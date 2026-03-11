@@ -1,0 +1,59 @@
+@inherits LayoutComponentBase
+@inject ThemeService ThemeService
+@inject TabService TabService
+@implements IDisposable
+
+<MudThemeProvider Theme="@ThemeService.ActiveTheme" IsDarkMode="@ThemeService.IsDark" />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+
+    <!-- ── Sidebar ───────────────────────────────────────────────────── -->
+    <BatchMonitor.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
+
+    <!-- ── AppBar — tab bar ──────────────────────────────────────────── -->
+    <MudAppBar Elevation="0"
+               Dense="true"
+               Class="bm-tabbar"
+               Fixed="true">
+        <BatchMonitor.Layout.TabBar />
+    </MudAppBar>
+
+    <!-- ── Main content ──────────────────────────────────────────────── -->
+    <MudMainContent Class="bm-main-content">
+        <div class="bm-content-area">
+            @if (TabService.ActiveTab is null)
+            {
+                <BatchMonitor.Pages.Home />
+            }
+            else
+            {
+                <BatchMonitor.Shared.TabContent Tab="@TabService.ActiveTab" />
+            }
+        </div>
+    </MudMainContent>
+
+</MudLayout>
+
+@code {
+    private bool _drawerOpen = true;
+
+    protected override void OnInitialized()
+    {
+        ThemeService.OnChange += StateHasChanged;
+        TabService.OnChange   += StateHasChanged;
+    }
+
+    private void OnDrawerOpenChanged(bool open)
+    {
+        _drawerOpen = open;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        ThemeService.OnChange -= StateHasChanged;
+        TabService.OnChange   -= StateHasChanged;
+    }
+}

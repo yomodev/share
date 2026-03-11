@@ -1,0 +1,172 @@
+@inject TabService TabService
+@inject EnvironmentSelectorService EnvService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<MudDrawer @bind-Open="_drawerOpen"
+           Variant="DrawerVariant.Mini"
+           MiniWidth="64px"
+           Width="240px"
+           Elevation="0"
+           Class="bm-sidebar"
+           OpenMiniOnHover="false">
+
+    <!-- ── Header: burger + title ────────────────────────────────────── -->
+    <div class="bm-sidebar-header">
+        <MudIconButton Icon="@Icons.Material.Outlined.Menu"
+                       Color="Color.Inherit"
+                       Size="Size.Medium"
+                       OnClick="ToggleDrawer"
+                       Class="bm-burger" />
+        @if (_drawerOpen)
+        {
+            <span class="bm-sidebar-title">Batch Monitor</span>
+        }
+    </div>
+
+    <MudDivider />
+
+    <!-- ── Nav items ─────────────────────────────────────────────────── -->
+    <div class="bm-nav-menu">
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.Home"
+                        Label="Home"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@(TabService.ActiveTab is null)"
+                        OnClick="GoHome" />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.ViewList"
+                        Label="Batches"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen($"dashboard:batches:{EnvService.SelectedId}")"
+                        OnClick="@(() => Open(TabModel.CreateBatchesDashboard(EnvService.SelectedId)))" />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.Dns"
+                        Label="Services"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen($"dashboard:services:{EnvService.SelectedId}")"
+                        OnClick="@(() => Open(TabModel.CreateServicesDashboard(EnvService.SelectedId)))" />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.Stream"
+                        Label="Kafka"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen($"dashboard:kafka:{EnvService.SelectedId}")"
+                        OnClick="@(() => Open(TabModel.CreateKafkaDashboard(EnvService.SelectedId)))" />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.Storage"
+                        Label="MongoDB"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen($"dashboard:mongo:{EnvService.SelectedId}")"
+                        OnClick="@(() => Open(TabModel.CreateMongoDashboard(EnvService.SelectedId)))" />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.BugReport"
+                        Label="Errors"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen($"dashboard:errors:{EnvService.SelectedId}")"
+                        OnClick="@(() => Open(TabModel.CreateErrorsDashboard(EnvService.SelectedId)))" />
+
+    </div>
+
+    <!-- ── Bottom: settings + env selector ───────────────────────────── -->
+    <div class="bm-sidebar-bottom">
+        <MudDivider />
+
+        <SidebarNavItem Icon="@Icons.Material.Outlined.Settings"
+                        Label="Settings"
+                        IsOpen="@_drawerOpen"
+                        IsActive="@TabService.IsOpen("dashboard:settings")"
+                        OnClick="@(() => Open(TabModel.CreateSettings()))" />
+
+        <!-- Environment selector -->
+        <div class="bm-env-selector @(_drawerOpen ? "expanded" : "collapsed")">
+            @if (_drawerOpen)
+            {
+                <MudSelect T="string"
+                           Value="@EnvService.SelectedId"
+                           ValueChanged="OnEnvChanged"
+                           Dense="true"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Class="bm-env-select">
+                    @foreach (var env in EnvService.Environments)
+                    {
+                        <MudSelectItem Value="@env.Id">
+                            <div class="bm-env-option">
+                                <span class="bm-env-badge"
+                                      style="background:@env.BadgeColor; color:@env.BadgeTextColor">
+                                    @env.Id
+                                </span>
+                                <span class="bm-env-label">@env.Label</span>
+                            </div>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            else
+            {
+                <MudTooltip Text="@EnvService.Selected?.Label" Placement="Placement.Right">
+                    <div class="bm-env-badge-mini"
+                         style="background:@EnvService.Selected?.BadgeColor; color:@EnvService.Selected?.BadgeTextColor"
+                         @onclick="ToggleDrawer">
+                        @(ShortId(EnvService.Selected?.Id))
+                    </div>
+                </MudTooltip>
+            }
+        </div>
+    </div>
+
+</MudDrawer>
+
+@code {
+    [Parameter] public EventCallback<bool> DrawerOpenChanged { get; set; }
+
+    private bool _drawerOpen = true;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", "bm_sidebar_open");
+            if (stored is not null)
+            {
+                _drawerOpen = stored != "false";
+                await DrawerOpenChanged.InvokeAsync(_drawerOpen);
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    protected override void OnInitialized()
+    {
+        TabService.OnChange += StateHasChanged;
+        EnvService.OnChange += StateHasChanged;
+    }
+
+    private async Task ToggleDrawer()
+    {
+        _drawerOpen = !_drawerOpen;
+        await DrawerOpenChanged.InvokeAsync(_drawerOpen);
+        try { await JS.InvokeVoidAsync("localStorage.setItem", "bm_sidebar_open", _drawerOpen.ToString().ToLower()); }
+        catch { }
+    }
+
+    private void GoHome() => TabService.GoHome();
+    private void Open(TabModel tab) => TabService.OpenOrFocus(tab);
+
+    private void OnEnvChanged(string newId)
+    {
+        EnvService.SelectedId = newId;
+        StateHasChanged();
+    }
+
+    private static string ShortId(string? id) =>
+        id is null ? "" : id.Length > 4 ? id[..4] : id;
+
+    public void Dispose()
+    {
+        TabService.OnChange -= StateHasChanged;
+        EnvService.OnChange -= StateHasChanged;
+    }
+}

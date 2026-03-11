@@ -1,0 +1,21 @@
+@* Placeholder used by tabs not yet implemented (Steps 2-10) *@
+
+<div class="bm-page bm-placeholder">
+    <div class="bm-placeholder-inner">
+        <MudIcon Icon="@Icon" Style="font-size: 3rem; opacity: 0.2;" />
+        <MudText Typo="Typo.h6" Class="bm-placeholder-title">@Title</MudText>
+        @if (!string.IsNullOrEmpty(Environment))
+        {
+            <MudText Typo="Typo.body2" Class="bm-muted">@Environment</MudText>
+        }
+        <MudText Typo="Typo.body2" Class="bm-muted mt-4" Style="opacity: 0.5;">
+            This section will be implemented in a future step.
+        </MudText>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title       { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Icon        { get; set; } = Icons.Material.Outlined.Dashboard;
+    [Parameter]                 public string Environment { get; set; } = string.Empty;
+}

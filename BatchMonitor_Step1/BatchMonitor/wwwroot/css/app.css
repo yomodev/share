@@ -1,0 +1,707 @@
+/* ================================================================
+   Batch Monitor — Application Stylesheet
+   Corporate precision aesthetic. Dark-first, light-supported.
+   ================================================================ */
+
+/* ── Google Font import fallback (if network unavailable) ───────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── CSS Custom Properties ──────────────────────────────────────── */
+:root {
+    --bm-radius:        6px;
+    --bm-radius-sm:     4px;
+    --bm-radius-lg:     10px;
+    --bm-transition:    180ms ease;
+    --bm-sidebar-w:     240px;
+    --bm-sidebar-mini:  64px;
+    --bm-tabbar-h:      44px;
+    --bm-font-mono:     'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+}
+
+/* ── Base resets ────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar styling ──────────────────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: rgba(139,148,158,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(139,148,158,0.5); }
+
+/* ================================================================
+   LAYOUT — Main structure
+   ================================================================ */
+
+.bm-main-content {
+    padding-left: 0 !important;  /* MudMainContent default override */
+}
+
+/* ── Tab bar (AppBar) ───────────────────────────────────────────── */
+/* MudLayout + MudDrawer handle left-offset automatically */
+.bm-tabbar.mud-appbar {
+    border-bottom: 1px solid var(--mud-palette-divider);
+    box-shadow: none !important;
+    height: var(--bm-tabbar-h) !important;
+    min-height: var(--bm-tabbar-h) !important;
+    padding: 0 !important;
+}
+
+/* ── Content area below tabbar ──────────────────────────────────── */
+.bm-content-area {
+    margin-top: var(--bm-tabbar-h);
+    height: calc(100vh - var(--bm-tabbar-h));
+    overflow: hidden;
+}
+
+/* ================================================================
+   SIDEBAR
+   ================================================================ */
+
+.bm-sidebar .mud-drawer-content {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    border-right: 1px solid var(--mud-palette-divider);
+}
+
+.bm-sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--bm-tabbar-h);
+    padding: 0 8px;
+    flex-shrink: 0;
+}
+
+.bm-sidebar-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    color: var(--mud-palette-text-primary);
+}
+
+.bm-burger {
+    flex-shrink: 0;
+}
+
+/* ── Nav menu ───────────────────────────────────────────────────── */
+.bm-nav-menu {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 4px 0;
+}
+
+.bm-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    margin: 1px 6px;
+    border-radius: var(--bm-radius);
+    cursor: pointer;
+    transition: background var(--bm-transition), color var(--bm-transition);
+    min-height: 38px;
+}
+
+.bm-nav-item:hover {
+    background: var(--mud-palette-action-default-hover);
+}
+
+.bm-nav-item.active {
+    background: rgba(47, 129, 244, 0.15);
+    color: var(--mud-palette-primary);
+}
+
+.bm-nav-item.active .bm-nav-icon {
+    color: var(--mud-palette-primary);
+}
+
+.bm-nav-icon {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary);
+    transition: color var(--bm-transition);
+}
+
+.bm-nav-label {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--mud-palette-text-primary);
+}
+
+/* ── Sidebar bottom ─────────────────────────────────────────────── */
+.bm-sidebar-bottom {
+    flex-shrink: 0;
+    padding-bottom: 8px;
+}
+
+/* ── Environment selector ───────────────────────────────────────── */
+.bm-env-selector {
+    padding: 8px;
+}
+
+.bm-env-selector.collapsed {
+    display: flex;
+    justify-content: center;
+    padding: 8px 4px;
+}
+
+.bm-env-select .mud-input-root {
+    font-size: 0.8125rem;
+}
+
+.bm-env-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bm-env-label {
+    font-size: 0.8125rem;
+}
+
+.bm-env-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.6;
+    white-space: nowrap;
+    font-family: var(--bm-font-mono);
+}
+
+.bm-env-badge-mini {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--bm-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.625rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    font-family: var(--bm-font-mono);
+    transition: opacity var(--bm-transition);
+}
+
+.bm-env-badge-mini:hover { opacity: 0.8; }
+
+/* ================================================================
+   TAB BAR
+   ================================================================ */
+
+.bm-tabbar-inner {
+    display: flex;
+    align-items: center;
+    height: var(--bm-tabbar-h);
+    width: 100%;
+    overflow: hidden;
+    padding: 0 4px;
+    gap: 2px;
+}
+
+/* Home button in tab bar */
+.bm-tab-home {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 32px;
+    border-radius: var(--bm-radius-sm);
+    cursor: pointer;
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary);
+    transition: background var(--bm-transition), color var(--bm-transition);
+}
+
+.bm-tab-home:hover  { background: var(--mud-palette-action-default-hover); }
+.bm-tab-home.active { color: var(--mud-palette-primary); }
+
+.bm-tab-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--mud-palette-divider);
+    flex-shrink: 0;
+    margin: 0 4px;
+}
+
+/* Scrollable tabs strip */
+.bm-tabs-scroll {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex: 1;
+    scrollbar-width: none;
+}
+.bm-tabs-scroll::-webkit-scrollbar { display: none; }
+
+/* Individual tab */
+.bm-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px 0 10px;
+    height: 32px;
+    border-radius: var(--bm-radius-sm);
+    cursor: pointer;
+    flex-shrink: 0;
+    max-width: 200px;
+    min-width: 100px;
+    border: 1px solid transparent;
+    transition: background var(--bm-transition), border-color var(--bm-transition);
+    position: relative;
+}
+
+.bm-tab:hover {
+    background: var(--mud-palette-action-default-hover);
+}
+
+.bm-tab.active {
+    background: rgba(47,129,244,0.12);
+    border-color: rgba(47,129,244,0.3);
+}
+
+.bm-tab-icon {
+    flex-shrink: 0;
+    font-size: 14px !important;
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-tab.active .bm-tab-icon {
+    color: var(--mud-palette-primary);
+}
+
+.bm-tab-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    color: var(--mud-palette-text-primary);
+}
+
+.bm-tab-env-badge {
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    font-family: var(--bm-font-mono);
+    flex-shrink: 0;
+}
+
+.bm-tab-close-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--bm-transition);
+    cursor: pointer;
+}
+
+.bm-tab:hover .bm-tab-close-wrap,
+.bm-tab.active .bm-tab-close-wrap {
+    opacity: 1;
+}
+
+.bm-tab-close {
+    width: 18px !important;
+    height: 18px !important;
+    padding: 0 !important;
+}
+
+/* Overflow menu */
+.bm-tab-overflow {
+    flex-shrink: 0;
+}
+
+.bm-overflow-item {
+    display: flex;
+    align-items: center;
+    font-size: 0.8125rem;
+}
+
+.bm-overflow-env {
+    font-size: 0.7rem;
+    font-family: var(--bm-font-mono);
+    opacity: 0.7;
+}
+
+/* ================================================================
+   PAGE CONTAINERS
+   ================================================================ */
+
+.bm-page {
+    height: 100%;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.bm-page-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.bm-page-title {
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    margin: 0;
+}
+
+/* ================================================================
+   HOME PAGE
+   ================================================================ */
+
+.bm-home {
+    height: 100%;
+    overflow-y: auto;
+    padding: 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.bm-home-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.bm-home-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.bm-home-subtitle {
+    color: var(--mud-palette-text-secondary);
+    margin-top: 2px;
+}
+
+.bm-home-env { min-width: 200px; }
+
+.bm-home-env-select { width: 100%; }
+
+/* ── Stat cards ─────────────────────────────────────────────────── */
+.bm-stat-grid { margin: 0; }
+
+.bm-stat-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+    border-radius: var(--bm-radius-lg);
+    border: 1px solid var(--mud-palette-divider);
+    background: var(--mud-palette-surface);
+    transition: border-color var(--bm-transition), box-shadow var(--bm-transition);
+}
+
+.bm-stat-card:hover {
+    border-color: rgba(47,129,244,0.3);
+    box-shadow: 0 0 0 1px rgba(47,129,244,0.1);
+}
+
+.bm-stat-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--bm-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.bm-stat-value {
+    font-size: 1.625rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    font-family: var(--bm-font-mono);
+}
+
+.bm-stat-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--mud-palette-text-secondary);
+    margin-top: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ── Mini summary ───────────────────────────────────────────────── */
+.bm-mini-summary {
+    border: 1px solid var(--mud-palette-divider) !important;
+    border-radius: var(--bm-radius-lg) !important;
+    overflow: hidden;
+}
+
+.bm-mini-summary-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 8px;
+}
+
+.bm-section-title {
+    font-weight: 600;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-view-all-btn {
+    font-size: 0.8rem !important;
+}
+
+.bm-mini-table .mud-table-container {
+    border: none !important;
+}
+
+/* ================================================================
+   BATCHES TABLE
+   ================================================================ */
+
+.bm-table-paper {
+    border: 1px solid var(--mud-palette-divider) !important;
+    border-radius: var(--bm-radius-lg) !important;
+    overflow: hidden;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.bm-table-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    flex-shrink: 0;
+}
+
+.bm-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.bm-batch-table .mud-table-container {
+    border: none !important;
+    flex: 1;
+}
+
+/* Table head */
+.bm-batch-table thead th,
+.bm-mini-table thead th {
+    font-size: 0.7rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    color: var(--mud-palette-text-secondary) !important;
+    border-bottom: 1px solid var(--mud-palette-table-lines) !important;
+    padding: 8px 12px !important;
+    white-space: nowrap;
+}
+
+/* Table rows */
+.bm-batch-table tbody tr,
+.bm-mini-table tbody tr {
+    transition: background var(--bm-transition);
+}
+
+.bm-batch-table tbody td,
+.bm-mini-table tbody td {
+    border-bottom: 1px solid var(--mud-palette-divider-light) !important;
+    padding: 8px 12px !important;
+    font-size: 0.8125rem !important;
+}
+
+/* Row actions */
+.bm-row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+}
+
+/* ── Pagination ─────────────────────────────────────────────────── */
+.bm-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-top: 1px solid var(--mud-palette-divider);
+    flex-shrink: 0;
+}
+
+/* ================================================================
+   SETTINGS PAGE
+   ================================================================ */
+
+.bm-settings-section {
+    border: 1px solid var(--mud-palette-divider) !important;
+    border-radius: var(--bm-radius-lg) !important;
+    padding: 20px 24px !important;
+}
+
+.bm-settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.bm-theme-toggle {
+    flex-shrink: 0;
+}
+
+.bm-about-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    align-items: center;
+}
+
+/* Theme switcher buttons */
+.bm-theme-switcher {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.bm-theme-btn {
+    min-width: 88px !important;
+}
+
+/* ================================================================
+   PLACEHOLDER PAGE
+   ================================================================ */
+
+.bm-placeholder {
+    align-items: center;
+    justify-content: center;
+}
+
+.bm-placeholder-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.6;
+    text-align: center;
+}
+
+.bm-placeholder-title {
+    font-weight: 600;
+    margin-top: 8px;
+}
+
+/* ================================================================
+   SHARED COMPONENTS
+   ================================================================ */
+
+/* ── Status icons ───────────────────────────────────────────────── */
+.bm-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.bm-status-running   { color: #3FB950; }
+.bm-status-completed { color: #8B949E; }
+.bm-status-failed    { color: #F85149; }
+.bm-status-unknown   { color: #8B949E; }
+
+/* Running pulse animation */
+@keyframes bm-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.45; }
+}
+
+.bm-status-running .mud-icon-root {
+    animation: bm-pulse 2s ease-in-out infinite;
+}
+
+/* ── Type chip ──────────────────────────────────────────────────── */
+.bm-type-chip.mud-chip {
+    height: 20px !important;
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    font-family: var(--bm-font-mono) !important;
+    background: rgba(47,129,244,0.1) !important;
+    color: var(--mud-palette-primary) !important;
+    border: 1px solid rgba(47,129,244,0.25) !important;
+    padding: 0 8px !important;
+}
+
+/* ================================================================
+   TYPOGRAPHY UTILITIES
+   ================================================================ */
+
+.bm-monospace {
+    font-family: var(--bm-font-mono) !important;
+    font-size: 0.8rem !important;
+}
+
+.bm-muted {
+    color: var(--mud-palette-text-secondary) !important;
+}
+
+/* ================================================================
+   BLAZOR ERROR UI
+   ================================================================ */
+
+#blazor-error-ui {
+    background: #F85149;
+    color: #fff;
+    bottom: 0;
+    position: fixed;
+    width: 100%;
+    padding: 10px 16px;
+    display: none;
+    z-index: 9999;
+    font-size: 0.875rem;
+    display: none;
+}
+
+#blazor-error-ui .reload {
+    color: #fff;
+    font-weight: 600;
+    margin-left: 12px;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    float: right;
+    padding: 0 4px;
+}

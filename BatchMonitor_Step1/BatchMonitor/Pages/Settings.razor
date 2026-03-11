@@ -1,0 +1,108 @@
+@implements IDisposable
+@inject ThemeService ThemeService
+@inject IJSRuntime JS
+
+<div class="bm-page">
+
+    <div class="bm-page-header">
+        <MudText Typo="Typo.h6" Class="bm-page-title">
+            <MudIcon Icon="@Icons.Material.Outlined.Settings" Class="mr-2" Size="Size.Small" />
+            Settings
+        </MudText>
+    </div>
+
+    <MudGrid Spacing="4">
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle1" Class="bm-section-title mb-4">Appearance</MudText>
+
+                <div class="bm-settings-row">
+                    <div>
+                        <MudText Typo="Typo.body1">Theme</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">
+                            Choose between dark and light interface
+                        </MudText>
+                    </div>
+                    <div class="bm-theme-switcher">
+                        <MudButton Variant="@(_isDark ? Variant.Filled : Variant.Outlined)"
+                                   StartIcon="@Icons.Material.Outlined.DarkMode"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => SetThemeAsync(true))"
+                                   Class="bm-theme-btn">
+                            Dark
+                        </MudButton>
+                        <MudButton Variant="@(!_isDark ? Variant.Filled : Variant.Outlined)"
+                                   StartIcon="@Icons.Material.Outlined.LightMode"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => SetThemeAsync(false))"
+                                   Class="bm-theme-btn">
+                            Light
+                        </MudButton>
+                    </div>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle1" Class="bm-section-title mb-4">About</MudText>
+                <div class="bm-about-grid">
+                    <MudText Typo="Typo.body2" Class="bm-muted">Version</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">1.0.0-step1</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-muted">Framework</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">.NET 8 / Blazor Server</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-muted">UI Library</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">MudBlazor 7</MudText>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+    </MudGrid>
+
+</div>
+
+@code {
+    private bool _isDark = true;
+
+    protected override void OnInitialized()
+    {
+        _isDark = ThemeService.IsDark;
+        ThemeService.OnChange += OnThemeExternallyChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", "bm_theme");
+            if (stored is not null)
+            {
+                _isDark = stored != "light";
+                ThemeService.IsDark = _isDark;
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    private async Task SetThemeAsync(bool dark)
+    {
+        _isDark = dark;
+        ThemeService.IsDark = dark;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", "bm_theme", dark ? "dark" : "light"); }
+        catch { }
+    }
+
+    private void OnThemeExternallyChanged()
+    {
+        _isDark = ThemeService.IsDark;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() =>
+        ThemeService.OnChange -= OnThemeExternallyChanged;
+}

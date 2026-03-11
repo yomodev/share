@@ -1,0 +1,67 @@
+@* Routes the active tab to its correct page component *@
+
+@if (Tab is null) { return; }
+
+@switch (Tab.Type)
+{
+    case TabType.Batches:
+        <BatchMonitor.Pages.Batches Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.Services:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="Services"
+            Icon="@Icons.Material.Outlined.Dns"
+            Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.Kafka:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="Kafka"
+            Icon="@Icons.Material.Outlined.Stream"
+            Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.MongoDB:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="MongoDB"
+            Icon="@Icons.Material.Outlined.Storage"
+            Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.Errors:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="Errors"
+            Icon="@Icons.Material.Outlined.BugReport"
+            Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.Settings:
+        <BatchMonitor.Pages.Settings />
+        break;
+
+    case TabType.BatchDetail:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="@($"Batch: {Tab.Label}")"
+            Icon="@Icons.Material.Outlined.Hexagon"
+            Environment="@Tab.Environment!" />
+        break;
+
+    case TabType.Timeline:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="Timeline"
+            Icon="@Icons.Material.Outlined.Timeline"
+            Environment="@Tab.Environment!" />
+        break;
+
+    default:
+        <BatchMonitor.Pages.PlaceholderPage
+            Title="@Tab.Label"
+            Icon="@Icons.Material.Outlined.Dashboard"
+            Environment="@(Tab.Environment ?? string.Empty)" />
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired] public TabModel? Tab { get; set; }
+}

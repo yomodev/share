@@ -1,0 +1,188 @@
+@inject EnvironmentSelectorService EnvService
+@inject TabService TabService
+@implements IDisposable
+
+<div class="bm-home">
+
+    <!-- ── Page header ────────────────────────────────────────────────── -->
+    <div class="bm-home-header">
+        <div>
+            <MudText Typo="Typo.h5" Class="bm-home-title">Operations Centre</MudText>
+            <MudText Typo="Typo.body2" Class="bm-home-subtitle">
+                Real-time batch processing monitor
+            </MudText>
+        </div>
+
+        <!-- Environment selector (synced with sidebar) -->
+        <div class="bm-home-env">
+            <MudSelect T="string"
+                       Value="@EnvService.SelectedId"
+                       ValueChanged="OnEnvChanged"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Label="Environment"
+                       Class="bm-home-env-select"
+                       Margin="Margin.Dense">
+                @foreach (var env in EnvService.Environments)
+                {
+                    <MudSelectItem Value="@env.Id">
+                        <div class="bm-env-option">
+                            <span class="bm-env-badge"
+                                  style="background:@env.BadgeColor; color:@env.BadgeTextColor">
+                                @env.Id
+                            </span>
+                            <span class="bm-env-label">@env.Label</span>
+                        </div>
+                    </MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+    </div>
+
+    <!-- ── KPI stat cards ─────────────────────────────────────────────── -->
+    <MudGrid Spacing="3" Class="bm-stat-grid">
+
+        <MudItem xs="12" sm="6" md="3">
+            <div class="bm-stat-card">
+                <div class="bm-stat-icon" style="background: rgba(63,185,80,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.PlayCircle"
+                             Style="color: #3FB950;" Size="Size.Medium" />
+                </div>
+                <div class="bm-stat-body">
+                    <MudText Class="bm-stat-value">@_runningCount</MudText>
+                    <MudText Class="bm-stat-label">Running</MudText>
+                </div>
+            </div>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <div class="bm-stat-card">
+                <div class="bm-stat-icon" style="background: rgba(47,129,244,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle"
+                             Style="color: #2F81F4;" Size="Size.Medium" />
+                </div>
+                <div class="bm-stat-body">
+                    <MudText Class="bm-stat-value">@_completedTodayCount</MudText>
+                    <MudText Class="bm-stat-label">Completed Today</MudText>
+                </div>
+            </div>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <div class="bm-stat-card">
+                <div class="bm-stat-icon" style="background: rgba(248,81,73,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.Error"
+                             Style="color: #F85149;" Size="Size.Medium" />
+                </div>
+                <div class="bm-stat-body">
+                    <MudText Class="bm-stat-value">@_failedCount</MudText>
+                    <MudText Class="bm-stat-label">Failed</MudText>
+                </div>
+            </div>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <div class="bm-stat-card">
+                <div class="bm-stat-icon" style="background: rgba(210,153,34,0.12);">
+                    <MudIcon Icon="@Icons.Material.Outlined.Speed"
+                             Style="color: #D29922;" Size="Size.Medium" />
+                </div>
+                <div class="bm-stat-body">
+                    <MudText Class="bm-stat-value">@_avgDuration</MudText>
+                    <MudText Class="bm-stat-label">Avg Duration</MudText>
+                </div>
+            </div>
+        </MudItem>
+
+    </MudGrid>
+
+    <!-- ── Mini batch summary ─────────────────────────────────────────── -->
+    <MudPaper Elevation="0" Class="bm-mini-summary">
+
+        <div class="bm-mini-summary-header">
+            <MudText Typo="Typo.subtitle1" Class="bm-section-title">Recent Batches</MudText>
+            <MudButton Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Outlined.ViewList"
+                       OnClick="OpenBatchesDashboard"
+                       Class="bm-view-all-btn">
+                View All
+            </MudButton>
+        </div>
+
+        <MudTable Items="@_recentBatches"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  Class="bm-mini-table">
+            <HeaderContent>
+                <MudTh Style="width:36px"></MudTh>
+                <MudTh>Name</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Started</MudTh>
+                <MudTh>Duration</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <StatusIcon Status="@context.Status" />
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">@context.BatchName</MudText>
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                        @context.Start.ToString("HH:mm:ss") UTC
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                        @FormatDuration(context.Duration)
+                    </MudText>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+
+    </MudPaper>
+
+</div>
+
+@code {
+    // ── Mock data (replaced by real endpoint in Step 2) ──────────────
+
+    private int _runningCount       = 3;
+    private int _completedTodayCount = 47;
+    private int _failedCount        = 1;
+    private string _avgDuration     = "00:08:24";
+
+    private List<BatchSummary> _recentBatches = new()
+    {
+        new() { RunId = "RUN-20240613-001", BatchName = "FullLoad_Customers",   Type = "FullLoad",    Status = BatchStatus.Running,   Start = DateTime.UtcNow.AddMinutes(-12) },
+        new() { RunId = "RUN-20240613-002", BatchName = "DeltaSync_Orders",     Type = "DeltaSync",   Status = BatchStatus.Completed, Start = DateTime.UtcNow.AddMinutes(-45), End = DateTime.UtcNow.AddMinutes(-37) },
+        new() { RunId = "RUN-20240613-003", BatchName = "Reconcile_Inventory",  Type = "Reconcile",   Status = BatchStatus.Failed,    Start = DateTime.UtcNow.AddMinutes(-62), End = DateTime.UtcNow.AddMinutes(-58) },
+        new() { RunId = "RUN-20240613-004", BatchName = "FullLoad_Products",    Type = "FullLoad",    Status = BatchStatus.Completed, Start = DateTime.UtcNow.AddMinutes(-90), End = DateTime.UtcNow.AddMinutes(-81) },
+        new() { RunId = "RUN-20240613-005", BatchName = "DeltaSync_Pricing",    Type = "DeltaSync",   Status = BatchStatus.Running,   Start = DateTime.UtcNow.AddMinutes(-5)  },
+    };
+
+    protected override void OnInitialized() =>
+        EnvService.OnChange += StateHasChanged;
+
+    private void OnEnvChanged(string newId)
+    {
+        EnvService.SelectedId = newId;
+        StateHasChanged();
+    }
+
+    private void OpenBatchesDashboard() =>
+        TabService.OpenOrFocus(TabModel.CreateBatchesDashboard(EnvService.SelectedId));
+
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+
+    public void Dispose() =>
+        EnvService.OnChange -= StateHasChanged;
+}

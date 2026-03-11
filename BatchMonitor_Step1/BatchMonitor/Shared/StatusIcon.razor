@@ -1,0 +1,20 @@
+@* Renders a status icon with appropriate colour and animation *@
+
+<MudTooltip Text="@Status.ToString()">
+    <span class="bm-status-icon bm-status-@Status.ToString().ToLower()">
+        <MudIcon Icon="@GetIcon()" Size="@Size" />
+    </span>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public BatchStatus Status { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Small;
+
+    private string GetIcon() => Status switch
+    {
+        BatchStatus.Running   => Icons.Material.Filled.PlayCircle,
+        BatchStatus.Completed => Icons.Material.Filled.CheckCircle,
+        BatchStatus.Failed    => Icons.Material.Filled.Error,
+        _                     => Icons.Material.Outlined.HelpOutline
+    };
+}

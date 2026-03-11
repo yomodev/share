@@ -1,0 +1,14 @@
+@* Renders a small coloured environment badge pill *@
+
+@if (Environment is not null)
+{
+    <span class="bm-env-badge"
+          style="background: @Environment.BadgeColor; color: @Environment.BadgeTextColor; @ExtraStyle">
+        @Environment.Id
+    </span>
+}
+
+@code {
+    [Parameter] public EnvironmentInfo? Environment { get; set; }
+    [Parameter] public string ExtraStyle { get; set; } = string.Empty;
+}
