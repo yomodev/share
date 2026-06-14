@@ -2,70 +2,70 @@
 @inject IJSRuntime JS
 
 <div class="bm-flow-graph-container">
-	<div class="bm-flow-graph-toolbar">
-		<MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="FitToView">
-			Fit to View
-		</MudButton>
-		<MudText Typo="Typo.caption" Class="bm-flow-graph-info">
-			@if (Topology?.Nodes?.Count > 0)
-			{
-				<span>@Topology.Nodes.Count nodes • @Topology.Edges.Count edges • @Topology.TotalChunks chunks</span>
-			}
-			else
-			{
-				<span>Waiting for first events…</span>
-			}
-		</MudText>
-	</div>
+    <div class="bm-flow-graph-toolbar">
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="FitToView">
+            Fit to View
+        </MudButton>
+        <MudText Typo="Typo.caption" Class="bm-flow-graph-info">
+            @if (Topology?.Nodes?.Count > 0)
+            {
+                <span>@Topology.Nodes.Count nodes • @Topology.Edges.Count edges • @Topology.TotalChunks chunks • @Topology.TotalEvents events</span>
+            }
+            else
+            {
+                <span>Waiting for first events…</span>
+            }
+        </MudText>
+    </div>
 
-	<div class="bm-flow-graph-wrapper" @ref="GraphContainerRef">
-		<svg class="bm-flow-graph-svg" @ref="SvgRef"></svg>
-	</div>
+    <div class="bm-flow-graph-wrapper" @ref="GraphContainerRef">
+        <svg class="bm-flow-graph-svg" @ref="SvgRef"></svg>
+    </div>
 </div>
 
 @code {
-	[Parameter]
-	public Topology? Topology { get; set; }
+    [Parameter]
+    public Topology? Topology { get; set; }
 
-	private ElementReference GraphContainerRef { get; set; }
-	private ElementReference SvgRef { get; set; }
-	private bool _initialized = false;
+    private ElementReference GraphContainerRef { get; set; }
+    private ElementReference SvgRef { get; set; }
+    private bool _initialized = false;
 
-	protected override async Task OnAfterRenderAsync(bool firstRender)
-	{
-		if (firstRender)
-		{
-			_initialized = true;
-		}
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _initialized = true;
+        }
 
-		// Re-render whenever Topology changes
-		if (Topology != null && _initialized)
-		{
-			await RenderGraph();
-		}
-	}
+        // Re-render whenever Topology changes
+        if (Topology != null && _initialized)
+        {
+            await RenderGraph();
+        }
+    }
 
-	private async Task RenderGraph()
-	{
-		try
-		{
-			await JS.InvokeVoidAsync("window.bm_d3Graph.render", SvgRef, Topology);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"[D3FlowGraph] Error rendering graph: {ex.Message}");
-		}
-	}
+    private async Task RenderGraph()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("window.bm_d3Graph.render", SvgRef, Topology);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[D3FlowGraph] Error rendering graph: {ex.Message}");
+        }
+    }
 
-	private async Task FitToView()
-	{
-		try
-		{
-			await JS.InvokeVoidAsync("window.bm_d3Graph.fitToView");
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"[D3FlowGraph] Error fitting to view: {ex.Message}");
-		}
-	}
+    private async Task FitToView()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("window.bm_d3Graph.fitToView");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[D3FlowGraph] Error fitting to view: {ex.Message}");
+        }
+    }
 }

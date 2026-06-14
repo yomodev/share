@@ -5,6 +5,7 @@ namespace BatchMonitor.Services;
 /// <summary>
 /// Computes a flow graph topology from the in-memory event store.
 /// Infers nodes (service aggregations) and edges (data flow paths).
+/// Enhanced with per-instance breakdown and throughput indicators.
 /// </summary>
 public class TopologyComputationService
 {
@@ -20,9 +21,10 @@ public class TopologyComputationService
 
         var topology = new Topology { TotalEvents = eventStore.Count };
 
-        // Phase 1: Aggregate nodes by service
+        // Phase 1: Aggregate nodes by service with per-instance breakdown
         var nodesByService = new Dictionary<string, TopologyNode>();
         var chunksByService = new Dictionary<string, HashSet<string>>();
+        var instanceStats = new Dictionary<string, Dictionary<string, (int EventCount, int SuccessCount, int FailureCount)>>();
 
         foreach (var evt in eventStore.Values)
         {
@@ -31,6 +33,7 @@ public class TopologyComputationService
                 node = new TopologyNode { Id = evt.Service, Label = evt.Service };
                 nodesByService[evt.Service] = node;
                 chunksByService[evt.Service] = new HashSet<string>();
+                instanceStats[evt.Service] = new Dictionary<string, (int, int, int)>();
             }
 
             // Track unique chunks
@@ -40,29 +43,48 @@ public class TopologyComputationService
             node.ProcessedCount += evt.RecordCount;
             node.AvgDurationMs = (node.AvgDurationMs + evt.DurationMs) / 2;
 
+            // Track per-instance breakdown
+            if (!instanceStats[evt.Service].TryGetValue(evt.ProcessId, out var stats))
+            {
+                stats = (0, 0, 0);
+            }
+            stats.EventCount++;
+
             switch (evt.Status)
             {
                 case "Success":
                     node.SuccessCount++;
+                    stats.SuccessCount++;
                     break;
                 case "Failed":
                     node.FailedCount++;
+                    stats.FailureCount++;
                     break;
                 case "Skipped":
                     node.SkippedCount++;
                     break;
             }
+
+            instanceStats[evt.Service][evt.ProcessId] = stats;
         }
 
-        // Update instance counts (unique ProcessIds per service)
+        // Update instance counts and per-instance breakdown
         foreach (var service in nodesByService.Keys)
         {
-            var uniqueProcessIds = eventStore.Values
-                .Where(e => e.Service == service)
-                .Select(e => e.ProcessId)
-                .Distinct()
-                .Count();
-            nodesByService[service].InstanceCount = uniqueProcessIds;
+            var node = nodesByService[service];
+            node.InstanceCount = instanceStats[service].Count;
+            node.InstanceBreakdown = instanceStats[service]
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+            // Calculate recent throughput score (0-1 scale)
+            // Based on success rate and event density
+            var totalEvents = node.SuccessCount + node.FailedCount + node.SkippedCount;
+            if (totalEvents > 0)
+            {
+                var successRate = (double)node.SuccessCount / totalEvents;
+                var eventDensity = Math.Min(1.0, totalEvents / 100.0); // Normalize to ~100 events
+                node.RecentThroughputScore = (successRate * 0.6) + (eventDensity * 0.4);
+            }
         }
 
         topology.Nodes = nodesByService.Values.OrderBy(n => n.Label).ToList();

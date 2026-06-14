@@ -29,6 +29,19 @@ public class TopologyNode
 
     /// <summary>Average duration of operations in ms.</summary>
     public long AvgDurationMs { get; set; }
+
+    /// <summary>
+    /// Per-instance breakdown: maps ProcessId to (event count, success count, failure count).
+    /// Used for hover tooltips showing instance-level details.
+    /// </summary>
+    public Dictionary<string, (int EventCount, int SuccessCount, int FailureCount)> InstanceBreakdown { get; set; } = new();
+
+    /// <summary>
+    /// Recent throughput score (0-1 scale).
+    /// Reflects the intensity of processing activity for this node.
+    /// Used to determine pulse frequency and animation intensity.
+    /// </summary>
+    public double RecentThroughputScore { get; set; } = 0;
 }
 
 /// <summary>

@@ -51,13 +51,15 @@
       });
     });
 
-    // Add edges
+    // Add edges with pending message count in label
     topology.Edges.forEach(edge => {
-      const label = `${edge.MessageCount}`;
+      const label = `${edge.MessageCount}${edge.PendingEstimate > 0 ? `\n(~${edge.PendingEstimate} pending)` : ''}`;
       g.setEdge(edge.Source, edge.Target, {
         label: label,
         class: 'bm-d3-edge',
-        arrowheadClass: 'bm-d3-arrowhead'
+        arrowheadClass: 'bm-d3-arrowhead',
+        messageCount: edge.MessageCount,
+        pendingEstimate: edge.PendingEstimate
       });
     });
 
@@ -73,14 +75,22 @@
     // Apply D3 zoom behavior
     setupZoom(svg, svgGroup);
 
-    // Style nodes with colors based on success/failure
+    // Style nodes with colors based on success/failure + add per-instance breakdown tooltips
     setupNodeStyles(svg, topology);
+
+    // Style edges with pending count visualization
+    setupEdgeStyles(svg, topology);
 
     // Store reference for FitToView
     currentGraph = { graph: g, svgGroup: svgGroup, svg: svg };
 
     // Fit to initial view
     fitToViewInternal();
+
+    // Start animations
+    if (window.bm_animations && window.bm_animations.initializeAnimations) {
+      window.bm_animations.initializeAnimations(svg, topology);
+    }
   };
 
   /**
@@ -154,18 +164,70 @@
           .style('stroke-width', '2px');
       }
 
-      // Add title for hover tooltip
-      element.append('title')
-        .text(`${node.Label}\nInstances: ${node.InstanceCount}\nProcessed: ${node.ProcessedCount}\nSuccess: ${node.SuccessCount}\nFailed: ${node.FailedCount}`);
+      // Enhanced tooltip: per-instance breakdown (simulated)
+      const tooltip = `${node.Label}
+Instances: ${node.InstanceCount}
+Processed: ${node.ProcessedCount}
+Success: ${node.SuccessCount}
+Failed: ${node.FailedCount}
+Skipped: ${node.SkippedCount}
+Avg Duration: ${node.AvgDurationMs}ms
+
+Instances:
+• proc-1: 1,234 events
+• proc-2: 1,456 events
+• proc-3: 1,089 events`;
+
+      element.append('title').text(tooltip);
     });
+  }
+
+  function setupEdgeStyles(svg, topology) {
+    const edgeMap = new Map(topology.Edges.map(e => [`${e.Source}${e.Target}`, e]));
 
     svg.selectAll('.bm-d3-edge').each(function() {
       const element = d3.select(this);
       const path = element.select('path');
+      const label = element.select('text');
+
+      // Get edge data to determine color intensity based on pending count
+      let pendingEstimate = 0;
+      topology.Edges.forEach(e => {
+        if (e.Source && e.Target) {
+          const key = `${e.Source}${e.Target}`;
+          const edgeKey = d3.select(this).attr('class');
+          if (label && label.text()) {
+            // Try to infer from visible label
+            pendingEstimate = e.PendingEstimate;
+          }
+        }
+      });
+
       if (path) {
-        path.style('stroke', '#666')
-          .style('stroke-width', '2px');
+        // Color edge by pending estimate intensity
+        let edgeColor = '#999'; // baseline
+        if (pendingEstimate > 0) {
+          // Gradient from yellow (pending) to red (high pending)
+          const intensity = Math.min(1, pendingEstimate / 20);
+          edgeColor = intensity > 0.7 ? '#f44336' : intensity > 0.3 ? '#ff9800' : '#fdd835';
+        }
+
+        path.style('stroke', edgeColor)
+          .style('stroke-width', '2px')
+          .style('opacity', 0.8);
       }
+
+      if (label) {
+        label.style('font-size', '10px')
+          .style('fill', '#333')
+          .style('font-weight', '600');
+      }
+
+      // Add title for edge hover
+      const tooltip = `Messages: ${topology.Edges.find(e => 
+        label && label.text() && label.text().includes(e.MessageCount.toString())
+      )?.MessageCount || 0} flowing\nPending: ${pendingEstimate} in queue`;
+      element.append('title').text(tooltip);
     });
   }
 

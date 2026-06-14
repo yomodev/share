@@ -41,7 +41,7 @@
   font-family: 'Inter', sans-serif;
 }
 
-/* D3 Node styling */
+/* ── Node Styling (Step 7: Pulse animation) ── */
 .bm-d3-node {
   fill: #4CAF50;
   stroke: #333;
@@ -49,11 +49,12 @@
   opacity: 0.8;
   cursor: pointer;
   transition: opacity 0.2s ease, filter 0.2s ease;
+  filter: drop-shadow(0 0 0 rgba(76, 175, 80, 0));
 }
 
 .bm-d3-node:hover {
   opacity: 1;
-  filter: brightness(1.1);
+  filter: brightness(1.1) drop-shadow(0 0 8px rgba(76, 175, 80, 0.6));
 }
 
 .bm-d3-node text {
@@ -62,25 +63,98 @@
   fill: white;
   pointer-events: none;
   text-anchor: middle;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-/* D3 Edge styling */
+/* Node-specific colors for status */
+.bm-d3-node.status-success {
+  fill: #4CAF50;
+}
+
+.bm-d3-node.status-warning {
+  fill: #ff9800;
+}
+
+.bm-d3-node.status-error {
+  fill: #f44336;
+}
+
+/* ── Edge Styling (Step 7: Particle animation + pulse) ── */
 .bm-d3-edge path {
   stroke: #999;
   stroke-width: 2px;
   fill: none;
   marker-end: url(#arrowhead);
+  transition: stroke-width 0.3s ease;
 }
 
 .bm-d3-edge text {
   font-size: 11px;
-  fill: #666;
+  fill: #333;
+  font-weight: 600;
   background: white;
   padding: 2px 4px;
+  text-anchor: middle;
+}
+
+.bm-d3-edge:hover path {
+  stroke-width: 3px;
+  filter: brightness(1.15);
 }
 
 .bm-d3-arrowhead {
   fill: #999;
+}
+
+/* Particle animation styling */
+.bm-particles circle {
+  fill: #4CAF50;
+  opacity: 0.7;
+  filter: drop-shadow(0 0 2px rgba(76, 175, 80, 0.8));
+}
+
+/* ── Animation Keyframes (throughput pulse) ── */
+@keyframes nodePulse {
+  0% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 0 rgba(76, 175, 80, 0));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(76, 175, 80, 0.6));
+  }
+  100% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 0 rgba(76, 175, 80, 0));
+  }
+}
+
+@keyframes edgePulse {
+  0% {
+    stroke-width: 2px;
+    opacity: 0.8;
+  }
+  50% {
+    stroke-width: 4px;
+    opacity: 1;
+  }
+  100% {
+    stroke-width: 2px;
+    opacity: 0.8;
+  }
+}
+
+/* Edge color states for pending messages */
+.bm-d3-edge.pending-low path {
+  stroke: #4CAF50;
+}
+
+.bm-d3-edge.pending-medium path {
+  stroke: #ff9800;
+}
+
+.bm-d3-edge.pending-high path {
+  stroke: #f44336;
 }
 
 /* Empty state */
@@ -97,4 +171,11 @@
 
 .bm-flow-graph-svg g:active {
   cursor: grabbing;
+}
+
+/* Tooltip styling for enhanced visibility */
+svg title {
+  font-size: 12px;
+  white-space: pre-wrap;
+  pointer-events: none;
 }
