@@ -4,50 +4,43 @@
 
 <div class="bm-tabbar-inner">
 
-    <!-- ── Home button (always visible, left anchor) ─────────────────── -->
-    <div class="bm-tab-home @(TabService.ActiveTab is null ? "active" : "")"
-         @onclick="() => TabService.GoHome()">
-        <MudIcon Icon="@Icons.Material.Outlined.Home" Size="Size.Small" />
-    </div>
-
-    <div class="bm-tab-divider"></div>
-
-    <!-- ── Visible tabs ──────────────────────────────────────────────── -->
+    <!-- Scrollable tab strip -->
     <div class="bm-tabs-scroll">
         @foreach (var tab in TabService.Tabs)
         {
-            <div class="bm-tab @(tab.IsActive ? "active" : "")"
-                 @onclick="() => TabService.Focus(tab.Id)"
-                 @key="tab.Id">
+            var tabId = tab.Id;
+            var isActive = tab.IsActive;
+            var envInfo = tab.Environment is not null
+                ? EnvService.Environments.FirstOrDefault(e => e.Id == tab.Environment)
+                : null;
+
+            <div class="bm-tab @(isActive ? "active" : "")"
+                 @onclick="@(() => TabService.Focus(tabId))"
+                 @key="tabId">
 
                 <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
 
                 <span class="bm-tab-label">@tab.Label</span>
 
-                @if (tab.Environment is not null)
+                @if (envInfo is not null)
                 {
-                    var env = EnvService.Environments.FirstOrDefault(e => e.Id == tab.Environment);
-                    if (env is not null)
-                    {
-                        <span class="bm-tab-env-badge"
-                              style="background:@env.BadgeColor; color:@env.BadgeTextColor">
-                            @env.Id
-                        </span>
-                    }
+                    <span class="bm-tab-env-badge"
+                          style="background:@envInfo.BadgeColor; color:@envInfo.BadgeTextColor">
+                        @envInfo.Id
+                    </span>
                 }
 
-                <span @onclick="@(() => TabService.Close(tab.Id))"
-                      @onclick:stopPropagation="true"
-                      class="bm-tab-close-wrap">
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small"
-                                   Class="bm-tab-close" />
-                </span>
+                <button class="bm-tab-close-btn"
+                        @onclick="@(() => TabService.Close(tabId))"
+                        @onclick:stopPropagation="true"
+                        aria-label="Close tab">
+                    <MudIcon Icon="@Icons.Material.Outlined.Close" Size="Size.Small" />
+                </button>
             </div>
         }
     </div>
 
-    <!-- ── Overflow menu ─────────────────────────────────────────────── -->
+    <!-- Overflow dropdown — only shown when tabs exist -->
     @if (TabService.Tabs.Count > 0)
     {
         <MudMenu Icon="@Icons.Material.Outlined.KeyboardArrowDown"
@@ -58,7 +51,8 @@
                  TransformOrigin="Origin.TopRight">
             @foreach (var tab in TabService.Tabs)
             {
-                <MudMenuItem OnClick="() => TabService.Focus(tab.Id)">
+                var tabId = tab.Id;
+                <MudMenuItem OnClick="@(() => TabService.Focus(tabId))">
                     <div class="bm-overflow-item">
                         <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="mr-2" />
                         <span>@tab.Label</span>

@@ -26,13 +26,18 @@ public class Program
         // ── SignalR ──────────────────────────────────────────────────────────
         builder.Services.AddSignalR();
 
+        // ── Batch service ─────────────────────────────────────────────────────
+        // Use MockBatchService for development / demo without a MongoDB instance.
+        // Swap to MongoBatchService when connecting to a real cluster:
+        //   builder.Services.AddSingleton<IBatchService, MongoBatchService>();
+        builder.Services.AddSingleton<IBatchService, MockBatchService>();
+
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
         builder.Services.AddScoped<EnvironmentSelectorService>();
         builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
 
-        // ── HTTP Context (needed for JS interop helpers) ─────────────────────
         builder.Services.AddHttpContextAccessor();
 
         var app = builder.Build();

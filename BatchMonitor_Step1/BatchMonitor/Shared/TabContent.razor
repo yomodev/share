@@ -2,38 +2,35 @@
 
 @if (Tab is null) { return; }
 
+@{
+    var env = Tab.Environment ?? string.Empty;
+    var label = Tab.Label ?? string.Empty;
+}
+
 @switch (Tab.Type)
 {
     case TabType.Batches:
-        <BatchMonitor.Pages.Batches Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.Batches Environment="@env" />
         break;
 
     case TabType.Services:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="Services"
-            Icon="@Icons.Material.Outlined.Dns"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="Services"
+            Icon="@Icons.Material.Outlined.Dns" Environment="@env" />
         break;
 
     case TabType.Kafka:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="Kafka"
-            Icon="@Icons.Material.Outlined.Stream"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="Kafka"
+            Icon="@Icons.Material.Outlined.Stream" Environment="@env" />
         break;
 
     case TabType.MongoDB:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="MongoDB"
-            Icon="@Icons.Material.Outlined.Storage"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="MongoDB"
+            Icon="@Icons.Material.Outlined.Storage" Environment="@env" />
         break;
 
     case TabType.Errors:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="Errors"
-            Icon="@Icons.Material.Outlined.BugReport"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="Errors"
+            Icon="@Icons.Material.Outlined.BugReport" Environment="@env" />
         break;
 
     case TabType.Settings:
@@ -41,24 +38,18 @@
         break;
 
     case TabType.BatchDetail:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="@($"Batch: {Tab.Label}")"
-            Icon="@Icons.Material.Outlined.Hexagon"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="@($"Batch: {label}")"
+            Icon="@Icons.Material.Outlined.Hexagon" Environment="@env" />
         break;
 
     case TabType.Timeline:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="Timeline"
-            Icon="@Icons.Material.Outlined.Timeline"
-            Environment="@Tab.Environment!" />
+        <BatchMonitor.Pages.PlaceholderPage Title="Timeline"
+            Icon="@Icons.Material.Outlined.Timeline" Environment="@env" />
         break;
 
     default:
-        <BatchMonitor.Pages.PlaceholderPage
-            Title="@Tab.Label"
-            Icon="@Icons.Material.Outlined.Dashboard"
-            Environment="@(Tab.Environment ?? string.Empty)" />
+        <BatchMonitor.Pages.PlaceholderPage Title="@label"
+            Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />
         break;
 }
 

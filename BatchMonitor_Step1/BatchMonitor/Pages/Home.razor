@@ -1,10 +1,11 @@
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
+@inject IBatchService BatchService
 @implements IDisposable
 
 <div class="bm-home">
 
-    <!-- ── Page header ────────────────────────────────────────────────── -->
+    <!-- ── Header ─────────────────────────────────────────────────────── -->
     <div class="bm-home-header">
         <div>
             <MudText Typo="Typo.h5" Class="bm-home-title">Operations Centre</MudText>
@@ -12,17 +13,14 @@
                 Real-time batch processing monitor
             </MudText>
         </div>
-
-        <!-- Environment selector (synced with sidebar) -->
         <div class="bm-home-env">
             <MudSelect T="string"
                        Value="@EnvService.SelectedId"
                        ValueChanged="OnEnvChanged"
                        Dense="true"
                        Variant="Variant.Outlined"
-                       Label="Environment"
-                       Class="bm-home-env-select"
-                       Margin="Margin.Dense">
+                       Margin="Margin.Dense"
+                       Class="bm-home-env-select">
                 @foreach (var env in EnvService.Environments)
                 {
                     <MudSelectItem Value="@env.Id">
@@ -39,14 +37,12 @@
         </div>
     </div>
 
-    <!-- ── KPI stat cards ─────────────────────────────────────────────── -->
+    <!-- ── KPI cards ──────────────────────────────────────────────────── -->
     <MudGrid Spacing="3" Class="bm-stat-grid">
-
         <MudItem xs="12" sm="6" md="3">
             <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background: rgba(63,185,80,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.PlayCircle"
-                             Style="color: #3FB950;" Size="Size.Medium" />
+                <div class="bm-stat-icon" style="background:rgba(63,185,80,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Style="color:#3FB950;" />
                 </div>
                 <div class="bm-stat-body">
                     <MudText Class="bm-stat-value">@_runningCount</MudText>
@@ -54,25 +50,21 @@
                 </div>
             </div>
         </MudItem>
-
         <MudItem xs="12" sm="6" md="3">
             <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background: rgba(47,129,244,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle"
-                             Style="color: #2F81F4;" Size="Size.Medium" />
+                <div class="bm-stat-icon" style="background:rgba(47,129,244,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="color:#2F81F4;" />
                 </div>
                 <div class="bm-stat-body">
-                    <MudText Class="bm-stat-value">@_completedTodayCount</MudText>
+                    <MudText Class="bm-stat-value">@_completedCount</MudText>
                     <MudText Class="bm-stat-label">Completed Today</MudText>
                 </div>
             </div>
         </MudItem>
-
         <MudItem xs="12" sm="6" md="3">
             <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background: rgba(248,81,73,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.Error"
-                             Style="color: #F85149;" Size="Size.Medium" />
+                <div class="bm-stat-icon" style="background:rgba(248,81,73,0.12);">
+                    <MudIcon Icon="@Icons.Material.Filled.Error" Style="color:#F85149;" />
                 </div>
                 <div class="bm-stat-body">
                     <MudText Class="bm-stat-value">@_failedCount</MudText>
@@ -80,12 +72,10 @@
                 </div>
             </div>
         </MudItem>
-
         <MudItem xs="12" sm="6" md="3">
             <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background: rgba(210,153,34,0.12);">
-                    <MudIcon Icon="@Icons.Material.Outlined.Speed"
-                             Style="color: #D29922;" Size="Size.Medium" />
+                <div class="bm-stat-icon" style="background:rgba(210,153,34,0.12);">
+                    <MudIcon Icon="@Icons.Material.Outlined.Speed" Style="color:#D29922;" />
                 </div>
                 <div class="bm-stat-body">
                     <MudText Class="bm-stat-value">@_avgDuration</MudText>
@@ -93,16 +83,13 @@
                 </div>
             </div>
         </MudItem>
-
     </MudGrid>
 
     <!-- ── Mini batch summary ─────────────────────────────────────────── -->
     <MudPaper Elevation="0" Class="bm-mini-summary">
-
         <div class="bm-mini-summary-header">
-            <MudText Typo="Typo.subtitle1" Class="bm-section-title">Recent Batches</MudText>
-            <MudButton Variant="Variant.Text"
-                       Size="Size.Small"
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Batches</MudText>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
                        StartIcon="@Icons.Material.Outlined.ViewList"
                        OnClick="OpenBatchesDashboard"
                        Class="bm-view-all-btn">
@@ -110,24 +97,24 @@
             </MudButton>
         </div>
 
-        <MudTable Items="@_recentBatches"
+        <MudTable T="BatchSummary"
+                  Items="@_recent"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
                   Class="bm-mini-table">
             <HeaderContent>
-                <MudTh Style="width:36px"></MudTh>
+                <MudTh Style="width:36px;"></MudTh>
                 <MudTh>Name</MudTh>
                 <MudTh>Type</MudTh>
                 <MudTh>Started</MudTh>
                 <MudTh>Duration</MudTh>
+                <MudTh Style="width:80px;"></MudTh>
             </HeaderContent>
             <RowTemplate>
+                <MudTd><StatusIcon Status="@context.Status" /></MudTd>
                 <MudTd>
-                    <StatusIcon Status="@context.Status" />
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">@context.BatchName</MudText>
+                    <MudText Typo="Typo.body2">@context.BatchName</MudText>
                 </MudTd>
                 <MudTd>
                     <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
@@ -142,41 +129,71 @@
                         @FormatDuration(context.Duration)
                     </MudText>
                 </MudTd>
+                <MudTd Style="text-align:right;">
+                    <MudTooltip Text="Open Detail">
+                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OpenDetail(context))" />
+                    </MudTooltip>
+                </MudTd>
             </RowTemplate>
         </MudTable>
-
     </MudPaper>
 
 </div>
 
 @code {
-    // ── Mock data (replaced by real endpoint in Step 2) ──────────────
+    private int _runningCount   = 0;
+    private int _completedCount = 0;
+    private int _failedCount    = 0;
+    private string _avgDuration = "--:--";
+    private List<BatchSummary> _recent = new();
 
-    private int _runningCount       = 3;
-    private int _completedTodayCount = 47;
-    private int _failedCount        = 1;
-    private string _avgDuration     = "00:08:24";
-
-    private List<BatchSummary> _recentBatches = new()
+    protected override async Task OnInitializedAsync()
     {
-        new() { RunId = "RUN-20240613-001", BatchName = "FullLoad_Customers",   Type = "FullLoad",    Status = BatchStatus.Running,   Start = DateTime.UtcNow.AddMinutes(-12) },
-        new() { RunId = "RUN-20240613-002", BatchName = "DeltaSync_Orders",     Type = "DeltaSync",   Status = BatchStatus.Completed, Start = DateTime.UtcNow.AddMinutes(-45), End = DateTime.UtcNow.AddMinutes(-37) },
-        new() { RunId = "RUN-20240613-003", BatchName = "Reconcile_Inventory",  Type = "Reconcile",   Status = BatchStatus.Failed,    Start = DateTime.UtcNow.AddMinutes(-62), End = DateTime.UtcNow.AddMinutes(-58) },
-        new() { RunId = "RUN-20240613-004", BatchName = "FullLoad_Products",    Type = "FullLoad",    Status = BatchStatus.Completed, Start = DateTime.UtcNow.AddMinutes(-90), End = DateTime.UtcNow.AddMinutes(-81) },
-        new() { RunId = "RUN-20240613-005", BatchName = "DeltaSync_Pricing",    Type = "DeltaSync",   Status = BatchStatus.Running,   Start = DateTime.UtcNow.AddMinutes(-5)  },
-    };
+        await LoadAsync();
+        EnvService.OnChange += OnEnvExternalChange;
+    }
 
-    protected override void OnInitialized() =>
-        EnvService.OnChange += StateHasChanged;
+    private async Task LoadAsync()
+    {
+        try
+        {
+            var batches = await BatchService.GetBatchesAsync(
+                EnvService.SelectedId, DateTime.UtcNow, 25);
 
-    private void OnEnvChanged(string newId)
+            _recent         = batches.Take(5).ToList();
+            _runningCount   = batches.Count(b => b.Status == BatchStatus.Running);
+            _failedCount    = batches.Count(b => b.Status == BatchStatus.Failed);
+            _completedCount = batches.Count(b => b.Status == BatchStatus.Completed);
+
+            var completed = batches.Where(b => b.End.HasValue).ToList();
+            if (completed.Any())
+            {
+                var avg = TimeSpan.FromSeconds(completed.Average(b => b.Duration.TotalSeconds));
+                _avgDuration = FormatDuration(avg);
+            }
+        }
+        catch { /* non-critical — show zeros */ }
+    }
+
+    private async void OnEnvExternalChange()
+    {
+        await LoadAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
-        StateHasChanged();
+        await LoadAsync();
     }
 
     private void OpenBatchesDashboard() =>
         TabService.OpenOrFocus(TabModel.CreateBatchesDashboard(EnvService.SelectedId));
+
+    private void OpenDetail(BatchSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateBatchDetail(b.RunId, b.BatchName, EnvService.SelectedId));
 
     private static string FormatDuration(TimeSpan ts) =>
         ts.TotalHours >= 1
@@ -184,5 +201,5 @@
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 
     public void Dispose() =>
-        EnvService.OnChange -= StateHasChanged;
+        EnvService.OnChange -= OnEnvExternalChange;
 }

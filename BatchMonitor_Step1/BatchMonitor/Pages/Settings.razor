@@ -2,21 +2,18 @@
 @inject ThemeService ThemeService
 @inject IJSRuntime JS
 
-<div class="bm-page">
+<div class="bm-settings-page">
 
-    <div class="bm-page-header">
-        <MudText Typo="Typo.h6" Class="bm-page-title">
-            <MudIcon Icon="@Icons.Material.Outlined.Settings" Class="mr-2" Size="Size.Small" />
-            Settings
-        </MudText>
-    </div>
+    <MudText Typo="Typo.h6" Class="mb-4" Style="font-weight:600;">
+        <MudIcon Icon="@Icons.Material.Outlined.Settings" Class="mr-2" Size="Size.Small" />
+        Settings
+    </MudText>
 
     <MudGrid Spacing="4">
 
         <MudItem xs="12" md="6">
             <MudPaper Elevation="0" Class="bm-settings-section">
-                <MudText Typo="Typo.subtitle1" Class="bm-section-title mb-4">Appearance</MudText>
-
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">Appearance</MudText>
                 <div class="bm-settings-row">
                     <div>
                         <MudText Typo="Typo.body1">Theme</MudText>
@@ -48,20 +45,19 @@
 
         <MudItem xs="12" md="6">
             <MudPaper Elevation="0" Class="bm-settings-section">
-                <MudText Typo="Typo.subtitle1" Class="bm-section-title mb-4">About</MudText>
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">About</MudText>
                 <div class="bm-about-grid">
                     <MudText Typo="Typo.body2" Class="bm-muted">Version</MudText>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">1.0.0-step1</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">1.0.0-step2</MudText>
                     <MudText Typo="Typo.body2" Class="bm-muted">Framework</MudText>
                     <MudText Typo="Typo.body2" Class="bm-monospace">.NET 8 / Blazor Server</MudText>
                     <MudText Typo="Typo.body2" Class="bm-muted">UI Library</MudText>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">MudBlazor 7</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">MudBlazor 9</MudText>
                 </div>
             </MudPaper>
         </MudItem>
 
     </MudGrid>
-
 </div>
 
 @code {

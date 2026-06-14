@@ -1,7 +1,7 @@
-@* Renders a status icon with appropriate colour and animation *@
+@* Status icon with colour and pulse animation for Running *@
 
 <MudTooltip Text="@Status.ToString()">
-    <span class="bm-status-icon bm-status-@Status.ToString().ToLower()">
+    <span class="bm-status-icon bm-status-@(Status.ToString().ToLower())">
         <MudIcon Icon="@GetIcon()" Size="@Size" />
     </span>
 </MudTooltip>

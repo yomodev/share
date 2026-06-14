@@ -1,65 +1,80 @@
+@inject IBatchService BatchService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@implements IDisposable
 
-<div class="bm-page">
+<div class="bm-page bm-page-fill">
 
-    <!-- ── Page header ────────────────────────────────────────────────── -->
-    <div class="bm-page-header">
-        <MudText Typo="Typo.h6" Class="bm-page-title">
-            <MudIcon Icon="@Icons.Material.Outlined.ViewList" Class="mr-2" Size="Size.Small" />
-            Batches
-        </MudText>
-        <MudText Typo="Typo.body2" Class="bm-muted">@Environment</MudText>
+    <!-- ── Toolbar: filter + refresh ────────────────────────────────── -->
+    <div class="bm-batch-toolbar">
+        <MudTextField @bind-Value="_searchText"
+                      Placeholder="Search name, run ID…"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Immediate="true"
+                      DebounceInterval="300"
+                      OnDebounceIntervalElapsed="ApplyFilter"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Class="bm-filter-input"
+                      Clearable="true"
+                      OnClearButtonClick="ClearFilter" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           OnClick="RefreshAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
     </div>
 
-    <!-- ── Batch table ────────────────────────────────────────────────── -->
-    <MudPaper Elevation="0" Class="bm-table-paper">
+    <!-- ── Table ─────────────────────────────────────────────────────── -->
+    <div class="bm-table-wrap">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
 
-        <!-- Toolbar: refresh + rows-per-page -->
-        <div class="bm-table-toolbar">
-            <MudText Typo="Typo.body2" Class="bm-muted">
-                Showing @_paged.Count of @_filtered.Count batches
-            </MudText>
-            <div class="bm-toolbar-right">
-                <MudSelect T="int"
-                           Value="@_pageSize"
-                           ValueChanged="OnPageSizeChanged"
-                           Dense="true"
-                           Variant="Variant.Outlined"
-                           Label="Rows"
-                           Style="width:90px;"
-                           Margin="Margin.Dense">
-                    <MudSelectItem Value="10">10</MudSelectItem>
-                    <MudSelectItem Value="25">25</MudSelectItem>
-                    <MudSelectItem Value="50">50</MudSelectItem>
-                    <MudSelectItem Value="100">100</MudSelectItem>
-                </MudSelect>
-                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                               Size="Size.Small"
-                               Title="Refresh"
-                               OnClick="Refresh"
-                               Class="ml-2" />
-            </div>
-        </div>
-
-        <MudTable Items="@_paged"
+        <MudTable T="BatchSummary"
+                  Items="@_paged"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
                   Class="bm-batch-table"
                   FixedHeader="true"
-                  Height="calc(100vh - 260px)">
+                  Height="100%">
             <HeaderContent>
-                <MudTh Style="width:36px; padding-left:16px;"></MudTh>
-                <MudTh>Name</MudTh>
-                <MudTh>Run ID</MudTh>
-                <MudTh>Type</MudTh>
-                <MudTh>Started (UTC)</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh Style="width:120px; text-align:center;">Actions</MudTh>
+                <MudTh Style="width:36px;"></MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.BatchName)">Name</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.RunId)">Run ID</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.Type)">Type</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.Start)" InitialDirection="SortDirection.Descending">
+                        Started (UTC)
+                    </MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.Duration)">Duration</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="BatchSummary"
+                                       SortBy="@(b => b.Status)">Status</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd Style="padding-left:16px;">
+                <MudTd Style="padding-left:12px;">
                     <StatusIcon Status="@context.Status" />
                 </MudTd>
                 <MudTd>
@@ -81,51 +96,68 @@
                         @FormatDuration(context.Duration)
                     </MudText>
                 </MudTd>
+                <MudTd>
+                    <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
+                        @context.Status
+                    </span>
+                </MudTd>
                 <MudTd Style="text-align:center;">
                     <div class="bm-row-actions">
-                        <!-- Open detail tab -->
                         <MudTooltip Text="Open Detail">
                             <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
                                            Size="Size.Small"
                                            OnClick="@(() => OpenDetail(context))" />
                         </MudTooltip>
-
-                        <!-- Open timeline tab -->
                         <MudTooltip Text="Open Timeline">
                             <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
                                            Size="Size.Small"
                                            OnClick="@(() => OpenTimeline(context))" />
                         </MudTooltip>
-
-                        <!-- Stop batch — enabled only when Running -->
                         <MudTooltip Text="@(context.Status == BatchStatus.Running ? "Stop Batch" : "Not running")">
                             <span>
                                 <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
                                                Size="Size.Small"
                                                Color="Color.Error"
                                                Disabled="@(context.Status != BatchStatus.Running)"
-                                               OnClick="@(() => StopBatch(context))" />
+                                               OnClick="@(() => StopBatchAsync(context))" />
                             </span>
                         </MudTooltip>
                     </div>
                 </MudTd>
             </RowTemplate>
         </MudTable>
+    </div>
 
-        <!-- ── Pagination ─────────────────────────────────────────────── -->
-        <div class="bm-pagination">
-            <MudText Typo="Typo.body2" Class="bm-muted">
-                Page @_page of @_totalPages
-            </MudText>
-            <MudPagination Count="@_totalPages"
-                           Selected="@_page"
-                           SelectedChanged="OnPageChanged"
-                           ShowFirstButton="true"
-                           ShowLastButton="true"
-                           Size="Size.Small" />
+    <!-- ── Footer: count + rows per page + pagination ────────────────── -->
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @_filtered.Count results
+        </MudText>
+
+        <MudPagination Count="@_totalPages"
+                       Selected="@_page"
+                       SelectedChanged="OnPageChanged"
+                       ShowFirstButton="true"
+                       ShowLastButton="true"
+                       Size="Size.Small"
+                       Class="bm-pagination-ctrl" />
+
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int"
+                       Value="@_pageSize"
+                       ValueChanged="OnPageSizeChanged"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Style="width:74px;">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+            </MudSelect>
         </div>
-
-    </MudPaper>
+    </div>
 
 </div>
 
@@ -134,93 +166,96 @@
 
     private int _page     = 1;
     private int _pageSize = 25;
+    private bool _loading = false;
+    private string _searchText = string.Empty;
 
     private List<BatchSummary> _all      = new();
     private List<BatchSummary> _filtered = new();
     private List<BatchSummary> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
 
-    protected override void OnInitialized()
+    private CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync() =>
+        await LoadAsync();
+
+    private async Task LoadAsync()
     {
-        LoadMockData();
-        ApplyFilter();
-    }
-
-    // ── Mock data (replaced by real endpoint in Step 2) ──────────────
-
-    private void LoadMockData()
-    {
-        var rng   = new Random(42);
-        var types = new[] { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
-        var names = new[] { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments" };
-
-        _all = Enumerable.Range(1, 120).Select(i =>
+        _loading = true;
+        StateHasChanged();
+        try
         {
-            var start  = DateTime.UtcNow.AddMinutes(-rng.Next(1, 1440));
-            var status = i switch { 1 => BatchStatus.Running, 2 => BatchStatus.Running, 3 => BatchStatus.Failed, _ => BatchStatus.Completed };
-            return new BatchSummary
-            {
-                RunId     = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
-                BatchName = $"{types[rng.Next(types.Length)]}_{names[rng.Next(names.Length)]}",
-                Type      = types[rng.Next(types.Length)],
-                Status    = status,
-                Start     = start,
-                End       = status != BatchStatus.Running ? start.AddMinutes(rng.Next(2, 30)) : null
-            };
-        })
-        .OrderByDescending(b => b.Start)
-        .ToList();
+            _all = await BatchService.GetBatchesAsync(
+                Environment, DateTime.UtcNow, 200, ct: _cts.Token);
+            ApplyFilter();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load batches: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private void ApplyFilter()
     {
-        _filtered = _all; // filter logic added in Step 3
+        var filter = string.IsNullOrWhiteSpace(_searchText)
+            ? _all
+            : _all.Where(b =>
+                b.BatchName.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                b.RunId.Contains(_searchText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        _filtered = filter;
         _page     = 1;
         RebuildPage();
+        StateHasChanged();
     }
 
-    private void RebuildPage()
+    private void ClearFilter()
     {
-        _paged = _filtered
-            .Skip((_page - 1) * _pageSize)
-            .Take(_pageSize)
-            .ToList();
-    }
-
-    private void OnPageChanged(int page)
-    {
-        _page = page;
-        RebuildPage();
-    }
-
-    private void OnPageSizeChanged(int size)
-    {
-        _pageSize = size;
-        _page     = 1;
-        RebuildPage();
-    }
-
-    private void Refresh()
-    {
-        LoadMockData();
+        _searchText = string.Empty;
         ApplyFilter();
-        Snackbar.Add("Refreshed", Severity.Normal, cfg => cfg.VisibleStateDuration = 1500);
     }
 
-    private void OpenDetail(BatchSummary batch) =>
-        TabService.OpenOrFocus(TabModel.CreateBatchDetail(batch.RunId, batch.BatchName, Environment));
+    private void RebuildPage() =>
+        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
-    private void OpenTimeline(BatchSummary batch) =>
-        TabService.OpenOrFocus(TabModel.CreateTimeline(batch.RunId, Environment));
+    private void OnPageChanged(int page) { _page = page; RebuildPage(); }
 
-    private void StopBatch(BatchSummary batch)
+    private void OnPageSizeChanged(int size) { _pageSize = size; _page = 1; RebuildPage(); }
+
+    private async Task RefreshAsync()
     {
-        // POST /api/{env}/batches/{runId}/cancel — wired in Step 2
-        Snackbar.Add($"Stop requested for {batch.BatchName}", Severity.Warning);
+        _searchText = string.Empty;
+        await LoadAsync();
+        Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
+    }
+
+    private void OpenDetail(BatchSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateBatchDetail(b.RunId, b.BatchName, Environment));
+
+    private void OpenTimeline(BatchSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateTimeline(b.RunId, Environment));
+
+    private async Task StopBatchAsync(BatchSummary b)
+    {
+        var ok = await BatchService.CancelBatchAsync(Environment, b.RunId, _cts.Token);
+        if (ok)
+        {
+            Snackbar.Add($"Stop requested for {b.BatchName}", Severity.Warning);
+            await LoadAsync();
+        }
+        else
+            Snackbar.Add("Could not stop batch", Severity.Error);
     }
 
     private static string FormatDuration(TimeSpan ts) =>
         ts.TotalHours >= 1
             ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+
+    public void Dispose() => _cts.Cancel();
 }

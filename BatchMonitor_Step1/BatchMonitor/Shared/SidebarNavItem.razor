@@ -1,21 +1,25 @@
-@* Reusable sidebar navigation item — icon + optional label + active state *@
+@* Reusable sidebar nav item — icon only when collapsed, icon+label when expanded *@
 
-<MudTooltip Text="@(IsOpen ? "" : Label)" Placement="Placement.Right" Delay="300">
+@if (!IsOpen)
+{
+    <MudTooltip Text="@Label" Placement="Placement.Right" Delay="200">
+        <div class="bm-nav-item @(IsActive ? "active" : "")" @onclick="OnClick">
+            <MudIcon Icon="@Icon" Size="Size.Small" Class="bm-nav-icon" />
+        </div>
+    </MudTooltip>
+}
+else
+{
     <div class="bm-nav-item @(IsActive ? "active" : "")" @onclick="OnClick">
-        <MudIcon Icon="@Icon"
-                 Size="Size.Small"
-                 Class="bm-nav-icon" />
-        @if (IsOpen)
-        {
-            <span class="bm-nav-label">@Label</span>
-        }
+        <MudIcon Icon="@Icon" Size="Size.Small" Class="bm-nav-icon" />
+        <span class="bm-nav-label">@Label</span>
     </div>
-</MudTooltip>
+}
 
 @code {
-    [Parameter, EditorRequired] public string Icon  { get; set; } = string.Empty;
-    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
-    [Parameter] public bool IsOpen   { get; set; }
-    [Parameter] public bool IsActive { get; set; }
+    [Parameter, EditorRequired] public string Icon    { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Label   { get; set; } = string.Empty;
+    [Parameter] public bool          IsOpen  { get; set; }
+    [Parameter] public bool          IsActive { get; set; }
     [Parameter] public EventCallback OnClick { get; set; }
 }

@@ -6,13 +6,12 @@
 <MudThemeProvider Theme="@ThemeService.ActiveTheme" IsDarkMode="@ThemeService.IsDark" />
 <MudDialogProvider />
 <MudSnackbarProvider />
+<MudPopoverProvider />
 
 <MudLayout>
 
-    <!-- ── Sidebar ───────────────────────────────────────────────────── -->
     <BatchMonitor.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
 
-    <!-- ── AppBar — tab bar ──────────────────────────────────────────── -->
     <MudAppBar Elevation="0"
                Dense="true"
                Class="bm-tabbar"
@@ -20,8 +19,7 @@
         <BatchMonitor.Layout.TabBar />
     </MudAppBar>
 
-    <!-- ── Main content ──────────────────────────────────────────────── -->
-    <MudMainContent Class="bm-main-content">
+    <MudMainContent Style="padding:0; height:100vh; overflow:hidden; display:flex; flex-direction:column;">
         <div class="bm-content-area">
             @if (TabService.ActiveTab is null)
             {
@@ -37,19 +35,13 @@
 </MudLayout>
 
 @code {
-    private bool _drawerOpen = true;
-
     protected override void OnInitialized()
     {
         ThemeService.OnChange += StateHasChanged;
         TabService.OnChange   += StateHasChanged;
     }
 
-    private void OnDrawerOpenChanged(bool open)
-    {
-        _drawerOpen = open;
-        StateHasChanged();
-    }
+    private void OnDrawerOpenChanged(bool open) => StateHasChanged();
 
     public void Dispose()
     {
