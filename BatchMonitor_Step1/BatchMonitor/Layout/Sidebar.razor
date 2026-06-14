@@ -5,25 +5,20 @@
 
 <MudDrawer @bind-Open="_drawerOpen"
            Variant="DrawerVariant.Mini"
-           MiniWidth="64px"
-           Width="240px"
+           MiniWidth="56px"
+           Width="184px"
            Elevation="0"
            Class="bm-sidebar"
            OpenMiniOnHover="false">
 
     <div class="bm-sidebar-content">
 
-        <!-- ── Header: burger + title (clickable → home) ─────────────── -->
+        <!-- ── Header: burger + title rendered as a nav item so it matches other items ───────── -->
         <div class="bm-sidebar-header">
-            <button class="bm-burger-btn" @onclick="ToggleDrawer" aria-label="Toggle sidebar">
-                <MudIcon Icon="@Icons.Material.Outlined.Menu" Size="Size.Small" />
-            </button>
-            @if (_drawerOpen)
-            {
-                <button class="bm-sidebar-title-btn" @onclick="GoHome">
-                    Batch Monitor
-                </button>
-            }
+            <SidebarNavItem Icon="@Icons.Material.Outlined.Menu"
+                            Label="Batch Monitor"
+                            IsOpen="@_drawerOpen"
+                            OnClick="ToggleDrawer" />
         </div>
 
         <div class="bm-sidebar-divider"></div>
@@ -75,7 +70,7 @@
         <!-- ── Bottom section ────────────────────────────────────────── -->
         <div class="bm-sidebar-bottom">
 
-            <!-- Environment selector — above the divider -->
+            <!-- Environment selector — compact badge-only but wide enough to avoid cropping -->
             @if (_drawerOpen)
             {
                 <div class="bm-env-selector-expanded">
@@ -85,17 +80,15 @@
                                Dense="true"
                                Variant="Variant.Outlined"
                                Margin="Margin.Dense"
-                               Class="bm-env-select">
+                               Class="bm-env-select"
+                               Style="width:56px; min-width:56px;">
                         @foreach (var env in EnvService.Environments)
                         {
                             <MudSelectItem Value="@env.Id">
-                                <div class="bm-env-option">
-                                    <span class="bm-env-badge"
-                                          style="background:@env.BadgeColor; color:@env.BadgeTextColor">
-                                        @env.Id
-                                    </span>
-                                    <span class="bm-env-label">@env.Label</span>
-                                </div>
+                                <span class="bm-env-badge"
+                                      style="background:@env.BadgeColor; color:@env.BadgeTextColor">
+                                    @env.Id
+                                </span>
                             </MudSelectItem>
                         }
                     </MudSelect>

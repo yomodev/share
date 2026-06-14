@@ -72,6 +72,37 @@ public class MongoBatchService : IBatchService
         return true;
     }
 
+    public Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default)
+    {
+        // Return deterministic static details for demo
+        var details = new BatchDetails
+        {
+            RunId = runId ?? "RUN-UNKNOWN",
+            BatchName = $"DemoBatch_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Type = "FullLoad",
+            Status = BatchStatus.Completed,
+            Start = DateTime.UtcNow.AddMinutes(-42),
+            End = DateTime.UtcNow.AddMinutes(-40),
+            Metadata = new Dictionary<string, string>
+            {
+                ["Source"] = "s3://bucket/path",
+                ["Target"] = "mongo://cluster/db/col",
+                ["RecordsProcessed"] = "12,345",
+                ["WorkerNode"] = "node-7",
+                ["RequestId"] = Guid.NewGuid().ToString()
+            }
+        };
+
+        // For some runIds simulate running
+        if (runId?.Contains("RUN-") == true && runId.EndsWith("1"))
+        {
+            details.Status = BatchStatus.Running;
+            details.End = null;
+        }
+
+        return Task.FromResult(details);
+    }
+
     // ── Mapping ──────────────────────────────────────────────────────────
 
     private static BatchSummary MapToBatchSummary(BsonDocument doc)

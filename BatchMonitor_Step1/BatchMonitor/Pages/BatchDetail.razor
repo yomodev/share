@@ -1,0 +1,158 @@
+@using BatchMonitor.Models
+@inject IBatchService BatchService
+@inject TabService TabService
+@inject IJSRuntime JS
+@implements IDisposable
+
+@code {
+    [Parameter, EditorRequired] public string? RunId { get; set; }
+    [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public TabModel? Tab { get; set; }
+
+    private BatchDetails? _details;
+    private bool _loading = true;
+    private bool _rightPanelCollapsed = false;
+    private string _localStorageKey => $"bm_batch_details_collapsed:{RunId}:{Environment}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // read persisted collapse state
+        try
+        {
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", _localStorageKey);
+            _rightPanelCollapsed = stored == "true";
+        }
+        catch { }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _details = await BatchService.GetBatchDetailsAsync(Environment, RunId ?? string.Empty);
+        }
+        catch { _details = null; }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task ToggleRightPanel()
+    {
+        _rightPanelCollapsed = !_rightPanelCollapsed;
+        StateHasChanged();
+        try { await JS.InvokeVoidAsync("localStorage.setItem", _localStorageKey, _rightPanelCollapsed.ToString().ToLower()); }
+        catch { }
+    }
+
+    private async Task CancelBatchAsync()
+    {
+        if (RunId is null) return;
+        var ok = await BatchService.CancelBatchAsync(Environment, RunId);
+        if (ok) await LoadAsync();
+    }
+
+    private void OpenTimeline()
+    {
+        if (RunId is null) return;
+        TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
+    }
+
+    public void Dispose() { /* nothing for now */ }
+}
+
+<div class="bm-page-fill bm-batch-detail">
+
+    <!-- Floating sub-header -->
+    <div class="bm-batch-subheader @( _loading ? "loading" : "" )" title="Batch info">
+        <div class="bm-batch-subheader-left">
+            <div class="bm-batch-icon">
+                <MudIcon Icon="@Icons.Material.Outlined.Hexagon" />
+            </div>
+            <div class="bm-batch-meta">
+                <div class="bm-batch-name">@(_details?.BatchName ?? "Loading…")</div>
+                <div class="bm-batch-submeta">
+                    <span class="bm-monospace">@(_details?.RunId ?? string.Empty)</span>
+                    <span class="bm-muted"> • @(_details?.Type ?? "")</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bm-batch-subheader-actions">
+            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Class="bm-status-chip">@(_details?.Status.ToString() ?? "--")</MudChip>
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelBatchAsync" Disabled="@(_details?.Status != BatchStatus.Running)">
+                Cancel
+            </MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenTimeline">
+                Open Timeline
+            </MudButton>
+        </div>
+    </div>
+
+    <!-- Main content area -->
+    <div class="bm-batch-detail-grid">
+        <!-- Graph / canvas placeholder -->
+        <div class="bm-batch-graph">
+            @if (_loading)
+            {
+                <div class="bm-graph-loading">Loading…</div>
+            }
+            else
+            {
+                <canvas class="bm-graph-canvas" width="800" height="280"></canvas>
+            }
+        </div>
+
+        <!-- Right details panel -->
+        <div class="bm-batch-details-panel @( _rightPanelCollapsed ? "collapsed" : "" )">
+            <div class="bm-details-toggle" @onclick="ToggleRightPanel">
+                <MudIcon Icon="@(_rightPanelCollapsed ? Icons.Material.Outlined.ChevronLeft : Icons.Material.Outlined.ChevronRight)" />
+            </div>
+            <div class="bm-details-body">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Details</MudText>
+                @if (_loading)
+                {
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                }
+                else if (_details is null)
+                {
+                    <MudText>Not available</MudText>
+                }
+                else
+                {
+                    <div class="bm-details-list">
+                        @foreach (var kv in _details.Metadata)
+                        {
+                            <div class="bm-details-row">
+                                <div class="bm-details-key">@kv.Key</div>
+                                <div class="bm-details-value">@kv.Value</div>
+                            </div>
+                        }
+                        <div class="bm-details-row">
+                            <div class="bm-details-key">Started</div>
+                            <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
+                        </div>
+                        <div class="bm-details-row">
+                            <div class="bm-details-key">Duration</div>
+                            <div class="bm-details-value">@FormatDuration(_details.Duration)</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom slider placeholder (disabled/empty) -->
+    <div class="bm-batch-detail-footer">
+        <MudSlider Disabled="true" Min="0" Max="100" Value="0" />
+    </div>
+</div>
+
+@code {
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+}

@@ -23,6 +23,9 @@ public interface IBatchService
     /// Returns true if the request was accepted.
     /// </summary>
     Task<bool> CancelBatchAsync(string env, string runId, CancellationToken ct = default);
+
+    // Step 4: batch details
+    Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default);
 }
 
 /// <summary>

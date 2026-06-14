@@ -19,7 +19,8 @@
         <BatchMonitor.Layout.TabBar />
     </MudAppBar>
 
-    <MudMainContent Style="padding:0; height:100vh; overflow:hidden; display:flex; flex-direction:column;">
+    <!-- Keep main content flexible; restore top offset for the fixed appbar -->
+    <MudMainContent Style="padding:0; padding-top:var(--bm-tabbar-h); overflow:hidden; display:flex; flex-direction:column;">
         <div class="bm-content-area">
             @if (TabService.ActiveTab is null)
             {

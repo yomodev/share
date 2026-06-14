@@ -95,9 +95,9 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--bm-radius);   /* same radius as nav items */
+    width: var(--bm-tabbar-h);
+    height: var(--bm-tabbar-h);
+    border-radius: var(--bm-radius);
     border: none;
     background: transparent;
     cursor: pointer;
@@ -113,6 +113,9 @@ html, body {
 
 /* ── Sidebar title (clickable → home) ───────────────────────────── */
 .bm-sidebar-title-btn {
+    display: flex;
+    align-items: center;
+    height: var(--bm-tabbar-h);
     border: none;
     background: transparent;
     cursor: pointer;
@@ -125,7 +128,6 @@ html, body {
     transition: color var(--bm-transition);
     font-family: inherit;
 }
-.bm-sidebar-title-btn:hover { color: var(--mud-palette-primary); }
 
 /* ── Divider ─────────────────────────────────────────────────────── */
 .bm-sidebar-divider {
@@ -144,6 +146,10 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: stretch;
+    scrollbar-width: none; /* Firefox */
+}
+.bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
+    display: none;
 }
 
 /* ── Spacer ──────────────────────────────────────────────────────── */
@@ -163,7 +169,7 @@ html, body {
     flex-direction: row;
     align-items: center;
     gap: 12px;
-    padding: 8px 12px;
+    padding: 8px 10px;
     margin: 1px 6px;
     border-radius: var(--bm-radius);
     cursor: pointer;
@@ -253,6 +259,13 @@ html, body {
     gap: 2px;
 }
 
+/* compact environment selector: hide label in expanded mode so only badge is visible */
+.bm-env-selector-expanded .bm-env-label {
+    display: none;
+}
+/* make select control compact so sidebar can be narrower */
+.bm-env-select { width: 56px; max-width: 56px; }
+
 .bm-tabs-scroll {
     display: flex;
     align-items: center;
@@ -261,7 +274,7 @@ html, body {
     overflow-y: hidden;
     flex: 1;
     scrollbar-width: none;
-    padding: 4px 0;
+    padding: 0;
 }
 .bm-tabs-scroll::-webkit-scrollbar { display: none; }
 
@@ -607,3 +620,387 @@ html, body {
 }
 #blazor-error-ui .reload  { color: #fff; font-weight: 600; margin-left: 12px; }
 #blazor-error-ui .dismiss { cursor: pointer; float: right; padding: 0 4px; }
+
+/* ---------- small layout & UI fixes (append to the end of app.css) ---------- */
+
+/* hide the nav menu scrollbar (still scrollable) */
+.bm-nav-menu {
+    scrollbar-width: none; /* Firefox */
+}
+.bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
+    display: none;
+}
+
+/* Home: prevent accidental horizontal scrolling */
+.bm-home {
+    overflow-x: hidden;
+}
+
+/* compact environment select in sidebar */
+.bm-env-select { width: 56px; max-width: 56px; }
+
+/* ensure the select control uses the compact width when rendered */
+.bm-env-selector-expanded .mud-select-root { width: 56px; }
+
+/* reduce font-size for rows-per-page select in Batches footer */
+.bm-rows-select .mud-input-root,
+.bm-rows-select .mud-select-value {
+    font-size: 0.75rem;
+}
+
+/* make appbar buttons and menu vertically centered at the exact tabbar height */
+.bm-tabbar .mud-button-root,
+.bm-tabbar .mud-icon-button-root,
+.bm-tabbar .mud-menu-root,
+.bm-tabbar .mud-menu-button {
+    height: var(--bm-tabbar-h);
+    min-height: var(--bm-tabbar-h);
+    display: flex;
+    align-items: center;
+}
+
+/* ensure tabs themselves center their internal icons/text */
+.bm-tab { align-items: center; }
+.bm-tab * { vertical-align: middle; }
+
+/* ---------- adjustments for layout issues (append to end of app.css) ---------- */
+
+/* Rows-per-page select: smaller font and compact sizing to fit the control */
+.bm-rows-select .mud-select-root,
+.bm-rows-select .mud-input-root,
+.bm-rows-select .mud-select-value,
+.bm-rows-select .mud-select-value span {
+    font-size: 0.68rem !important;
+    line-height: 1 !important;
+}
+.bm-rows-select .mud-select-root .mud-input-root {
+    height: 28px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+.bm-rows-select .mud-select-root { min-width: 72px !important; }
+
+/* Topbar buttons: stronger vertical centering override for MudBlazor 9.5 */
+.bm-tabbar.mud-appbar,
+.bm-tabbar.mud-appbar .mud-toolbar,
+.bm-tabbar-inner {
+    height: var(--bm-tabbar-h) !important;
+    min-height: var(--bm-tabbar-h) !important;
+    display: flex;
+    align-items: center;
+}
+.bm-tabbar .mud-button-root,
+.bm-tabbar .mud-icon-button-root,
+.bm-tabbar .mud-menu-root,
+.bm-tabbar .mud-menu-button,
+.bm-tabbar .mud-icon-button-root .mud-icon-svg {
+    height: var(--bm-tabbar-h) !important;
+    min-height: var(--bm-tabbar-h) !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Environment select: allow slightly larger width so badges don't get cropped */
+.bm-env-select { width: 64px; max-width: 64px; }
+.bm-env-selector-expanded .mud-select-root { width: 64px !important; min-width:64px !important; }
+
+/* Ensure the badge inside the select has enough room and doesn't wrap/crop */
+.bm-env-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 8px;
+    border-radius: 8px;
+    font-size: 0.65rem;
+    min-width: 18px;
+    box-sizing: border-box;
+}
+
+/* Collapsed sidebar: slightly narrower mini width visual fix (keeps compact look) */
+.bm-sidebar .mud-drawer-mini .mud-drawer-content,
+.bm-sidebar .mud-drawer-mini {
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+}
+
+/* ---------- fixes: topbar alignment, overflow control, env select and collapsed mini width ---------- */
+
+/* Restore left alignment for toolbar content (MudBlazor toolbar defaults to center in some themes) */
+.bm-tabbar .mud-toolbar {
+    justify-content: flex-start !important;
+}
+
+/* Keep our inner tab strip left-aligned and prevent accidental centering */
+.bm-tabbar-inner {
+    justify-content: flex-start;
+}
+
+/* Ensure overflow dropdown stays at the right of the tab strip */
+.bm-tab-overflow {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Prevent the appbar content from visually overlapping the sidebar:
+   put the sidebar above the appbar so the appbar buttons never draw "over" the drawer header. */
+.bm-tabbar.mud-appbar { z-index: 1000; }
+.bm-sidebar .mud-drawer-paper { z-index: 1100; }
+
+/* Environment select: enlarge control so badge and arrow don't overlap, and ensure popover is wide enough */
+.bm-env-select { width: 96px; max-width: 96px; }
+.bm-env-selector-expanded .mud-select-root { width: 96px !important; min-width: 96px !important; }
+.bm-env-select .mud-select-value { padding-right: 26px !important; } /* room for arrow */
+.bm-env-select .mud-select-arrow { right: 8px !important; }
+
+/* Ensure dropdown list has at least the same width as the input so badges aren't clipped */
+.bm-env-select .mud-popover, 
+.bm-env-select .mud-popover-class {
+    min-width: 96px !important;
+}
+
+/* Ensure the badge inside the select does not wrap or get cropped */
+.bm-env-badge { white-space: nowrap; display: inline-flex; padding: 1px 8px; }
+
+/* Collapsed sidebar: enforce the mini width to match MudDrawer MiniWidth */
+.bm-sidebar .mud-drawer-paper.mud-drawer-mini,
+.bm-sidebar .mud-drawer-mini .mud-drawer-paper {
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+}
+
+/* small tweak: ensure tab strip doesn't flow into the sidebar space (keeps it under the appbar) */
+.bm-tabbar-inner { overflow: hidden; }
+
+/* ---------- precise fixes for the 5 issues (append to end of app.css) ---------- */
+
+/* 1) Remove the drawer overlay dimming (Drawer has DisableOverlay=true now),
+   but ensure layout stacking still makes drawer above content */
+.bm-sidebar .mud-drawer-paper { z-index: 1100; }
+.bm-tabbar.mud-appbar { z-index: 1000; }
+
+/* 2) Topbar: force left alignment and ensure overflow menu sits at extreme right */
+.bm-tabbar .mud-toolbar { justify-content: flex-start !important; padding: 0 6px !important; }
+.bm-tabbar-inner { justify-content: flex-start !important; align-items: center; display:flex; height:var(--bm-tabbar-h) !important; padding:0 6px; gap:2px; overflow:hidden; }
+
+/* Tab strip grows and is scrollable; overflow button always at right edge */
+.bm-tabs-scroll { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; padding: 0; display:flex; align-items:center; gap:2px; }
+.bm-tab-overflow { margin-left: auto !important; flex-shrink: 0; }
+
+/* 3) Sidebar nav cropping: ensure nav area scrolls and items don't overflow their container.
+   Also provide a dedicated mini-mode rule so icons center when collapsed. */
+.bm-nav-menu { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 0; box-sizing: border-box; }
+.bm-nav-item { width: auto; box-sizing: border-box; }
+
+/* When MudDrawer is in mini mode, center-only icons and reduce horizontal padding so nothing clips */
+.bm-sidebar .mud-drawer-mini .bm-nav-item,
+.bm-sidebar .mud-drawer-mini .bm-nav-item .bm-nav-icon {
+    justify-content: center;
+    padding: 6px 4px;
+    margin: 4px 6px;
+    width: 100%;
+}
+
+/* Ensure nav items are fully visible and the list can scroll if many items */
+.bm-sidebar .bm-nav-menu .bm-nav-item { white-space: nowrap; }
+
+/* 4) Narrow expanded sidebar (drawer Width updated in Sidebar.razor).
+   Tweak internal paddings so content fits the new width. */
+.bm-sidebar .bm-sidebar-content { padding: 0; }
+.bm-sidebar .bm-nav-item { padding: 8px 10px; margin: 1px 6px; }
+
+/* Make sure title/button truncates gracefully */
+.bm-sidebar-title-btn { overflow: hidden; text-overflow: ellipsis; }
+
+/* 5) Burger alignment: ensure header nav-item uses same layout as other nav items */
+.bm-sidebar-header .bm-nav-item { display:flex; align-items:center; gap:12px; padding:8px 10px; margin:1px 6px; height:36px; box-sizing:border-box; }
+
+/* Environment select: ensure arrows don't overlap badges and popover is wide enough */
+.bm-env-select { width:72px; max-width:72px; }
+.bm-env-selector-expanded .mud-select-root { width:72px !important; min-width:72px !important; }
+.bm-env-select .mud-select-value { padding-right: 28px !important; }
+.bm-env-select .mud-select-arrow { right: 8px !important; }
+
+/* Dropdown/popover width at least input width */
+.mud-popover.mud-popover-placement-bottom, .bm-env-select .mud-popover {
+    min-width: 72px !important;
+}
+
+/* Make sure the badge inside the select is visible */
+.bm-env-badge { display:inline-flex; padding:1px 8px; white-space:nowrap; font-size:0.68rem; }
+
+/* small utility: ensure the tab close button doesn't push tabs taller */
+.bm-tab { align-items:center; height:30px; }
+
+/* final: safety clamp so sidebar mini width is enforced */
+.bm-sidebar .mud-drawer-paper.mud-drawer-mini,
+.bm-sidebar .mud-drawer-mini .mud-drawer-paper {
+    width: 56px !important; min-width:56px !important; max-width:56px !important; box-sizing:border-box;
+}
+
+/* ---------- Guarantee left-aligned tabs and always-visible overflow ---------- */
+
+/* Ensure the appbar toolbar content does not center */
+.bm-tabbar .mud-toolbar {
+    justify-content: flex-start !important;
+}
+
+/* Tabbar inner: left align and keep consistent height */
+.bm-tabbar-inner {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    height: var(--bm-tabbar-h) !important;
+    padding: 0 6px !important;
+    gap: 4px;
+    box-sizing: border-box;
+}
+
+/* Scrollable tab strip grows and stays left-aligned */
+.bm-tabs-scroll {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 0;
+    scrollbar-width: none; /* hide scrollbar while keeping scroll functionality */
+}
+.bm-tabs-scroll::-webkit-scrollbar { display: none; }
+
+/* Overflow button must stay pinned to the extreme right of the tabbar */
+.bm-tab-overflow {
+    margin-left: auto !important;
+    flex-shrink: 0;
+    height: var(--bm-tabbar-h);
+    display: flex;
+    align-items: center;
+}
+
+/* Make sure overflow icon doesn't shift vertically */
+.bm-tab-overflow .mud-icon-button-root,
+.bm-tab-overflow .mud-button-root {
+    height: var(--bm-tabbar-h) !important;
+    display: flex;
+    align-items: center;
+    padding: 0 6px !important;
+}
+
+/* Keep individual tabs vertically centered (no accidental top shift) */
+.bm-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+}
+
+/* Prevent the tab strip from stretching or centering its items */
+.bm-tabs-scroll .bm-tab { white-space: nowrap; }
+
+/* small accessibility: ensure the overflow menu button remains focusable when there are no tabs */
+.bm-tab-overflow .mud-icon-root { pointer-events: auto; }
+
+/* ---------- step 4: reduce expanded sidebar width and adjust internal spacing ---------- */
+
+/* New effective drawer width is 184px (set on the component). Tweak paddings so content fits. */
+.bm-sidebar .mud-drawer-paper {
+    width: 184px !important;
+    min-width: 184px !important;
+    box-sizing: border-box;
+}
+
+/* Slightly tighter nav item padding to fit the reduced width */
+.bm-nav-item {
+    padding: 8px 10px;
+    margin: 1px 6px;
+}
+
+/* Title truncation to avoid overflow */
+.bm-sidebar-title-btn {
+    max-width: calc(184px - 64px); /* leave room for burger + paddings */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Environment select compacted to 56px to fit the new width without cropping */
+.bm-env-select { width: 56px; max-width: 56px; }
+.bm-env-selector-expanded .mud-select-root { width: 56px !important; min-width: 56px !important; }
+.bm-env-select .mud-select-value { padding-right: 26px !important; }
+.bm-env-select .mud-select-arrow { right: 6px !important; }
+
+/* Ensure popover for env select is at least as wide as the control */
+.bm-env-select .mud-popover { min-width: 56px !important; }
+
+/* Keep mini drawer width enforced */
+.bm-sidebar .mud-drawer-paper.mud-drawer-mini,
+.bm-sidebar .mud-drawer-mini .mud-drawer-paper {
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+}
+
+/* Ensure nav list still scrolls correctly when many items exist */
+.bm-nav-menu { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---------- Step 4 UI styles (append to end of app.css) ---------- */
+
+.bm-batch-detail { position: relative; padding: 8px 12px; height: 100%; display:flex; flex-direction:column; gap:8px; }
+
+/* floating sub-header */
+.bm-batch-subheader {
+    position: absolute;
+    top: 8px;
+    left: calc(var(--bm-main-left, 0px) + 12px);
+    right: calc(72px + 12px); /* leave room for right panel toggle */
+    display:flex;
+    justify-content: space-between;
+    align-items:center;
+    padding:8px 12px;
+    border-radius:8px;
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.12);
+    z-index: 5;
+    transition: transform 160ms ease, opacity 160ms ease;
+}
+.bm-batch-subheader .bm-batch-meta { margin-left:8px; }
+.bm-batch-subheader .bm-batch-name { font-weight:700; }
+.bm-batch-subheader .bm-batch-submeta { font-size:0.85rem; color:var(--mud-palette-text-secondary); margin-top:2px; }
+.bm-batch-subheader-actions { display:flex; gap:8px; align-items:center; }
+
+/* main grid */
+.bm-batch-detail-grid { margin-top:56px; display:flex; flex:1; gap:12px; align-items:stretch; overflow:hidden; }
+
+/* graph area */
+.bm-batch-graph { flex:1; border-radius:10px; background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); display:flex; align-items:center; justify-content:center; min-height:260px; }
+.bm-graph-loading { color:var(--mud-palette-text-secondary); }
+.bm-graph-canvas { width:100%; height:100%; background: transparent; border-radius:8px; }
+
+/* details panel */
+.bm-batch-details-panel {
+    width: 320px;
+    max-width: 40%;
+    border-radius:10px;
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(8px);
+    overflow: auto;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+    position: relative;
+    display:flex;
+    flex-direction:column;
+}
+.bm-batch-details-panel.collapsed { width: 44px; overflow: visible; }
+.bm-details-toggle { position:absolute; left:-28px; top:12px; width:28px; height:28px; display:flex; align-items:center; justify-content:center; background:transparent; cursor:pointer; }
+.bm-details-body { padding:12px; }
+.bm-details-list { display:flex; flex-direction:column; gap:8px; }
+.bm-details-row { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+.bm-details-key { font-size:0.75rem; color:var(--mud-palette-text-secondary); width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bm-details-value { font-size:0.85rem; font-family:var(--bm-font-mono); text-align:right; word-break:break-word; }
+
+/* footer slider */
+.bm-batch-detail-footer { padding:6px 0; }

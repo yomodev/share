@@ -4,8 +4,8 @@
 
 <div class="bm-tabbar-inner">
 
-    <!-- Scrollable tab strip -->
-    <div class="bm-tabs-scroll">
+    <!-- Scrollable tab strip (left-aligned) -->
+    <div class="bm-tabs-scroll" role="tablist" aria-label="Open tabs">
         @foreach (var tab in TabService.Tabs)
         {
             var tabId = tab.Id;
@@ -16,10 +16,11 @@
 
             <div class="bm-tab @(isActive ? "active" : "")"
                  @onclick="@(() => TabService.Focus(tabId))"
-                 @key="tabId">
-
+                 @key="tabId"
+                 data-tab-id="@tabId"
+                 role="tab"
+                 aria-selected="@(isActive)">
                 <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
-
                 <span class="bm-tab-label">@tab.Label</span>
 
                 @if (envInfo is not null)
@@ -40,31 +41,29 @@
         }
     </div>
 
-    <!-- Overflow dropdown — only shown when tabs exist -->
-    @if (TabService.Tabs.Count > 0)
-    {
-        <MudMenu Icon="@Icons.Material.Outlined.KeyboardArrowDown"
-                 Size="Size.Small"
-                 Dense="true"
-                 Class="bm-tab-overflow"
-                 AnchorOrigin="Origin.BottomRight"
-                 TransformOrigin="Origin.TopRight">
-            @foreach (var tab in TabService.Tabs)
-            {
-                var tabId = tab.Id;
-                <MudMenuItem OnClick="@(() => TabService.Focus(tabId))">
-                    <div class="bm-overflow-item">
-                        <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="mr-2" />
-                        <span>@tab.Label</span>
-                        @if (tab.Environment is not null)
-                        {
-                            <span class="bm-overflow-env ml-2">@tab.Environment</span>
-                        }
-                    </div>
-                </MudMenuItem>
-            }
-        </MudMenu>
-    }
+    <!-- Overflow dropdown — always rendered and pinned to the extreme right -->
+    <MudMenu Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+             Size="Size.Small"
+             Dense="true"
+             Class="bm-tab-overflow"
+             AnchorOrigin="Origin.BottomRight"
+             TransformOrigin="Origin.TopRight"
+             AriaLabel="More tabs">
+        @foreach (var tab in TabService.Tabs)
+        {
+            var tabId = tab.Id;
+            <MudMenuItem OnClick="@(() => TabService.Focus(tabId))">
+                <div class="bm-overflow-item">
+                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="mr-2" />
+                    <span>@tab.Label</span>
+                    @if (tab.Environment is not null)
+                    {
+                        <span class="bm-overflow-env ml-2">@tab.Environment</span>
+                    }
+                </div>
+            </MudMenuItem>
+        }
+    </MudMenu>
 
 </div>
 

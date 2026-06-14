@@ -21,6 +21,10 @@ public class Program
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
         builder.Services.AddServerSideBlazor();
+
+        // register controllers (API endpoints)
+        builder.Services.AddControllers();
+
         builder.Services.AddMudServices();
 
         // ── SignalR ──────────────────────────────────────────────────────────
@@ -52,6 +56,9 @@ public class Program
         app.UseHttpsRedirection();
         app.UseStaticFiles();
         app.UseRouting();
+
+        // map controllers
+        app.MapControllers();
 
         app.MapBlazorHub();
         app.MapHub<BatchHub>("/hubs/batch");

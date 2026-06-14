@@ -32,8 +32,30 @@
         <a class="dismiss">🗙</a>
     </div>
 
-    <script src="_framework/blazor.server.js"></script>
-    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
+         This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
+         before Blazor starts invoking them. A fallback loads blazor.server.js even if Mud fails. -->
+    <script>
+        (function(){
+            var mud = document.createElement('script');
+            mud.src = '_content/MudBlazor/MudBlazor.min.js';
+            mud.onload = function() {
+                var blazor = document.createElement('script');
+                blazor.src = '_framework/blazor.server.js';
+                document.body.appendChild(blazor);
+            };
+            mud.onerror = function() {
+                // If MudBlazor fails to load, still start Blazor to show the error fast.
+                var blazor = document.createElement('script');
+                blazor.src = '_framework/blazor.server.js';
+                document.body.appendChild(blazor);
+            };
+            // Insert Mud script synchronously into head so it begins loading immediately
+            document.head.appendChild(mud);
+        })();
+    </script>
+
+    <!-- optional application JS (kept after Blazor load) -->
     <script src="js/app.js"></script>
 </body>
 </html>
