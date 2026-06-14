@@ -1004,3 +1004,5 @@ html, body {
 
 /* footer slider */
 .bm-batch-detail-footer { padding:6px 0; }
+
+@import url('d3-graph.css');

@@ -133,4 +133,9 @@ public class MongoBatchService : IBatchService
     {
         throw new NotImplementedException();
     }
+
+    public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
+    {
+        throw new NotImplementedException();
+    }
 }

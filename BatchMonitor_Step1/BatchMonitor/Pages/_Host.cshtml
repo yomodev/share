@@ -32,6 +32,12 @@
         <a class="dismiss">🗙</a>
     </div>
 
+    <!-- D3 v7 library -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <!-- Dagre library for hierarchical layout -->
+    <script src="https://dagrejs.github.io/project/dagre-d3/latest/dagre-d3.min.js"></script>
+
     <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
          This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
          before Blazor starts invoking them. A fallback loads blazor.server.js even if Mud fails. -->
@@ -55,7 +61,8 @@
         })();
     </script>
 
-    <!-- optional application JS (kept after Blazor load) -->
+    <!-- Application JS files -->
+    <script src="js/d3-graph.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

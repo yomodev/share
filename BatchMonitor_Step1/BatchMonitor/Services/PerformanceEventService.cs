@@ -12,6 +12,7 @@ public class PerformanceEventService : IDisposable
     private readonly PerformanceEventStore _eventStore;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
+    private Action? _onEventsUpdated;
 
     public PerformanceEventService(IBatchService batchService)
     {
@@ -39,10 +40,13 @@ public class PerformanceEventService : IDisposable
         string runId,
         DateTime batchStartTime,
         int pollIntervalMs = 2000,
+        Action? onEventsUpdated = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(env) || string.IsNullOrWhiteSpace(runId))
             throw new ArgumentException("env and runId are required");
+
+        _onEventsUpdated = onEventsUpdated;
 
         // Stop any existing polling
         StopPolling();
@@ -102,6 +106,7 @@ public class PerformanceEventService : IDisposable
             if (events?.Count > 0)
             {
                 _eventStore.UpsertEvents(events);
+                _onEventsUpdated?.Invoke();
                 Console.WriteLine($"[EventService] Loaded {events.Count} events for {runId} from {from:O}");
             }
         }
@@ -127,6 +132,7 @@ public class PerformanceEventService : IDisposable
                 if (events?.Count > 0)
                 {
                     _eventStore.UpsertEvents(events);
+                    _onEventsUpdated?.Invoke();
                     Console.WriteLine($"[EventService] Polled {events.Count} new/updated events, total now: {_eventStore.Count}");
                 }
             }

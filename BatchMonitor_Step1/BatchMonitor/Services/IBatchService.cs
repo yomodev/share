@@ -38,6 +38,13 @@ public interface IBatchService
         string runId,
         DateTime from,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns inferred topology (nodes and edges) from the batch's events.
+    /// Typically called after events have been accumulated in the client event store,
+    /// but can also be computed server-side.
+    /// </summary>
+    Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default);
 }
 
 /// <summary>

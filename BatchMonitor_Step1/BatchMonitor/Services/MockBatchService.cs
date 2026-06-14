@@ -11,11 +11,12 @@ public class MockBatchService : IBatchService
 {
     private static readonly string[] Types = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] Entities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
-    private static readonly string[] Services = { "DataProcessor", "Transformer", "Validator", "Loader" };
+    private static readonly string[] Services = { "Ingester", "Validator", "Transformer", "Enricher", "Loader" };
     private static readonly string[] ProcessIds = { "proc-1", "proc-2", "proc-3", "proc-4" };
 
     private readonly List<BatchSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
+    private readonly TopologyComputationService _topologyService = new();
 
     public MockBatchService()
     {
@@ -126,6 +127,21 @@ public class MockBatchService : IBatchService
         return Task.FromResult(filtered);
     }
 
+    public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
+    {
+        // For demo: compute topology from pre-generated events
+        if (!_eventsByRunId.TryGetValue(runId, out var events))
+        {
+            return Task.FromResult(new Topology { TotalChunks = 0, TotalEvents = 0 });
+        }
+
+        // Convert to event store format (key-value by composite key)
+        var eventStore = events.ToDictionary(e => e.CompositeKey, e => e);
+        var topology = _topologyService.ComputeTopology(eventStore);
+
+        return Task.FromResult(topology);
+    }
+
     // ── Private ──────────────────────────────────────────────────────
 
     private void GenerateMockEvents(Random rng)
@@ -134,28 +150,37 @@ public class MockBatchService : IBatchService
         foreach (var batch in _store.Take(10))
         {
             var events = new List<PerformanceEvent>();
-            var eventCount = rng.Next(20, 80);
+            var eventCount = rng.Next(50, 150);
             var batchStart = batch.Start;
+            var chunksGenerated = rng.Next(20, 40);
 
-            for (int i = 0; i < eventCount; i++)
+            // Generate chunks that flow through the service pipeline
+            for (int chunkIdx = 0; chunkIdx < chunksGenerated; chunkIdx++)
             {
-                var service = Services[i % Services.Length];
-                var processId = ProcessIds[i % ProcessIds.Length];
-                var chunkId = $"chunk-{i:D4}";
+                var chunkId = $"chunk-{chunkIdx:D4}";
+                var chunkStartTime = batchStart.AddSeconds(chunkIdx * 5 + rng.Next(0, 3));
 
-                events.Add(new PerformanceEvent
+                // Each chunk flows through each service in order
+                for (int serviceIdx = 0; serviceIdx < Services.Length; serviceIdx++)
                 {
-                    ChunkId = chunkId,
-                    Service = service,
-                    ProcessId = processId,
-                    Timestamp = batchStart.AddSeconds(i * 10 + rng.Next(0, 5)),
-                    DurationMs = rng.Next(100, 5000),
-                    Status = i % 15 == 0 ? "Failed" : (i % 20 == 0 ? "Skipped" : "Success"),
-                    Message = i % 15 == 0 ? "Timeout occurred" : null,
-                    RecordCount = rng.Next(100, 5000),
-                    MemoryMb = rng.Next(50, 500),
-                    CpuPercent = rng.Next(10, 95)
-                });
+                    var service = Services[serviceIdx];
+                    var processId = ProcessIds[rng.Next(0, ProcessIds.Length)];
+                    var timestamp = chunkStartTime.AddSeconds(serviceIdx * 2 + rng.Next(0, 2));
+
+                    events.Add(new PerformanceEvent
+                    {
+                        ChunkId = chunkId,
+                        Service = service,
+                        ProcessId = processId,
+                        Timestamp = timestamp,
+                        DurationMs = rng.Next(50, 1000),
+                        Status = rng.Next(0, 100) < 85 ? "Success" : (rng.Next(0, 100) < 50 ? "Failed" : "Skipped"),
+                        Message = rng.Next(0, 100) < 15 ? "Validation failed" : null,
+                        RecordCount = rng.Next(10, 500),
+                        MemoryMb = rng.Next(50, 300),
+                        CpuPercent = rng.Next(20, 85)
+                    });
+                }
             }
 
             _eventsByRunId[batch.RunId] = events.OrderBy(e => e.Timestamp).ToList();

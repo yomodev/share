@@ -18,6 +18,12 @@
     private PerformanceEventService? _eventService;
     private int _eventCount = 0;
 
+    // Step 6: Topology computation and rendering
+    private Topology? _topology;
+    private TopologyComputationService? _topologyService;
+    private CancellationTokenSource? _topologyDebounce;
+    private const int TopologyDebounceMs = 500;
+
     protected override async Task OnInitializedAsync()
     {
         // read persisted collapse state
@@ -27,6 +33,8 @@
             _rightPanelCollapsed = stored == "true";
         }
         catch { }
+
+        _topologyService = new TopologyComputationService();
 
         await LoadAsync();
     }
@@ -62,7 +70,8 @@
                 Environment,
                 RunId,
                 _details.Start,
-                pollIntervalMs: 2000);
+                pollIntervalMs: 2000,
+                onEventsUpdated: () => DebouncedTopologyCompute());
 
             Console.WriteLine($"[BatchDetail] Event polling started for {RunId}");
         }
@@ -70,6 +79,40 @@
         {
             Console.WriteLine($"[BatchDetail] Error starting event polling: {ex.Message}");
         }
+    }
+
+    private void DebouncedTopologyCompute()
+    {
+        // Cancel previous debounce
+        _topologyDebounce?.Cancel();
+        _topologyDebounce?.Dispose();
+
+        // Create new debounce
+        _topologyDebounce = new CancellationTokenSource();
+        var token = _topologyDebounce.Token;
+
+        _ = Task.Delay(TopologyDebounceMs, token).ContinueWith(async _ =>
+        {
+            if (token.IsCancellationRequested) return;
+
+            try
+            {
+                if (_eventService is not null && _topologyService is not null)
+                {
+                    var eventStore = _eventService.Events;
+                    var newTopology = _topologyService.ComputeTopology(eventStore);
+                    
+                    _topology = newTopology;
+                    await InvokeAsync(StateHasChanged);
+
+                    Console.WriteLine($"[BatchDetail] Topology recomputed: {newTopology.Nodes.Count} nodes, {newTopology.Edges.Count} edges");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BatchDetail] Error computing topology: {ex.Message}");
+            }
+        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private async Task ToggleRightPanel()
@@ -113,6 +156,10 @@
             _eventService.Dispose();
             _eventService = null;
         }
+
+        // Step 6: Cancel debounce timers
+        _topologyDebounce?.Cancel();
+        _topologyDebounce?.Dispose();
     }
 }
 
@@ -150,15 +197,19 @@
 
     <!-- Main content area -->
     <div class="bm-batch-detail-grid">
-        <!-- Graph / canvas placeholder -->
+        <!-- Step 6: Graph with D3 rendering -->
         <div class="bm-batch-graph">
             @if (_loading)
             {
                 <div class="bm-graph-loading">Loading…</div>
             }
+            else if (_topology == null)
+            {
+                <div class="bm-graph-loading">Waiting for events…</div>
+            }
             else
             {
-                <canvas class="bm-graph-canvas" width="800" height="280"></canvas>
+                <BatchMonitor.Components.D3FlowGraph Topology="@_topology" />
             }
         </div>
 
