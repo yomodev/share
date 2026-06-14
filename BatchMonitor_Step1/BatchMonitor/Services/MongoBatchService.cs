@@ -128,4 +128,9 @@ public class MongoBatchService : IBatchService
             "failed"    => BatchStatus.Failed,
             _           => BatchStatus.Unknown
         };
+
+    public Task<List<PerformanceEvent>> GetBatchEventsAsync(string env, string runId, DateTime from, CancellationToken ct = default)
+    {
+        throw new NotImplementedException();
+    }
 }

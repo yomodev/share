@@ -11,8 +11,11 @@ public class MockBatchService : IBatchService
 {
     private static readonly string[] Types = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] Entities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
+    private static readonly string[] Services = { "DataProcessor", "Transformer", "Validator", "Loader" };
+    private static readonly string[] ProcessIds = { "proc-1", "proc-2", "proc-3", "proc-4" };
 
     private readonly List<BatchSummary> _store;
+    private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
 
     public MockBatchService()
     {
@@ -35,6 +38,9 @@ public class MockBatchService : IBatchService
         })
         .OrderByDescending(b => b.Start)
         .ToList();
+
+        // Pre-generate mock events for demo
+        GenerateMockEvents(rng);
     }
 
     public Task<List<BatchSummary>> GetBatchesAsync(
@@ -102,5 +108,57 @@ public class MockBatchService : IBatchService
         }
 
         return Task.FromResult(details);
+    }
+
+    public Task<List<PerformanceEvent>> GetBatchEventsAsync(
+        string env,
+        string runId,
+        DateTime from,
+        CancellationToken ct = default)
+    {
+        if (!_eventsByRunId.TryGetValue(runId, out var allEvents))
+        {
+            return Task.FromResult(new List<PerformanceEvent>());
+        }
+
+        // Return only events >= from timestamp
+        var filtered = allEvents.Where(e => e.Timestamp >= from).ToList();
+        return Task.FromResult(filtered);
+    }
+
+    // ── Private ──────────────────────────────────────────────────────
+
+    private void GenerateMockEvents(Random rng)
+    {
+        // Generate events for the first few batches
+        foreach (var batch in _store.Take(10))
+        {
+            var events = new List<PerformanceEvent>();
+            var eventCount = rng.Next(20, 80);
+            var batchStart = batch.Start;
+
+            for (int i = 0; i < eventCount; i++)
+            {
+                var service = Services[i % Services.Length];
+                var processId = ProcessIds[i % ProcessIds.Length];
+                var chunkId = $"chunk-{i:D4}";
+
+                events.Add(new PerformanceEvent
+                {
+                    ChunkId = chunkId,
+                    Service = service,
+                    ProcessId = processId,
+                    Timestamp = batchStart.AddSeconds(i * 10 + rng.Next(0, 5)),
+                    DurationMs = rng.Next(100, 5000),
+                    Status = i % 15 == 0 ? "Failed" : (i % 20 == 0 ? "Skipped" : "Success"),
+                    Message = i % 15 == 0 ? "Timeout occurred" : null,
+                    RecordCount = rng.Next(100, 5000),
+                    MemoryMb = rng.Next(50, 500),
+                    CpuPercent = rng.Next(10, 95)
+                });
+            }
+
+            _eventsByRunId[batch.RunId] = events.OrderBy(e => e.Timestamp).ToList();
+        }
     }
 }

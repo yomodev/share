@@ -24,8 +24,20 @@ public interface IBatchService
     /// </summary>
     Task<bool> CancelBatchAsync(string env, string runId, CancellationToken ct = default);
 
-    // Step 4: batch details
+    /// <summary>
+    /// Returns detailed metadata for a batch.
+    /// </summary>
     Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns lean performance events for a batch from a given timestamp onwards.
+    /// Used for incremental event loading with polling.
+    /// </summary>
+    Task<List<PerformanceEvent>> GetBatchEventsAsync(
+        string env,
+        string runId,
+        DateTime from,
+        CancellationToken ct = default);
 }
 
 /// <summary>

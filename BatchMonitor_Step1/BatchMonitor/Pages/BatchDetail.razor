@@ -14,6 +14,10 @@
     private bool _rightPanelCollapsed = false;
     private string _localStorageKey => $"bm_batch_details_collapsed:{RunId}:{Environment}";
 
+    // Step 5: Event service and store
+    private PerformanceEventService? _eventService;
+    private int _eventCount = 0;
+
     protected override async Task OnInitializedAsync()
     {
         // read persisted collapse state
@@ -34,9 +38,38 @@
         try
         {
             _details = await BatchService.GetBatchDetailsAsync(Environment, RunId ?? string.Empty);
+            
+            // Step 5: Start event polling if details loaded
+            if (_details is not null && RunId is not null)
+            {
+                StartEventPolling();
+            }
         }
         catch { _details = null; }
         finally { _loading = false; StateHasChanged(); }
+    }
+
+    private void StartEventPolling()
+    {
+        if (_details is null || RunId is null) return;
+
+        try
+        {
+            _eventService = new PerformanceEventService(BatchService);
+            
+            // Create a task to start polling (fire and forget, but we track disposal)
+            _ = _eventService.StartPollingAsync(
+                Environment,
+                RunId,
+                _details.Start,
+                pollIntervalMs: 2000);
+
+            Console.WriteLine($"[BatchDetail] Event polling started for {RunId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[BatchDetail] Error starting event polling: {ex.Message}");
+        }
     }
 
     private async Task ToggleRightPanel()
@@ -60,7 +93,27 @@
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
     }
 
-    public void Dispose() { /* nothing for now */ }
+    // Step 5: Display event count for testing
+    private void ShowEventCount()
+    {
+        if (_eventService is not null)
+        {
+            _eventCount = _eventService.EventCount;
+            Console.WriteLine($"[BatchDetail] Current event store has {_eventCount} events");
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        // Step 5: Stop polling and dispose event service on tab close
+        if (_eventService is not null)
+        {
+            Console.WriteLine($"[BatchDetail] Disposing event service for {RunId}");
+            _eventService.Dispose();
+            _eventService = null;
+        }
+    }
 }
 
 <div class="bm-page-fill bm-batch-detail">
@@ -82,6 +135,10 @@
 
         <div class="bm-batch-subheader-actions">
             <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Class="bm-status-chip">@(_details?.Status.ToString() ?? "--")</MudChip>
+            <!-- Step 5: Debug button to show event count -->
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ShowEventCount">
+                Events: @_eventCount
+            </MudButton>
             <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelBatchAsync" Disabled="@(_details?.Status != BatchStatus.Running)">
                 Cancel
             </MudButton>
