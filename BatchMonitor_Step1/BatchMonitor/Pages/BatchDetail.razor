@@ -14,19 +14,14 @@
     private bool _rightPanelCollapsed = false;
     private string _localStorageKey => $"bm_batch_details_collapsed:{RunId}:{Environment}";
 
-    // Step 5: Event service and store
-    private PerformanceEventService? _eventService;
-    private int _eventCount = 0;
-
-    // Step 6: Topology computation and rendering
+    // Step 6: Topology for rendering
     private Topology? _topology;
-    private TopologyComputationService? _topologyService;
-    private CancellationTokenSource? _topologyDebounce;
-    private const int TopologyDebounceMs = 500;
+    private TopologyComputationService _topologyService = new();
 
     protected override async Task OnInitializedAsync()
     {
-        // read persisted collapse state
+        Console.WriteLine($"[BatchDetail] OnInitializedAsync - RunId={RunId}");
+        
         try
         {
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", _localStorageKey);
@@ -34,85 +29,72 @@
         }
         catch { }
 
-        _topologyService = new TopologyComputationService();
-
-        await LoadAsync();
+        await LoadBatchDetailsAsync();
     }
 
-    private async Task LoadAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Console.WriteLine($"[BatchDetail] OnAfterRenderAsync (firstRender)");
+            await ComputeInitialTopologyAsync();
+        }
+    }
+
+    private async Task LoadBatchDetailsAsync()
     {
         _loading = true;
         StateHasChanged();
         try
         {
+            Console.WriteLine($"[BatchDetail] Loading batch details for {RunId}");
             _details = await BatchService.GetBatchDetailsAsync(Environment, RunId ?? string.Empty);
-            
-            // Step 5: Start event polling if details loaded
-            if (_details is not null && RunId is not null)
-            {
-                StartEventPolling();
-            }
+            Console.WriteLine($"[BatchDetail] Batch details loaded: {_details?.BatchName}");
         }
-        catch { _details = null; }
-        finally { _loading = false; StateHasChanged(); }
+        catch (Exception ex) 
+        { 
+            Console.WriteLine($"[BatchDetail] Error loading batch details: {ex.Message}");
+            _details = null; 
+        }
+        finally 
+        { 
+            _loading = false; 
+            StateHasChanged(); 
+        }
     }
 
-    private void StartEventPolling()
+    private async Task ComputeInitialTopologyAsync()
     {
         if (_details is null || RunId is null) return;
 
         try
         {
-            _eventService = new PerformanceEventService(BatchService);
+            Console.WriteLine($"[BatchDetail] ComputeInitialTopologyAsync - fetching events for {RunId}");
             
-            // Create a task to start polling (fire and forget, but we track disposal)
-            _ = _eventService.StartPollingAsync(
-                Environment,
-                RunId,
-                _details.Start,
-                pollIntervalMs: 2000,
-                onEventsUpdated: () => DebouncedTopologyCompute());
+            // Load events directly
+            var events = await BatchService.GetBatchEventsAsync(Environment, RunId, _details.Start);
+            Console.WriteLine($"[BatchDetail] Fetched {events.Count} events");
 
-            Console.WriteLine($"[BatchDetail] Event polling started for {RunId}");
+            if (events.Count > 0)
+            {
+                // Convert to event store format
+                var eventStore = events.ToDictionary(e => e.CompositeKey, e => e);
+                
+                // Compute topology
+                _topology = _topologyService.ComputeTopology(eventStore);
+                Console.WriteLine($"[BatchDetail] Topology computed: {_topology.Nodes.Count} nodes, {_topology.Edges.Count} edges");
+            }
+            else
+            {
+                Console.WriteLine($"[BatchDetail] No events returned");
+            }
+
+            StateHasChanged();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[BatchDetail] Error starting event polling: {ex.Message}");
+            Console.WriteLine($"[BatchDetail] Error computing topology: {ex.Message}\n{ex.StackTrace}");
         }
-    }
-
-    private void DebouncedTopologyCompute()
-    {
-        // Cancel previous debounce
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
-
-        // Create new debounce
-        _topologyDebounce = new CancellationTokenSource();
-        var token = _topologyDebounce.Token;
-
-        _ = Task.Delay(TopologyDebounceMs, token).ContinueWith(async _ =>
-        {
-            if (token.IsCancellationRequested) return;
-
-            try
-            {
-                if (_eventService is not null && _topologyService is not null)
-                {
-                    var eventStore = _eventService.Events;
-                    var newTopology = _topologyService.ComputeTopology(eventStore);
-                    
-                    _topology = newTopology;
-                    await InvokeAsync(StateHasChanged);
-
-                    Console.WriteLine($"[BatchDetail] Topology recomputed: {newTopology.Nodes.Count} nodes, {newTopology.Edges.Count} edges");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[BatchDetail] Error computing topology: {ex.Message}");
-            }
-        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private async Task ToggleRightPanel()
@@ -127,7 +109,7 @@
     {
         if (RunId is null) return;
         var ok = await BatchService.CancelBatchAsync(Environment, RunId);
-        if (ok) await LoadAsync();
+        if (ok) await LoadBatchDetailsAsync();
     }
 
     private void OpenTimeline()
@@ -136,30 +118,9 @@
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
     }
 
-    // Step 5: Display event count for testing
-    private void ShowEventCount()
-    {
-        if (_eventService is not null)
-        {
-            _eventCount = _eventService.EventCount;
-            Console.WriteLine($"[BatchDetail] Current event store has {_eventCount} events");
-            StateHasChanged();
-        }
-    }
-
     public void Dispose()
     {
-        // Step 5: Stop polling and dispose event service on tab close
-        if (_eventService is not null)
-        {
-            Console.WriteLine($"[BatchDetail] Disposing event service for {RunId}");
-            _eventService.Dispose();
-            _eventService = null;
-        }
-
-        // Step 6: Cancel debounce timers
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
+        Console.WriteLine($"[BatchDetail] Disposing for {RunId}");
     }
 }
 
@@ -182,10 +143,6 @@
 
         <div class="bm-batch-subheader-actions">
             <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Class="bm-status-chip">@(_details?.Status.ToString() ?? "--")</MudChip>
-            <!-- Step 5: Debug button to show event count -->
-            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ShowEventCount">
-                Events: @_eventCount
-            </MudButton>
             <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelBatchAsync" Disabled="@(_details?.Status != BatchStatus.Running)">
                 Cancel
             </MudButton>
@@ -197,15 +154,15 @@
 
     <!-- Main content area -->
     <div class="bm-batch-detail-grid">
-        <!-- Step 6: Graph with D3 rendering -->
+        <!-- Graph area -->
         <div class="bm-batch-graph">
             @if (_loading)
             {
                 <div class="bm-graph-loading">Loading…</div>
             }
-            else if (_topology == null)
+            else if (_topology == null || _topology.Nodes.Count == 0)
             {
-                <div class="bm-graph-loading">Waiting for events…</div>
+                <div class="bm-graph-loading">No topology data available</div>
             }
             else
             {
@@ -252,7 +209,7 @@
         </div>
     </div>
 
-    <!-- Bottom slider placeholder (disabled/empty) -->
+    <!-- Bottom slider placeholder -->
     <div class="bm-batch-detail-footer">
         <MudSlider Disabled="true" Min="0" Max="100" Value="0" />
     </div>

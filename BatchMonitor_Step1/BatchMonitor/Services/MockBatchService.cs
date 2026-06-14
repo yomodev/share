@@ -5,7 +5,6 @@ namespace BatchMonitor.Services;
 /// <summary>
 /// Mock implementation of <see cref="IBatchService"/>.
 /// Generates deterministic fake data so the UI works without a real backend.
-/// Replace with <see cref="MongoBatchService"/> (Step 2 real impl) when ready.
 /// </summary>
 public class MockBatchService : IBatchService
 {
@@ -42,6 +41,9 @@ public class MockBatchService : IBatchService
 
         // Pre-generate mock events for demo
         GenerateMockEvents(rng);
+
+        Console.WriteLine($"[MockBatchService] Generated {_store.Count} batches");
+        Console.WriteLine($"[MockBatchService] Generated events for {_eventsByRunId.Count} batches");
     }
 
     public Task<List<BatchSummary>> GetBatchesAsync(
@@ -82,7 +84,6 @@ public class MockBatchService : IBatchService
 
     public Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default)
     {
-        // Return deterministic static details for demo
         var details = new BatchDetails
         {
             RunId = runId ?? "RUN-UNKNOWN",
@@ -108,6 +109,8 @@ public class MockBatchService : IBatchService
             details.End = null;
         }
 
+        Console.WriteLine($"[MockBatchService.GetBatchDetailsAsync] RunId={runId}, Events available: {_eventsByRunId.ContainsKey(runId ?? "")}");
+
         return Task.FromResult(details);
     }
 
@@ -119,25 +122,27 @@ public class MockBatchService : IBatchService
     {
         if (!_eventsByRunId.TryGetValue(runId, out var allEvents))
         {
+            Console.WriteLine($"[MockBatchService.GetBatchEventsAsync] No events found for {runId}");
             return Task.FromResult(new List<PerformanceEvent>());
         }
 
-        // Return only events >= from timestamp
         var filtered = allEvents.Where(e => e.Timestamp >= from).ToList();
+        Console.WriteLine($"[MockBatchService.GetBatchEventsAsync] RunId={runId}, from={from:O}, returned {filtered.Count} events (total: {allEvents.Count})");
         return Task.FromResult(filtered);
     }
 
     public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
     {
-        // For demo: compute topology from pre-generated events
         if (!_eventsByRunId.TryGetValue(runId, out var events))
         {
+            Console.WriteLine($"[MockBatchService.GetBatchTopologyAsync] No events for {runId}");
             return Task.FromResult(new Topology { TotalChunks = 0, TotalEvents = 0 });
         }
 
-        // Convert to event store format (key-value by composite key)
         var eventStore = events.ToDictionary(e => e.CompositeKey, e => e);
         var topology = _topologyService.ComputeTopology(eventStore);
+
+        Console.WriteLine($"[MockBatchService.GetBatchTopologyAsync] RunId={runId}, Topology: {topology.Nodes.Count} nodes, {topology.Edges.Count} edges, {topology.TotalChunks} chunks");
 
         return Task.FromResult(topology);
     }
@@ -146,26 +151,28 @@ public class MockBatchService : IBatchService
 
     private void GenerateMockEvents(Random rng)
     {
-        // Generate events for the first few batches
+        // Generate events for the first 10 batches (those that will be visible)
         foreach (var batch in _store.Take(10))
         {
             var events = new List<PerformanceEvent>();
-            var eventCount = rng.Next(50, 150);
+            var eventCount = rng.Next(50, 200);  // More events for better graph
             var batchStart = batch.Start;
-            var chunksGenerated = rng.Next(20, 40);
+            var chunksGenerated = rng.Next(15, 40);
+
+            Console.WriteLine($"[MockBatchService] Generating {eventCount} events ({chunksGenerated} chunks) for batch {batch.RunId}");
 
             // Generate chunks that flow through the service pipeline
             for (int chunkIdx = 0; chunkIdx < chunksGenerated; chunkIdx++)
             {
                 var chunkId = $"chunk-{chunkIdx:D4}";
-                var chunkStartTime = batchStart.AddSeconds(chunkIdx * 5 + rng.Next(0, 3));
+                var chunkStartTime = batchStart.AddSeconds(chunkIdx * 2 + rng.Next(0, 2));
 
-                // Each chunk flows through each service in order
+                // Each chunk flows through each service in sequence
                 for (int serviceIdx = 0; serviceIdx < Services.Length; serviceIdx++)
                 {
                     var service = Services[serviceIdx];
                     var processId = ProcessIds[rng.Next(0, ProcessIds.Length)];
-                    var timestamp = chunkStartTime.AddSeconds(serviceIdx * 2 + rng.Next(0, 2));
+                    var timestamp = chunkStartTime.AddSeconds(serviceIdx * 1 + rng.Next(0, 1));
 
                     events.Add(new PerformanceEvent
                     {

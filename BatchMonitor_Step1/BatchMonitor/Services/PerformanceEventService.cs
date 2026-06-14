@@ -18,6 +18,7 @@ public class PerformanceEventService : IDisposable
     {
         _batchService = batchService ?? throw new ArgumentNullException(nameof(batchService));
         _eventStore = new PerformanceEventStore();
+        Console.WriteLine("[PerformanceEventService] Created new instance");
     }
 
     /// <summary>
@@ -46,6 +47,8 @@ public class PerformanceEventService : IDisposable
         if (string.IsNullOrWhiteSpace(env) || string.IsNullOrWhiteSpace(runId))
             throw new ArgumentException("env and runId are required");
 
+        Console.WriteLine($"[PerformanceEventService.StartPollingAsync] env={env}, runId={runId}, pollIntervalMs={pollIntervalMs}");
+
         _onEventsUpdated = onEventsUpdated;
 
         // Stop any existing polling
@@ -56,13 +59,16 @@ public class PerformanceEventService : IDisposable
         try
         {
             // Initial load: fetch full history from batch start time
+            Console.WriteLine($"[PerformanceEventService] Starting initial load...");
             await LoadEventsAsync(env, runId, batchStartTime, _cts.Token);
+            Console.WriteLine($"[PerformanceEventService] Initial load complete, event count: {EventCount}");
 
             // Start polling loop for incremental updates
             _pollingTask = PollLoopAsync(env, runId, pollIntervalMs, _cts.Token);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[PerformanceEventService.StartPollingAsync] Error: {ex.Message}");
             _cts?.Dispose();
             _cts = null;
             throw;
@@ -102,23 +108,36 @@ public class PerformanceEventService : IDisposable
     {
         try
         {
+            Console.WriteLine($"[PerformanceEventService.LoadEventsAsync] Fetching events from {from:O}");
             var events = await _batchService.GetBatchEventsAsync(env, runId, from, ct);
+            
             if (events?.Count > 0)
             {
+                Console.WriteLine($"[PerformanceEventService.LoadEventsAsync] Received {events.Count} events");
                 _eventStore.UpsertEvents(events);
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Loaded {events.Count} events for {runId} from {from:O}");
+                Console.WriteLine($"[PerformanceEventService] Loaded {events.Count} events, store now has {EventCount} total");
+            }
+            else
+            {
+                Console.WriteLine($"[PerformanceEventService.LoadEventsAsync] No events returned");
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("[PerformanceEventService.LoadEventsAsync] Operation cancelled");
+        }
         catch (Exception ex)
         {
-            Console.WriteLine($"[EventService] Error loading events: {ex.Message}");
+            Console.WriteLine($"[PerformanceEventService.LoadEventsAsync] Error: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
     private async Task PollLoopAsync(string env, string runId, int intervalMs, CancellationToken ct)
     {
+        Console.WriteLine($"[PerformanceEventService.PollLoopAsync] Starting polling loop (interval: {intervalMs}ms)");
+        int pollCount = 0;
+
         while (!ct.IsCancellationRequested)
         {
             try
@@ -129,28 +148,37 @@ public class PerformanceEventService : IDisposable
                 var lastTs = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
                 var events = await _batchService.GetBatchEventsAsync(env, runId, lastTs, ct);
 
+                pollCount++;
+
                 if (events?.Count > 0)
                 {
                     _eventStore.UpsertEvents(events);
                     _onEventsUpdated?.Invoke();
-                    Console.WriteLine($"[EventService] Polled {events.Count} new/updated events, total now: {_eventStore.Count}");
+                    Console.WriteLine($"[PerformanceEventService] Poll #{pollCount}: {events.Count} new events, total now: {EventCount}");
+                }
+                else
+                {
+                    if (pollCount % 5 == 0) // Log every 5th empty poll
+                        Console.WriteLine($"[PerformanceEventService] Poll #{pollCount}: No new events");
                 }
             }
             catch (OperationCanceledException)
             {
+                Console.WriteLine($"[PerformanceEventService.PollLoopAsync] Cancelled after {pollCount} polls");
                 break;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EventService] Error during poll: {ex.Message}");
+                Console.WriteLine($"[PerformanceEventService.PollLoopAsync] Error on poll #{pollCount}: {ex.Message}");
             }
         }
 
-        Console.WriteLine($"[EventService] Polling stopped for {runId}");
+        Console.WriteLine($"[PerformanceEventService] Polling stopped for {runId} after {pollCount} polls");
     }
 
     public void Dispose()
     {
+        Console.WriteLine("[PerformanceEventService] Disposing");
         StopPolling();
     }
 }

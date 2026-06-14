@@ -1,52 +1,53 @@
 // D3 Animation System for Batch Monitor Flow Graph
-// Handles node pulse effects, edge animations, and throughput indicators
 
 (function() {
   'use strict';
 
+  console.log('[Animations] Initializing animation module');
+
   window.bm_animations = window.bm_animations || {};
 
-  // Animation state
   let animationState = {
     nodeAnimationIds: new Map(),
     edgeAnimationIds: new Map(),
     throughputThreshold: 0,
-    lastThroughputUpdate: 0,
     isRunning: false
   };
 
   /**
    * Initialize animations for the given SVG and topology.
-   * @param {Object} svg - D3 selection of SVG element
-   * @param {Object} topology - Topology object with nodes and edges
    */
   window.bm_animations.initializeAnimations = function(svg, topology) {
-    if (!svg || !topology) return;
+    console.log('[Animations] initializeAnimations called with', 
+      (topology.nodes || topology.Nodes || []).length, 'nodes');
 
-    // Stop existing animations
+    if (!svg || !topology) {
+      console.warn('[Animations] Missing svg or topology');
+      return;
+    }
+
     window.bm_animations.stopAnimations();
 
-    // Calculate adaptive throughput threshold
-    updateThroughputThreshold(topology);
+    const nodes = topology.nodes || topology.Nodes || [];
+    const edges = topology.edges || topology.Edges || [];
 
-    // Start node pulse animations
-    animateNodePulse(svg, topology);
-
-    // Start edge animations (particles + pulse)
-    animateEdges(svg, topology);
+    updateThroughputThreshold(edges);
+    animateNodePulse(svg, nodes);
+    animateEdges(svg, nodes, edges);
 
     animationState.isRunning = true;
+    console.log('[Animations] Animations initialized ✓');
   };
 
   /**
    * Stop all active animations.
    */
   window.bm_animations.stopAnimations = function() {
-    // Clear node intervals
+    console.log('[Animations] Stopping all animations');
+    
     animationState.nodeAnimationIds.forEach(id => clearInterval(id));
     animationState.nodeAnimationIds.clear();
 
-    // Clear edge intervals
     animationState.edgeAnimationIds.forEach(id => clearInterval(id));
     animationState.edgeAnimationIds.clear();
 
@@ -65,31 +66,35 @@
     window.bm_animations.initializeAnimations(svg, topology);
   };
 
-  // ── Private helpers ──────────────────────────────────────────────────
+  // ── Private helpers ──
 
   /**
    * Adaptive threshold: calculate median message count as baseline.
    */
-  function updateThroughputThreshold(topology) {
-    if (!topology.Edges || topology.Edges.length === 0) {
+  function updateThroughputThreshold(edges) {
+    if (!edges || edges.length === 0) {
       animationState.throughputThreshold = 1;
       return;
     }
 
-    const counts = topology.Edges.map(e => e.MessageCount).sort((a, b) => a - b);
+    const counts = edges
+      .map(e => (e.messageCount || e.MessageCount || 0))
+      .sort((a, b) => a - b);
+    
     const mid = Math.floor(counts.length / 2);
-    animationState.throughputThreshold = counts[mid] || 1;
-    animationState.lastThroughputUpdate = Date.now();
-
-    console.log(`[Animations] Throughput threshold set to: ${animationState.throughputThreshold}`);
+    animationState.throughputThreshold = Math.max(1, counts[mid] || 1);
+    
+    console.log('[Animations] Throughput threshold:', animationState.throughputThreshold);
   }
 
   /**
    * Animate nodes with a running status pulse (brightness + saturation).
    * Pulse intensity reflects recent throughput.
    */
-  function animateNodePulse(svg, topology) {
-    const nodeMap = new Map(topology.Nodes.map(n => [n.Id, n]));
+  function animateNodePulse(svg, nodes) {
+    console.log('[Animations] Starting node pulse animations for', nodes.length, 'nodes');
+
+    const nodeMap = new Map(nodes.map(n => [n.id || n.Id, n]));
 
     svg.selectAll('.bm-d3-node').each(function(nodeId) {
       const node = nodeMap.get(nodeId);
@@ -98,18 +103,19 @@
       const nodeElement = d3.select(this);
       const rect = nodeElement.select('rect');
 
-      // Calculate recent throughput score (0-1 scale)
-      const throughputScore = Math.min(1, node.ProcessedCount / (animationState.throughputThreshold * 10));
+      if (!rect.node()) return;
 
-      // Pulse frequency and intensity scale with throughput
+      // Calculate throughput score
+      const processed = node.processedCount || node.ProcessedCount || 0;
+      const throughputScore = Math.min(1, processed / (animationState.throughputThreshold * 10));
       const pulseFrequency = 800 + (throughputScore * 400); // 800-1200ms
       const pulseIntensity = 0.3 + (throughputScore * 0.4); // 0.3-0.7
 
       const animationId = setInterval(() => {
         if (!rect.node()) return;
 
-        const currentOpacity = parseFloat(rect.style('opacity')) || 0.8;
-        const targetOpacity = currentOpacity < 0.85 ? 0.8 + pulseIntensity : 0.8;
+        const currentOpacity = parseFloat(rect.style('opacity')) || 0.85;
+        const targetOpacity = currentOpacity < 0.87 ? 0.85 + pulseIntensity : 0.85;
 
         rect.transition()
           .duration(pulseFrequency / 2)
@@ -118,6 +124,8 @@
 
       animationState.nodeAnimationIds.set(nodeId, animationId);
     });
+
+    console.log('[Animations] Node pulse animations started');
   }
 
   /**
@@ -125,90 +133,34 @@
    * - Low throughput: particle dots flowing along the path
    * - High throughput: edge pulse (thickness variation)
    */
-  function animateEdges(svg, topology) {
-    if (!topology.Edges || topology.Edges.length === 0) return;
+  function animateEdges(svg, nodes, edges) {
+    if (!edges || edges.length === 0) {
+      console.log('[Animations] No edges to animate');
+      return;
+    }
 
-    topology.Edges.forEach((edge, idx) => {
-      const edgeElement = svg.select(`g.bm-d3-edge:nth-child(${idx + 1})`);
-      if (!edgeElement.empty()) {
-        const path = edgeElement.select('path');
+    console.log('[Animations] Starting edge animations for', edges.length, 'edges');
+
+    edges.forEach((edge, idx) => {
+      const edgeElements = svg.selectAll('.bm-d3-edge');
+      
+      edgeElements.each(function() {
+        const element = d3.select(this);
+        const path = element.select('path');
+        
         if (!path.empty()) {
-          // Determine animation type based on throughput
-          const isHighThroughput = edge.MessageCount > animationState.throughputThreshold;
+          const msgCount = edge.messageCount || edge.MessageCount || 0;
+          const isHighThroughput = msgCount > animationState.throughputThreshold;
 
           if (isHighThroughput) {
+            // Animate edge thickness
             animateEdgePulse(path, edge);
-          } else {
-            animateEdgeParticles(edgeElement, path, edge);
           }
         }
-      }
+      });
     });
-  }
 
-  /**
-   * Edge animation: particle dots at low throughput.
-   * Creates a visual flow of particles from source to target.
-   */
-  function animateEdgeParticles(edgeElement, path, edge) {
-    const pathElement = path.node();
-    if (!pathElement || pathElement.getTotalLength === undefined) return;
-
-    const pathLength = pathElement.getTotalLength();
-    const particleCount = Math.max(1, Math.floor(edge.MessageCount / 5));
-    const animationDuration = 3000 + (edge.MessageCount * 100); // Slower at low throughput
-
-    // Create particle container if not exists
-    let particleContainer = edgeElement.select('.bm-particles');
-    if (particleContainer.empty()) {
-      particleContainer = edgeElement.append('g').attr('class', 'bm-particles');
-    }
-
-    // Add particles
-    for (let i = 0; i < particleCount; i++) {
-      const delay = (i / particleCount) * animationDuration;
-
-      const particle = particleContainer.append('circle')
-        .attr('r', 3)
-        .attr('fill', '#4CAF50')
-        .attr('opacity', 0.7);
-
-      // Animate particle along path
-      animateParticleAlongPath(particle, path, animationDuration, delay);
-    }
-  }
-
-  /**
-   * Animate a single particle along a path using SMIL animation.
-   */
-  function animateParticleAlongPath(particle, pathElement, duration, delay) {
-    const path = pathElement.node();
-    if (!path || !path.getTotalLength) return;
-
-    const pathLength = path.getTotalLength();
-
-    // Use requestAnimationFrame for smooth animation
-    let lastTime = Date.now() + delay;
-
-    const animateParticle = () => {
-      const now = Date.now();
-      const elapsed = (now - lastTime) % duration;
-      const progress = elapsed / duration;
-
-      const point = path.getPointAtLength(progress * pathLength);
-      particle.attr('cx', point.x).attr('cy', point.y);
-
-      if (animationState.isRunning) {
-        requestAnimationFrame(animateParticle);
-      }
-    };
-
-    // Start animation after delay
-    setTimeout(() => {
-      if (animationState.isRunning) {
-        animateParticle();
-      }
-    }, delay);
+    console.log('[Animations] Edge animations started');
   }
 
   /**
@@ -216,9 +168,10 @@
    * Creates a visual "stress" effect on busy edges.
    */
   function animateEdgePulse(path, edge) {
-    const baseStrokeWidth = 2;
-    const maxStrokeWidth = 2 + (Math.min(edge.MessageCount / (animationState.throughputThreshold * 2), 1) * 4); // 2-6px
-    const pulseFrequency = 1000 - (Math.min(edge.MessageCount / (animationState.throughputThreshold * 3), 1) * 500); // 500-1000ms
+    const msgCount = edge.messageCount || edge.MessageCount || 1;
+    const baseStrokeWidth = 2.5;
+    const maxStrokeWidth = 2.5 + (Math.min(msgCount / (animationState.throughputThreshold * 2), 1) * 3); // 2.5-5.5px
+    const pulseFrequency = 1000 - (Math.min(msgCount / (animationState.throughputThreshold * 3), 1) * 400); // 600-1000ms
 
     const animationId = setInterval(() => {
       const currentWidth = parseFloat(path.style('stroke-width')) || baseStrokeWidth;
@@ -229,10 +182,11 @@
       path.transition()
         .duration(pulseFrequency / 2)
         .style('stroke-width', targetWidth + 'px')
-        .style('opacity', targetWidth === maxStrokeWidth ? 1 : 0.8);
+        .style('opacity', targetWidth === maxStrokeWidth ? 0.95 : 0.8);
     }, pulseFrequency);
 
-    animationState.edgeAnimationIds.set(`edge-${edge.Source}-${edge.Target}`, animationId);
+    animationState.edgeAnimationIds.set(`edge-${edge.source}-${edge.target}`, animationId);
   }
 
+  console.log('[Animations] Module initialization complete ✓');
 })();

@@ -6,29 +6,46 @@
 
 /* ── Variables ───────────────────────────────────────────────────── */
 :root {
-    --bm-radius:      6px;
-    --bm-radius-sm:   4px;
-    --bm-radius-lg:   10px;
-    --bm-transition:  160ms ease;
-    --bm-tabbar-h:    44px;
-    --bm-font-mono:   'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+    --bm-radius: 6px;
+    --bm-radius-sm: 4px;
+    --bm-radius-lg: 10px;
+    --bm-transition: 160ms ease;
+    --bm-tabbar-h: 44px;
+    --bm-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
 /* ── Resets ──────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; }
+*, *::before, *::after {
+    box-sizing: border-box;
+}
 
 html, body {
-    margin: 0; padding: 0;
-    height: 100%; overflow: hidden;   /* <-- kills the outer scrollbar */
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden; /* <-- kills the outer scrollbar */
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────── */
-::-webkit-scrollbar              { width: 5px; height: 5px; }
-::-webkit-scrollbar-track        { background: transparent; }
-::-webkit-scrollbar-thumb        { background: rgba(139,148,158,0.25); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover  { background: rgba(139,148,158,0.45); }
+::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(139,148,158,0.25);
+    border-radius: 3px;
+}
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(139,148,158,0.45);
+    }
 
 /* ================================================================
    LAYOUT
@@ -85,7 +102,7 @@ html, body {
     display: flex;
     align-items: center;
     gap: 0;
-    height: var(--bm-tabbar-h);   /* must match tab bar height exactly */
+    height: var(--bm-tabbar-h); /* must match tab bar height exactly */
     padding: 0 8px;
     flex-shrink: 0;
 }
@@ -106,10 +123,11 @@ html, body {
     flex-shrink: 0;
     padding: 0;
 }
-.bm-burger-btn:hover {
-    background: var(--mud-palette-action-default-hover);
-    color: var(--mud-palette-text-primary);
-}
+
+    .bm-burger-btn:hover {
+        background: var(--mud-palette-action-default-hover);
+        color: var(--mud-palette-text-primary);
+    }
 
 /* ── Sidebar title (clickable → home) ───────────────────────────── */
 .bm-sidebar-title-btn {
@@ -148,12 +166,15 @@ html, body {
     align-items: stretch;
     scrollbar-width: none; /* Firefox */
 }
-.bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
-    display: none;
-}
+
+    .bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
+        display: none;
+    }
 
 /* ── Spacer ──────────────────────────────────────────────────────── */
-.bm-nav-spacer { flex: 1; }
+.bm-nav-spacer {
+    flex: 1;
+}
 
 /* ── Bottom block ────────────────────────────────────────────────── */
 .bm-sidebar-bottom {
@@ -177,12 +198,22 @@ html, body {
     min-height: 36px;
     width: calc(100% - 12px);
 }
-.bm-nav-item:hover { background: var(--mud-palette-action-default-hover); }
-.bm-nav-item.active {
-    background: rgba(47,129,244,0.14);
-}
-.bm-nav-item.active .bm-nav-icon  { color: var(--mud-palette-primary); }
-.bm-nav-item.active .bm-nav-label { color: var(--mud-palette-primary); }
+
+    .bm-nav-item:hover {
+        background: var(--mud-palette-action-default-hover);
+    }
+
+    .bm-nav-item.active {
+        background: rgba(47,129,244,0.14);
+    }
+
+        .bm-nav-item.active .bm-nav-icon {
+            color: var(--mud-palette-primary);
+        }
+
+        .bm-nav-item.active .bm-nav-label {
+            color: var(--mud-palette-primary);
+        }
 
 .bm-nav-icon {
     flex-shrink: 0;
@@ -190,6 +221,7 @@ html, body {
     display: flex;
     align-items: center;
 }
+
 .bm-nav-label {
     font-size: 0.8125rem;
     font-weight: 500;
@@ -201,22 +233,34 @@ html, body {
 .bm-env-selector-expanded {
     padding: 6px 8px;
 }
-.bm-env-select .mud-input-root { font-size: 0.8rem; }
+
+.bm-env-select .mud-input-root {
+    font-size: 0.8rem;
+}
 /* hide the label entirely */
-.bm-env-select .mud-input-label { display: none !important; }
-.bm-env-select .mud-input-outlined-border { top: 0 !important; }
+.bm-env-select .mud-input-label {
+    display: none !important;
+}
+
+.bm-env-select .mud-input-outlined-border {
+    top: 0 !important;
+}
 
 .bm-env-selector-collapsed {
     display: flex;
     justify-content: center;
     padding: 6px 0;
 }
+
 .bm-env-option {
     display: flex;
     align-items: center;
     gap: 8px;
 }
-.bm-env-label { font-size: 0.8125rem; }
+
+.bm-env-label {
+    font-size: 0.8125rem;
+}
 
 .bm-env-badge {
     display: inline-flex;
@@ -233,17 +277,24 @@ html, body {
 }
 
 .bm-env-badge-mini {
-    width: 34px; height: 34px;
+    width: 34px;
+    height: 34px;
     border-radius: var(--bm-radius);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.6rem; font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    font-weight: 800;
     letter-spacing: 0.06em;
     cursor: pointer;
     font-family: var(--bm-font-mono);
     transition: opacity var(--bm-transition);
     margin: 0 auto;
 }
-.bm-env-badge-mini:hover { opacity: 0.8; }
+
+    .bm-env-badge-mini:hover {
+        opacity: 0.8;
+    }
 
 /* ================================================================
    TAB BAR
@@ -264,7 +315,10 @@ html, body {
     display: none;
 }
 /* make select control compact so sidebar can be narrower */
-.bm-env-select { width: 56px; max-width: 56px; }
+.bm-env-select {
+    width: 56px;
+    max-width: 56px;
+}
 
 .bm-tabs-scroll {
     display: flex;
@@ -276,7 +330,10 @@ html, body {
     scrollbar-width: none;
     padding: 0;
 }
-.bm-tabs-scroll::-webkit-scrollbar { display: none; }
+
+    .bm-tabs-scroll::-webkit-scrollbar {
+        display: none;
+    }
 
 /* Individual tab */
 .bm-tab {
@@ -294,11 +351,25 @@ html, body {
     transition: background var(--bm-transition), border-color var(--bm-transition);
     user-select: none;
 }
-.bm-tab:hover   { background: var(--mud-palette-action-default-hover); }
-.bm-tab.active  { background: rgba(47,129,244,0.12); border-color: rgba(47,129,244,0.28); }
 
-.bm-tab-icon { flex-shrink: 0; font-size: 14px !important; color: var(--mud-palette-text-secondary); }
-.bm-tab.active .bm-tab-icon { color: var(--mud-palette-primary); }
+    .bm-tab:hover {
+        background: var(--mud-palette-action-default-hover);
+    }
+
+    .bm-tab.active {
+        background: rgba(47,129,244,0.12);
+        border-color: rgba(47,129,244,0.28);
+    }
+
+.bm-tab-icon {
+    flex-shrink: 0;
+    font-size: 14px !important;
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-tab.active .bm-tab-icon {
+    color: var(--mud-palette-primary);
+}
 
 .bm-tab-label {
     font-size: 0.78rem;
@@ -327,7 +398,8 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px; height: 16px;
+    width: 16px;
+    height: 16px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -338,15 +410,37 @@ html, body {
     color: var(--mud-palette-text-secondary);
     transition: opacity var(--bm-transition), background var(--bm-transition);
 }
+
 .bm-tab:hover .bm-tab-close-btn,
-.bm-tab.active .bm-tab-close-btn { opacity: 1; }
-.bm-tab-close-btn:hover { background: rgba(248,81,73,0.15); color: #F85149; }
-.bm-tab-close-btn .mud-icon-root { font-size: 13px !important; }
+.bm-tab.active .bm-tab-close-btn {
+    opacity: 1;
+}
+
+.bm-tab-close-btn:hover {
+    background: rgba(248,81,73,0.15);
+    color: #F85149;
+}
+
+.bm-tab-close-btn .mud-icon-root {
+    font-size: 13px !important;
+}
 
 /* Overflow */
-.bm-tab-overflow { flex-shrink: 0; }
-.bm-overflow-item { display: flex; align-items: center; font-size: 0.8125rem; }
-.bm-overflow-env  { font-size: 0.7rem; font-family: var(--bm-font-mono); opacity: 0.65; }
+.bm-tab-overflow {
+    flex-shrink: 0;
+}
+
+.bm-overflow-item {
+    display: flex;
+    align-items: center;
+    font-size: 0.8125rem;
+}
+
+.bm-overflow-env {
+    font-size: 0.7rem;
+    font-family: var(--bm-font-mono);
+    opacity: 0.65;
+}
 
 /* ================================================================
    PAGE SHELL
@@ -390,43 +484,77 @@ html, body {
     gap: 16px;
     flex-shrink: 0;
 }
-.bm-home-title   { font-weight: 700; letter-spacing: -0.01em; }
-.bm-home-subtitle { color: var(--mud-palette-text-secondary); margin-top: 2px; }
-.bm-home-env     { min-width: 200px; }
-.bm-home-env-select { width: 100%; }
+
+.bm-home-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.bm-home-subtitle {
+    color: var(--mud-palette-text-secondary);
+    margin-top: 2px;
+}
+
+.bm-home-env {
+    min-width: 200px;
+}
+
+.bm-home-env-select {
+    width: 100%;
+}
 
 /* KPI cards */
-.bm-stat-grid { margin: 0; flex-shrink: 0; }
+.bm-stat-grid {
+    margin: 0;
+    flex-shrink: 0;
+}
 
 .bm-stat-card {
-    display: flex; align-items: center; gap: 14px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
     padding: 16px 18px;
     border-radius: var(--bm-radius-lg);
     border: 1px solid var(--mud-palette-divider);
     background: var(--mud-palette-surface);
     transition: border-color var(--bm-transition), box-shadow var(--bm-transition);
 }
-.bm-stat-card:hover {
-    border-color: rgba(47,129,244,0.3);
-    box-shadow: 0 0 0 1px rgba(47,129,244,0.08);
-}
+
+    .bm-stat-card:hover {
+        border-color: rgba(47,129,244,0.3);
+        box-shadow: 0 0 0 1px rgba(47,129,244,0.08);
+    }
+
 .bm-stat-icon {
-    width: 42px; height: 42px;
+    width: 42px;
+    height: 42px;
     border-radius: var(--bm-radius);
-    display: flex; align-items: center; justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
 }
-.bm-stat-body { display: flex; flex-direction: column; }
+
+.bm-stat-body {
+    display: flex;
+    flex-direction: column;
+}
+
 .bm-stat-value {
-    font-size: 1.5rem; font-weight: 700;
-    letter-spacing: -0.02em; line-height: 1;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
     font-family: var(--bm-font-mono);
 }
+
 .bm-stat-label {
-    font-size: 0.7rem; font-weight: 600;
+    font-size: 0.7rem;
+    font-weight: 600;
     color: var(--mud-palette-text-secondary);
     margin-top: 3px;
-    text-transform: uppercase; letter-spacing: 0.06em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
 }
 
 /* Mini summary table */
@@ -436,17 +564,29 @@ html, body {
     overflow: hidden;
     flex-shrink: 0;
 }
+
 .bm-mini-summary-header {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 12px 16px 6px;
 }
+
 .bm-section-title {
-    font-weight: 600; font-size: 0.75rem;
-    text-transform: uppercase; letter-spacing: 0.07em;
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
     color: var(--mud-palette-text-secondary);
 }
-.bm-view-all-btn  { font-size: 0.78rem !important; }
-.bm-mini-table .mud-table-container { border: none !important; }
+
+.bm-view-all-btn {
+    font-size: 0.78rem !important;
+}
+
+.bm-mini-table .mud-table-container {
+    border: none !important;
+}
 
 /* ================================================================
    BATCHES PAGE
@@ -461,11 +601,24 @@ html, body {
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
 }
-.bm-filter-input { flex: 1; }
-.bm-refresh-btn  { flex-shrink: 0; }
+
+.bm-filter-input {
+    flex: 1;
+}
+
+.bm-refresh-btn {
+    flex-shrink: 0;
+}
 
 /* Loading bar */
-.bm-loading-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; border-radius: 0; }
+.bm-loading-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    border-radius: 0;
+}
 
 /* Table wrapper fills remaining height */
 .bm-table-wrap {
@@ -481,47 +634,65 @@ html, body {
     display: flex;
     flex-direction: column;
 }
-.bm-batch-table .mud-table-container {
-    flex: 1;
-    overflow-y: auto !important;
-}
 
-/* Table head */
-.bm-batch-table thead th,
-.bm-mini-table thead th {
-    font-size: 0.69rem !important;
-    font-weight: 700 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.06em !important;
-    color: var(--mud-palette-text-secondary) !important;
-    padding: 7px 10px !important;
-    white-space: nowrap;
-    background: var(--mud-palette-surface) !important;
-}
+    .bm-batch-table .mud-table-container {
+        flex: 1;
+        overflow-y: auto !important;
+    }
 
-/* Table rows */
-.bm-batch-table tbody td,
-.bm-mini-table tbody td {
-    padding: 6px 10px !important;
-    font-size: 0.8125rem !important;
-    border-bottom: 1px solid var(--mud-palette-divider-light) !important;
-}
+    /* Table head */
+    .bm-batch-table thead th,
+    .bm-mini-table thead th {
+        font-size: 0.69rem !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.06em !important;
+        color: var(--mud-palette-text-secondary) !important;
+        padding: 7px 10px !important;
+        white-space: nowrap;
+        background: var(--mud-palette-surface) !important;
+    }
+
+    /* Table rows */
+    .bm-batch-table tbody td,
+    .bm-mini-table tbody td {
+        padding: 6px 10px !important;
+        font-size: 0.8125rem !important;
+        border-bottom: 1px solid var(--mud-palette-divider-light) !important;
+    }
 
 /* Row actions */
 .bm-row-actions {
-    display: flex; align-items: center; justify-content: center; gap: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
 }
 
 /* Status text (in-row, coloured) */
 .bm-status-text {
-    font-size: 0.75rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     font-family: var(--bm-font-mono);
 }
-.bm-status-running   { color: #3FB950; }
-.bm-status-completed { color: #8B949E; }
-.bm-status-failed    { color: #F85149; }
-.bm-status-unknown   { color: #8B949E; }
+
+.bm-status-running {
+    color: #3FB950;
+}
+
+.bm-status-completed {
+    color: #8B949E;
+}
+
+.bm-status-failed {
+    color: #F85149;
+}
+
+.bm-status-unknown {
+    color: #8B949E;
+}
 
 /* Footer: count + pagination + rows selector */
 .bm-batch-footer {
@@ -532,9 +703,24 @@ html, body {
     border-top: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
 }
-.bm-footer-count    { flex-shrink: 0; white-space: nowrap; }
-.bm-pagination-ctrl { flex: 1; display: flex; justify-content: center; }
-.bm-rows-select     { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.bm-footer-count {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.bm-pagination-ctrl {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+}
+
+.bm-rows-select {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
 
 /* ================================================================
    SETTINGS
@@ -545,17 +731,30 @@ html, body {
     overflow-y: auto;
     height: 100%;
 }
+
 .bm-settings-section {
     border: 1px solid var(--mud-palette-divider) !important;
     border-radius: var(--bm-radius-lg) !important;
     padding: 18px 22px !important;
 }
+
 .bm-settings-row {
-    display: flex; align-items: center;
-    justify-content: space-between; gap: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
 }
-.bm-theme-switcher { display: flex; gap: 6px; flex-shrink: 0; }
-.bm-theme-btn      { min-width: 86px !important; }
+
+.bm-theme-switcher {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.bm-theme-btn {
+    min-width: 86px !important;
+}
+
 .bm-about-grid {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -568,28 +767,50 @@ html, body {
    ================================================================ */
 
 .bm-placeholder {
-    display: flex; align-items: center; justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 100%;
 }
+
 .bm-placeholder-inner {
-    display: flex; flex-direction: column;
-    align-items: center; gap: 8px;
-    opacity: 0.5; text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.5;
+    text-align: center;
 }
-.bm-placeholder-title { font-weight: 600; margin-top: 8px; }
+
+.bm-placeholder-title {
+    font-weight: 600;
+    margin-top: 8px;
+}
 
 /* ================================================================
    SHARED COMPONENTS
    ================================================================ */
 
 /* Status icon */
-.bm-status-icon { display: inline-flex; align-items: center; justify-content: center; }
+.bm-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 
 @keyframes bm-pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.35; }
+    0%, 100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.35;
+    }
 }
-.bm-status-running .mud-icon-root { animation: bm-pulse 2s ease-in-out infinite; }
+
+.bm-status-running .mud-icon-root {
+    animation: bm-pulse 2s ease-in-out infinite;
+}
 
 /* Type chip */
 .bm-type-chip.mud-chip {
@@ -605,21 +826,42 @@ html, body {
 }
 
 /* Utilities */
-.bm-monospace { font-family: var(--bm-font-mono) !important; font-size: 0.78rem !important; }
-.bm-muted     { color: var(--mud-palette-text-secondary) !important; }
+.bm-monospace {
+    font-family: var(--bm-font-mono) !important;
+    font-size: 0.78rem !important;
+}
+
+.bm-muted {
+    color: var(--mud-palette-text-secondary) !important;
+}
 
 /* ================================================================
    BLAZOR ERROR UI
    ================================================================ */
 
 #blazor-error-ui {
-    background: #F85149; color: #fff;
-    bottom: 0; position: fixed; width: 100%;
-    padding: 10px 16px; display: none; z-index: 9999;
+    background: #F85149;
+    color: #fff;
+    bottom: 0;
+    position: fixed;
+    width: 100%;
+    padding: 10px 16px;
+    display: none;
+    z-index: 9999;
     font-size: 0.875rem;
 }
-#blazor-error-ui .reload  { color: #fff; font-weight: 600; margin-left: 12px; }
-#blazor-error-ui .dismiss { cursor: pointer; float: right; padding: 0 4px; }
+
+    #blazor-error-ui .reload {
+        color: #fff;
+        font-weight: 600;
+        margin-left: 12px;
+    }
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        float: right;
+        padding: 0 4px;
+    }
 
 /* ---------- small layout & UI fixes (append to the end of app.css) ---------- */
 
@@ -627,9 +869,10 @@ html, body {
 .bm-nav-menu {
     scrollbar-width: none; /* Firefox */
 }
-.bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
-    display: none;
-}
+
+    .bm-nav-menu::-webkit-scrollbar { /* Chrome/Safari */
+        display: none;
+    }
 
 /* Home: prevent accidental horizontal scrolling */
 .bm-home {
@@ -637,10 +880,15 @@ html, body {
 }
 
 /* compact environment select in sidebar */
-.bm-env-select { width: 56px; max-width: 56px; }
+.bm-env-select {
+    width: 56px;
+    max-width: 56px;
+}
 
 /* ensure the select control uses the compact width when rendered */
-.bm-env-selector-expanded .mud-select-root { width: 56px; }
+.bm-env-selector-expanded .mud-select-root {
+    width: 56px;
+}
 
 /* reduce font-size for rows-per-page select in Batches footer */
 .bm-rows-select .mud-input-root,
@@ -660,8 +908,13 @@ html, body {
 }
 
 /* ensure tabs themselves center their internal icons/text */
-.bm-tab { align-items: center; }
-.bm-tab * { vertical-align: middle; }
+.bm-tab {
+    align-items: center;
+}
+
+    .bm-tab * {
+        vertical-align: middle;
+    }
 
 /* ---------- adjustments for layout issues (append to end of app.css) ---------- */
 
@@ -673,12 +926,16 @@ html, body {
     font-size: 0.68rem !important;
     line-height: 1 !important;
 }
-.bm-rows-select .mud-select-root .mud-input-root {
-    height: 28px !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
+
+    .bm-rows-select .mud-select-root .mud-input-root {
+        height: 28px !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+
+.bm-rows-select .mud-select-root {
+    min-width: 72px !important;
 }
-.bm-rows-select .mud-select-root { min-width: 72px !important; }
 
 /* Topbar buttons: stronger vertical centering override for MudBlazor 9.5 */
 .bm-tabbar.mud-appbar,
@@ -689,6 +946,7 @@ html, body {
     display: flex;
     align-items: center;
 }
+
 .bm-tabbar .mud-button-root,
 .bm-tabbar .mud-icon-button-root,
 .bm-tabbar .mud-menu-root,
@@ -703,8 +961,15 @@ html, body {
 }
 
 /* Environment select: allow slightly larger width so badges don't get cropped */
-.bm-env-select { width: 64px; max-width: 64px; }
-.bm-env-selector-expanded .mud-select-root { width: 64px !important; min-width:64px !important; }
+.bm-env-select {
+    width: 64px;
+    max-width: 64px;
+}
+
+.bm-env-selector-expanded .mud-select-root {
+    width: 64px !important;
+    min-width: 64px !important;
+}
 
 /* Ensure the badge inside the select has enough room and doesn't wrap/crop */
 .bm-env-badge {
@@ -746,23 +1011,45 @@ html, body {
 
 /* Prevent the appbar content from visually overlapping the sidebar:
    put the sidebar above the appbar so the appbar buttons never draw "over" the drawer header. */
-.bm-tabbar.mud-appbar { z-index: 1000; }
-.bm-sidebar .mud-drawer-paper { z-index: 1100; }
+.bm-tabbar.mud-appbar {
+    z-index: 1000;
+}
+
+.bm-sidebar .mud-drawer-paper {
+    z-index: 1100;
+}
 
 /* Environment select: enlarge control so badge and arrow don't overlap, and ensure popover is wide enough */
-.bm-env-select { width: 96px; max-width: 96px; }
-.bm-env-selector-expanded .mud-select-root { width: 96px !important; min-width: 96px !important; }
-.bm-env-select .mud-select-value { padding-right: 26px !important; } /* room for arrow */
-.bm-env-select .mud-select-arrow { right: 8px !important; }
+.bm-env-select {
+    width: 96px;
+    max-width: 96px;
+}
+
+.bm-env-selector-expanded .mud-select-root {
+    width: 96px !important;
+    min-width: 96px !important;
+}
+
+.bm-env-select .mud-select-value {
+    padding-right: 26px !important;
+}
+/* room for arrow */
+.bm-env-select .mud-select-arrow {
+    right: 8px !important;
+}
 
 /* Ensure dropdown list has at least the same width as the input so badges aren't clipped */
-.bm-env-select .mud-popover, 
+.bm-env-select .mud-popover,
 .bm-env-select .mud-popover-class {
     min-width: 96px !important;
 }
 
 /* Ensure the badge inside the select does not wrap or get cropped */
-.bm-env-badge { white-space: nowrap; display: inline-flex; padding: 1px 8px; }
+.bm-env-badge {
+    white-space: nowrap;
+    display: inline-flex;
+    padding: 1px 8px;
+}
 
 /* Collapsed sidebar: enforce the mini width to match MudDrawer MiniWidth */
 .bm-sidebar .mud-drawer-paper.mud-drawer-mini,
@@ -773,27 +1060,68 @@ html, body {
 }
 
 /* small tweak: ensure tab strip doesn't flow into the sidebar space (keeps it under the appbar) */
-.bm-tabbar-inner { overflow: hidden; }
+.bm-tabbar-inner {
+    overflow: hidden;
+}
 
 /* ---------- precise fixes for the 5 issues (append to end of app.css) ---------- */
 
 /* 1) Remove the drawer overlay dimming (Drawer has DisableOverlay=true now),
    but ensure layout stacking still makes drawer above content */
-.bm-sidebar .mud-drawer-paper { z-index: 1100; }
-.bm-tabbar.mud-appbar { z-index: 1000; }
+.bm-sidebar .mud-drawer-paper {
+    z-index: 1100;
+}
+
+.bm-tabbar.mud-appbar {
+    z-index: 1000;
+}
 
 /* 2) Topbar: force left alignment and ensure overflow menu sits at extreme right */
-.bm-tabbar .mud-toolbar { justify-content: flex-start !important; padding: 0 6px !important; }
-.bm-tabbar-inner { justify-content: flex-start !important; align-items: center; display:flex; height:var(--bm-tabbar-h) !important; padding:0 6px; gap:2px; overflow:hidden; }
+.bm-tabbar .mud-toolbar {
+    justify-content: flex-start !important;
+    padding: 0 6px !important;
+}
+
+.bm-tabbar-inner {
+    justify-content: flex-start !important;
+    align-items: center;
+    display: flex;
+    height: var(--bm-tabbar-h) !important;
+    padding: 0 6px;
+    gap: 2px;
+    overflow: hidden;
+}
 
 /* Tab strip grows and is scrollable; overflow button always at right edge */
-.bm-tabs-scroll { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; padding: 0; display:flex; align-items:center; gap:2px; }
-.bm-tab-overflow { margin-left: auto !important; flex-shrink: 0; }
+.bm-tabs-scroll {
+    flex: 1 1 auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.bm-tab-overflow {
+    margin-left: auto !important;
+    flex-shrink: 0;
+}
 
 /* 3) Sidebar nav cropping: ensure nav area scrolls and items don't overflow their container.
    Also provide a dedicated mini-mode rule so icons center when collapsed. */
-.bm-nav-menu { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 0; box-sizing: border-box; }
-.bm-nav-item { width: auto; box-sizing: border-box; }
+.bm-nav-menu {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 4px 0;
+    box-sizing: border-box;
+}
+
+.bm-nav-item {
+    width: auto;
+    box-sizing: border-box;
+}
 
 /* When MudDrawer is in mini mode, center-only icons and reduce horizontal padding so nothing clips */
 .bm-sidebar .mud-drawer-mini .bm-nav-item,
@@ -805,24 +1133,56 @@ html, body {
 }
 
 /* Ensure nav items are fully visible and the list can scroll if many items */
-.bm-sidebar .bm-nav-menu .bm-nav-item { white-space: nowrap; }
+.bm-sidebar .bm-nav-menu .bm-nav-item {
+    white-space: nowrap;
+}
 
 /* 4) Narrow expanded sidebar (drawer Width updated in Sidebar.razor).
    Tweak internal paddings so content fits the new width. */
-.bm-sidebar .bm-sidebar-content { padding: 0; }
-.bm-sidebar .bm-nav-item { padding: 8px 10px; margin: 1px 6px; }
+.bm-sidebar .bm-sidebar-content {
+    padding: 0;
+}
+
+.bm-sidebar .bm-nav-item {
+    padding: 8px 10px;
+    margin: 1px 6px;
+}
 
 /* Make sure title/button truncates gracefully */
-.bm-sidebar-title-btn { overflow: hidden; text-overflow: ellipsis; }
+.bm-sidebar-title-btn {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 /* 5) Burger alignment: ensure header nav-item uses same layout as other nav items */
-.bm-sidebar-header .bm-nav-item { display:flex; align-items:center; gap:12px; padding:8px 10px; margin:1px 6px; height:36px; box-sizing:border-box; }
+.bm-sidebar-header .bm-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    margin: 1px 6px;
+    height: 36px;
+    box-sizing: border-box;
+}
 
 /* Environment select: ensure arrows don't overlap badges and popover is wide enough */
-.bm-env-select { width:72px; max-width:72px; }
-.bm-env-selector-expanded .mud-select-root { width:72px !important; min-width:72px !important; }
-.bm-env-select .mud-select-value { padding-right: 28px !important; }
-.bm-env-select .mud-select-arrow { right: 8px !important; }
+.bm-env-select {
+    width: 72px;
+    max-width: 72px;
+}
+
+.bm-env-selector-expanded .mud-select-root {
+    width: 72px !important;
+    min-width: 72px !important;
+}
+
+.bm-env-select .mud-select-value {
+    padding-right: 28px !important;
+}
+
+.bm-env-select .mud-select-arrow {
+    right: 8px !important;
+}
 
 /* Dropdown/popover width at least input width */
 .mud-popover.mud-popover-placement-bottom, .bm-env-select .mud-popover {
@@ -830,15 +1190,26 @@ html, body {
 }
 
 /* Make sure the badge inside the select is visible */
-.bm-env-badge { display:inline-flex; padding:1px 8px; white-space:nowrap; font-size:0.68rem; }
+.bm-env-badge {
+    display: inline-flex;
+    padding: 1px 8px;
+    white-space: nowrap;
+    font-size: 0.68rem;
+}
 
 /* small utility: ensure the tab close button doesn't push tabs taller */
-.bm-tab { align-items:center; height:30px; }
+.bm-tab {
+    align-items: center;
+    height: 30px;
+}
 
 /* final: safety clamp so sidebar mini width is enforced */
 .bm-sidebar .mud-drawer-paper.mud-drawer-mini,
 .bm-sidebar .mud-drawer-mini .mud-drawer-paper {
-    width: 56px !important; min-width:56px !important; max-width:56px !important; box-sizing:border-box;
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+    box-sizing: border-box;
 }
 
 /* ---------- Guarantee left-aligned tabs and always-visible overflow ---------- */
@@ -870,7 +1241,10 @@ html, body {
     padding: 4px 0;
     scrollbar-width: none; /* hide scrollbar while keeping scroll functionality */
 }
-.bm-tabs-scroll::-webkit-scrollbar { display: none; }
+
+    .bm-tabs-scroll::-webkit-scrollbar {
+        display: none;
+    }
 
 /* Overflow button must stay pinned to the extreme right of the tabbar */
 .bm-tab-overflow {
@@ -881,14 +1255,14 @@ html, body {
     align-items: center;
 }
 
-/* Make sure overflow icon doesn't shift vertically */
-.bm-tab-overflow .mud-icon-button-root,
-.bm-tab-overflow .mud-button-root {
-    height: var(--bm-tabbar-h) !important;
-    display: flex;
-    align-items: center;
-    padding: 0 6px !important;
-}
+    /* Make sure overflow icon doesn't shift vertically */
+    .bm-tab-overflow .mud-icon-button-root,
+    .bm-tab-overflow .mud-button-root {
+        height: var(--bm-tabbar-h) !important;
+        display: flex;
+        align-items: center;
+        padding: 0 6px !important;
+    }
 
 /* Keep individual tabs vertically centered (no accidental top shift) */
 .bm-tab {
@@ -899,10 +1273,14 @@ html, body {
 }
 
 /* Prevent the tab strip from stretching or centering its items */
-.bm-tabs-scroll .bm-tab { white-space: nowrap; }
+.bm-tabs-scroll .bm-tab {
+    white-space: nowrap;
+}
 
 /* small accessibility: ensure the overflow menu button remains focusable when there are no tabs */
-.bm-tab-overflow .mud-icon-root { pointer-events: auto; }
+.bm-tab-overflow .mud-icon-root {
+    pointer-events: auto;
+}
 
 /* ---------- step 4: reduce expanded sidebar width and adjust internal spacing ---------- */
 
@@ -928,13 +1306,28 @@ html, body {
 }
 
 /* Environment select compacted to 56px to fit the new width without cropping */
-.bm-env-select { width: 56px; max-width: 56px; }
-.bm-env-selector-expanded .mud-select-root { width: 56px !important; min-width: 56px !important; }
-.bm-env-select .mud-select-value { padding-right: 26px !important; }
-.bm-env-select .mud-select-arrow { right: 6px !important; }
+.bm-env-select {
+    width: 56px;
+    max-width: 56px;
+}
+
+.bm-env-selector-expanded .mud-select-root {
+    width: 56px !important;
+    min-width: 56px !important;
+}
+
+.bm-env-select .mud-select-value {
+    padding-right: 26px !important;
+}
+
+.bm-env-select .mud-select-arrow {
+    right: 6px !important;
+}
 
 /* Ensure popover for env select is at least as wide as the control */
-.bm-env-select .mud-popover { min-width: 56px !important; }
+.bm-env-select .mud-popover {
+    min-width: 56px !important;
+}
 
 /* Keep mini drawer width enforced */
 .bm-sidebar .mud-drawer-paper.mud-drawer-mini,
@@ -945,11 +1338,21 @@ html, body {
 }
 
 /* Ensure nav list still scrolls correctly when many items exist */
-.bm-nav-menu { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.bm-nav-menu {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
 
 /* ---------- Step 4 UI styles (append to end of app.css) ---------- */
 
-.bm-batch-detail { position: relative; padding: 8px 12px; height: 100%; display:flex; flex-direction:column; gap:8px; }
+.bm-batch-detail {
+    position: relative;
+    padding: 8px 12px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
 
 /* floating sub-header */
 .bm-batch-subheader {
@@ -957,52 +1360,138 @@ html, body {
     top: 8px;
     left: calc(var(--bm-main-left, 0px) + 12px);
     right: calc(72px + 12px); /* leave room for right panel toggle */
-    display:flex;
+    display: flex;
     justify-content: space-between;
-    align-items:center;
-    padding:8px 12px;
-    border-radius:8px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 8px;
     background: rgba(255,255,255,0.04);
     backdrop-filter: blur(8px);
     box-shadow: 0 1px 0 rgba(0,0,0,0.12);
     z-index: 5;
     transition: transform 160ms ease, opacity 160ms ease;
 }
-.bm-batch-subheader .bm-batch-meta { margin-left:8px; }
-.bm-batch-subheader .bm-batch-name { font-weight:700; }
-.bm-batch-subheader .bm-batch-submeta { font-size:0.85rem; color:var(--mud-palette-text-secondary); margin-top:2px; }
-.bm-batch-subheader-actions { display:flex; gap:8px; align-items:center; }
+
+    .bm-batch-subheader .bm-batch-meta {
+        margin-left: 8px;
+    }
+
+    .bm-batch-subheader .bm-batch-name {
+        font-weight: 700;
+    }
+
+    .bm-batch-subheader .bm-batch-submeta {
+        font-size: 0.85rem;
+        color: var(--mud-palette-text-secondary);
+        margin-top: 2px;
+    }
+
+.bm-batch-subheader-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
 
 /* main grid */
-.bm-batch-detail-grid { margin-top:56px; display:flex; flex:1; gap:12px; align-items:stretch; overflow:hidden; }
+.bm-batch-detail-grid {
+    margin-top: 56px;
+    display: flex;
+    flex: 1;
+    gap: 12px;
+    align-items: stretch;
+    overflow: hidden;
+}
 
 /* graph area */
-.bm-batch-graph { flex:1; border-radius:10px; background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); display:flex; align-items:center; justify-content:center; min-height:260px; }
-.bm-graph-loading { color:var(--mud-palette-text-secondary); }
-.bm-graph-canvas { width:100%; height:100%; background: transparent; border-radius:8px; }
+.bm-batch-graph {
+    flex: 1;
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 260px;
+}
+
+.bm-graph-loading {
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-graph-canvas {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border-radius: 8px;
+}
 
 /* details panel */
 .bm-batch-details-panel {
     width: 320px;
     max-width: 40%;
-    border-radius:10px;
+    border-radius: 10px;
     background: rgba(255,255,255,0.03);
     backdrop-filter: blur(8px);
     overflow: auto;
     box-shadow: 0 6px 18px rgba(0,0,0,0.12);
     position: relative;
-    display:flex;
-    flex-direction:column;
+    display: flex;
+    flex-direction: column;
 }
-.bm-batch-details-panel.collapsed { width: 44px; overflow: visible; }
-.bm-details-toggle { position:absolute; left:-28px; top:12px; width:28px; height:28px; display:flex; align-items:center; justify-content:center; background:transparent; cursor:pointer; }
-.bm-details-body { padding:12px; }
-.bm-details-list { display:flex; flex-direction:column; gap:8px; }
-.bm-details-row { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
-.bm-details-key { font-size:0.75rem; color:var(--mud-palette-text-secondary); width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.bm-details-value { font-size:0.85rem; font-family:var(--bm-font-mono); text-align:right; word-break:break-word; }
+
+    .bm-batch-details-panel.collapsed {
+        width: 44px;
+        overflow: visible;
+    }
+
+.bm-details-toggle {
+    position: absolute;
+    left: -28px;
+    top: 12px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    cursor: pointer;
+}
+
+.bm-details-body {
+    padding: 12px;
+}
+
+.bm-details-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bm-details-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.bm-details-key {
+    font-size: 0.75rem;
+    color: var(--mud-palette-text-secondary);
+    width: 40%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-details-value {
+    font-size: 0.85rem;
+    font-family: var(--bm-font-mono);
+    text-align: right;
+    word-break: break-word;
+}
 
 /* footer slider */
-.bm-batch-detail-footer { padding:6px 0; }
+.bm-batch-detail-footer {
+    padding: 6px 0;
+}
 
 @import url('d3-graph.css');
