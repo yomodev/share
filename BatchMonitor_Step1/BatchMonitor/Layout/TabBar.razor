@@ -1,28 +1,81 @@
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
-@implements IDisposable
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <div class="bm-tabbar-inner">
 
-    <!-- Scrollable tab strip (left-aligned) -->
-    <div class="bm-tabs-scroll" role="tablist" aria-label="Open tabs">
+    <!-- Visible tab strip (left-aligned) -->
+    <div class="bm-tabs-scroll" role="tablist" aria-label="Open tabs"
+         @ref="_tabsScrollRef"
+         @ondragover="@OnStripDragOver" @ondragover:preventDefault="true"
+         @ondrop="@OnStripDrop" @ondrop:preventDefault="true"
+         @ondragleave="@OnStripDragLeave">
+        @{ var visibleTabs = TabService.Tabs.Where(t => !_overflowingTabIds.Contains(t.Id)).ToList(); }
+        @for (var pos = 0; pos <= visibleTabs.Count; pos++)
+        {
+            @if (_dropIndex == pos && _draggedTabId is not null)
+            {
+                <div class="bm-tab-drop-indicator"></div>
+            }
+
+            @if (pos < visibleTabs.Count)
+            {
+                var tab = visibleTabs[pos];
+                var tabId = tab.Id;
+                var isActive = tab.IsActive;
+                var envInfo = tab.Environment is not null
+                    ? EnvService.Environments.FirstOrDefault(e => e.Id == tab.Environment)
+                    : null;
+                var widthStyle = _tabWidths.TryGetValue(tabId, out var w)
+                    ? $"width:{w.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;"
+                    : "";
+
+                <div class="bm-tab @(isActive ? "active" : "") @(_draggedTabId == tabId ? "dragging" : "")"
+                     style="@widthStyle"
+                     @onclick="@(() => TabService.Focus(tabId))"
+                     @key="tabId"
+                     data-tab-id="@tabId"
+                     role="tab"
+                     aria-selected="@(isActive)"
+                     draggable="true"
+                     @ondragstart="@(() => OnTabDragStart(tabId))"
+                     @ondragend="@OnDragEnd">
+                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                    <span class="bm-tab-label">@tab.Label</span>
+
+                    @if (envInfo is not null)
+                    {
+                        <span class="bm-tab-env-badge"
+                              style="background:@envInfo.BadgeColor; color:@envInfo.BadgeTextColor">
+                            @envInfo.Id
+                        </span>
+                    }
+
+                    <button class="bm-tab-close-btn"
+                            @onclick="@(() => TabService.Close(tabId))"
+                            @onclick:stopPropagation="true"
+                            aria-label="Close tab">
+                        <MudIcon Icon="@Icons.Material.Outlined.Close" Size="Size.Small" />
+                    </button>
+                </div>
+            }
+        }
+    </div>
+
+    <!-- Offscreen measurement strip: one copy of every tab, always laid out so JS
+         can read natural widths, in the current display order. -->
+    <div class="bm-tabs-measure" aria-hidden="true" @ref="_measureRef">
         @foreach (var tab in TabService.Tabs)
         {
             var tabId = tab.Id;
-            var isActive = tab.IsActive;
             var envInfo = tab.Environment is not null
                 ? EnvService.Environments.FirstOrDefault(e => e.Id == tab.Environment)
                 : null;
 
-            <div class="bm-tab @(isActive ? "active" : "")"
-                 @onclick="@(() => TabService.Focus(tabId))"
-                 @key="tabId"
-                 data-tab-id="@tabId"
-                 role="tab"
-                 aria-selected="@(isActive)">
+            <div class="bm-tab" data-measure-tab-id="@tabId" @key="@($"measure-{tabId}")">
                 <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
                 <span class="bm-tab-label">@tab.Label</span>
-
                 @if (envInfo is not null)
                 {
                     <span class="bm-tab-env-badge"
@@ -30,47 +83,239 @@
                         @envInfo.Id
                     </span>
                 }
-
-                <button class="bm-tab-close-btn"
-                        @onclick="@(() => TabService.Close(tabId))"
-                        @onclick:stopPropagation="true"
-                        aria-label="Close tab">
+                <button class="bm-tab-close-btn" aria-hidden="true" tabindex="-1">
                     <MudIcon Icon="@Icons.Material.Outlined.Close" Size="Size.Small" />
                 </button>
             </div>
         }
     </div>
 
-    <!-- Overflow dropdown — always rendered and pinned to the extreme right -->
-    <MudMenu Icon="@Icons.Material.Outlined.KeyboardArrowDown"
-             Size="Size.Small"
-             Dense="true"
-             Class="bm-tab-overflow"
-             AnchorOrigin="Origin.BottomRight"
-             TransformOrigin="Origin.TopRight"
-             AriaLabel="More tabs">
-        @foreach (var tab in TabService.Tabs)
-        {
-            var tabId = tab.Id;
-            <MudMenuItem OnClick="@(() => TabService.Focus(tabId))">
-                <div class="bm-overflow-item">
-                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="mr-2" />
-                    <span>@tab.Label</span>
-                    @if (tab.Environment is not null)
-                    {
-                        <span class="bm-overflow-env ml-2">@tab.Environment</span>
-                    }
-                </div>
-            </MudMenuItem>
-        }
-    </MudMenu>
+    <!-- Overflow dropdown — only rendered when at least one tab doesn't fit.
+         Also acts as a drop target: dropping a dragged tab here sends it to
+         the end of the overflow list (i.e. far right). -->
+    @if (_overflowingTabIds.Count > 0)
+    {
+        <div class="bm-tab-overflow-wrap"
+             @ondragover="@OnOverflowDragOver" @ondragover:preventDefault="true"
+             @ondrop="@OnOverflowDrop" @ondrop:preventDefault="true">
+            <MudMenu Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                     Size="Size.Small"
+                     Dense="true"
+                     Class="bm-tab-overflow"
+                     AnchorOrigin="Origin.BottomRight"
+                     TransformOrigin="Origin.TopRight"
+                     AriaLabel="More tabs">
+                @foreach (var tab in TabService.Tabs)
+                {
+                    if (!_overflowingTabIds.Contains(tab.Id)) continue;
+
+                    var tabId = tab.Id;
+                    <MudMenuItem OnClick="@(() => TabService.Focus(tabId))">
+                        <div class="bm-overflow-item"
+                             draggable="true"
+                             @ondragstart="@(() => OnTabDragStart(tabId))"
+                             @ondragend="@OnDragEnd">
+                            <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="mr-2" />
+                            <span>@tab.Label</span>
+                            @if (tab.Environment is not null)
+                            {
+                                <span class="bm-overflow-env ml-2">@tab.Environment</span>
+                            }
+                        </div>
+                    </MudMenuItem>
+                }
+            </MudMenu>
+        </div>
+    }
 
 </div>
 
 @code {
-    protected override void OnInitialized() =>
-        TabService.OnChange += StateHasChanged;
+    private ElementReference _tabsScrollRef;
+    private ElementReference _measureRef;
+    private HashSet<string> _overflowingTabIds = new();
+    private Dictionary<string, double> _tabWidths = new();
+    private IJSObjectReference? _resizeHandle;
+    private DotNetObjectReference<TabBar>? _selfRef;
+    private bool _pendingRecompute;
 
-    public void Dispose() =>
-        TabService.OnChange -= StateHasChanged;
+    // Drag-and-drop state
+    private string? _draggedTabId;
+    private int? _dropIndex;
+
+    protected override void OnInitialized() =>
+        TabService.OnChange += OnTabsChanged;
+
+    private void OnTabsChanged()
+    {
+        // Mark that the tab list changed; actual measurement happens in
+        // OnAfterRenderAsync once the new tab(s) have been rendered to the DOM.
+        _pendingRecompute = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try
+            {
+                _resizeHandle = await JS.InvokeAsync<IJSObjectReference>(
+                    "BatchMonitor.observeTabBarResize", _tabsScrollRef, _selfRef, nameof(RecomputeLayoutAsync));
+            }
+            catch { }
+
+            await RecomputeLayoutAsync();
+            return;
+        }
+
+        if (_pendingRecompute)
+        {
+            _pendingRecompute = false;
+            await RecomputeLayoutAsync();
+        }
+    }
+
+    [JSInvokable]
+    public async Task RecomputeLayoutAsync()
+    {
+        try
+        {
+            var activeId = TabService.ActiveTab?.Id ?? string.Empty;
+            var result = await JS.InvokeAsync<TabLayoutResult>(
+                "BatchMonitor.computeTabLayout", _tabsScrollRef, _measureRef, activeId, _overflowingTabIds.Count > 0);
+
+            var newOverflow = new HashSet<string>(result.OverflowingIds ?? Array.Empty<string>());
+            var newWidths = result.Widths ?? new Dictionary<string, double>();
+
+            var overflowChanged = !newOverflow.SetEquals(_overflowingTabIds);
+            var widthsChanged = !WidthsEqual(_tabWidths, newWidths);
+
+            if (overflowChanged || widthsChanged)
+            {
+                _overflowingTabIds = newOverflow;
+                _tabWidths = newWidths;
+                if (overflowChanged)
+                {
+                    // ▼ button appearing/disappearing changes available width — re-measure once more.
+                    _pendingRecompute = true;
+                }
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { }
+    }
+
+    private static bool WidthsEqual(Dictionary<string, double> a, Dictionary<string, double> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var (key, val) in a)
+        {
+            if (!b.TryGetValue(key, out var other) || Math.Abs(val - other) > 0.5) return false;
+        }
+        return true;
+    }
+
+    // ── Drag and drop ───────────────────────────────────────────────────
+
+    private void OnTabDragStart(string tabId)
+    {
+        _draggedTabId = tabId;
+        _dropIndex = null;
+    }
+
+    private async Task OnStripDragOver(DragEventArgs e)
+    {
+        if (_draggedTabId is null) return;
+
+        try
+        {
+            var idx = await JS.InvokeAsync<int>("BatchMonitor.getTabDropIndex", _tabsScrollRef, e.ClientX);
+            if (_dropIndex != idx)
+            {
+                _dropIndex = idx;
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    private void OnStripDragLeave()
+    {
+        _dropIndex = null;
+        StateHasChanged();
+    }
+
+    private void OnStripDrop()
+    {
+        if (_draggedTabId is null) { _dropIndex = null; return; }
+
+        var visibleTabs = TabService.Tabs.Where(t => !_overflowingTabIds.Contains(t.Id)).ToList();
+        var dropPos = Math.Clamp(_dropIndex ?? visibleTabs.Count, 0, visibleTabs.Count);
+
+        // Translate "drop before visible tab at dropPos" into an absolute
+        // index in TabService.Tabs (which includes overflowing tabs too).
+        int targetIndex;
+        if (dropPos < visibleTabs.Count)
+        {
+            targetIndex = TabService.Tabs.ToList().FindIndex(t => t.Id == visibleTabs[dropPos].Id);
+        }
+        else if (visibleTabs.Count > 0)
+        {
+            // Drop after the last visible tab.
+            var lastVisibleIdx = TabService.Tabs.ToList().FindIndex(t => t.Id == visibleTabs[^1].Id);
+            targetIndex = lastVisibleIdx + 1;
+        }
+        else
+        {
+            targetIndex = 0;
+        }
+
+        TabService.Reorder(_draggedTabId, targetIndex);
+        _draggedTabId = null;
+        _dropIndex = null;
+    }
+
+    private void OnOverflowDragOver()
+    {
+        // Highlight isn't tracked separately — dropping anywhere on the
+        // overflow control sends the tab to the end of the order.
+    }
+
+    private void OnOverflowDrop()
+    {
+        if (_draggedTabId is null) return;
+
+        TabService.Reorder(_draggedTabId, TabService.Tabs.Count - 1);
+        _draggedTabId = null;
+        _dropIndex = null;
+    }
+
+    private void OnDragEnd()
+    {
+        _draggedTabId = null;
+        _dropIndex = null;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        TabService.OnChange -= OnTabsChanged;
+
+        if (_resizeHandle is not null)
+        {
+            try { await _resizeHandle.InvokeVoidAsync("dispose"); } catch { }
+            try { await _resizeHandle.DisposeAsync(); } catch { }
+        }
+
+        _selfRef?.Dispose();
+    }
+
+    /// <summary>Shape returned by BatchMonitor.computeTabLayout (JS).</summary>
+    private class TabLayoutResult
+    {
+        public string[]? OverflowingIds { get; set; }
+        public Dictionary<string, double>? Widths { get; set; }
+    }
 }

@@ -1,120 +1,170 @@
-/* D3 Flow Graph Styling */
+/* ================================================================
+   D3 FLOW GRAPH
+   ================================================================ */
 
-.bm-flow-graph-container {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+.bm-d3-flow-graph {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: var(--bm-radius-lg);
 }
 
-.bm-flow-graph-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.95);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  gap: 12px;
-  flex-shrink: 0;
-  min-height: 48px;
+.bm-d3-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+.bm-d3-svg:active { cursor: grabbing; }
+
+/* ── Fit to view button ──────────────────────────────────────────── */
+.bm-graph-fit-btn {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: var(--bm-radius);
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(8px);
+    color: var(--mud-palette-text-secondary);
+    cursor: pointer;
+    transition: background var(--bm-transition), color var(--bm-transition);
+}
+.bm-graph-fit-btn:hover {
+    background: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-primary);
 }
 
-.bm-flow-graph-info {
-  flex: 1;
-  text-align: center;
-  color: #666;
-  font-weight: 500;
-  font-size: 13px;
+/* ── Nodes ────────────────────────────────────────────────────────── */
+.bm-node { cursor: pointer; }
+
+.bm-node-rect {
+    fill: rgba(255,255,255,0.04);
+    stroke: var(--mud-palette-divider);
+    stroke-width: 1.5px;
+    transition: fill 400ms ease, stroke 400ms ease, filter 400ms ease;
 }
 
-.bm-flow-graph-wrapper {
-  flex: 1;
-  background: white;
-  overflow: hidden;
-  position: relative;
-  min-height: 0;
+/* Activity level reflects RecentThroughputScore */
+.bm-node-rect.bm-activity-idle {
+    fill: rgba(255,255,255,0.03);
+    stroke: var(--mud-palette-divider);
+}
+.bm-node-rect.bm-activity-warm {
+    fill: rgba(47,129,244,0.10);
+    stroke: rgba(47,129,244,0.45);
+}
+.bm-node-rect.bm-activity-hot {
+    fill: rgba(47,129,244,0.18);
+    stroke: var(--mud-palette-primary);
+    filter: drop-shadow(0 0 6px rgba(47,129,244,0.45));
 }
 
-.bm-flow-graph-svg {
-  width: 100%;
-  height: 100%;
-  font-family: 'Inter', sans-serif;
-  background: white;
-  display: block;
+.bm-node-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    fill: var(--mud-palette-text-primary);
+    pointer-events: none;
 }
 
-/* ── Node Styling with pulse animations ── */
-.bm-d3-node {
-  fill: #4CAF50;
-  stroke: #333;
-  stroke-width: 2px;
-  opacity: 0.85;
-  cursor: pointer;
-  transition: opacity 0.3s ease, filter 0.3s ease;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+.bm-node-sub {
+    font-size: 0.7rem;
+    font-family: var(--bm-font-mono);
+    fill: var(--mud-palette-text-secondary);
+    pointer-events: none;
 }
 
-.bm-d3-node:hover {
-  opacity: 1;
-  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3)) brightness(1.1);
-  stroke-width: 3px;
+/* Instance-count badge, top-right of node */
+.bm-node-badge circle {
+    fill: var(--mud-palette-primary);
+    opacity: 0.9;
+}
+.bm-node-badge text {
+    font-size: 0.62rem;
+    font-weight: 700;
+    fill: #fff;
+    pointer-events: none;
 }
 
-.bm-d3-node text {
-  font-size: 12px;
-  font-weight: 600;
-  fill: white;
-  pointer-events: none;
-  text-anchor: middle;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  dominant-baseline: middle;
+/* ── Edges ────────────────────────────────────────────────────────── */
+.bm-edge-path {
+    fill: none;
+    stroke: var(--mud-palette-divider);
+    stroke-width: 1.5px;
+    transition: stroke 200ms ease, stroke-width 120ms ease;
 }
 
-/* ── Edge Styling ── */
-.bm-d3-edge path {
-  stroke: #666;
-  stroke-width: 2.5px;
-  fill: none;
-  marker-end: url(#arrowhead);
-  transition: stroke-width 0.3s ease;
-  opacity: 0.8;
+.bm-edge-arrow {
+    fill: var(--mud-palette-divider);
 }
 
-.bm-d3-edge:hover path {
-  stroke-width: 4px;
-  stroke: #333;
-  opacity: 1;
-  filter: brightness(1.2);
+/* Pulse mode: intensity (0-1) is written to --bm-pulse-intensity each frame */
+.bm-edge-path.bm-edge-pulse {
+    stroke: var(--mud-palette-primary);
+    stroke-width: calc(1.5px + var(--bm-pulse-intensity, 0) * 2.5px);
+    opacity: calc(0.45 + var(--bm-pulse-intensity, 0) * 0.55);
 }
 
-.bm-d3-edge text {
-  font-size: 11px;
-  fill: #333;
-  font-weight: 600;
-  text-anchor: middle;
-  pointer-events: none;
+.bm-edge-label {
+    font-size: 0.62rem;
+    font-family: var(--bm-font-mono);
+    fill: var(--mud-palette-text-secondary);
+    paint-order: stroke;
+    stroke: var(--mud-palette-background);
+    stroke-width: 3px;
+    pointer-events: none;
 }
 
-.bm-d3-arrowhead {
-  fill: #666;
+/* ── Particles (low-throughput edge animation) ──────────────────────── */
+.bm-particle {
+    fill: var(--mud-palette-primary);
+    filter: drop-shadow(0 0 3px rgba(47,129,244,0.8));
+    pointer-events: none;
 }
 
-/* ── Empty state ── */
-.bm-graph-empty {
-  font-size: 16px;
-  fill: #999;
-  font-weight: 500;
+/* ── Tooltip ──────────────────────────────────────────────────────── */
+.bm-graph-tooltip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 10;
+    pointer-events: none;
+    background: rgba(20,20,24,0.92);
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: var(--bm-radius-sm);
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    color: var(--mud-palette-text-primary);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+    max-width: 260px;
+    transition: opacity 120ms ease;
+    opacity: 0;
 }
 
-/* ── Zoom + Pan support ── */
-.bm-flow-graph-svg g {
-  cursor: grab;
+.bm-tooltip-title {
+    font-weight: 700;
+    font-size: 0.78rem;
+    margin-bottom: 4px;
 }
 
-.bm-flow-graph-svg g:active {
-  cursor: grabbing;
+.bm-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--bm-font-mono);
+    white-space: nowrap;
+}
+
+.bm-tooltip-divider {
+    height: 1px;
+    background: var(--mud-palette-divider);
+    margin: 6px 0;
 }

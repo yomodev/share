@@ -6,7 +6,7 @@
 <MudDrawer @bind-Open="_drawerOpen"
            Variant="DrawerVariant.Mini"
            MiniWidth="56px"
-           Width="184px"
+           Width="168px"
            Elevation="0"
            Class="bm-sidebar"
            OpenMiniOnHover="false">
@@ -20,8 +20,6 @@
                             IsOpen="@_drawerOpen"
                             OnClick="ToggleDrawer" />
         </div>
-
-        <div class="bm-sidebar-divider"></div>
 
         <!-- ── Nav items (top section) ───────────────────────────────── -->
         <div class="bm-nav-menu">
@@ -80,8 +78,7 @@
                                Dense="true"
                                Variant="Variant.Outlined"
                                Margin="Margin.Dense"
-                               Class="bm-env-select"
-                               Style="width:56px; min-width:56px;">
+                               Class="bm-env-select">
                         @foreach (var env in EnvService.Environments)
                         {
                             <MudSelectItem Value="@env.Id">

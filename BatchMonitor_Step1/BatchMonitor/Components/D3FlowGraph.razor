@@ -1,71 +1,72 @@
-@using BatchMonitor.Models
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<div class="bm-flow-graph-container">
-    <div class="bm-flow-graph-toolbar">
-        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="FitToView">
-            Fit to View
-        </MudButton>
-        <MudText Typo="Typo.caption" Class="bm-flow-graph-info">
-            @if (Topology?.Nodes?.Count > 0)
-            {
-                <span>@Topology.Nodes.Count nodes • @Topology.Edges.Count edges • @Topology.TotalChunks chunks • @Topology.TotalEvents events</span>
-            }
-            else
-            {
-                <span>Waiting for first events…</span>
-            }
-        </MudText>
-    </div>
-
-    <div class="bm-flow-graph-wrapper" @ref="GraphContainerRef">
-        <svg class="bm-flow-graph-svg" @ref="SvgRef"></svg>
-    </div>
+<div class="bm-d3-flow-graph" @ref="_containerRef">
+    <button class="bm-graph-fit-btn" title="Fit to view" @onclick="FitToViewAsync">
+        <MudIcon Icon="@Icons.Material.Outlined.CenterFocusWeak" Size="Size.Small" />
+    </button>
 </div>
 
 @code {
-    [Parameter]
-    public Topology? Topology { get; set; }
+    [Parameter, EditorRequired] public Topology Topology { get; set; } = new();
 
-    private ElementReference GraphContainerRef { get; set; }
-    private ElementReference SvgRef { get; set; }
-    private bool _initialized = false;
+    private ElementReference _containerRef;
+    private bool _initialized;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            _initialized = true;
-        }
-
-        // Re-render whenever Topology changes
-        if (Topology != null && _initialized)
-        {
-            await RenderGraph();
-        }
-    }
-
-    private async Task RenderGraph()
-    {
-        try
-        {
-            await JS.InvokeVoidAsync("window.bm_d3Graph.render", SvgRef, Topology);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[D3FlowGraph] Error rendering graph: {ex.Message}");
+            try
+            {
+                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.init", _containerRef, GetHandleKey());
+                _initialized = true;
+                await PushTopologyAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[D3FlowGraph] init failed: {ex.Message}");
+            }
         }
     }
 
-    private async Task FitToView()
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_initialized)
+        {
+            await PushTopologyAsync();
+        }
+    }
+
+    private string GetHandleKey() => $"d3flowgraph-{GetHashCode()}";
+
+    private async Task PushTopologyAsync()
     {
         try
         {
-            await JS.InvokeVoidAsync("window.bm_d3Graph.fitToView");
+            await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.update", GetHandleKey(), Topology);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[D3FlowGraph] Error fitting to view: {ex.Message}");
+            Console.WriteLine($"[D3FlowGraph] update failed: {ex.Message}");
+        }
+    }
+
+    private async Task FitToViewAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.fitToView", GetHandleKey());
+        }
+        catch { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_initialized)
+        {
+            try { await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.dispose", GetHandleKey()); }
+            catch { }
         }
     }
 }

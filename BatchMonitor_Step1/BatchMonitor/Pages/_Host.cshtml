@@ -35,22 +35,8 @@
     <!-- D3 v7 library -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
 
-    <!-- Dagre library for hierarchical layout -->
-    <script src="https://dagrejs.github.io/project/dagre-d3/latest/dagre-d3.min.js"></script>
-
-    <!-- Check that D3 and Dagre loaded -->
-    <script>
-        if (typeof d3 === 'undefined') {
-          console.error('[CDN] D3 failed to load from CDN');
-        } else {
-          console.log('[CDN] D3 loaded successfully');
-        }
-        if (typeof dagreD3 === 'undefined') {
-          console.error('[CDN] dagreD3 failed to load from CDN');
-        } else {
-          console.log('[CDN] dagreD3 loaded successfully');
-        }
-    </script>
+    <!-- Dagre (layout engine only — no bundled D3, no rendering) for hierarchical DAG layout -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
 
     <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
          This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
@@ -75,9 +61,9 @@
         })();
     </script>
 
-    <!-- Application JS files (order matters: animation before graph) -->
+    <!-- Application JS files -->
+    <script src="js/d3-graph.js"></script>
     <script src="js/d3-animation.js"></script>
-    <script src="js/d3-graph-debug.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

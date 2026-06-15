@@ -24,7 +24,7 @@ public class TopologyComputationService
         // Phase 1: Aggregate nodes by service with per-instance breakdown
         var nodesByService = new Dictionary<string, TopologyNode>();
         var chunksByService = new Dictionary<string, HashSet<string>>();
-        var instanceStats = new Dictionary<string, Dictionary<string, (int EventCount, int SuccessCount, int FailureCount)>>();
+        var instanceStats = new Dictionary<string, Dictionary<string, InstanceStats>>();
 
         foreach (var evt in eventStore.Values)
         {
@@ -33,7 +33,7 @@ public class TopologyComputationService
                 node = new TopologyNode { Id = evt.Service, Label = evt.Service };
                 nodesByService[evt.Service] = node;
                 chunksByService[evt.Service] = new HashSet<string>();
-                instanceStats[evt.Service] = new Dictionary<string, (int, int, int)>();
+                instanceStats[evt.Service] = new Dictionary<string, InstanceStats>();
             }
 
             // Track unique chunks
@@ -46,7 +46,8 @@ public class TopologyComputationService
             // Track per-instance breakdown
             if (!instanceStats[evt.Service].TryGetValue(evt.ProcessId, out var stats))
             {
-                stats = (0, 0, 0);
+                stats = new InstanceStats();
+                instanceStats[evt.Service][evt.ProcessId] = stats;
             }
             stats.EventCount++;
 
@@ -64,8 +65,6 @@ public class TopologyComputationService
                     node.SkippedCount++;
                     break;
             }
-
-            instanceStats[evt.Service][evt.ProcessId] = stats;
         }
 
         // Update instance counts and per-instance breakdown

@@ -92,6 +92,26 @@ public class TabService
     /// <summary>Returns true if the tab with the given id is the active tab.</summary>
     public bool IsActive(string tabId) => ActiveTab?.Id == tabId;
 
+    /// <summary>
+    /// Moves the tab with id <paramref name="tabId"/> so it sits immediately
+    /// before the tab currently at <paramref name="targetIndex"/> (0-based,
+    /// measured in the list *after* the moved tab is removed). No-op if the
+    /// tab isn't found or the resulting position is unchanged.
+    /// </summary>
+    public void Reorder(string tabId, int targetIndex)
+    {
+        var idx = _tabs.FindIndex(t => t.Id == tabId);
+        if (idx < 0) return;
+
+        var tab = _tabs[idx];
+        _tabs.RemoveAt(idx);
+
+        targetIndex = Math.Clamp(targetIndex, 0, _tabs.Count);
+        _tabs.Insert(targetIndex, tab);
+
+        Notify();
+    }
+
     // ── Internals ────────────────────────────────────────────────────────
 
     private void SetActive(TabModel tab)
