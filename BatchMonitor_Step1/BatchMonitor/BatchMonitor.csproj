@@ -10,9 +10,11 @@
 
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="9.5.0" />
-    <PackageReference Include="MongoDB.Driver" Version="2.27.0" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.1.0" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BatchMonitor.Core\BatchMonitor.Core.csproj" />
   </ItemGroup>
 
 </Project>

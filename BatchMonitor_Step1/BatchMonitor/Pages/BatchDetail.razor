@@ -34,7 +34,7 @@
     // Slider uses 0–1000 integer steps; converted to/from timestamps internally.
     private DateTime _sliderMin;
     private DateTime _sliderMax;
-    private double _sliderValue;   // 0–1000
+    private double   _sliderValue;   // 0–1000
     private const double SliderSteps = 1000.0;
 
     // ── UI ────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@
     protected override async Task OnInitializedAsync()
     {
         _previousIsFocused = IsFocused;
-        _topologyService = new TopologyComputationService();
+        _topologyService   = new TopologyComputationService();
 
         try
         {
@@ -63,12 +63,12 @@
         if (IsFocused == _previousIsFocused) return;
 
         var gained = IsFocused && !_previousIsFocused;
-        var lost = !IsFocused && _previousIsFocused;
+        var lost   = !IsFocused && _previousIsFocused;
         _previousIsFocused = IsFocused;
 
         if (_eventService is not null) _eventService.IsFocused = IsFocused;
 
-        if (gained) StateHasChanged();
+        if (gained)      StateHasChanged();
         else if (lost) { _allowNextRender = true; StateHasChanged(); }
     }
 
@@ -100,13 +100,13 @@
         _eventService = new PerformanceEventService(BatchService);
 
         await _eventService.StartAsync(
-            env: Environment,
-            runId: RunId,
+            env:            Environment,
+            runId:          RunId,
             batchStartTime: _details.Start,
-            isRunning: _details.Status == BatchStatus.Running,
-            isFocused: IsFocused,
+            isRunning:      _details.Status == BatchStatus.Running,
+            isFocused:      IsFocused,
             onEventsUpdated: DebouncedTopologyCompute,
-            signalR: SignalR);
+            signalR:        SignalR);
     }
 
     private void DebouncedTopologyCompute()
@@ -130,7 +130,7 @@
                                .ToDictionary(kv => kv.Key, kv => kv.Value)
                     : allEvents;
 
-                _topology = _topologyService.ComputeTopology(filtered);
+                _topology   = _topologyService.ComputeTopology(filtered);
                 _eventCount = _eventService.EventCount;
 
                 UpdateSliderRange(allEvents.Values);
@@ -163,7 +163,7 @@
     {
         if (_sliderMax <= _sliderMin) return _sliderMax;
         var fraction = Math.Clamp(value / SliderSteps, 0.0, 1.0);
-        var totalMs = (_sliderMax - _sliderMin).TotalMilliseconds;
+        var totalMs  = (_sliderMax - _sliderMin).TotalMilliseconds;
         return _sliderMin.AddMilliseconds(fraction * totalMs);
     }
 
@@ -185,14 +185,14 @@
     private void EnterLiveMode()
     {
         _replayTimestamp = null;
-        _sliderValue = SliderSteps;
+        _sliderValue     = SliderSteps;
         DebouncedTopologyCompute();
     }
 
     private void EnterReplayMode()
     {
         if (_sliderMax <= _sliderMin) return;
-        _sliderValue = SliderSteps * 0.75;
+        _sliderValue     = SliderSteps * 0.75;
         _replayTimestamp = SliderToDateTime(_sliderValue);
         DebouncedTopologyCompute();
     }
@@ -207,14 +207,14 @@
     // ── Top bar helpers ────────────────────────────────────────────────────
 
     private BatchStatus EffectiveStatus => _details?.Status ?? BatchStatus.Unknown;
-    private int DoneCount => _topology?.TotalDone ?? 0;
+    private int DoneCount       => _topology?.TotalDone       ?? 0;
     private int InProgressCount => _topology?.TotalInProgress ?? 0;
     private int ProgressPercent => _topology is null ? 0 : (int)Math.Round(_topology.EstimatedProgress * 100);
     private Color ProgressColor => EffectiveStatus switch
     {
         BatchStatus.Running => Color.Success,
-        BatchStatus.Failed => Color.Error,
-        _ => Color.Default
+        BatchStatus.Failed  => Color.Error,
+        _                   => Color.Default
     };
 
     private async Task ToggleDetailsStrip()
