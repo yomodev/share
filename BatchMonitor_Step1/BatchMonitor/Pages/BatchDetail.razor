@@ -1,6 +1,7 @@
 @using BatchMonitor.Models
 @inject IBatchService BatchService
 @inject TabService TabService
+@inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -8,100 +9,73 @@
     [Parameter, EditorRequired] public string? RunId { get; set; }
     [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
     [Parameter, EditorRequired] public TabModel? Tab { get; set; }
-
-    /// <summary>
-    /// Whether this tab is currently the focused/visible tab. The component
-    /// instance is kept alive (in its own pane, see MainLayout) regardless —
-    /// this only drives render-skipping and polling cadence (§4, §9).
-    /// </summary>
     [Parameter] public bool IsFocused { get; set; }
 
     private bool _previousIsFocused;
+    private bool _allowNextRender = true;
 
+    // ── Data ─────────────────────────────────────────────────────────────
     private BatchDetails? _details;
     private bool _loading = true;
 
-    // Details strip expand/collapse (§8.1) — collapsed by default, persisted per tab type.
-    private bool _detailsExpanded = false;
-    private string _localStorageKey => "bm_batch_details_strip_expanded";
-
-    // Step 5: Event service and store
     private PerformanceEventService? _eventService;
-    private int _eventCount = 0;
-
-    // Step 6: Topology computation and rendering
-    private Topology? _topology;
     private TopologyComputationService? _topologyService;
     private CancellationTokenSource? _topologyDebounce;
-    private const int TopologyDebounceMs = 500;
+    private const int TopologyDebounceMs = 400;
+
+    // ── Topology (live and replay) ────────────────────────────────────────
+    private Topology? _topology;
+    private int _eventCount;
+
+    // ── Replay mode (Step 8) ─────────────────────────────────────────────
+    private DateTime? _replayTimestamp;
+    private bool IsReplay => _replayTimestamp.HasValue;
+
+    // Slider uses 0–1000 integer steps; converted to/from timestamps internally.
+    private DateTime _sliderMin;
+    private DateTime _sliderMax;
+    private double _sliderValue;   // 0–1000
+    private const double SliderSteps = 1000.0;
+
+    // ── UI ────────────────────────────────────────────────────────────────
+    private bool _detailsExpanded;
+    private string LocalStorageKey => "bm_batch_details_strip_expanded";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
     {
         _previousIsFocused = IsFocused;
+        _topologyService = new TopologyComputationService();
 
-        // read persisted expand state (per tab type, not per-batch — §8.1)
         try
         {
-            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", _localStorageKey);
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", LocalStorageKey);
             _detailsExpanded = stored == "true";
         }
         catch { }
-
-        _topologyService = new TopologyComputationService();
 
         await LoadAsync();
     }
 
     protected override void OnParametersSet()
     {
-        if (IsFocused != _previousIsFocused)
-        {
-            var regainedFocus = IsFocused && !_previousIsFocused;
-            var lostFocus = !IsFocused && _previousIsFocused;
-            _previousIsFocused = IsFocused;
+        if (IsFocused == _previousIsFocused) return;
 
-            if (_eventService is not null)
-            {
-                _eventService.IsFocused = IsFocused;
-            }
+        var gained = IsFocused && !_previousIsFocused;
+        var lost = !IsFocused && _previousIsFocused;
+        _previousIsFocused = IsFocused;
 
-            if (regainedFocus)
-            {
-                // ShouldRender() suppressed renders while unfocused; force one
-                // now so the UI reflects any updates that accumulated.
-                StateHasChanged();
-            }
-            else if (lostFocus)
-            {
-                // Allow exactly one more render so D3FlowGraph receives
-                // IsVisible=false and pauses/hides its canvas.
-                _allowNextRender = true;
-                StateHasChanged();
-            }
-        }
+        if (_eventService is not null) _eventService.IsFocused = IsFocused;
+
+        if (gained) StateHasChanged();
+        else if (lost) { _allowNextRender = true; StateHasChanged(); }
     }
-
-    /// <summary>
-    /// Skips re-renders while this tab is unfocused (§9 "ShouldRender() => isFocused").
-    /// The component instance and its background work (polling, topology
-    /// recompute) keep running — only the DOM update is skipped — so the UI
-    /// is instantly up to date when the tab regains focus.
-    ///
-    /// The transition into "unfocused" must still render once, so the D3
-    /// graph receives IsVisible=false and pauses its animation loop / hides
-    /// its canvas (§9). <see cref="OnParametersSet"/> tracks transitions and
-    /// flags <see cref="_allowNextRender"/> for exactly that render.
-    /// </summary>
-    private bool _allowNextRender = true;
 
     protected override bool ShouldRender()
     {
         if (IsFocused) return true;
-        if (_allowNextRender)
-        {
-            _allowNextRender = false;
-            return true;
-        }
+        if (_allowNextRender) { _allowNextRender = false; return true; }
         return false;
     }
 
@@ -112,89 +86,148 @@
         try
         {
             _details = await BatchService.GetBatchDetailsAsync(Environment, RunId ?? string.Empty);
-
-            // Step 5: Start event polling if details loaded
             if (_details is not null && RunId is not null)
-            {
-                StartEventPolling();
-            }
+                await StartEventServiceAsync();
         }
         catch { _details = null; }
         finally { _loading = false; StateHasChanged(); }
     }
 
-    private void StartEventPolling()
+    private async Task StartEventServiceAsync()
     {
         if (_details is null || RunId is null) return;
 
-        try
-        {
-            _eventService = new PerformanceEventService(BatchService);
+        _eventService = new PerformanceEventService(BatchService);
 
-            // Create a task to start polling (fire and forget, but we track disposal)
-            _ = _eventService.StartPollingAsync(
-                Environment,
-                RunId,
-                _details.Start,
-                isFocused: IsFocused,
-                onEventsUpdated: () => DebouncedTopologyCompute());
-
-            Console.WriteLine($"[BatchDetail] Event polling started for {RunId}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[BatchDetail] Error starting event polling: {ex.Message}");
-        }
+        await _eventService.StartAsync(
+            env: Environment,
+            runId: RunId,
+            batchStartTime: _details.Start,
+            isRunning: _details.Status == BatchStatus.Running,
+            isFocused: IsFocused,
+            onEventsUpdated: DebouncedTopologyCompute,
+            signalR: SignalR);
     }
 
     private void DebouncedTopologyCompute()
     {
-        // Cancel previous debounce
         _topologyDebounce?.Cancel();
         _topologyDebounce?.Dispose();
-
-        // Create new debounce
         _topologyDebounce = new CancellationTokenSource();
         var token = _topologyDebounce.Token;
 
         _ = Task.Delay(TopologyDebounceMs, token).ContinueWith(async _ =>
         {
             if (token.IsCancellationRequested) return;
-
             try
             {
-                if (_eventService is not null && _topologyService is not null)
-                {
-                    var eventStore = _eventService.Events;
-                    var newTopology = _topologyService.ComputeTopology(eventStore);
+                if (_eventService is null || _topologyService is null) return;
 
-                    _topology = newTopology;
-                    _eventCount = _eventService.EventCount;
-                    await InvokeAsync(StateHasChanged);
+                var allEvents = _eventService.Events;
 
-                    Console.WriteLine($"[BatchDetail] Topology recomputed: {newTopology.Nodes.Count} nodes, {newTopology.Edges.Count} edges");
-                }
+                IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue
+                    ? allEvents.Where(kv => kv.Value.Start <= _replayTimestamp.Value)
+                               .ToDictionary(kv => kv.Key, kv => kv.Value)
+                    : allEvents;
+
+                _topology = _topologyService.ComputeTopology(filtered);
+                _eventCount = _eventService.EventCount;
+
+                UpdateSliderRange(allEvents.Values);
+
+                await InvokeAsync(StateHasChanged);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[BatchDetail] Error computing topology: {ex.Message}");
+                Console.WriteLine($"[BatchDetail] Topology compute error: {ex.Message}");
             }
-        }, TaskScheduler.FromCurrentSynchronizationContext());
+        }, TaskScheduler.Default);
     }
+
+    // ── Slider & Replay ───────────────────────────────────────────────────
+
+    private void UpdateSliderRange(IEnumerable<PerformanceEvent> events)
+    {
+        var list = events.ToList();
+        if (list.Count == 0) return;
+
+        _sliderMin = list.Min(e => e.Start);
+        _sliderMax = list.Max(e => e.Finish ?? e.Start);
+
+        // In LIVE mode keep the thumb at the right edge.
+        if (!IsReplay) _sliderValue = SliderSteps;
+    }
+
+    // Convert 0–1000 slider position to a DateTime within [_sliderMin, _sliderMax].
+    private DateTime SliderToDateTime(double value)
+    {
+        if (_sliderMax <= _sliderMin) return _sliderMax;
+        var fraction = Math.Clamp(value / SliderSteps, 0.0, 1.0);
+        var totalMs = (_sliderMax - _sliderMin).TotalMilliseconds;
+        return _sliderMin.AddMilliseconds(fraction * totalMs);
+    }
+
+    private void OnSliderChanged(double value)
+    {
+        _sliderValue = value;
+
+        // Snap to LIVE when dragged to/past the right edge.
+        if (value >= SliderSteps - 1)
+        {
+            EnterLiveMode();
+            return;
+        }
+
+        _replayTimestamp = SliderToDateTime(value);
+        DebouncedTopologyCompute();
+    }
+
+    private void EnterLiveMode()
+    {
+        _replayTimestamp = null;
+        _sliderValue = SliderSteps;
+        DebouncedTopologyCompute();
+    }
+
+    private void EnterReplayMode()
+    {
+        if (_sliderMax <= _sliderMin) return;
+        _sliderValue = SliderSteps * 0.75;
+        _replayTimestamp = SliderToDateTime(_sliderValue);
+        DebouncedTopologyCompute();
+    }
+
+    private string FormatSliderTime()
+    {
+        if (!IsReplay || _replayTimestamp is null) return "LIVE";
+        var ts = _replayTimestamp.Value.ToLocalTime();
+        return ts.ToString("HH:mm:ss");
+    }
+
+    // ── Top bar helpers ────────────────────────────────────────────────────
+
+    private BatchStatus EffectiveStatus => _details?.Status ?? BatchStatus.Unknown;
+    private int DoneCount => _topology?.TotalDone ?? 0;
+    private int InProgressCount => _topology?.TotalInProgress ?? 0;
+    private int ProgressPercent => _topology is null ? 0 : (int)Math.Round(_topology.EstimatedProgress * 100);
+    private Color ProgressColor => EffectiveStatus switch
+    {
+        BatchStatus.Running => Color.Success,
+        BatchStatus.Failed => Color.Error,
+        _ => Color.Default
+    };
 
     private async Task ToggleDetailsStrip()
     {
         _detailsExpanded = !_detailsExpanded;
-        StateHasChanged();
-        try { await JS.InvokeVoidAsync("localStorage.setItem", _localStorageKey, _detailsExpanded.ToString().ToLower()); }
+        try { await JS.InvokeVoidAsync("localStorage.setItem", LocalStorageKey, _detailsExpanded.ToString().ToLower()); }
         catch { }
     }
 
     private async Task CancelBatchAsync()
     {
         if (RunId is null) return;
-        var ok = await BatchService.CancelBatchAsync(Environment, RunId);
-        if (ok) await LoadAsync();
+        if (await BatchService.CancelBatchAsync(Environment, RunId)) await LoadAsync();
     }
 
     private void OpenTimeline()
@@ -203,87 +236,40 @@
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
     }
 
-    // ── Top bar derived values (§8.1, §8.3) ─────────────────────────────
-
-    /// <summary>Effective status — live topology overrides the static details
-    /// status only while the latter still says Running (avoids flicker once
-    /// the batch completes server-side).</summary>
-    private BatchStatus EffectiveStatus => _details?.Status ?? BatchStatus.Unknown;
-
-    private int DoneCount => _topology?.TotalDone ?? 0;
-    private int InProgressCount => _topology?.TotalInProgress ?? 0;
-
-    private int ProgressPercent => _topology is null
-        ? 0
-        : (int)Math.Round(_topology.EstimatedProgress * 100);
-
-    private Color ProgressColor => EffectiveStatus switch
-    {
-        BatchStatus.Running   => Color.Success,
-        BatchStatus.Failed    => Color.Error,
-        _                     => Color.Default
-    };
-
-    // Step 5/A: Display event count and topology summary for testing
-    private void ShowEventCount()
-    {
-        if (_eventService is not null)
-        {
-            _eventCount = _eventService.EventCount;
-            Console.WriteLine($"[BatchDetail] Current event store has {_eventCount} events");
-        }
-
-        if (_topology is not null)
-        {
-            Console.WriteLine($"[BatchDetail] Topology: {_topology.Nodes.Count} nodes, {_topology.Edges.Count} edges, " +
-                               $"chunks={_topology.TotalChunks}, done={_topology.TotalDone}, inProgress={_topology.TotalInProgress}, " +
-                               $"progress={_topology.EstimatedProgress:P0}");
-
-            foreach (var node in _topology.Nodes)
-            {
-                Console.WriteLine($"  - {node.Label} [{node.HeaderState}] x{node.InstanceCount} instances");
-                foreach (var p in node.Pipelines)
-                {
-                    Console.WriteLine($"      · {p.Name} [{p.State}] done={p.DoneCount} inProgress={p.InProgressCount} " +
-                                       $"errors={p.ErrorCount} progress={p.Progress:P0} instances={p.Instances.Count}");
-                }
-            }
-
-            foreach (var edge in _topology.Edges)
-            {
-                Console.WriteLine($"  -> {edge.Source}/{edge.SourcePipeline} => {edge.Target}/{edge.TargetPipeline} " +
-                                   $"[{edge.State}] done={edge.DoneCount} waiting={edge.WaitingEstimate}");
-            }
-        }
-
-        StateHasChanged();
-    }
+    // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
-        // Step 5: Stop polling and dispose event service on tab close
-        if (_eventService is not null)
-        {
-            Console.WriteLine($"[BatchDetail] Disposing event service for {RunId}");
-            _eventService.Dispose();
-            _eventService = null;
-        }
-
-        // Step 6: Cancel debounce timers
+        _eventService?.Dispose();
         _topologyDebounce?.Cancel();
         _topologyDebounce?.Dispose();
     }
+
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 
 <div class="bm-page-fill bm-batch-detail">
 
-    <!-- ── Top bar (§8.1) — fixed height, part of layout flow ── -->
-    <div class="bm-detail-topbar @( _loading ? "loading" : "" )">
+    <!-- ── Top bar ── -->
+    <div class="bm-detail-topbar @(_loading ? "loading" : "")">
         <div class="bm-detail-topbar-left">
             <span class="bm-status-chip-dot bm-status-@(EffectiveStatus.ToString().ToLower())"></span>
-            <span class="bm-status-chip-label bm-status-@(EffectiveStatus.ToString().ToLower())">@EffectiveStatus.ToString()</span>
+            <span class="bm-status-chip-label bm-status-@(EffectiveStatus.ToString().ToLower())">
+                @EffectiveStatus
+            </span>
 
             <span class="bm-detail-batch-name">@(_details?.BatchName ?? "Loading…")</span>
+
+            @if (IsReplay)
+            {
+                <span class="bm-replay-chip">
+                    <MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Small" />
+                    REPLAY @FormatSliderTime()
+                </span>
+            }
 
             @if (_topology is not null)
             {
@@ -295,20 +281,15 @@
                     <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" />
                     @InProgressCount.ToString("N0")
                 </span>
-
                 <div class="bm-detail-progress">
-                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor" Size="Size.Small" Class="bm-detail-progress-bar" />
-                    <span class="bm-detail-progress-label">~@(ProgressPercent)% estimated</span>
+                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor"
+                                       Size="Size.Small" Class="bm-detail-progress-bar" />
+                    <span class="bm-detail-progress-label">~@(ProgressPercent)%</span>
                 </div>
             }
         </div>
 
         <div class="bm-detail-topbar-actions">
-            <!-- Debug button: dumps event/topology summary to console (Step 5/A) -->
-            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ShowEventCount">
-                Events: @_eventCount
-            </MudButton>
-
             <MudTooltip Text="Open Timeline">
                 <MudIconButton Icon="@Icons.Material.Outlined.Timeline" Size="Size.Small" OnClick="OpenTimeline" />
             </MudTooltip>
@@ -316,7 +297,8 @@
             @if (EffectiveStatus == BatchStatus.Running)
             {
                 <MudTooltip Text="Cancel batch">
-                    <MudIconButton Icon="@Icons.Material.Outlined.Stop" Size="Size.Small" Color="Color.Error" OnClick="CancelBatchAsync" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.Stop" Size="Size.Small"
+                                   Color="Color.Error" OnClick="CancelBatchAsync" />
                 </MudTooltip>
             }
 
@@ -327,7 +309,7 @@
         </div>
     </div>
 
-    <!-- ── Details strip (§8.1) — expands below top bar on chevron click ── -->
+    <!-- ── Details strip ── -->
     @if (_detailsExpanded)
     {
         <div class="bm-detail-strip">
@@ -351,7 +333,7 @@
                         <div class="bm-details-value">@_details.Type</div>
                     </div>
                     <div class="bm-details-row">
-                        <div class="bm-details-key">StartTime</div>
+                        <div class="bm-details-key">Start</div>
                         <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
                     </div>
                     <div class="bm-details-row">
@@ -370,7 +352,7 @@
         </div>
     }
 
-    <!-- ── Graph area (§8.2) — fills remaining height ── -->
+    <!-- ── Graph ── -->
     <div class="bm-batch-graph">
         @if (_loading)
         {
@@ -386,15 +368,40 @@
         }
     </div>
 
-    <!-- ── Bottom slider (§8.4) — placeholder, wired in a later step ── -->
+    <!-- ── Timeline slider (Step 8) ── -->
     <div class="bm-batch-detail-footer">
-        <MudSlider Disabled="true" Min="0" Max="100" Value="0" />
+        <div class="bm-slider-row">
+            @if (IsReplay)
+            {
+                <MudTooltip Text="Return to live view">
+                    <MudIconButton Icon="@Icons.Material.Outlined.FiberManualRecord"
+                                   Color="Color.Error" Size="Size.Small"
+                                   Class="bm-live-btn"
+                                   OnClick="EnterLiveMode" />
+                </MudTooltip>
+            }
+            else
+            {
+                <MudTooltip Text="Scrub timeline (enter replay mode)">
+                    <MudIconButton Icon="@Icons.Material.Outlined.History"
+                                   Size="Size.Small"
+                                   Class="bm-replay-btn"
+                                   OnClick="EnterReplayMode" />
+                </MudTooltip>
+            }
+
+            <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : _sliderMin.ToLocalTime().ToString("HH:mm:ss"))</span>
+
+            <MudSlider Class="bm-timeline-slider"
+                       Min="0.0" Max="@SliderSteps"
+                       Step="1.0"
+                       Value="@_sliderValue"
+                       ValueChanged="@((double v) => OnSliderChanged(v))"
+                       Disabled="@(_sliderMax <= _sliderMin)" />
+
+            <span class="bm-slider-label bm-muted">@(_sliderMax == default ? "" : _sliderMax.ToLocalTime().ToString("HH:mm:ss"))</span>
+
+            <span class="bm-slider-count bm-muted">@_eventCount events</span>
+        </div>
     </div>
 </div>
-
-@code {
-    private static string FormatDuration(TimeSpan ts) =>
-        ts.TotalHours >= 1
-            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
-}

@@ -1,6 +1,7 @@
 using BatchMonitor.Configuration;
 using BatchMonitor.Hubs;
 using BatchMonitor.Services;
+using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 
 namespace BatchMonitor;
@@ -34,7 +35,8 @@ public class Program
         // Use MockBatchService for development / demo without a MongoDB instance.
         // Swap to MongoBatchService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IBatchService, MongoBatchService>();
-        builder.Services.AddSingleton<IBatchService, MockBatchService>();
+        builder.Services.AddSingleton<IBatchService, MockBatchService>(sp =>
+            new MockBatchService(sp.GetRequiredService<IHubContext<BatchEventsHub>>()));
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
@@ -62,6 +64,7 @@ public class Program
 
         app.MapBlazorHub();
         app.MapHub<BatchHub>("/hubs/batch");
+        app.MapHub<BatchEventsHub>("/hubs/batch-events");
         app.MapFallbackToPage("/_Host");
 
         app.Run();

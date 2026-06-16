@@ -4,29 +4,35 @@ using System.Threading.Tasks;
 namespace BatchMonitor.Services;
 
 /// <summary>
-/// Handles polling for events and maintains the in-memory event store.
-/// Coordinates with the batch service to fetch incremental events.
+/// Per-tab event accumulator. Combines two delivery paths (Step 9):
+///
+///   1. HTTP polling (fallback, always active): loads historical events on
+///      startup; polls incrementally for completed batches where SignalR
+///      push is not available.
+///
+///   2. SignalR push (primary for running batches): low-latency event delivery
+///      from the server via <see cref="SignalRConnectionService"/>. When push
+///      is active, the polling interval is relaxed to a slow fallback rate.
+///
+/// Focus-aware: while the owning tab is unfocused, polling slows to 10 s and
+/// SignalR events are still accumulated (the component just won't re-render
+/// until it regains focus — see BatchDetail.ShouldRender).
 /// </summary>
 public class PerformanceEventService : IDisposable
 {
-    /// <summary>Poll interval while the owning tab is focused.</summary>
-    public const int FocusedPollIntervalMs = 2000;
-
-    /// <summary>Poll interval while the owning tab is unfocused (§9 throttle).</summary>
-    public const int UnfocusedPollIntervalMs = 10_000;
+    public const int FocusedPollIntervalMs   = 3_000;
+    public const int UnfocusedPollIntervalMs = 15_000;
+    // When SignalR push is active, poll much less frequently (safety net only).
+    public const int SignalRFallbackPollMs   = 30_000;
 
     private readonly IBatchService _batchService;
     private readonly PerformanceEventStore _eventStore;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private Action? _onEventsUpdated;
+    private IDisposable? _signalRSubscription;
+    private bool _signalRActive;
 
-    /// <summary>
-    /// Whether the owning tab is currently focused. The poll loop reads this
-    /// on each iteration to choose between <see cref="FocusedPollIntervalMs"/>
-    /// and <see cref="UnfocusedPollIntervalMs"/> — no restart needed when this
-    /// changes (§9 "restore on focus").
-    /// </summary>
     public bool IsFocused
     {
         get => _isFocused;
@@ -34,13 +40,7 @@ public class PerformanceEventService : IDisposable
         {
             if (_isFocused == value) return;
             _isFocused = value;
-
-            // Refocusing should resume fast polling immediately rather than
-            // waiting out an in-flight 10s unfocused delay.
-            if (value)
-            {
-                _focusRegainedSignal?.TrySetResult();
-            }
+            if (value) _focusRegainedSignal?.TrySetResult();
         }
     }
     private volatile bool _isFocused = true;
@@ -49,69 +49,74 @@ public class PerformanceEventService : IDisposable
     public PerformanceEventService(IBatchService batchService)
     {
         _batchService = batchService ?? throw new ArgumentNullException(nameof(batchService));
-        _eventStore = new PerformanceEventStore();
+        _eventStore   = new PerformanceEventStore();
     }
 
-    /// <summary>
-    /// Returns a read-only snapshot of the current event store.
-    /// </summary>
     public IReadOnlyDictionary<string, PerformanceEvent> Events => _eventStore.Snapshot;
-
-    /// <summary>
-    /// Current event count in store.
-    /// </summary>
     public int EventCount => _eventStore.Count;
 
+    // ── Startup ──────────────────────────────────────────────────────────
+
     /// <summary>
-    /// Starts polling for events from a batch.
-    /// On first call (from=batchStart), loads full history.
-    /// Subsequent polls use lastEventTimestamp to fetch only new/updated events.
-    /// The poll cadence adapts to <see cref="IsFocused"/> on each iteration.
+    /// Loads full history from batch start, then subscribes to SignalR push
+    /// (running batches) and starts a fallback polling loop.
     /// </summary>
-    public async Task StartPollingAsync(
+    public async Task StartAsync(
         string env,
         string runId,
         DateTime batchStartTime,
+        bool isRunning,
         bool isFocused = true,
         Action? onEventsUpdated = null,
-        CancellationToken cancellationToken = default)
+        SignalRConnectionService? signalR = null,
+        CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(env) || string.IsNullOrWhiteSpace(runId))
-            throw new ArgumentException("env and runId are required");
-
         _onEventsUpdated = onEventsUpdated;
-        IsFocused = isFocused;
+        IsFocused        = isFocused;
 
-        // Stop any existing polling
         StopPolling();
 
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        try
-        {
-            // Initial load: fetch full history from batch start time
-            await LoadEventsAsync(env, runId, batchStartTime, _cts.Token);
+        // 1. Load full history.
+        await LoadHistoryAsync(env, runId, batchStartTime, _cts.Token);
 
-            // Start polling loop for incremental updates
-            _pollingTask = PollLoopAsync(env, runId, _cts.Token);
-        }
-        catch
+        // 2. Subscribe to SignalR push for running batches.
+        if (isRunning && signalR is not null)
         {
-            _cts?.Dispose();
-            _cts = null;
-            throw;
+            try
+            {
+                _signalRSubscription = await signalR.SubscribeToBatchAsync(
+                    env, runId, OnSignalREvent, _cts.Token);
+                _signalRActive = true;
+                Console.WriteLine($"[EventService] SignalR push active for {runId}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[EventService] SignalR subscription failed, using polling only: {ex.Message}");
+            }
         }
+
+        // 3. Start polling loop (always — safety net / completed batch support).
+        _pollingTask = PollLoopAsync(env, runId, _cts.Token);
     }
 
-    /// <summary>
-    /// Stops the polling loop. Cancellation is signalled immediately and the
-    /// loop exits on its own — this method does not block waiting for it
-    /// (a blocking wait here previously caused a multi-second UI freeze on
-    /// tab close, especially when the loop was mid-delay in unfocused/10s
-    /// throttle mode).
-    /// </summary>
+    // ── SignalR push handler ──────────────────────────────────────────────
+
+    private async Task OnSignalREvent(PerformanceEvent evt)
+    {
+        _eventStore.UpsertEvent(evt);
+        _onEventsUpdated?.Invoke();
+    }
+
+    // ── Polling loop ──────────────────────────────────────────────────────
+
     public void StopPolling()
     {
+        _signalRSubscription?.Dispose();
+        _signalRSubscription = null;
+        _signalRActive       = false;
+
         if (_cts is not null)
         {
             _cts.Cancel();
@@ -119,33 +124,23 @@ public class PerformanceEventService : IDisposable
             _cts = null;
         }
 
-        // Observe any exception from the polling task without blocking, so
-        // it doesn't surface as an unobserved task exception.
         if (_pollingTask is not null)
         {
-            var task = _pollingTask;
+            var t = _pollingTask;
             _pollingTask = null;
-            _ = task.ContinueWith(t =>
+            _ = t.ContinueWith(task =>
             {
-                if (t.Exception is not null)
-                {
-                    Console.WriteLine($"[EventService] Polling task ended with error: {t.Exception.GetBaseException().Message}");
-                }
+                if (task.Exception is not null)
+                    Console.WriteLine($"[EventService] Poll task error: {task.Exception.GetBaseException().Message}");
             }, TaskScheduler.Default);
         }
     }
 
-    /// <summary>
-    /// Clears all accumulated events (useful for testing or resetting).
-    /// </summary>
-    public void ClearEvents()
-    {
-        _eventStore.Clear();
-    }
+    public void ClearEvents() => _eventStore.Clear();
 
-    // ── Private ──────────────────────────────────────────────────────
+    // ── Private ───────────────────────────────────────────────────────────
 
-    private async Task LoadEventsAsync(string env, string runId, DateTime from, CancellationToken ct)
+    private async Task LoadHistoryAsync(string env, string runId, DateTime from, CancellationToken ct)
     {
         try
         {
@@ -154,14 +149,11 @@ public class PerformanceEventService : IDisposable
             {
                 _eventStore.UpsertEvents(events);
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Loaded {events.Count} events for {runId} from {from:O}");
+                Console.WriteLine($"[EventService] Loaded {events.Count} historical events for {runId}");
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[EventService] Error loading events: {ex.Message}");
-        }
+        catch (Exception ex) { Console.WriteLine($"[EventService] History load error: {ex.Message}"); }
     }
 
     private async Task PollLoopAsync(string env, string runId, CancellationToken ct)
@@ -170,50 +162,40 @@ public class PerformanceEventService : IDisposable
         {
             try
             {
-                var intervalMs = IsFocused ? FocusedPollIntervalMs : UnfocusedPollIntervalMs;
+                int interval;
+                if (_signalRActive)
+                    interval = SignalRFallbackPollMs;
+                else if (!IsFocused)
+                    interval = UnfocusedPollIntervalMs;
+                else
+                    interval = FocusedPollIntervalMs;
 
-                if (!IsFocused)
+                if (!IsFocused && !_signalRActive)
                 {
-                    // Allow a refocus to interrupt the long unfocused delay
-                    // so polling resumes promptly (§9 "restore on focus").
                     _focusRegainedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    var delayTask = Task.Delay(intervalMs, ct);
-                    await Task.WhenAny(delayTask, _focusRegainedSignal.Task);
+                    await Task.WhenAny(Task.Delay(interval, ct), _focusRegainedSignal.Task);
                     _focusRegainedSignal = null;
                 }
                 else
                 {
-                    await Task.Delay(intervalMs, ct);
+                    await Task.Delay(interval, ct);
                 }
 
                 if (ct.IsCancellationRequested) break;
 
-                // Fetch new/updated events since last poll
-                var lastTs = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
-                var events = await _batchService.GetBatchEventsAsync(env, runId, lastTs, ct);
-
+                var from   = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
+                var events = await _batchService.GetBatchEventsAsync(env, runId, from, ct);
                 if (events?.Count > 0)
                 {
                     _eventStore.UpsertEvents(events);
                     _onEventsUpdated?.Invoke();
-                    Console.WriteLine($"[EventService] Polled {events.Count} new/updated events, total now: {_eventStore.Count}");
+                    Console.WriteLine($"[EventService] Poll: {events.Count} events, total={_eventStore.Count}");
                 }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[EventService] Error during poll: {ex.Message}");
-            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Console.WriteLine($"[EventService] Poll error: {ex.Message}"); }
         }
-
-        Console.WriteLine($"[EventService] Polling stopped for {runId}");
     }
 
-    public void Dispose()
-    {
-        StopPolling();
-    }
+    public void Dispose() => StopPolling();
 }

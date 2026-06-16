@@ -774,4 +774,54 @@ html, body {
 .bm-graph-canvas { width:100%; height:100%; background: transparent; border-radius:8px; }
 
 /* ── Bottom slider (§8.4) ── */
-.bm-batch-detail-footer { flex-shrink:0; padding:6px 4px; }
+.bm-batch-detail-footer {
+    flex-shrink: 0;
+    padding: 4px 8px 6px;
+    border-top: 1px solid var(--mud-palette-divider);
+}
+
+.bm-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bm-timeline-slider {
+    flex: 1;
+    margin: 0 4px;
+}
+
+.bm-slider-label {
+    font-size: 0.65rem;
+    font-family: var(--bm-font-mono, monospace);
+    flex-shrink: 0;
+    min-width: 52px;
+}
+.bm-slider-label:last-of-type { text-align: right; }
+
+.bm-slider-count {
+    font-size: 0.65rem;
+    font-family: var(--bm-font-mono, monospace);
+    flex-shrink: 0;
+    min-width: 70px;
+    text-align: right;
+}
+
+/* REPLAY chip in top bar */
+.bm-replay-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #F0A500;
+    background: rgba(240,165,0,0.12);
+    border: 1px solid rgba(240,165,0,0.3);
+    border-radius: 6px;
+    padding: 1px 7px;
+    animation: bm-pulse 2s ease-in-out infinite;
+}
+
+.bm-live-btn  { color: #F85149 !important; }
+.bm-replay-btn { color: var(--mud-palette-text-secondary); }

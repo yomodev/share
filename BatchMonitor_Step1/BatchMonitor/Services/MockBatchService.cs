@@ -1,21 +1,21 @@
+using BatchMonitor.Hubs;
 using BatchMonitor.Models;
+using Microsoft.AspNetCore.SignalR;
 
 namespace BatchMonitor.Services;
 
 /// <summary>
 /// Mock implementation of <see cref="IBatchService"/>.
-/// Generates deterministic fake data so the UI works without a real backend.
-/// Replace with <see cref="MongoBatchService"/> (Step 2 real impl) when ready.
+/// Generates deterministic fake data and — for "Running" batches — simulates
+/// a live stream of <see cref="PerformanceEvent"/> objects pushed via
+/// <see cref="BatchEventsHub"/> so the SignalR live-push path can be tested
+/// without a real backend (Step 9).
 /// </summary>
 public class MockBatchService : IBatchService
 {
-    private static readonly string[] Types = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
+    private static readonly string[] Types    = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] Entities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
 
-    /// <summary>
-    /// Each service has one or more pipelines (unique per service, one input topic each).
-    /// The list order also defines the default flow order for the mock data generator.
-    /// </summary>
     private static readonly (string Service, string[] Pipelines)[] ServicePipelines =
     {
         ("Ingester",    new[] { "ingest-main" }),
@@ -25,15 +25,21 @@ public class MockBatchService : IBatchService
         ("Loader",      new[] { "load-main" }),
     };
 
-    private static readonly string[] Servers = { "server01", "server02" };
+    private static readonly string[] Servers    = { "server01", "server02" };
     private static readonly string[] ProcessIds = { "4821", "4822", "5103", "5104" };
 
     private readonly List<BatchSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
+    private readonly IHubContext<BatchEventsHub>? _hubContext;
 
-    public MockBatchService()
+    // Background push simulation for running batches.
+    private readonly CancellationTokenSource _bgCts = new();
+
+    public MockBatchService(IHubContext<BatchEventsHub>? hubContext = null)
     {
+        _hubContext = hubContext;
+
         var rng = new Random(42);
         _store = Enumerable.Range(1, 200).Select(i =>
         {
@@ -48,37 +54,38 @@ public class MockBatchService : IBatchService
                 Type      = type,
                 Status    = status,
                 Start     = start,
-                End       = status != BatchStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null
+                End       = status != BatchStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
             };
-        })
-        .OrderByDescending(b => b.Start)
-        .ToList();
+        }).OrderByDescending(b => b.Start).ToList();
 
-        // Pre-generate mock events for demo
         GenerateMockEvents(rng);
+
+        // Start background push simulation for running batches.
+        if (_hubContext is not null)
+        {
+            _ = SimulateLivePushAsync(_bgCts.Token);
+        }
     }
+
+    // ── IBatchService ─────────────────────────────────────────────────────
 
     public Task<List<BatchSummary>> GetBatchesAsync(
         string env, DateTime before, int count,
         BatchFilter? filter = null, CancellationToken ct = default)
     {
         var query = _store.Where(b => b.Start < before);
-
         if (filter is not null && !filter.IsEmpty)
         {
             if (!string.IsNullOrWhiteSpace(filter.SearchText))
             {
-                var text = filter.SearchText.Trim().ToLowerInvariant();
+                var text = filter.SearchText.Trim();
                 query = query.Where(b =>
                     b.RunId.Contains(text, StringComparison.OrdinalIgnoreCase) ||
                     b.BatchName.Contains(text, StringComparison.OrdinalIgnoreCase));
             }
-            if (filter.Statuses?.Count > 0)
-                query = query.Where(b => filter.Statuses.Contains(b.Status));
-            if (filter.Types?.Count > 0)
-                query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
+            if (filter.Statuses?.Count > 0) query = query.Where(b => filter.Statuses.Contains(b.Status));
+            if (filter.Types?.Count > 0)    query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
         }
-
         return Task.FromResult(query.Take(count).ToList());
     }
 
@@ -96,128 +103,147 @@ public class MockBatchService : IBatchService
 
     public Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default)
     {
-        // Return deterministic static details for demo
+        var summary = _store.FirstOrDefault(b => b.RunId == runId);
         var details = new BatchDetails
         {
-            RunId = runId ?? "RUN-UNKNOWN",
-            BatchName = $"DemoBatch_{runId?.Split('-').LastOrDefault() ?? "X"}",
-            Type = "FullLoad",
-            Status = BatchStatus.Completed,
-            Start = DateTime.UtcNow.AddMinutes(-42),
-            End = DateTime.UtcNow.AddMinutes(-40),
-            Metadata = new Dictionary<string, string>
+            RunId     = runId ?? "RUN-UNKNOWN",
+            BatchName = summary?.BatchName ?? $"DemoBatch_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Type      = summary?.Type ?? "FullLoad",
+            Status    = summary?.Status ?? BatchStatus.Completed,
+            Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
+            End       = summary?.End,
+            Metadata  = new Dictionary<string, string>
             {
-                ["Source"] = "s3://bucket/path",
-                ["Target"] = "mongo://cluster/db/col",
+                ["Source"]           = "s3://bucket/path",
+                ["Target"]           = "mongo://cluster/db/col",
                 ["RecordsProcessed"] = "12,345",
-                ["WorkerNode"] = "node-7",
-                ["RequestId"] = Guid.NewGuid().ToString()
-            }
+                ["WorkerNode"]       = "node-7",
+                ["RequestId"]        = Guid.NewGuid().ToString(),
+            },
         };
-
-        // For some runIds simulate running
-        if (runId?.Contains("RUN-") == true && runId.EndsWith("1"))
-        {
-            details.Status = BatchStatus.Running;
-            details.End = null;
-        }
-
         return Task.FromResult(details);
     }
 
     public Task<List<PerformanceEvent>> GetBatchEventsAsync(
-        string env,
-        string runId,
-        DateTime from,
-        CancellationToken ct = default)
+        string env, string runId, DateTime from, CancellationToken ct = default)
     {
-        if (!_eventsByRunId.TryGetValue(runId, out var allEvents))
-        {
+        if (!_eventsByRunId.TryGetValue(runId, out var all))
             return Task.FromResult(new List<PerformanceEvent>());
-        }
 
-        // Return only events with Start >= from timestamp
-        var filtered = allEvents.Where(e => e.Start >= from).ToList();
-        return Task.FromResult(filtered);
+        return Task.FromResult(all.Where(e => e.Start >= from).ToList());
     }
 
     public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
     {
-        // For demo: compute topology from pre-generated events
         if (!_eventsByRunId.TryGetValue(runId, out var events))
-        {
-            return Task.FromResult(new Topology { TotalChunks = 0, TotalEvents = 0 });
-        }
+            return Task.FromResult(new Topology());
 
-        // Convert to event store format (key-value by composite key)
-        var eventStore = events.ToDictionary(e => e.CompositeKey, e => e);
-        var topology = _topologyService.ComputeTopology(eventStore);
-
-        return Task.FromResult(topology);
+        var store = events.ToDictionary(e => e.CompositeKey, e => e);
+        return Task.FromResult(_topologyService.ComputeTopology(store));
     }
 
-    // ── Private ──────────────────────────────────────────────────────
+    // ── Live push simulation (Step 9) ────────────────────────────────────
 
     /// <summary>
-    /// Generates a realistic chunk flow per batch:
-    /// each chunk visits every (service, pipeline) hop in <see cref="ServicePipelines"/>
-    /// order, except for "enrich-lookup" which is a fan-out branch some chunks
-    /// take in addition to "enrich-main" (so Enricher has two incoming edges
-    /// from Transformer and Loader sees a converged stream — a simple
-    /// fan-out/fan-in shape to exercise the flow graph).
-    /// A small fraction of chunks error out partway through and never finish
-    /// their current pipeline (Finish stays null), and a small fraction of
-    /// "in-flight" chunks on the last pipeline are left with Finish = null
-    /// to simulate a running batch.
+    /// For each "Running" batch in the store, periodically generates new
+    /// PerformanceEvents and pushes them to connected clients via
+    /// <see cref="BatchEventsHub"/>, simulating what a real backend would do.
     /// </summary>
+    private async Task SimulateLivePushAsync(CancellationToken ct)
+    {
+        var rng = new Random();
+        int chunkCounter = 1000; // start above pre-generated range
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                foreach (var batch in _store.Where(b => b.Status == BatchStatus.Running))
+                {
+                    var env = "DEV1"; // mock environment
+                    var group = BatchEventsHub.GroupName(env, batch.RunId);
+
+                    // Generate 1-3 new events per tick per running batch.
+                    var newEvents = GenerateLiveEvents(batch.RunId, ref chunkCounter, rng);
+                    foreach (var evt in newEvents)
+                    {
+                        // Persist into local store so HTTP polling also returns them.
+                        if (!_eventsByRunId.ContainsKey(batch.RunId))
+                            _eventsByRunId[batch.RunId] = new List<PerformanceEvent>();
+                        _eventsByRunId[batch.RunId].Add(evt);
+
+                        // Push to SignalR group with env+runId so client-side routing works.
+                        await _hubContext!.Clients.Group(group)
+                            .SendAsync("BatchEvent", env, batch.RunId, evt, ct);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MockBatchService] Live push error: {ex.Message}");
+            }
+        }
+    }
+
+    private List<PerformanceEvent> GenerateLiveEvents(string runId, ref int counter, Random rng)
+    {
+        var events = new List<PerformanceEvent>();
+        var count  = rng.Next(1, 4);
+
+        for (int i = 0; i < count; i++)
+        {
+            var hopIdx  = rng.Next(0, ServicePipelines.Length);
+            var (service, pipelines) = ServicePipelines[hopIdx];
+            var pipeline = pipelines[rng.Next(0, pipelines.Length)];
+            var start    = DateTime.UtcNow.AddSeconds(-rng.Next(0, 3));
+
+            events.Add(new PerformanceEvent
+            {
+                ChunkId     = $"LIVE-{counter++:D5}",
+                Service     = service,
+                Pipeline    = pipeline,
+                Server      = Servers[rng.Next(0, Servers.Length)],
+                ProcessId   = ProcessIds[rng.Next(0, ProcessIds.Length)],
+                Start       = start,
+                Finish      = rng.Next(0, 100) < 80 ? start.AddSeconds(rng.Next(1, 4)) : null,
+                RecordCount = rng.Next(10, 200),
+            });
+        }
+        return events;
+    }
+
+    // ── Mock data generation ──────────────────────────────────────────────
+
     private void GenerateMockEvents(Random rng)
     {
         foreach (var batch in _store.Take(10))
         {
-            var events = new List<PerformanceEvent>();
-            var batchStart = batch.Start;
-            var chunksGenerated = rng.Next(20, 40);
+            var events  = new List<PerformanceEvent>();
             var isRunning = batch.Status == BatchStatus.Running;
 
-            for (int chunkIdx = 0; chunkIdx < chunksGenerated; chunkIdx++)
+            for (int ci = 0; ci < rng.Next(20, 40); ci++)
             {
-                var chunkId = $"CHK-{chunkIdx:D4}";
-                var cursor = batchStart.AddSeconds(chunkIdx * 5 + rng.Next(0, 3));
-                var chunkErrored = rng.Next(0, 100) < 8;
-                var errorHop = chunkErrored ? rng.Next(0, ServicePipelines.Length) : -1;
+                var cursor      = batch.Start.AddSeconds(ci * 5 + rng.Next(0, 3));
+                var willError   = rng.Next(0, 100) < 8;
+                var errorHop    = willError ? rng.Next(0, ServicePipelines.Length) : -1;
 
-                for (int hopIdx = 0; hopIdx < ServicePipelines.Length; hopIdx++)
+                for (int hi = 0; hi < ServicePipelines.Length; hi++)
                 {
-                    var (service, pipelines) = ServicePipelines[hopIdx];
-                    var pipeline = pipelines[0];
+                    var (svc, pipes) = ServicePipelines[hi];
+                    AddEvent(events, $"CHK-{ci:D4}", svc, pipes[0], cursor, rng,
+                        isLastHop: hi == ServicePipelines.Length - 1,
+                        isRunning: isRunning,
+                        willError: willError && errorHop == hi);
 
-                    AddEvent(events, chunkId, service, pipeline, cursor, rng, isLastHop: hopIdx == ServicePipelines.Length - 1,
-                        isRunningBatch: isRunning, willError: chunkErrored && errorHop == hopIdx);
+                    if (svc == "Enricher" && pipes.Length > 1 && rng.Next(0, 100) < 40)
+                        AddEvent(events, $"CHK-{ci:D4}", svc, pipes[1], cursor.AddSeconds(rng.Next(1, 4)), rng, false, isRunning, false);
+                    if (svc == "Validator" && pipes.Length > 1 && rng.Next(0, 100) < 15)
+                        AddEvent(events, $"CHK-{ci:D4}", svc, pipes[1], cursor.AddSeconds(rng.Next(1, 3)), rng, false, isRunning, false);
 
-                    // Fan-out: Enricher has a secondary "enrich-lookup" pipeline
-                    // that some chunks also pass through (in addition to enrich-main).
-                    if (service == "Enricher" && pipelines.Length > 1 && rng.Next(0, 100) < 40)
-                    {
-                        var lookupCursor = cursor.AddSeconds(rng.Next(1, 4));
-                        AddEvent(events, chunkId, service, pipelines[1], lookupCursor, rng, isLastHop: false,
-                            isRunningBatch: isRunning, willError: false);
-                    }
-
-                    // Fan-out: Validator has a "validate-retry" pipeline that a
-                    // small fraction of chunks visit before continuing.
-                    if (service == "Validator" && pipelines.Length > 1 && rng.Next(0, 100) < 15)
-                    {
-                        var retryCursor = cursor.AddSeconds(rng.Next(1, 3));
-                        AddEvent(events, chunkId, service, pipelines[1], retryCursor, rng, isLastHop: false,
-                            isRunningBatch: isRunning, willError: false);
-                    }
-
-                    if (chunkErrored && errorHop == hopIdx)
-                    {
-                        // Chunk stops here — does not proceed to subsequent hops.
-                        break;
-                    }
-
+                    if (willError && errorHop == hi) break;
                     cursor = cursor.AddSeconds(rng.Next(2, 6));
                 }
             }
@@ -226,46 +252,22 @@ public class MockBatchService : IBatchService
         }
     }
 
-    private static void AddEvent(
-        List<PerformanceEvent> events,
-        string chunkId,
-        string service,
-        string pipeline,
-        DateTime start,
-        Random rng,
-        bool isLastHop,
-        bool isRunningBatch,
-        bool willError)
+    private static void AddEvent(List<PerformanceEvent> events, string chunkId, string service,
+        string pipeline, DateTime start, Random rng, bool isLastHop, bool isRunning, bool willError)
     {
-        var server = Servers[rng.Next(0, Servers.Length)];
-        var processId = ProcessIds[rng.Next(0, ProcessIds.Length)];
-        var durationSeconds = rng.Next(1, 5);
-
-        DateTime? finish = start.AddSeconds(durationSeconds);
-        string? error = null;
-
-        if (willError)
-        {
-            error = "Validation failed: schema mismatch";
-            // Errored chunks still record a finish time (failed, not hung).
-        }
-        else if (isRunningBatch && isLastHop && rng.Next(0, 100) < 25)
-        {
-            // Simulate some chunks still in progress on the final pipeline
-            // of a running batch.
-            finish = null;
-        }
+        DateTime? finish = start.AddSeconds(rng.Next(1, 5));
+        if (isRunning && isLastHop && rng.Next(0, 100) < 25) finish = null;
 
         events.Add(new PerformanceEvent
         {
-            ChunkId = chunkId,
-            Service = service,
-            Pipeline = pipeline,
-            Server = server,
-            ProcessId = processId,
-            Start = start,
-            Finish = finish,
-            Error = error,
+            ChunkId     = chunkId,
+            Service     = service,
+            Pipeline    = pipeline,
+            Server      = Servers[rng.Next(0, Servers.Length)],
+            ProcessId   = ProcessIds[rng.Next(0, ProcessIds.Length)],
+            Start       = start,
+            Finish      = finish,
+            Error       = willError ? "Validation failed: schema mismatch" : null,
             RecordCount = rng.Next(10, 500),
         });
     }
