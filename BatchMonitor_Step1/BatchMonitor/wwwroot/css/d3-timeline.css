@@ -1,0 +1,200 @@
+/* ================================================================
+   TIMELINE TAB  (Step 10)
+   ================================================================ */
+
+.bm-timeline {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* ── Control bar ─────────────────────────────────────────────────── */
+
+.bm-tl-controls {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+.bm-tl-controls-left  { display: flex; align-items: center; gap: 8px; }
+.bm-tl-controls-right { display: flex; align-items: center; gap: 4px; }
+
+.bm-tl-filter { min-width: 160px; max-width: 220px; }
+.bm-tl-select { min-width: 160px; max-width: 200px; }
+
+/* ── Canvas ──────────────────────────────────────────────────────── */
+
+/* Wrapper fills remaining height; scrolls vertically per spec §2
+   ("outer container scrolls vertically"). */
+.bm-tl-canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* The actual D3 attachment point — fills wrapper width; height is
+   driven by the SVG content (set by d3-timeline.js). */
+.bm-tl-canvas {
+    width: 100%;
+    min-height: 100%;
+    position: relative;
+}
+
+.bm-tl-svg {
+    display: block;
+    width: 100%;
+    /* height is set explicitly by JS to match content */
+}
+
+.bm-tl-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--mud-palette-text-secondary);
+    pointer-events: none;
+}
+
+/* ── Batch header text ───────────────────────────────────────────── */
+
+.bm-tl-batch-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    fill: var(--mud-palette-text-primary);
+}
+
+.bm-tl-batch-runid {
+    font-size: 0.72rem;
+    fill: var(--mud-palette-text-secondary);
+    font-family: var(--bm-font-mono, monospace);
+}
+
+/* LIVE dot pulse */
+.bm-tl-live-dot { animation: bm-pulse 2s ease-in-out infinite; }
+
+/* ── Tick scale ──────────────────────────────────────────────────── */
+
+.bm-tl-tick-label {
+    font-size: 0.62rem;
+    font-family: var(--bm-font-mono, monospace);
+    fill: var(--mud-palette-text-secondary);
+}
+
+/* ── Cursor line ─────────────────────────────────────────────────── */
+
+.bm-tl-cursor-label {
+    font-size: 0.6rem;
+    font-family: var(--bm-font-mono, monospace);
+    fill: #FF00FF;
+}
+
+/* ── Range selector brush ────────────────────────────────────────── */
+
+.bm-tl-brush .selection {
+    fill: rgba(56,139,253,0.2);
+    stroke: #388BFD;
+    stroke-width: 1px;
+}
+
+.bm-tl-brush .handle { fill: #388BFD; cursor: ew-resize; }
+
+.bm-tl-reset-link {
+    font-size: 0.67rem;
+    fill: var(--mud-palette-text-secondary);
+    transition: fill 120ms;
+}
+.bm-tl-reset-link:hover { fill: var(--mud-palette-primary); }
+
+/* ── Tooltip ─────────────────────────────────────────────────────── */
+
+.bm-tl-tooltip {
+    position: absolute;
+    z-index: 30;
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 8px;
+    padding: 0;
+    font-size: 0.72rem;
+    color: var(--mud-palette-text-primary);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    transition: opacity 100ms ease;
+    overflow: hidden;
+    min-width: 220px;
+}
+
+.bm-tl-tt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 12px 5px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    gap: 8px;
+}
+
+.bm-tl-tt-id {
+    font-weight: 700;
+    font-family: var(--bm-font-mono, monospace);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-tl-tt-status {
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.bm-tl-tt-done       { background: rgba(63,185,80,0.18);  color: #3FB950; }
+.bm-tl-tt-inprogress { background: rgba(56,139,253,0.18); color: #388BFD; }
+.bm-tl-tt-error      { background: rgba(248,81,73,0.18);  color: #F85149; }
+
+.bm-tl-tt-sep {
+    height: 1px;
+    background: var(--mud-palette-divider);
+    margin: 0;
+}
+
+.bm-tl-tt-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 2px 12px;
+    font-size: 0.69rem;
+}
+.bm-tl-tt-row span:first-child { color: var(--mud-palette-text-secondary); flex-shrink: 0; }
+.bm-tl-tt-row span:last-child  { font-family: var(--bm-font-mono, monospace); text-align: right; word-break: break-all; }
+.bm-tl-tt-error { color: #F85149 !important; }
+
+.bm-tl-tt-footer {
+    padding: 4px 12px 6px;
+    font-size: 0.62rem;
+    color: var(--mud-palette-text-secondary);
+    text-align: center;
+    border-top: 1px solid var(--mud-palette-divider);
+    cursor: default;
+}
+
+/* ── Add Batch dialog ────────────────────────────────────────────── */
+
+.bm-tl-dialog-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.bm-tl-dialog-env    { min-width: 100px; max-width: 120px; }
+.bm-tl-dialog-filter { flex: 1; }
+
+.bm-tl-dialog-selected { background: rgba(56,139,253,0.10) !important; }

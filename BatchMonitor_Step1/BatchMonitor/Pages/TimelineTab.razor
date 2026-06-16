@@ -1,0 +1,497 @@
+@using BatchMonitor.Models
+@inject IBatchService BatchService
+@inject SignalRConnectionService SignalR
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@code {
+    [Parameter, EditorRequired] public TabModel? Tab { get; set; }
+    [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
+    [Parameter] public string? InitialRunId { get; set; }
+    [Parameter] public bool IsFocused { get; set; }
+
+    // ── Batch data ────────────────────────────────────────────────────────
+    private readonly List<TimelineBatch> _batches = new();
+    private readonly SemaphoreSlim _batchLock = new(1, 1);
+
+    // ── Control bar state ─────────────────────────────────────────────────
+    private string _filterText = string.Empty;
+    private GroupByOption _groupBy = GroupByOption.ServicePipeline;
+    private ColourByOption _colourBy = ColourByOption.Source;
+    private bool _stackView = false;
+
+    // ── Add Batch dialog ──────────────────────────────────────────────────
+    private bool _addDialogOpen = false;
+    private List<BatchSummary> _dialogBatches = new();
+    private BatchSummary? _dialogSelected;
+    private string _dialogFilter = string.Empty;
+    private string _dialogEnv = string.Empty;
+    private bool _dialogLoading = false;
+    private int _dialogPage = 1;
+    private const int DialogPageSize = 25;
+
+    // ── JS interop ────────────────────────────────────────────────────────
+    private ElementReference _canvasRef;
+    private bool _jsInitialised = false;
+    private CancellationTokenSource? _renderDebounce;
+    private const int RenderDebounceMs = 300;
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
+    {
+        _dialogEnv = Environment;
+
+        if (!string.IsNullOrEmpty(InitialRunId))
+        {
+            await LoadBatchAsync(Environment, InitialRunId);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _canvasRef, GetOptions());
+                _jsInitialised = true;
+                await PushDataAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Timeline] JS init error: {ex.Message}");
+            }
+        }
+    }
+
+    protected override bool ShouldRender() => IsFocused || !_jsInitialised;
+
+    // ── Batch loading ─────────────────────────────────────────────────────
+
+    private async Task LoadBatchAsync(string env, string runId)
+    {
+        await _batchLock.WaitAsync();
+        try
+        {
+            var existing = _batches.FirstOrDefault(b => b.RunId == runId && b.Env == env);
+            if (existing is not null)
+            {
+                // Already loaded — refresh/merge events.
+                await existing.RefreshAsync(BatchService);
+            }
+            else
+            {
+                var batch = new TimelineBatch(env, runId, BatchService, SignalR,
+                    onUpdated: async () => await DebouncedPushAsync());
+                await batch.LoadAsync();
+                _batches.Add(batch);
+            }
+        }
+        finally { _batchLock.Release(); }
+
+        await DebouncedPushAsync();
+        StateHasChanged();
+    }
+
+    private async Task RemoveBatchAsync(string runId, string env)
+    {
+        await _batchLock.WaitAsync();
+        try
+        {
+            var batch = _batches.FirstOrDefault(b => b.RunId == runId && b.Env == env);
+            if (batch is not null)
+            {
+                await batch.DisposeAsync();
+                _batches.Remove(batch);
+            }
+        }
+        finally { _batchLock.Release(); }
+
+        await DebouncedPushAsync();
+        StateHasChanged();
+    }
+
+    private async Task RemoveAllBatchesAsync()
+    {
+        await _batchLock.WaitAsync();
+        try
+        {
+            foreach (var b in _batches) await b.DisposeAsync();
+            _batches.Clear();
+        }
+        finally { _batchLock.Release(); }
+
+        await DebouncedPushAsync();
+        StateHasChanged();
+    }
+
+    // ── D3 data push ─────────────────────────────────────────────────────
+
+    private async Task DebouncedPushAsync()
+    {
+        _renderDebounce?.Cancel();
+        _renderDebounce?.Dispose();
+        _renderDebounce = new CancellationTokenSource();
+        var token = _renderDebounce.Token;
+
+        try
+        {
+            await Task.Delay(RenderDebounceMs, token);
+            if (!token.IsCancellationRequested)
+                await InvokeAsync(PushDataAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task PushDataAsync()
+    {
+        if (!_jsInitialised) return;
+        try
+        {
+            var payload = BuildPayload();
+            await JS.InvokeVoidAsync("BatchMonitor.Timeline.update", payload);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Timeline] Push error: {ex.Message}");
+        }
+    }
+
+    private object BuildPayload()
+    {
+        return new
+        {
+            groupBy   = _groupBy.ToString(),
+            colourBy  = _colourBy.ToString(),
+            stackView = _stackView,
+            filter    = _filterText,
+            batches   = _batches.Select(b => new
+            {
+                runId     = b.RunId,
+                env       = b.Env,
+                batchName = b.BatchName,
+                isLive    = b.IsLive,
+                events    = b.Events.Select(e => new
+                {
+                    chunkId   = e.ChunkId,
+                    source    = e.Source,
+                    pipeline  = e.Pipeline,
+                    service   = e.Service,
+                    processId = e.ProcessId,
+                    server    = e.Server,
+                    startMs   = (e.Start - b.BatchStart).TotalMilliseconds,
+                    finishMs  = e.Finish.HasValue ? (e.Finish.Value - b.BatchStart).TotalMilliseconds : (double?)null,
+                    error     = e.Error,
+                    status    = e.IsError ? "error" : e.IsDone ? "done" : "inprogress",
+                }).ToList(),
+            }).ToList(),
+        };
+    }
+
+    private object GetOptions() => new
+    {
+        groupBy  = _groupBy.ToString(),
+        colourBy = _colourBy.ToString(),
+    };
+
+    // ── Control bar handlers ──────────────────────────────────────────────
+
+    private async Task OnGroupByChanged(GroupByOption v)
+    {
+        _groupBy = v;
+        await PushDataAsync();
+    }
+
+    private async Task OnColourByChanged(ColourByOption v)
+    {
+        _colourBy = v;
+        await PushDataAsync();
+    }
+
+    private async Task OnFilterChanged(string v)
+    {
+        _filterText = v;
+        await PushDataAsync();
+    }
+
+    private async Task ToggleStackView()
+    {
+        _stackView = !_stackView;
+        await PushDataAsync();
+    }
+
+    private async Task ResetView()
+    {
+        if (_jsInitialised)
+            await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView");
+    }
+
+    private void ExportCsv()
+    {
+        // CSV export fires via JS — build blob client-side from the current data.
+        _ = JS.InvokeVoidAsync("BatchMonitor.Timeline.exportCsv");
+    }
+
+    // ── Add Batch dialog ──────────────────────────────────────────────────
+
+    private async Task OpenAddDialog()
+    {
+        _addDialogOpen    = true;
+        _dialogSelected   = null;
+        _dialogFilter     = string.Empty;
+        _dialogPage       = 1;
+        await LoadDialogBatchesAsync();
+    }
+
+    private async Task LoadDialogBatchesAsync()
+    {
+        _dialogLoading = true;
+        StateHasChanged();
+        try
+        {
+            var filter = new BatchFilter { SearchText = _dialogFilter };
+            var page   = await BatchService.GetBatchesAsync(
+                _dialogEnv, DateTime.UtcNow, DialogPageSize * _dialogPage, filter);
+            // Poor man's pagination: fetch N items and skip to page.
+            _dialogBatches = page
+                .Skip((_dialogPage - 1) * DialogPageSize)
+                .Take(DialogPageSize)
+                .ToList();
+        }
+        finally { _dialogLoading = false; StateHasChanged(); }
+    }
+
+    private async Task OnDialogEnvChanged(string env)
+    {
+        _dialogEnv      = env;
+        _dialogPage     = 1;
+        _dialogSelected = null;
+        await LoadDialogBatchesAsync();
+    }
+
+    private async Task OnDialogFilterChanged(string text)
+    {
+        _dialogFilter   = text;
+        _dialogPage     = 1;
+        _dialogSelected = null;
+        await LoadDialogBatchesAsync();
+    }
+
+    private async Task ConfirmAddBatch()
+    {
+        if (_dialogSelected is null) return;
+        _addDialogOpen = false;
+        await LoadBatchAsync(_dialogEnv, _dialogSelected.RunId);
+    }
+
+    private bool IsAlreadyLoaded(BatchSummary b) =>
+        _batches.Any(x => x.RunId == b.RunId && x.Env == _dialogEnv);
+
+    // ── Dispose ───────────────────────────────────────────────────────────
+
+    public async ValueTask DisposeAsync()
+    {
+        _renderDebounce?.Cancel();
+        _renderDebounce?.Dispose();
+
+        await _batchLock.WaitAsync();
+        try { foreach (var b in _batches) await b.DisposeAsync(); }
+        finally { _batchLock.Release(); }
+
+        if (_jsInitialised)
+        {
+            try { await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose"); }
+            catch { }
+        }
+    }
+
+    // ── Enums ─────────────────────────────────────────────────────────────
+
+    public enum GroupByOption
+    {
+        ServicePipeline,
+        PidServicePipeline,
+        Service,
+        Pipeline,
+        Pid,
+    }
+
+    public enum ColourByOption
+    {
+        Source,
+        Pipeline,
+        Service,
+        Status,
+    }
+}
+
+<!-- ── Markup ──────────────────────────────────────────────────────────── -->
+<div class="bm-page-fill bm-timeline">
+
+    <!-- Control bar -->
+    <div class="bm-tl-controls">
+        <div class="bm-tl-controls-left">
+            <MudTextField T="string" Placeholder="Filter…" Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Outlined.Search"
+                          Value="@_filterText" ValueChanged="OnFilterChanged"
+                          Immediate="true" DebounceInterval="250"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Class="bm-tl-filter" />
+
+            <MudSelect T="GroupByOption" Label="Group by" Value="_groupBy"
+                       ValueChanged="OnGroupByChanged"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-select">
+                <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
+                <MudSelectItem Value="GroupByOption.PidServicePipeline">PID / Service / Pipeline</MudSelectItem>
+                <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
+                <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
+                <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
+            </MudSelect>
+
+            <MudSelect T="ColourByOption" Label="Colour by" Value="_colourBy"
+                       ValueChanged="OnColourByChanged"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-select">
+                <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
+                <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
+                <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
+                <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
+            </MudSelect>
+        </div>
+
+        <div class="bm-tl-controls-right">
+            <MudTooltip Text="@(_stackView ? "Exit stack view" : "Stack view")">
+                <MudIconButton Icon="@Icons.Material.Outlined.ViewColumn"
+                               Color="@(_stackView ? Color.Primary : Color.Default)"
+                               Size="Size.Small" OnClick="ToggleStackView" />
+            </MudTooltip>
+
+            <MudTooltip Text="Reset view">
+                <MudIconButton Icon="@Icons.Material.Outlined.ZoomOutMap"
+                               Size="Size.Small" OnClick="ResetView" />
+            </MudTooltip>
+
+            <MudTooltip Text="Export CSV">
+                <MudIconButton Icon="@Icons.Material.Outlined.Download"
+                               Size="Size.Small" OnClick="ExportCsv" />
+            </MudTooltip>
+
+            <!-- Remove batch menu -->
+            <MudMenu Icon="@Icons.Material.Outlined.DeleteOutline" Size="Size.Small"
+                     Dense="true" Disabled="@(!_batches.Any())"
+                     AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                @foreach (var b in _batches)
+                {
+                    var runId = b.RunId;
+                    var env   = b.Env;
+                    <MudMenuItem OnClick="@(() => RemoveBatchAsync(runId, env))">
+                        @b.BatchName <span class="bm-muted">@b.RunId</span>
+                    </MudMenuItem>
+                }
+                <MudDivider />
+                <MudMenuItem OnClick="RemoveAllBatchesAsync">
+                    <MudText Color="Color.Error">Remove all</MudText>
+                </MudMenuItem>
+            </MudMenu>
+
+            <MudButton StartIcon="@Icons.Material.Outlined.Add"
+                       Variant="Variant.Outlined" Size="Size.Small"
+                       OnClick="OpenAddDialog">
+                Add
+            </MudButton>
+        </div>
+    </div>
+
+    <!-- D3 canvas — contains only the SVG appended by d3-timeline.js.
+         No Blazor-managed children inside this div; the empty state is
+         rendered as an absolute overlay so it never interferes with the
+         SVG appended by D3. -->
+    <div class="bm-tl-canvas-wrap">
+        <div class="bm-tl-canvas" @ref="_canvasRef"></div>
+
+        @if (!_batches.Any())
+        {
+            <div class="bm-tl-empty">
+                <MudIcon Icon="@Icons.Material.Outlined.Timeline" Style="font-size:3rem; opacity:0.25" />
+                <div class="bm-muted" style="margin-top:8px">No batches loaded — click <strong>Add</strong> to begin</div>
+            </div>
+        }
+    </div>
+
+    <!-- Add Batch dialog -->
+    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true })">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Add Batch</MudText>
+        </TitleContent>
+        <DialogContent>
+            <div class="bm-tl-dialog-controls">
+                <MudSelect T="string" Label="Environment" Value="_dialogEnv"
+                           ValueChanged="OnDialogEnvChanged"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-dialog-env">
+                    @* environments populated from EnvironmentSelectorService in a real impl *@
+                    <MudSelectItem Value="@Environment">@Environment</MudSelectItem>
+                </MudSelect>
+
+                <MudTextField T="string" Placeholder="Search RunId / Name…"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Outlined.Search"
+                              Value="@_dialogFilter" ValueChanged="OnDialogFilterChanged"
+                              Immediate="true" DebounceInterval="300"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Class="bm-tl-dialog-filter" />
+            </div>
+
+            @if (_dialogLoading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+            }
+            else
+            {
+                <MudDataGrid T="BatchSummary" Items="@_dialogBatches"
+                             RowClick="@(e => _dialogSelected = _dialogSelected?.RunId == e.Item.RunId ? null : e.Item)"
+                             RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
+                             Dense="true" Hover="true" Striped="false" Bordered="false">
+                    <Columns>
+                        <PropertyColumn Property="x => x.RunId" Title="RunId" />
+                        <PropertyColumn Property="x => x.BatchName" Title="Name" />
+                        <TemplateColumn Title="Status">
+                            <CellTemplate>
+                                <BatchMonitor.Shared.StatusIcon Status="@context.Item.Status" />
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <PropertyColumn Property="x => x.Start" Title="Start" Format="HH:mm" />
+                        <TemplateColumn Title="Duration">
+                            <CellTemplate>
+                                @(context.Item.End.HasValue
+                                    ? FormatDuration(context.Item.End.Value - context.Item.Start)
+                                    : "—")
+                            </CellTemplate>
+                        </TemplateColumn>
+                    </Columns>
+                </MudDataGrid>
+            }
+
+            @if (_dialogSelected is not null && IsAlreadyLoaded(_dialogSelected))
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                    Already loaded: @_dialogSelected.RunId (@_dialogEnv) — loading will refresh/merge events.
+                </MudAlert>
+            }
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => _addDialogOpen = false)">Cancel</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       Disabled="@(_dialogSelected is null)"
+                       OnClick="ConfirmAddBatch">
+                Load Batch
+            </MudButton>
+        </DialogActions>
+    </MudDialog>
+</div>
+
+@code {
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}h {ts.Minutes:D2}m"
+            : $"{ts.Minutes}m {ts.Seconds:D2}s";
+}

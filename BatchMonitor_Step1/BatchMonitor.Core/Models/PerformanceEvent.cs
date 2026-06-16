@@ -30,6 +30,12 @@ public class PerformanceEvent
     /// <summary>Set if this chunk failed.</summary>
     public string? Error { get; set; }
 
+    /// <summary>
+    /// Class name or pipe processor that handled this chunk (e.g. "OrderParser",
+    /// "ValidationHandler"). Used as the default Colour By key in the Timeline tab.
+    /// </summary>
+    public string Source { get; set; } = string.Empty;
+
     /// <summary>Records processed in this chunk.</summary>
     public int RecordCount { get; set; }
 

@@ -42,8 +42,11 @@
         break;
 
     case TabType.Timeline:
-        <BatchMonitor.Pages.PlaceholderPage Title="Timeline"
-            Icon="@Icons.Material.Outlined.Timeline" Environment="@env" />
+        <BatchMonitor.Pages.TimelineTab
+            Tab="@Tab"
+            Environment="@env"
+            InitialRunId="@Tab.EntityId"
+            IsFocused="@Tab.IsActive" />
         break;
 
     default:

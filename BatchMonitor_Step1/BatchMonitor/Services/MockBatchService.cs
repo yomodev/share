@@ -28,6 +28,25 @@ public class MockBatchService : IBatchService
     private static readonly string[] Servers    = { "server01", "server02" };
     private static readonly string[] ProcessIds = { "4821", "4822", "5103", "5104" };
 
+    // Source class names per (service, pipeline) — simulates PerformanceTracker.Source field.
+    private static readonly Dictionary<(string, string), string[]> SourceNames = new()
+    {
+        { ("Ingester",    "ingest-main")     , new[] { "CsvIngester", "JsonIngester", "XmlIngester" } },
+        { ("Validator",   "validate-main")   , new[] { "SchemaValidator", "BusinessRuleValidator" } },
+        { ("Validator",   "validate-retry")  , new[] { "RetryValidator" } },
+        { ("Transformer", "transform-main")  , new[] { "FieldMapper", "Normaliser", "Deduplicator" } },
+        { ("Enricher",    "enrich-main")     , new[] { "LookupEnricher", "GeoEnricher" } },
+        { ("Enricher",    "enrich-lookup")   , new[] { "ReferenceLookup", "CacheEnricher" } },
+        { ("Loader",      "load-main")       , new[] { "MongoWriter", "ElasticWriter" } },
+    };
+
+    private static string PickSource(string service, string pipeline, Random rng)
+    {
+        if (SourceNames.TryGetValue((service, pipeline), out var names))
+            return names[rng.Next(0, names.Length)];
+        return service;
+    }
+
     private readonly List<BatchSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
@@ -205,6 +224,7 @@ public class MockBatchService : IBatchService
                 ChunkId     = $"LIVE-{counter++:D5}",
                 Service     = service,
                 Pipeline    = pipeline,
+                Source      = PickSource(service, pipeline, rng),
                 Server      = Servers[rng.Next(0, Servers.Length)],
                 ProcessId   = ProcessIds[rng.Next(0, ProcessIds.Length)],
                 Start       = start,
@@ -263,6 +283,7 @@ public class MockBatchService : IBatchService
             ChunkId     = chunkId,
             Service     = service,
             Pipeline    = pipeline,
+            Source      = PickSource(service, pipeline, rng),
             Server      = Servers[rng.Next(0, Servers.Length)],
             ProcessId   = ProcessIds[rng.Next(0, ProcessIds.Length)],
             Start       = start,
