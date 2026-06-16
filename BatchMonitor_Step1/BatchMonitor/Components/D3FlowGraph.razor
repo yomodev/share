@@ -10,8 +10,16 @@
 @code {
     [Parameter, EditorRequired] public Topology Topology { get; set; } = new();
 
+    /// <summary>
+    /// Whether the owning tab is currently focused/visible. When false, the
+    /// canvas is hidden (display:none) and the D3 animation loop pauses
+    /// entirely (§9 "Unfocused canvas consuming GPU" mitigation).
+    /// </summary>
+    [Parameter] public bool IsVisible { get; set; } = true;
+
     private ElementReference _containerRef;
     private bool _initialized;
+    private bool _previousIsVisible = true;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -21,6 +29,8 @@
             {
                 await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.init", _containerRef, GetHandleKey());
                 _initialized = true;
+                _previousIsVisible = IsVisible;
+                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
             }
             catch (Exception ex)
@@ -32,10 +42,22 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_initialized)
+        if (!_initialized) return;
+
+        if (IsVisible != _previousIsVisible)
         {
-            await PushTopologyAsync();
+            _previousIsVisible = IsVisible;
+            try
+            {
+                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.setVisible", GetHandleKey(), IsVisible);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[D3FlowGraph] setVisible failed: {ex.Message}");
+            }
         }
+
+        await PushTopologyAsync();
     }
 
     private string GetHandleKey() => $"d3flowgraph-{GetHashCode()}";

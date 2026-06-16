@@ -1,5 +1,5 @@
 /* ================================================================
-   D3 FLOW GRAPH
+   D3 FLOW GRAPH  (rev 4)
    ================================================================ */
 
 .bm-d3-flow-graph {
@@ -7,7 +7,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    border-radius: var(--bm-radius-lg);
+    border-radius: 10px;
 }
 
 .bm-d3-svg {
@@ -18,153 +18,215 @@
 }
 .bm-d3-svg:active { cursor: grabbing; }
 
-/* ── Fit to view button ──────────────────────────────────────────── */
-.bm-graph-fit-btn {
-    position: absolute;
-    bottom: 16px;
-    right: 16px;
-    z-index: 5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border: 1px solid var(--mud-palette-divider);
-    border-radius: var(--bm-radius);
-    background: rgba(255,255,255,0.04);
-    backdrop-filter: blur(8px);
-    color: var(--mud-palette-text-secondary);
-    cursor: pointer;
-    transition: background var(--bm-transition), color var(--bm-transition);
-}
-.bm-graph-fit-btn:hover {
-    background: var(--mud-palette-action-default-hover);
-    color: var(--mud-palette-text-primary);
-}
-
 /* ── Nodes ────────────────────────────────────────────────────────── */
-.bm-node { cursor: pointer; }
+
+/* No CSS transform on hover — it conflicts with D3's translate transform
+   attribute and causes the strobo/jump effect. Instead we use a subtle
+   filter on the border rect only. */
+.bm-node { cursor: default; }
 
 .bm-node-rect {
-    fill: rgba(255,255,255,0.04);
-    stroke: var(--mud-palette-divider);
+    fill: none;
     stroke-width: 1.5px;
-    transition: fill 400ms ease, stroke 400ms ease, filter 400ms ease;
+    transition: stroke 300ms ease, filter 300ms ease;
+}
+/* Hover glow — filter only, no positional change. */
+.bm-node:hover .bm-node-rect {
+    filter: brightness(1.35);
 }
 
-/* Activity level reflects RecentThroughputScore */
-.bm-node-rect.bm-activity-idle {
-    fill: rgba(255,255,255,0.03);
-    stroke: var(--mud-palette-divider);
-}
-.bm-node-rect.bm-activity-warm {
-    fill: rgba(47,129,244,0.10);
-    stroke: rgba(47,129,244,0.45);
-}
-.bm-node-rect.bm-activity-hot {
-    fill: rgba(47,129,244,0.18);
-    stroke: var(--mud-palette-primary);
-    filter: drop-shadow(0 0 6px rgba(47,129,244,0.45));
-}
+.bm-hdr-errored    { stroke: #F85149; filter: drop-shadow(0 0 6px rgba(248,81,73,0.4)); }
+.bm-hdr-active     { stroke: #3FB950; filter: drop-shadow(0 0 6px rgba(63,185,80,0.35)); }
+.bm-hdr-inprogress { stroke: #388BFD; }
+.bm-hdr-idle       { stroke: var(--mud-palette-divider); }
+.bm-hdr-completed  { stroke: var(--mud-palette-divider); }
+.bm-hdr-notstarted { stroke: var(--mud-palette-divider); opacity: 0.55; }
+
+.bm-node-accent { pointer-events: none; }
 
 .bm-node-label {
-    font-size: 0.85rem;
+    font-size: 0.83rem;
     font-weight: 600;
     fill: var(--mud-palette-text-primary);
     pointer-events: none;
 }
 
-.bm-node-sub {
-    font-size: 0.7rem;
-    font-family: var(--bm-font-mono);
-    fill: var(--mud-palette-text-secondary);
+.bm-node-hdr-div {
+    stroke-width: 1px;
     pointer-events: none;
 }
 
-/* Instance-count badge, top-right of node */
-.bm-node-badge circle {
-    fill: var(--mud-palette-primary);
-    opacity: 0.9;
-}
-.bm-node-badge text {
-    font-size: 0.62rem;
+/* Instance badge */
+.bm-node-badge circle { fill: #388BFD; opacity: 0.9; }
+.bm-node-badge-text {
+    font-size: 0.6rem;
     font-weight: 700;
     fill: #fff;
     pointer-events: none;
 }
 
-/* ── Edges ────────────────────────────────────────────────────────── */
+/* Header active-state pulse */
+.bm-node-pulse { pointer-events: none; }
+
+/* ── Pipeline rows ───────────────────────────────────────────────── */
+
+.bm-row { cursor: pointer; }
+.bm-row:hover .bm-row-hit  { fill: rgba(88,166,255,0.07) !important; }
+.bm-row:hover .bm-row-name { fill: var(--mud-palette-primary); }
+
+.bm-row-bar { pointer-events: none; }
+
+.bm-row-name {
+    font-size: 0.72rem;
+    font-weight: 500;
+    fill: var(--mud-palette-text-primary);
+    pointer-events: none;
+    transition: fill 150ms ease;
+}
+
+.bm-row-track { fill: rgba(255,255,255,0.07); }
+.bm-row-fill  { transition: width 350ms ease; }
+
+.bm-row-counts {
+    font-size: 0.62rem;
+    font-family: var(--bm-font-mono, monospace);
+    fill: var(--mud-palette-text-secondary);
+    pointer-events: none;
+}
+
+/* ── Edges ───────────────────────────────────────────────────────── */
+
+/* stroke & stroke-width set as SVG attributes in JS (required for
+   context-stroke on the arrowhead marker). CSS only handles extras. */
 .bm-edge-path {
     fill: none;
-    stroke: var(--mud-palette-divider);
-    stroke-width: 1.5px;
-    transition: stroke 200ms ease, stroke-width 120ms ease;
-}
-
-.bm-edge-arrow {
-    fill: var(--mud-palette-divider);
-}
-
-/* Pulse mode: intensity (0-1) is written to --bm-pulse-intensity each frame */
-.bm-edge-path.bm-edge-pulse {
-    stroke: var(--mud-palette-primary);
-    stroke-width: calc(1.5px + var(--bm-pulse-intensity, 0) * 2.5px);
-    opacity: calc(0.45 + var(--bm-pulse-intensity, 0) * 0.55);
+    stroke-linecap: round;
 }
 
 .bm-edge-label {
-    font-size: 0.62rem;
-    font-family: var(--bm-font-mono);
+    font-size: 0.6rem;
+    font-family: var(--bm-font-mono, monospace);
     fill: var(--mud-palette-text-secondary);
+    /* Halo so label is readable on both dark and light themes. */
     paint-order: stroke;
-    stroke: var(--mud-palette-background);
-    stroke-width: 3px;
+    stroke: var(--mud-palette-surface, #1e1e2e);
+    stroke-width: 4px;
     pointer-events: none;
 }
 
-/* ── Particles (low-throughput edge animation) ──────────────────────── */
-.bm-particle {
-    fill: var(--mud-palette-primary);
-    filter: drop-shadow(0 0 3px rgba(47,129,244,0.8));
-    pointer-events: none;
-}
+/* ── Popover ─────────────────────────────────────────────────────── */
 
-/* ── Tooltip ──────────────────────────────────────────────────────── */
-.bm-graph-tooltip {
+.bm-graph-popover {
     position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 10;
-    pointer-events: none;
-    background: rgba(20,20,24,0.92);
+    z-index: 20;
+    width: 254px;
+    background: var(--mud-palette-surface);
     border: 1px solid var(--mud-palette-divider);
-    border-radius: var(--bm-radius-sm);
-    padding: 8px 10px;
+    border-radius: 10px;
     font-size: 0.72rem;
     color: var(--mud-palette-text-primary);
-    backdrop-filter: blur(8px);
-    box-shadow: 0 6px 18px rgba(0,0,0,0.25);
-    max-width: 260px;
-    transition: opacity 120ms ease;
-    opacity: 0;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.4);
+    transition: opacity 130ms ease;
+    overflow: hidden;
 }
 
-.bm-tooltip-title {
+.bm-pop-hdr {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px 6px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+.bm-pop-title {
     font-weight: 700;
     font-size: 0.78rem;
-    margin-bottom: 4px;
-}
-
-.bm-tooltip-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    font-family: var(--bm-font-mono);
+    flex: 1;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.bm-pop-badge {
+    font-size: 0.57rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.bm-pop-active     { background:rgba(63,185,80,0.18);  color:#3FB950; }
+.bm-pop-inprogress { background:rgba(56,139,253,0.18); color:#388BFD; }
+.bm-pop-errored    { background:rgba(248,81,73,0.18);  color:#F85149; }
+.bm-pop-completed  { background:rgba(139,148,158,0.14); color:var(--mud-palette-text-secondary); }
+.bm-pop-idle       { background:rgba(139,148,158,0.10); color:var(--mud-palette-text-secondary); }
+.bm-pop-notstarted { background:rgba(139,148,158,0.08); color:var(--mud-palette-text-secondary); }
+
+.bm-pop-x {
+    background: none; border: none;
+    color: var(--mud-palette-text-secondary);
+    cursor: pointer; font-size: 1.1rem; line-height: 1;
+    padding: 0 2px; flex-shrink: 0; opacity: 0.6;
+    transition: opacity 110ms, color 110ms;
+}
+.bm-pop-x:hover { opacity: 1; color: #F85149; }
+
+.bm-pop-prog-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+}
+.bm-pop-track {
+    flex: 1; height: 4px;
+    background: var(--mud-palette-divider);
+    border-radius: 2px; overflow: hidden;
+}
+.bm-pop-fill { height: 100%; border-radius: 2px; transition: width 350ms ease; }
+.bm-pop-pct {
+    font-size: 0.65rem; font-family: monospace;
+    color: var(--mud-palette-text-secondary);
+    flex-shrink: 0; width: 32px; text-align: right;
 }
 
-.bm-tooltip-divider {
+.bm-pop-topic {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; padding: 2px 10px 6px;
+    font-size: 0.67rem; color: var(--mud-palette-text-secondary);
+}
+.bm-pop-topic code { font-family: monospace; }
+
+.bm-pop-kafka {
+    background: none;
+    border: 1px solid rgba(56,139,253,0.4);
+    border-radius: 4px; color: #388BFD; cursor: pointer;
+    font-size: 0.62rem; padding: 1px 6px; flex-shrink: 0;
+    transition: background 110ms;
+}
+.bm-pop-kafka:hover { background: rgba(56,139,253,0.12); }
+
+.bm-pop-sep {
     height: 1px;
     background: var(--mud-palette-divider);
-    margin: 6px 0;
+}
+
+.bm-pop-inst-hdr {
+    padding: 5px 10px 3px;
+    font-size: 0.63rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-pop-inst {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 10px;
+    border-top: 1px solid var(--mud-palette-divider);
+    font-size: 0.67rem;
+}
+.bm-pop-inst:first-of-type { border-top: none; }
+.bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-pop-pid { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
+.bm-pop-cnt { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
+
+.bm-pop-empty {
+    padding: 6px 10px 8px;
+    color: var(--mud-palette-text-secondary);
+    font-style: italic;
 }

@@ -22,13 +22,19 @@
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
     <MudMainContent Style="padding:0; padding-top:var(--bm-tabbar-h); overflow:hidden; display:flex; flex-direction:column;">
         <div class="bm-content-area">
-            @if (TabService.ActiveTab is null)
-            {
+            <!-- Home pane: always rendered, hidden when a tab is focused. -->
+            <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
                 <BatchMonitor.Pages.Home />
-            }
-            else
+            </div>
+
+            <!-- One persistent pane per open tab — kept alive in the DOM so
+                 polling loops, event stores, and D3 graph state survive
+                 focus changes (§4 tab lifecycle). -->
+            @foreach (var tab in TabService.Tabs)
             {
-                <BatchMonitor.Shared.TabContent Tab="@TabService.ActiveTab" />
+                <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
+                    <BatchMonitor.Shared.TabContent Tab="@tab" />
+                </div>
             }
         </div>
     </MudMainContent>

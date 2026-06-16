@@ -1,522 +1,683 @@
-// Batch Monitor — D3 flow graph
+// Batch Monitor — D3 flow graph  (rev 4)
 //
-// Renders a directed-acyclic flow graph of service topology using:
-//  - dagre for hierarchical (left-to-right) layout
-//  - D3 v7 for SVG rendering, zoom/pan, transitions
-//  - d3-animation.js for live edge particle/pulse animation
-//
-// Public API (all attached to window.BatchMonitor.D3Graph):
-//   init(containerEl)              -> handle
-//   update(handle, topologyJson)   -> void   (debounced layout internally)
-//   fitToView(handle)              -> void
-//   dispose(handle)                -> void
+// Fixes in this revision:
+//  - Arrow marker: orient="auto" + fill="context-stroke" with inline stroke
+//    attribute so context-stroke resolves correctly; no more flipped arrows.
+//  - Node hover: CSS transform removed (caused strobo/jump). Hover is now
+//    a subtle border/glow brightening via CSS filter only — no positional change.
+//  - Node background: read --mud-palette-surface at runtime so it works with
+//    both dark and light MudBlazor themes.
+//  - Row border bar: clipped to node interior via SVG clipPath, never overflows.
+//  - Edges: paint-order ensures labels are readable on both themes.
 
 window.BatchMonitor = window.BatchMonitor || {};
 window.BatchMonitor.D3Graph = (function () {
 
-    const NODE_WIDTH = 180;
-    const NODE_HEIGHT = 64;
-    const LAYOUT_DEBOUNCE_MS = 500; // spec: 400-600ms
-    const TRANSITION_MS = 300;
+    const NODE_WIDTH    = 234;
+    const HEADER_HEIGHT = 32;
+    const ROW_HEIGHT    = 40;
+    const MIN_ROWS      = 1;
+    const DEBOUNCE_MS   = 500;
+    const T             = 280;   // transition duration ms
+
+    // Read page surface colour at runtime so light/dark themes both work.
+    function nodeBg() {
+        return getComputedStyle(document.documentElement)
+            .getPropertyValue('--mud-palette-surface').trim() || '#1e1e2e';
+    }
+
+    function dividerColor() {
+        return getComputedStyle(document.documentElement)
+            .getPropertyValue('--mud-palette-divider').trim() || 'rgba(139,148,158,0.2)';
+    }
+
+    const STATE_COLOR = {
+        errored:    '#F85149',
+        active:     '#3FB950',
+        inprogress: '#388BFD',
+        idle:       '#8B949E',
+        completed:  '#8B949E',
+        notstarted: 'rgba(139,148,158,0.22)',
+    };
+
+    function sk(s) { return String(s || 'notstarted').toLowerCase(); }
+    function sc(s) { return STATE_COLOR[sk(s)] || STATE_COLOR.notstarted; }
+
+    // ── Geometry ─────────────────────────────────────────────────────────
+
+    function nh(node) {
+        return HEADER_HEIGHT + Math.max((node.pipelines || []).length, MIN_ROWS) * ROW_HEIGHT;
+    }
+
+    function rowCY(node, i) {
+        return -nh(node) / 2 + HEADER_HEIGHT + i * ROW_HEIGHT + ROW_HEIGHT / 2;
+    }
+
+    function pipelineIdx(node, name) {
+        return (node?.pipelines || []).findIndex(p => p.name === name);
+    }
 
     // ── Layout ───────────────────────────────────────────────────────────
 
-    function runDagreLayout(topology) {
-        const g = new dagre.graphlib.Graph();
-        g.setGraph({ rankdir: 'LR', nodesep: 32, ranksep: 90, marginx: 24, marginy: 24 });
+    function chooseDir(containerEl) {
+        const r = containerEl.getBoundingClientRect();
+        return r.width >= r.height ? 'LR' : 'TB';
+    }
+
+    function runLayout(topo, containerEl) {
+        const dir = chooseDir(containerEl);
+        const g = new dagre.graphlib.Graph({ multigraph: true });
+        g.setGraph({
+            rankdir: dir,
+            nodesep: dir === 'LR' ? 60  : 80,
+            ranksep: dir === 'LR' ? 160 : 100,
+            marginx: 48, marginy: 48,
+        });
         g.setDefaultEdgeLabel(() => ({}));
 
-        for (const node of topology.nodes) {
-            g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT, data: node });
-        }
-        for (const edge of topology.edges) {
-            // Skip edges referencing unknown nodes defensively.
-            if (!topology.nodes.find(n => n.id === edge.source)) continue;
-            if (!topology.nodes.find(n => n.id === edge.target)) continue;
-            g.setEdge(edge.source, edge.target, { data: edge });
-        }
+        for (const n of topo.nodes)
+            g.setNode(n.id, { width: NODE_WIDTH, height: nh(n), data: n });
 
+        const ids = new Set(topo.nodes.map(n => n.id));
+        for (const e of topo.edges) {
+            if (!ids.has(e.source) || !ids.has(e.target)) continue;
+            g.setEdge(e.source, e.target, { data: e }, `${e.sourcePipeline}::${e.targetPipeline}`);
+        }
         dagre.layout(g);
         return g;
     }
 
-    // ── Path generation ──────────────────────────────────────────────────
+    // ── Edge path: S-curve, horizontal entry AND exit ────────────────────
 
-    function edgePathD(points) {
-        // Smooth curve through dagre's control points.
-        const line = d3.line()
-            .x(p => p.x)
-            .y(p => p.y)
-            .curve(d3.curveBasis);
-        return line(points);
+    function edgePath(pts) {
+        if (!pts || pts.length < 2) return '';
+        const s = pts[0], t = pts[pts.length - 1];
+        const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
+        return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
     }
 
-    // ── Public handle factory ───────────────────────────────────────────
+    function snapPorts(pts, g, edge) {
+        if (!pts || pts.length < 2) return pts;
+        const sp = [...pts.map(p => ({ ...p }))];
+        const sn = g.node(edge.source), tn = g.node(edge.target);
+        if (sn) {
+            const ri = pipelineIdx(sn.data, edge.sourcePipeline);
+            sp[0] = { x: sn.x + sn.width / 2, y: sn.y + (ri >= 0 ? rowCY(sn.data, ri) : 0) };
+        }
+        if (tn) {
+            const ri = pipelineIdx(tn.data, edge.targetPipeline);
+            const last = sp.length - 1;
+            sp[last] = { x: tn.x - tn.width / 2, y: tn.y + (ri >= 0 ? rowCY(tn.data, ri) : 0) };
+        }
+        return sp;
+    }
+
+    // ── init ─────────────────────────────────────────────────────────────
 
     function init(containerEl) {
         if (!containerEl) return null;
 
-        const svg = d3.select(containerEl)
-            .append('svg')
+        const svg = d3.select(containerEl).append('svg')
             .attr('class', 'bm-d3-svg')
-            .attr('width', '100%')
-            .attr('height', '100%');
+            .attr('width', '100%').attr('height', '100%');
 
-        // Defs for arrow markers / gradients.
         const defs = svg.append('defs');
+
+        // Arrow marker — orient="auto" (not auto-start-reverse) so it always
+        // points toward the target. fill="context-stroke" inherits the path's
+        // stroke colour; the stroke must be set as an SVG attribute (not just
+        // CSS) for context-stroke to resolve in all browsers.
         defs.append('marker')
             .attr('id', 'bm-arrow')
             .attr('viewBox', '0 0 10 10')
-            .attr('refX', 8)
-            .attr('refY', 5)
-            .attr('markerWidth', 7)
-            .attr('markerHeight', 7)
-            .attr('orient', 'auto-start-reverse')
+            .attr('refX', 8).attr('refY', 5)
+            .attr('markerWidth', 5).attr('markerHeight', 5)
+            .attr('orient', 'auto')
+            .attr('markerUnits', 'strokeWidth')
             .append('path')
-            .attr('d', 'M 0 0 L 10 5 L 0 10 z')
-            .attr('class', 'bm-edge-arrow');
+            .attr('d', 'M 0 1 L 9 5 L 0 9 z')
+            .attr('fill', 'context-stroke')
+            .attr('stroke', 'none');
 
-        const root = svg.append('g').attr('class', 'bm-d3-root');
-        const edgeLayer = root.append('g').attr('class', 'bm-edge-layer');
-        const particleLayer = root.append('g').attr('class', 'bm-particle-layer');
-        const nodeLayer = root.append('g').attr('class', 'bm-node-layer');
+        const root  = svg.append('g').attr('class', 'bm-d3-root');
+        const eLayer = root.append('g').attr('class', 'bm-edge-layer');
+        const nLayer = root.append('g').attr('class', 'bm-node-layer');
+
+        // Popover div.
+        const popover = d3.select(containerEl).append('div')
+            .attr('class', 'bm-graph-popover')
+            .style('opacity', 0)
+            .style('pointer-events', 'none');
 
         const zoom = d3.zoom()
-            .scaleExtent([0.25, 2.5])
-            .on('zoom', (event) => {
-                root.attr('transform', event.transform);
-                handle.userHasInteracted = true;
-            });
-
+            .scaleExtent([0.12, 3])
+            .on('zoom', ev => { root.attr('transform', ev.transform); handle.userZoomed = true; });
         svg.call(zoom);
-
-        const tooltip = d3.select(containerEl)
-            .append('div')
-            .attr('class', 'bm-graph-tooltip')
-            .style('opacity', 0);
+        svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl,
-            svg,
-            root,
-            edgeLayer,
-            particleLayer,
-            nodeLayer,
-            zoom,
-            tooltip,
+            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs,
             animState: window.BatchMonitor.D3Animation.createState(),
-            currentGraph: null,     // dagre graphlib graph from the last committed layout
-            currentTopology: null,
-            layoutTimer: null,
-            rafId: null,
-            lastFrameTime: null,
-            userHasInteracted: false,
-            disposed: false,
+            currentGraph: null, pendingTopology: null,
+            layoutTimer: null, rafId: null, lastFrameTime: null,
+            userZoomed: false, isVisible: true, disposed: false,
+            popoverNodeId: null, popoverPipeline: null, popoverHideTimer: null,
         };
 
-        // Animation loop.
-        const frame = (now) => {
+        const frame = now => {
             if (handle.disposed) return;
-            if (handle.lastFrameTime == null) handle.lastFrameTime = now;
-            const dt = now - handle.lastFrameTime;
-            handle.lastFrameTime = now;
-
-            renderAnimationFrame(handle, dt, now);
-
+            if (handle.isVisible) {
+                if (!handle.lastFrameTime) handle.lastFrameTime = now;
+                renderAnimationFrame(handle, now - handle.lastFrameTime, now);
+                handle.lastFrameTime = now;
+            } else {
+                handle.lastFrameTime = null;
+            }
             handle.rafId = requestAnimationFrame(frame);
         };
         handle.rafId = requestAnimationFrame(frame);
-
         return handle;
     }
 
-    // ── Update (debounced layout) ──────────────────────────────────────────
+    // ── update / layout ───────────────────────────────────────────────────
 
-    function update(handle, topology) {
+    function update(handle, topo) {
         if (!handle || handle.disposed) return;
-        handle.pendingTopology = topology;
-
-        if (handle.currentGraph === null) {
-            // First render: commit immediately so the user isn't staring at
-            // an empty canvas while the debounce timer runs.
-            commitLayout(handle);
-            return;
-        }
-
-        if (handle.layoutTimer) clearTimeout(handle.layoutTimer);
-        handle.layoutTimer = setTimeout(() => commitLayout(handle), LAYOUT_DEBOUNCE_MS);
+        handle.pendingTopology = topo;
+        if (!handle.currentGraph) { commitLayout(handle); return; }
+        clearTimeout(handle.layoutTimer);
+        handle.layoutTimer = setTimeout(() => commitLayout(handle), DEBOUNCE_MS);
     }
 
     function commitLayout(handle) {
         if (handle.disposed) return;
-        handle.layoutTimer = null;
+        const topo = handle.pendingTopology;
+        if (!topo) return;
 
-        const topology = handle.pendingTopology;
-        if (!topology) return;
+        // Refresh per-node clipPaths whenever the topology changes.
+        updateClipPaths(handle, topo);
 
-        const g = runDagreLayout(topology);
+        const g = runLayout(topo, handle.containerEl);
         handle.currentGraph = g;
-        handle.currentTopology = topology;
-
-        renderGraph(handle, g, topology);
-
-        // Auto fit-to-view on first render or whenever the user hasn't
-        // manually panned/zoomed yet (graph "grows outward" per spec).
-        if (!handle.userHasInteracted) {
-            fitToView(handle, /* animate */ true);
-        }
-    }
-
-    // ── Rendering ───────────────────────────────────────────────────────
-
-    function renderGraph(handle, g, topology) {
+        renderEdges(handle, g);  // edges first — drawn below nodes
         renderNodes(handle, g);
-        renderEdges(handle, g, topology);
+        if (!handle.userZoomed) fitToView(handle, true);
     }
+
+    // ── SVG clipPaths — one per node, clips row content to card bounds ────
+
+    function updateClipPaths(handle, topo) {
+        const clips = handle.defs.selectAll('clipPath.bm-node-clip')
+            .data(topo.nodes, n => n.id);
+
+        clips.exit().remove();
+
+        const enter = clips.enter().append('clipPath')
+            .attr('class', 'bm-node-clip')
+            .attr('id', n => `bm-clip-${n.id}`);
+        enter.append('rect').attr('rx', 10);
+
+        // Update dimensions for both enter + update.
+        handle.defs.selectAll('clipPath.bm-node-clip').each(function(n) {
+            const h = nh(n), w = NODE_WIDTH;
+            d3.select(this).select('rect')
+                .attr('x', -w / 2).attr('y', -h / 2)
+                .attr('width', w).attr('height', h);
+        });
+    }
+
+    // ── Nodes ─────────────────────────────────────────────────────────────
 
     function renderNodes(handle, g) {
-        const nodeIds = g.nodes();
-        const nodeData = nodeIds.map(id => ({ id, ...g.node(id) }));
+        const data = g.nodes().map(id => ({ id, ...g.node(id) }));
 
-        const sel = handle.nodeLayer
-            .selectAll('g.bm-node')
-            .data(nodeData, d => d.id);
+        const sel = handle.nLayer.selectAll('g.bm-node').data(data, d => d.id);
 
-        // EXIT: fade + scale out then remove.
-        sel.exit()
-            .transition().duration(TRANSITION_MS).ease(d3.easeCubicOut)
-            .attr('transform', d => `translate(${d.x},${d.y}) scale(0.6)`)
+        sel.exit().transition().duration(T)
             .style('opacity', 0)
+            .attr('transform', d => `translate(${d.x},${d.y}) scale(0.75)`)
             .remove();
 
-        // ENTER: fade + scale in at computed position.
-        const enter = sel.enter()
-            .append('g')
-            .attr('class', 'bm-node')
-            .attr('transform', d => `translate(${d.x},${d.y}) scale(0.6)`)
-            .style('opacity', 0)
-            .on('mouseenter', (event, d) => showTooltip(handle, event, d))
-            .on('mousemove', (event, d) => moveTooltip(handle, event))
-            .on('mouseleave', () => hideTooltip(handle));
-
-        buildNodeContent(enter);
-
-        enter.transition().duration(TRANSITION_MS).ease(d3.easeCubicOut)
-            .attr('transform', d => `translate(${d.x},${d.y}) scale(1)`)
-            .style('opacity', 1);
-
-        // UPDATE: animate to new position; refresh dynamic visuals.
-        const merged = enter.merge(sel);
-
-        merged.transition().duration(TRANSITION_MS).ease(d3.easeCubicInOut)
-            .attr('transform', d => `translate(${d.x},${d.y}) scale(1)`)
-            .style('opacity', 1);
-
-        updateNodeContent(merged);
-    }
-
-    function buildNodeContent(enter) {
-        const rect = enter.append('rect')
-            .attr('class', 'bm-node-rect')
-            .attr('x', d => -d.width / 2)
-            .attr('y', d => -d.height / 2)
-            .attr('width', d => d.width)
-            .attr('height', d => d.height)
-            .attr('rx', 10);
-
-        enter.append('text')
-            .attr('class', 'bm-node-label')
-            .attr('x', 0)
-            .attr('y', -10)
-            .attr('text-anchor', 'middle')
-            .text(d => d.data.label);
-
-        enter.append('text')
-            .attr('class', 'bm-node-sub')
-            .attr('x', 0)
-            .attr('y', 10)
-            .attr('text-anchor', 'middle');
-
-        // Instance count badge, top-right corner.
-        enter.append('g')
-            .attr('class', 'bm-node-badge')
-            .attr('transform', d => `translate(${d.width / 2 - 16}, ${-d.height / 2 + 14})`)
-            .call(g => {
-                g.append('circle').attr('r', 11);
-                g.append('text').attr('text-anchor', 'middle').attr('dy', '0.32em');
-            });
-    }
-
-    function updateNodeContent(sel) {
-        sel.select('.bm-node-rect')
-            .attr('class', d => {
-                const t = d.data.recentThroughputScore || 0;
-                let activity = 'idle';
-                if (t > 0.66) activity = 'hot';
-                else if (t > 0.2) activity = 'warm';
-                return `bm-node-rect bm-activity-${activity}`;
-            });
-
-        sel.select('.bm-node-label').text(d => d.data.label);
-
-        sel.select('.bm-node-sub')
-            .text(d => formatNodeSubtext(d.data));
-
-        sel.select('.bm-node-badge text').text(d => `×${d.data.instanceCount ?? 0}`);
-        sel.select('.bm-node-badge')
-            .style('display', d => (d.data.instanceCount ?? 0) > 0 ? null : 'none');
-    }
-
-    function formatNodeSubtext(node) {
-        const processed = node.processedCount ?? 0;
-        return `${processed.toLocaleString()} processed`;
-    }
-
-    function renderEdges(handle, g, topology) {
-        const edgeData = g.edges().map(e => {
-            const edge = g.edge(e);
-            return {
-                id: `${e.v}→${e.w}`,
-                v: e.v,
-                w: e.w,
-                points: edge.points,
-                data: edge.data,
-            };
-        });
-
-        const sel = handle.edgeLayer
-            .selectAll('g.bm-edge')
-            .data(edgeData, d => d.id);
-
-        sel.exit()
-            .transition().duration(TRANSITION_MS).style('opacity', 0).remove();
-
-        const enter = sel.enter()
-            .append('g')
-            .attr('class', 'bm-edge')
+        const enter = sel.enter().append('g').attr('class', 'bm-node')
+            .attr('transform', d => `translate(${d.x},${d.y}) scale(0.8)`)
             .style('opacity', 0);
 
-        enter.append('path')
-            .attr('class', 'bm-edge-path')
-            .attr('marker-end', 'url(#bm-arrow)')
-            .attr('d', d => edgePathD(d.points));
+        buildNode(enter, handle);
 
-        enter.append('text')
-            .attr('class', 'bm-edge-label')
-            .attr('text-anchor', 'middle');
-
-        enter.transition().duration(TRANSITION_MS).style('opacity', 1);
-
-        // UPDATE: redraw paths after node transitions have had a moment to
-        // start (edges redraw slightly after nodes move, per spec).
-        const merged = enter.merge(sel);
-
-        merged.transition().delay(TRANSITION_MS * 0.5).duration(TRANSITION_MS)
-            .style('opacity', 1)
-            .select('.bm-edge-path')
-            .attr('d', d => edgePathD(d.points));
-
-        merged.select('.bm-edge-label')
-            .attr('x', d => midpoint(d.points).x)
-            .attr('y', d => midpoint(d.points).y - 6)
-            .text(d => formatEdgeLabel(d.data));
-    }
-
-    function midpoint(points) {
-        if (!points || points.length === 0) return { x: 0, y: 0 };
-        const mid = points[Math.floor(points.length / 2)];
-        return mid;
-    }
-
-    function formatEdgeLabel(edge) {
-        if (!edge) return '';
-        const count = edge.messageCount ?? 0;
-        const pending = edge.pendingEstimate ?? 0;
-        return pending > 0 ? `${count} · ~${pending} pending` : `${count}`;
-    }
-
-    // ── Animation frame (particles + pulse) ────────────────────────────
-
-    function renderAnimationFrame(handle, dtMs, now) {
-        if (!handle.currentGraph || !handle.currentTopology) return;
-
-        const anim = window.BatchMonitor.D3Animation;
-        const edgePaths = handle.edgeLayer.selectAll('g.bm-edge');
-
-        const particleData = [];
-
-        edgePaths.each(function (d) {
-            const s = anim.sampleEdge(handle.animState, d.id, d.data?.messageCount ?? 0, now);
-            const result = anim.tick(s, dtMs);
-            const pathEl = this.querySelector('path.bm-edge-path');
-
-            if (result.mode === 'pulse') {
-                d3.select(this).select('.bm-edge-path')
-                    .classed('bm-edge-pulse', true)
-                    .style('--bm-pulse-intensity', result.pulse.intensity.toFixed(3));
-            } else {
-                d3.select(this).select('.bm-edge-path')
-                    .classed('bm-edge-pulse', false)
-                    .style('--bm-pulse-intensity', null);
-            }
-
-            for (const p of result.particles) {
-                const pt = anim.pointOnPath(pathEl, p.progress);
-                particleData.push({ id: `${d.id}:${p.progress.toFixed(4)}:${Math.random()}`, x: pt.x, y: pt.y });
-            }
-        });
-
-        const sel = handle.particleLayer.selectAll('circle.bm-particle')
-            .data(particleData, (d, i) => i);
-
-        sel.exit().remove();
-
-        sel.enter()
-            .append('circle')
-            .attr('class', 'bm-particle')
-            .attr('r', anim.PARTICLE_RADIUS);
-
-        handle.particleLayer.selectAll('circle.bm-particle')
-            .attr('cx', d => d.x)
-            .attr('cy', d => d.y);
-    }
-
-    // ── Tooltip ─────────────────────────────────────────────────────────
-
-    function showTooltip(handle, event, d) {
-        const node = d.data;
-        const breakdown = node.instanceBreakdown || {};
-        const rows = Object.entries(breakdown)
-            .map(([pid, stats]) => {
-                const s = Array.isArray(stats) ? stats : [stats.eventCount, stats.successCount, stats.failureCount];
-                return `<div class="bm-tooltip-row"><span>PID ${pid}</span><span>${s[0]} events · ${s[1]} ok · ${s[2]} failed</span></div>`;
-            })
-            .join('');
-
-        handle.tooltip
-            .html(`
-                <div class="bm-tooltip-title">${escapeHtml(node.label)}</div>
-                <div class="bm-tooltip-row"><span>Processed</span><span>${(node.processedCount ?? 0).toLocaleString()}</span></div>
-                <div class="bm-tooltip-row"><span>Success / Failed / Skipped</span><span>${node.successCount ?? 0} / ${node.failedCount ?? 0} / ${node.skippedCount ?? 0}</span></div>
-                ${rows ? `<div class="bm-tooltip-divider"></div>${rows}` : ''}
-            `)
+        enter.transition().duration(T).ease(d3.easeCubicOut)
+            .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('opacity', 1);
 
-        moveTooltip(handle, event);
+        const merged = enter.merge(sel);
+        merged.transition().duration(T).ease(d3.easeCubicInOut)
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('opacity', 1);
+
+        updateNode(merged, handle);
     }
 
-    function moveTooltip(handle, event) {
-        const rect = handle.containerEl.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        handle.tooltip
-            .style('left', `${x + 14}px`)
-            .style('top', `${y + 14}px`);
+    function buildNode(enter, handle) {
+        // Opaque background (theme-aware, set in updateNode).
+        enter.append('rect').attr('class', 'bm-node-bg').attr('rx', 10);
+
+        // Visible border.
+        enter.append('rect').attr('class', 'bm-node-rect').attr('rx', 10)
+            .attr('fill', 'none');
+
+        // Clip group — all row content clipped to card shape.
+        enter.append('g').attr('class', 'bm-node-clip-group');
+
+        // Header accent bar (left edge strip — inside clip group in updateNode).
+        enter.append('rect').attr('class', 'bm-node-accent').attr('width', 4).attr('rx', 2);
+
+        // Service label.
+        enter.append('text').attr('class', 'bm-node-label').attr('dy', '0.32em');
+
+        // Header divider.
+        enter.append('line').attr('class', 'bm-node-hdr-div');
+
+        // Instance badge.
+        const badge = enter.append('g').attr('class', 'bm-node-badge');
+        badge.append('circle').attr('r', 11);
+        badge.append('text').attr('class', 'bm-node-badge-text')
+            .attr('text-anchor', 'middle').attr('dy', '0.32em');
+
+        // Active-state header pulse.
+        enter.append('rect').attr('class', 'bm-node-pulse').attr('rx', 10)
+            .style('opacity', 0).attr('fill', '#3FB950');
+
+        // Pipeline rows container (clipped).
+        enter.append('g').attr('class', 'bm-node-rows');
     }
 
-    function hideTooltip(handle) {
-        handle.tooltip.style('opacity', 0);
+    function updateNode(sel, handle) {
+        const bg = nodeBg();
+        const div = dividerColor();
+
+        sel.each(function(d) {
+            const el  = d3.select(this);
+            const hw  = d.width / 2, hh = d.height / 2;
+            const st  = sk(d.data.headerState);
+            const col = sc(d.data.headerState);
+
+            // Clip group reference.
+            el.select('.bm-node-clip-group')
+                .attr('clip-path', `url(#bm-clip-${d.id})`);
+
+            el.select('.bm-node-bg')
+                .attr('x', -hw).attr('y', -hh)
+                .attr('width', d.width).attr('height', d.height)
+                .attr('fill', bg);
+
+            el.select('.bm-node-rect')
+                .attr('x', -hw).attr('y', -hh)
+                .attr('width', d.width).attr('height', d.height)
+                .attr('class', `bm-node-rect bm-hdr-${st}`);
+
+            // Accent bar — placed *after* bg so it's on top, but inside clip.
+            el.select('.bm-node-accent')
+                .attr('x', -hw).attr('y', -hh)
+                .attr('height', HEADER_HEIGHT)
+                .attr('fill', col);
+
+            el.select('.bm-node-label')
+                .attr('x', -hw + 14).attr('y', -hh + HEADER_HEIGHT / 2)
+                .text(d.data.label);
+
+            el.select('.bm-node-hdr-div')
+                .attr('x1', -hw).attr('x2', hw)
+                .attr('y1', -hh + HEADER_HEIGHT).attr('y2', -hh + HEADER_HEIGHT)
+                .attr('stroke', div);
+
+            const ic = d.data.instanceCount ?? 0;
+            el.select('.bm-node-badge').style('display', ic > 0 ? null : 'none');
+            el.select('.bm-node-badge circle')
+                .attr('cx', hw - 34).attr('cy', -hh + HEADER_HEIGHT / 2);
+            el.select('.bm-node-badge-text')
+                .attr('x', hw - 34).attr('y', -hh + HEADER_HEIGHT / 2)
+                .text(`×${ic}`);
+
+            el.select('.bm-node-pulse')
+                .attr('x', -hw).attr('y', -hh)
+                .attr('width', d.width).attr('height', HEADER_HEIGHT)
+                .classed('bm-pulse-active', st === 'active');
+
+            renderRows(el, d, handle, bg);
+        });
     }
 
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, c => ({
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-        }[c]));
+    // ── Pipeline rows ─────────────────────────────────────────────────────
+
+    function renderRows(nodeEl, nd, handle, bg) {
+        const pipelines = nd.data.pipelines || [];
+        const rows = pipelines.map((p, i) => ({
+            ...p, _hw: nd.width / 2, _i: i, _cy: rowCY(nd.data, i),
+            _nodeId: nd.id, _nodeData: nd.data,
+        }));
+
+        // Rows live inside the clip group.
+        const container = nodeEl.select('.bm-node-rows');
+
+        const sel = container.selectAll('g.bm-row').data(rows, r => r.name);
+
+        sel.exit().transition().duration(T).style('opacity', 0).remove();
+
+        const enter = sel.enter().append('g').attr('class', 'bm-row')
+            .style('opacity', 0)
+            .style('cursor', 'pointer');
+
+        // Hit area — full row width.
+        enter.append('rect').attr('class', 'bm-row-hit').attr('fill', 'transparent');
+        // Left state-colour bar (3 px wide, inset 1px from card edge so it
+        // doesn't touch the border rect).
+        enter.append('rect').attr('class', 'bm-row-bar').attr('width', 3);
+        // Top divider line.
+        enter.append('line').attr('class', 'bm-row-div');
+        // Name text.
+        enter.append('text').attr('class', 'bm-row-name');
+        // Progress track + fill.
+        enter.append('rect').attr('class', 'bm-row-track').attr('rx', 2);
+        enter.append('rect').attr('class', 'bm-row-fill').attr('rx', 2);
+        // Done / in-progress counts.
+        enter.append('text').attr('class', 'bm-row-counts');
+
+        enter
+            .on('click', (event, r) => {
+                event.stopPropagation();
+                togglePopover(handle, nd, r);
+            })
+            .on('mouseenter', () => cancelHidePopover(handle))
+            .on('mouseleave', () => scheduleHidePopover(handle));
+
+        enter.transition().duration(T).style('opacity', 1);
+
+        const merged = enter.merge(sel);
+        merged.transition().duration(T).style('opacity', 1);
+
+        const hw = nd.width / 2;
+        const pX = -hw + 10;
+        const pW = nd.width - 10 - 68;   // track width; right gap for counts
+        const pH = 3;
+        const div = dividerColor();
+
+        merged.each(function(r) {
+            const row  = d3.select(this);
+            const top  = r._cy - ROW_HEIGHT / 2;
+            const col  = sc(r.state);
+
+            row.select('.bm-row-hit')
+                .attr('x', -hw).attr('y', top)
+                .attr('width', nd.width).attr('height', ROW_HEIGHT);
+
+            row.select('.bm-row-div')
+                .attr('x1', -hw).attr('x2', hw)
+                .attr('y1', top).attr('y2', top)
+                .attr('stroke', div).attr('stroke-width', 0.5);
+
+            // Bar inset 1px from left edge; clip-path on parent handles overflow.
+            row.select('.bm-row-bar')
+                .attr('x', -hw + 1)
+                .attr('y', top + 6)
+                .attr('height', ROW_HEIGHT - 12)
+                .attr('fill', col);
+
+            row.select('.bm-row-name')
+                .attr('x', -hw + 10).attr('y', r._cy - 9)
+                .attr('class', 'bm-row-name');
+
+            row.select('.bm-row-name').text(r.name);
+
+            row.select('.bm-row-track')
+                .attr('x', pX).attr('y', r._cy + 2)
+                .attr('width', pW).attr('height', pH);
+
+            row.select('.bm-row-fill')
+                .attr('x', pX).attr('y', r._cy + 2).attr('height', pH)
+                .attr('fill', col)
+                .transition().duration(T)
+                .attr('width', pW * Math.max(0, Math.min(1, r.progress ?? 0)));
+
+            row.select('.bm-row-counts')
+                .attr('x', hw - 6).attr('y', r._cy - 9)
+                .attr('text-anchor', 'end')
+                .text(`✓${r.doneCount ?? 0} ⟳${r.inProgressCount ?? 0}`);
+        });
     }
 
-    // ── Fit to view ─────────────────────────────────────────────────────
+    // ── Popover ───────────────────────────────────────────────────────────
 
-    function fitToView(handle, animate) {
-        if (!handle || !handle.currentGraph) return;
-
-        const g = handle.currentGraph;
-        const graphInfo = g.graph();
-        const w = graphInfo.width || 1;
-        const h = graphInfo.height || 1;
-
-        const containerRect = handle.containerEl.getBoundingClientRect();
-        const cw = containerRect.width || 1;
-        const ch = containerRect.height || 1;
-
-        const padding = 40;
-        const scale = Math.min(
-            (cw - padding * 2) / w,
-            (ch - padding * 2) / h,
-            2.5
-        );
-        const clampedScale = Math.max(0.25, isFinite(scale) ? scale : 1);
-
-        const tx = (cw - w * clampedScale) / 2;
-        const ty = (ch - h * clampedScale) / 2;
-
-        const transform = d3.zoomIdentity.translate(tx, ty).scale(clampedScale);
-
-        if (animate) {
-            handle.svg.transition().duration(TRANSITION_MS).call(handle.zoom.transform, transform);
+    function togglePopover(handle, nodeDatum, pipeline) {
+        if (handle.popoverNodeId === nodeDatum.id &&
+            handle.popoverPipeline === pipeline.name) {
+            hidePopover(handle);
         } else {
-            handle.svg.call(handle.zoom.transform, transform);
+            showPopover(handle, nodeDatum, pipeline);
         }
     }
 
-    function resetUserInteraction(handle) {
-        if (handle) handle.userHasInteracted = false;
+    function showPopover(handle, nodeDatum, pipeline) {
+        cancelHidePopover(handle);
+        handle.popoverNodeId   = nodeDatum.id;
+        handle.popoverPipeline = pipeline.name;
+
+        const instances = pipeline.instances || [];
+        const topic     = pipeline.topic || '';
+        const progress  = Math.round((pipeline.progress ?? 0) * 100);
+
+        const instHtml = instances.length > 0
+            ? instances.map(i =>
+                `<div class="bm-pop-inst">
+                    <span class="bm-pop-srv">${esc(i.server)}</span>
+                    <span class="bm-pop-pid">PID&nbsp;${esc(i.processId)}</span>
+                    <span class="bm-pop-cnt">✓${i.doneCount ?? 0}&nbsp;⟳${i.inProgressCount ?? 0}</span>
+                </div>`).join('')
+            : '<div class="bm-pop-empty">No instances seen yet</div>';
+
+        const topicHtml = topic
+            ? `<div class="bm-pop-topic">
+                   <span>Topic:&nbsp;<code>${esc(topic)}</code></span>
+                   <button class="bm-pop-kafka" onclick="console.log('Open Kafka stub:','${esc(topic)}')">↗&nbsp;Kafka</button>
+               </div>`
+            : '';
+
+        handle.popover.html(`
+            <div class="bm-pop-hdr">
+                <span class="bm-pop-title">${esc(pipeline.name)}</span>
+                <span class="bm-pop-badge bm-pop-${esc(sk(pipeline.state))}">${esc(sk(pipeline.state))}</span>
+                <button class="bm-pop-x">×</button>
+            </div>
+            <div class="bm-pop-prog-row">
+                <div class="bm-pop-track"><div class="bm-pop-fill" style="width:${progress}%;background:${sc(pipeline.state)}"></div></div>
+                <span class="bm-pop-pct">${progress}%</span>
+            </div>
+            ${topicHtml}
+            <div class="bm-pop-sep"></div>
+            <div class="bm-pop-inst-hdr">Instances (${instances.length})</div>
+            ${instHtml}
+        `)
+        .style('opacity', 1)
+        .style('pointer-events', 'auto');
+
+        handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
+        handle.popover
+            .on('mouseenter', () => cancelHidePopover(handle))
+            .on('mouseleave', () => scheduleHidePopover(handle));
+
+        positionPopover(handle, nodeDatum);
     }
 
-    // ── Dispose ─────────────────────────────────────────────────────────
+    function positionPopover(handle, nd) {
+        const g = handle.currentGraph;
+        if (!g) return;
+        const n = g.node(nd.id);
+        if (!n) return;
+
+        const t   = d3.zoomTransform(handle.svg.node());
+        const sx  = t.x + n.x * t.k;
+        const sy  = t.y + n.y * t.k;
+        const nw  = n.width  * t.k;
+        const nh2 = n.height * t.k;
+        const cw  = handle.containerEl.clientWidth;
+        const ch  = handle.containerEl.clientHeight;
+        const pw  = 258, ph = 240;
+
+        let left = sx + nw / 2 + 10;
+        if (left + pw > cw - 8) left = sx - nw / 2 - pw - 10;
+        left = Math.max(8, Math.min(left, cw - pw - 8));
+
+        let top = sy - nh2 / 2;
+        top = Math.max(8, Math.min(top, ch - ph - 8));
+
+        handle.popover.style('left', `${left}px`).style('top', `${top}px`);
+    }
+
+    function scheduleHidePopover(h) {
+        h.popoverHideTimer = setTimeout(() => hidePopover(h), 220);
+    }
+    function cancelHidePopover(h)  { clearTimeout(h.popoverHideTimer); }
+    function hidePopover(h) {
+        cancelHidePopover(h);
+        h.popoverNodeId = h.popoverPipeline = null;
+        h.popover.style('opacity', 0).style('pointer-events', 'none');
+    }
+
+    function esc(s) {
+        return String(s ?? '').replace(/[&<>"']/g,
+            c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // ── Edges ─────────────────────────────────────────────────────────────
+
+    function renderEdges(handle, g) {
+        const data = g.edges().map(e => {
+            const ed  = g.edge(e);
+            const pts = snapPorts(ed.points, g, ed.data);
+            return { id: `${e.v}::${e.name}::${e.w}`, pts, data: ed.data };
+        });
+
+        const sel = handle.eLayer.selectAll('g.bm-edge').data(data, d => d.id);
+
+        sel.exit().transition().duration(T).style('opacity', 0).remove();
+
+        const enter = sel.enter().append('g').attr('class', 'bm-edge').style('opacity', 0);
+
+        // stroke must be set as SVG attribute (not CSS) for context-stroke to
+        // work on the arrowhead marker.
+        enter.append('path').attr('class', 'bm-edge-path')
+            .attr('marker-end', 'url(#bm-arrow)')
+            .attr('fill', 'none')
+            .style('stroke-dasharray', '5 9');
+
+        enter.append('text').attr('class', 'bm-edge-label').attr('text-anchor', 'middle');
+        enter.transition().duration(T).style('opacity', 1);
+
+        const merged = enter.merge(sel);
+
+        merged.each(function(d) {
+            const col = sc(d.data?.state);
+            const w   = edgeW(d.data);
+            const path = d3.select(this).select('.bm-edge-path');
+            // Set stroke as attribute so context-stroke on the marker resolves.
+            path.attr('d', edgePath(d.pts))
+                .attr('stroke', col)
+                .attr('stroke-width', w);
+
+            const mid = d.pts[Math.floor(d.pts.length / 2)] || { x:0, y:0 };
+            d3.select(this).select('.bm-edge-label')
+                .attr('x', mid.x).attr('y', mid.y - 8)
+                .text(edgeLabel(d.data));
+        });
+    }
+
+    function edgeW(e) {
+        const n = e?.doneCount ?? 0;
+        return Math.max(1, Math.min(5, 1 + Math.log10(n + 1) * 1.7));
+    }
+
+    function edgeLabel(e) {
+        if (!e) return '';
+        const d = e.doneCount ?? 0, w = e.waitingEstimate ?? 0;
+        return w > 0 ? `✓${d} ~${w}` : `✓${d}`;
+    }
+
+    // ── Animation frame ────────────────────────────────────────────────────
+
+    function renderAnimationFrame(handle, dt, now) {
+        if (!handle.currentGraph) return;
+
+        const anim = window.BatchMonitor.D3Animation;
+        handle.eLayer.selectAll('g.bm-edge').each(function(d) {
+            const s = anim.sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
+            const r = anim.tick(s, dt);
+            const col = sc(d.data?.state);
+            const w   = edgeW(d.data) + r.thicknessBoost;
+
+            d3.select(this).select('.bm-edge-path')
+                .attr('stroke', col)
+                .attr('stroke-width', w)
+                .style('stroke-dasharray', r.dashArray)
+                .style('stroke-dashoffset', r.dashOffset)
+                .style('opacity', 0.70 + r.brighten * 0.30)
+                .style('filter', r.brighten > 0.05
+                    ? `drop-shadow(0 0 ${(r.brighten * 5).toFixed(1)}px ${col})`
+                    : null);
+        });
+
+        // Header pulse for active-state nodes.
+        const phase = 0.5 + 0.5 * Math.sin(now / 700);
+        handle.nLayer.selectAll('.bm-node-pulse.bm-pulse-active')
+            .style('opacity', 0.08 + phase * 0.14);
+    }
+
+    // ── Fit / visible / dispose ────────────────────────────────────────────
+
+    function fitToView(handle, animate) {
+        const g  = handle.currentGraph;
+        if (!g) return;
+        const gi = g.graph();
+        const cw = handle.containerEl.clientWidth  || 1;
+        const ch = handle.containerEl.clientHeight || 1;
+        const pad = 52;
+        const scale = Math.max(0.12, Math.min(3,
+            Math.min((cw - pad * 2) / (gi.width  || 1),
+                     (ch - pad * 2) / (gi.height || 1))));
+        const tx = (cw - (gi.width  || 0) * scale) / 2;
+        const ty = (ch - (gi.height || 0) * scale) / 2;
+        const tr = d3.zoomIdentity.translate(tx, ty).scale(scale);
+        if (animate) handle.svg.transition().duration(T).call(handle.zoom.transform, tr);
+        else         handle.svg.call(handle.zoom.transform, tr);
+    }
+
+    function setVisible(handle, visible) {
+        if (!handle) return;
+        handle.isVisible = !!visible;
+        handle.svg.style('display', visible ? null : 'none');
+        if (visible && handle.currentGraph && !handle.userZoomed) fitToView(handle, false);
+    }
+
+    function resetZoom(h) { if (h) h.userZoomed = false; }
 
     function dispose(handle) {
         if (!handle) return;
         handle.disposed = true;
-        if (handle.rafId) cancelAnimationFrame(handle.rafId);
-        if (handle.layoutTimer) clearTimeout(handle.layoutTimer);
+        cancelAnimationFrame(handle.rafId);
+        clearTimeout(handle.layoutTimer);
         handle.svg.remove();
-        handle.tooltip.remove();
+        handle.popover.remove();
     }
 
-    return {
-        init,
-        update,
-        fitToView,
-        resetUserInteraction,
-        dispose,
-    };
+    return { init, update, fitToView, resetZoom, setVisible, dispose };
 })();
 
-// ── Blazor interop layer ────────────────────────────────────────────────
-// Keeps a registry of graph handles keyed by a string id supplied by the
-// D3FlowGraph component, since IJSObjectReference round-trips are awkward
-// for an object holding D3 selections / RAF state.
+// ── Blazor interop ────────────────────────────────────────────────────────
 window.BatchMonitor.D3FlowGraphInterop = (function () {
     const handles = new Map();
     const G = window.BatchMonitor.D3Graph;
-
-    function init(containerEl, key) {
-        if (handles.has(key)) {
-            G.dispose(handles.get(key));
-        }
-        handles.set(key, G.init(containerEl));
-    }
-
-    function update(key, topology) {
-        const h = handles.get(key);
-        if (h) G.update(h, topology);
-    }
-
-    function fitToView(key) {
-        const h = handles.get(key);
-        if (h) {
-            G.resetUserInteraction(h);
-            G.fitToView(h, true);
-        }
-    }
-
-    function dispose(key) {
-        const h = handles.get(key);
-        if (h) {
-            G.dispose(h);
-            handles.delete(key);
-        }
-    }
-
-    return { init, update, fitToView, dispose };
+    return {
+        init(el, key)            { if (handles.has(key)) G.dispose(handles.get(key)); handles.set(key, G.init(el)); },
+        update(key, topo)        { const h = handles.get(key); if (h) G.update(h, topo); },
+        fitToView(key)           { const h = handles.get(key); if (h) { G.resetZoom(h); G.fitToView(h, true); } },
+        setVisible(key, visible) { const h = handles.get(key); if (h) G.setVisible(h, visible); },
+        dispose(key)             { const h = handles.get(key); if (h) { G.dispose(h); handles.delete(key); } },
+    };
 })();

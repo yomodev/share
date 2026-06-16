@@ -1,13 +1,16 @@
 // Batch Monitor — D3 flow graph edge animation
 //
-// Two animation modes per edge, chosen adaptively based on observed
-// message throughput (messages/sec over a short rolling window):
-//
-//  - LOW throughput:  discrete particle dots travel along the edge path,
-//                      one roughly per message.
-//  - HIGH throughput: the edge itself pulses (stroke width / opacity)
-//                      proportionally to recent throughput, avoiding a
-//                      "particle blizzard" at scale.
+// Dash-flow animation (§8.2 / Step 7):
+//  - Every edge has an animated dash pattern; dashes travel in the flow
+//    direction (source -> target) via a continuously decreasing
+//    stroke-dashoffset.
+//  - Animation speed is proportional to recent throughput (done-count
+//    delta over a rolling window).
+//  - At higher throughput, the dash gap shrinks toward zero (dashes
+//    merge into a near-solid line) and the stroke thickens slightly.
+//  - On an activity spike (a sudden jump in throughput), the edge
+//    brightens briefly (~300ms) via an opacity/glow boost that decays
+//    back to baseline.
 //
 // All functions operate on plain DOM/SVG elements and D3 selections;
 // no Blazor/.NET interop here.
@@ -15,23 +18,29 @@
 window.BatchMonitor = window.BatchMonitor || {};
 window.BatchMonitor.D3Animation = (function () {
 
-    // Messages/sec at or above this switches an edge to pulse mode.
-    const THROUGHPUT_SWITCH_THRESHOLD = 2.0;
-
-    // Rolling window (ms) used to estimate throughput from message-count deltas.
+    // Rolling window (ms) used to estimate throughput from done-count deltas.
     const THROUGHPUT_WINDOW_MS = 5000;
 
-    // Particle visual tuning.
-    const PARTICLE_RADIUS = 3;
-    const PARTICLE_DURATION_MS = 1100; // time to travel the full edge path
-    const MAX_CONCURRENT_PARTICLES = 6; // cap per edge to avoid blizzard near the threshold
+    // Dash pattern tuning.
+    const DASH_LENGTH = 6;          // length of each dash segment (px)
+    const MAX_GAP = 10;             // gap between dashes at zero throughput (px)
+    const MIN_GAP = 1.5;            // gap between dashes at high throughput (px)
+    const BASE_SPEED = 14;          // dash travel speed at baseline (px/sec)
+    const MAX_SPEED = 160;          // dash travel speed at high throughput (px/sec)
+
+    // Throughput (done/sec) considered "high" for gap-shrink / thickness scaling.
+    const HIGH_THROUGHPUT = 2.0;
+
+    // Activity-spike detection & decay.
+    const SPIKE_DELTA_THRESHOLD = 1;     // minimum done-count delta to count as a spike
+    const SPIKE_DECAY_MS = 300;          // brighten decays back to baseline over this window
 
     /**
-     * Creates a fresh per-edge animation state map, keyed by edge id
-     * ("source→target"). Each entry:
+     * Creates a fresh per-edge animation state map, keyed by edge id.
+     * Each entry:
      * {
-     *   lastMessageCount, lastSampleTime, throughput,
-     *   particles: [{ progress }], pulsePhase
+     *   lastDoneCount, lastSampleTime, throughput,
+     *   dashOffset, spikeIntensity
      * }
      */
     function createState() {
@@ -39,18 +48,19 @@ window.BatchMonitor.D3Animation = (function () {
     }
 
     /**
-     * Updates throughput estimate for an edge given its current cumulative
-     * message count. Call this whenever fresh topology data arrives.
+     * Updates throughput estimate (and detects activity spikes) for an edge
+     * given its current cumulative done count. Call this whenever fresh
+     * topology data arrives.
      */
-    function sampleEdge(state, edgeId, messageCount, now) {
+    function sampleEdge(state, edgeId, doneCount, now) {
         let s = state.get(edgeId);
         if (!s) {
             s = {
-                lastMessageCount: messageCount,
+                lastDoneCount: doneCount,
                 lastSampleTime: now,
                 throughput: 0,
-                particles: [],
-                pulsePhase: 0,
+                dashOffset: 0,
+                spikeIntensity: 0,
             };
             state.set(edgeId, s);
             return s;
@@ -58,84 +68,66 @@ window.BatchMonitor.D3Animation = (function () {
 
         const dt = now - s.lastSampleTime;
         if (dt > 50) { // avoid div-by-near-zero on rapid successive calls
-            const delta = Math.max(0, messageCount - s.lastMessageCount);
-            const instantRate = delta / (dt / 1000);
-            // Exponential moving average for a stable-but-responsive estimate.
+            const delta = doneCount - s.lastDoneCount;
+
+            if (delta >= SPIKE_DELTA_THRESHOLD) {
+                s.spikeIntensity = 1; // brighten; decays in tick()
+            }
+
+            const instantRate = Math.max(0, delta) / (dt / 1000);
             const alpha = Math.min(1, dt / THROUGHPUT_WINDOW_MS);
             s.throughput = s.throughput * (1 - alpha) + instantRate * alpha;
-            s.lastMessageCount = messageCount;
+            s.lastDoneCount = doneCount;
             s.lastSampleTime = now;
         }
         return s;
     }
 
     /**
-     * Returns 'pulse' or 'particles' for the given edge state.
-     */
-    function modeForEdge(s) {
-        return s.throughput >= THROUGHPUT_SWITCH_THRESHOLD ? 'pulse' : 'particles';
-    }
-
-    /**
-     * Advances animation state by `dtMs` and returns render instructions.
-     * Spawns new particles probabilistically based on throughput when in
-     * particle mode; advances existing particles and pulse phase.
+     * Advances animation state by `dtMs` and returns render instructions
+     * for the dash-flow animation.
      *
-     * Returns: { mode, particles: [{progress}], pulse: { intensity (0-1) } | null }
+     * Returns:
+     * {
+     *   dashArray: "<dash> <gap>",
+     *   dashOffset: number,        // negative, decreasing -> dashes flow toward target
+     *   thicknessBoost: 0-1,       // additive thickness factor at high throughput
+     *   brighten: 0-1              // activity-spike brighten intensity, decays to 0
+     * }
      */
     function tick(s, dtMs) {
-        const mode = modeForEdge(s);
+        // Normalise throughput into 0-1 for gap/speed/thickness scaling.
+        const t = Math.max(0, Math.min(1, s.throughput / HIGH_THROUGHPUT));
 
-        if (mode === 'particles') {
-            // Spawn probability per tick proportional to throughput.
-            const spawnChance = (s.throughput * dtMs) / 1000;
-            if (s.particles.length < MAX_CONCURRENT_PARTICLES && Math.random() < spawnChance) {
-                s.particles.push({ progress: 0 });
-            }
+        const gap = MAX_GAP - (MAX_GAP - MIN_GAP) * t;
+        const speed = BASE_SPEED + (MAX_SPEED - BASE_SPEED) * t;
 
-            // Advance & cull.
-            const step = dtMs / PARTICLE_DURATION_MS;
-            s.particles = s.particles
-                .map(p => ({ progress: p.progress + step }))
-                .filter(p => p.progress < 1);
-
-            return { mode, particles: s.particles, pulse: null };
+        // Dashes flow from source to target: decreasing dashoffset moves the
+        // pattern in the direction the path was drawn.
+        s.dashOffset -= speed * (dtMs / 1000);
+        // Keep the offset bounded so it doesn't grow unboundedly over a long session.
+        const period = DASH_LENGTH + gap;
+        if (s.dashOffset <= -period) {
+            s.dashOffset += period;
         }
 
-        // Pulse mode: phase cycles 0..1, intensity derived from a sine wave
-        // whose speed scales with throughput (capped) so busier edges pulse faster.
-        const cyclesPerSec = Math.min(3, 0.5 + s.throughput / 20);
-        s.pulsePhase = (s.pulsePhase + (dtMs / 1000) * cyclesPerSec) % 1;
-        const intensity = 0.5 + 0.5 * Math.sin(s.pulsePhase * Math.PI * 2);
+        // Decay activity-spike brighten back to 0 over SPIKE_DECAY_MS.
+        if (s.spikeIntensity > 0) {
+            s.spikeIntensity = Math.max(0, s.spikeIntensity - dtMs / SPIKE_DECAY_MS);
+        }
 
-        // Particles already in flight finish their journey even after switching modes.
-        const step = dtMs / PARTICLE_DURATION_MS;
-        s.particles = s.particles
-            .map(p => ({ progress: p.progress + step }))
-            .filter(p => p.progress < 1);
-
-        return { mode, particles: s.particles, pulse: { intensity } };
-    }
-
-    /**
-     * Computes the point at parameter t (0-1) along an SVG path element,
-     * using the native getPointAtLength API.
-     */
-    function pointOnPath(pathEl, t) {
-        if (!pathEl || typeof pathEl.getTotalLength !== 'function') return { x: 0, y: 0 };
-        const len = pathEl.getTotalLength();
-        if (!isFinite(len) || len <= 0) return { x: 0, y: 0 };
-        const pt = pathEl.getPointAtLength(len * Math.min(1, Math.max(0, t)));
-        return { x: pt.x, y: pt.y };
+        return {
+            dashArray: `${DASH_LENGTH} ${gap.toFixed(2)}`,
+            dashOffset: s.dashOffset,
+            thicknessBoost: t,
+            brighten: s.spikeIntensity,
+        };
     }
 
     return {
-        THROUGHPUT_SWITCH_THRESHOLD,
-        PARTICLE_RADIUS,
+        HIGH_THROUGHPUT,
         createState,
         sampleEdge,
-        modeForEdge,
         tick,
-        pointOnPath,
     };
 })();

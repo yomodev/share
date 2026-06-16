@@ -9,10 +9,21 @@
     [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
     [Parameter, EditorRequired] public TabModel? Tab { get; set; }
 
+    /// <summary>
+    /// Whether this tab is currently the focused/visible tab. The component
+    /// instance is kept alive (in its own pane, see MainLayout) regardless —
+    /// this only drives render-skipping and polling cadence (§4, §9).
+    /// </summary>
+    [Parameter] public bool IsFocused { get; set; }
+
+    private bool _previousIsFocused;
+
     private BatchDetails? _details;
     private bool _loading = true;
-    private bool _rightPanelCollapsed = false;
-    private string _localStorageKey => $"bm_batch_details_collapsed:{RunId}:{Environment}";
+
+    // Details strip expand/collapse (§8.1) — collapsed by default, persisted per tab type.
+    private bool _detailsExpanded = false;
+    private string _localStorageKey => "bm_batch_details_strip_expanded";
 
     // Step 5: Event service and store
     private PerformanceEventService? _eventService;
@@ -26,17 +37,72 @@
 
     protected override async Task OnInitializedAsync()
     {
-        // read persisted collapse state
+        _previousIsFocused = IsFocused;
+
+        // read persisted expand state (per tab type, not per-batch — §8.1)
         try
         {
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", _localStorageKey);
-            _rightPanelCollapsed = stored == "true";
+            _detailsExpanded = stored == "true";
         }
         catch { }
 
         _topologyService = new TopologyComputationService();
 
         await LoadAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (IsFocused != _previousIsFocused)
+        {
+            var regainedFocus = IsFocused && !_previousIsFocused;
+            var lostFocus = !IsFocused && _previousIsFocused;
+            _previousIsFocused = IsFocused;
+
+            if (_eventService is not null)
+            {
+                _eventService.IsFocused = IsFocused;
+            }
+
+            if (regainedFocus)
+            {
+                // ShouldRender() suppressed renders while unfocused; force one
+                // now so the UI reflects any updates that accumulated.
+                StateHasChanged();
+            }
+            else if (lostFocus)
+            {
+                // Allow exactly one more render so D3FlowGraph receives
+                // IsVisible=false and pauses/hides its canvas.
+                _allowNextRender = true;
+                StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Skips re-renders while this tab is unfocused (§9 "ShouldRender() => isFocused").
+    /// The component instance and its background work (polling, topology
+    /// recompute) keep running — only the DOM update is skipped — so the UI
+    /// is instantly up to date when the tab regains focus.
+    ///
+    /// The transition into "unfocused" must still render once, so the D3
+    /// graph receives IsVisible=false and pauses its animation loop / hides
+    /// its canvas (§9). <see cref="OnParametersSet"/> tracks transitions and
+    /// flags <see cref="_allowNextRender"/> for exactly that render.
+    /// </summary>
+    private bool _allowNextRender = true;
+
+    protected override bool ShouldRender()
+    {
+        if (IsFocused) return true;
+        if (_allowNextRender)
+        {
+            _allowNextRender = false;
+            return true;
+        }
+        return false;
     }
 
     private async Task LoadAsync()
@@ -46,7 +112,7 @@
         try
         {
             _details = await BatchService.GetBatchDetailsAsync(Environment, RunId ?? string.Empty);
-            
+
             // Step 5: Start event polling if details loaded
             if (_details is not null && RunId is not null)
             {
@@ -64,13 +130,13 @@
         try
         {
             _eventService = new PerformanceEventService(BatchService);
-            
+
             // Create a task to start polling (fire and forget, but we track disposal)
             _ = _eventService.StartPollingAsync(
                 Environment,
                 RunId,
                 _details.Start,
-                pollIntervalMs: 2000,
+                isFocused: IsFocused,
                 onEventsUpdated: () => DebouncedTopologyCompute());
 
             Console.WriteLine($"[BatchDetail] Event polling started for {RunId}");
@@ -101,8 +167,9 @@
                 {
                     var eventStore = _eventService.Events;
                     var newTopology = _topologyService.ComputeTopology(eventStore);
-                    
+
                     _topology = newTopology;
+                    _eventCount = _eventService.EventCount;
                     await InvokeAsync(StateHasChanged);
 
                     Console.WriteLine($"[BatchDetail] Topology recomputed: {newTopology.Nodes.Count} nodes, {newTopology.Edges.Count} edges");
@@ -115,11 +182,11 @@
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    private async Task ToggleRightPanel()
+    private async Task ToggleDetailsStrip()
     {
-        _rightPanelCollapsed = !_rightPanelCollapsed;
+        _detailsExpanded = !_detailsExpanded;
         StateHasChanged();
-        try { await JS.InvokeVoidAsync("localStorage.setItem", _localStorageKey, _rightPanelCollapsed.ToString().ToLower()); }
+        try { await JS.InvokeVoidAsync("localStorage.setItem", _localStorageKey, _detailsExpanded.ToString().ToLower()); }
         catch { }
     }
 
@@ -136,15 +203,60 @@
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
     }
 
-    // Step 5: Display event count for testing
+    // ── Top bar derived values (§8.1, §8.3) ─────────────────────────────
+
+    /// <summary>Effective status — live topology overrides the static details
+    /// status only while the latter still says Running (avoids flicker once
+    /// the batch completes server-side).</summary>
+    private BatchStatus EffectiveStatus => _details?.Status ?? BatchStatus.Unknown;
+
+    private int DoneCount => _topology?.TotalDone ?? 0;
+    private int InProgressCount => _topology?.TotalInProgress ?? 0;
+
+    private int ProgressPercent => _topology is null
+        ? 0
+        : (int)Math.Round(_topology.EstimatedProgress * 100);
+
+    private Color ProgressColor => EffectiveStatus switch
+    {
+        BatchStatus.Running   => Color.Success,
+        BatchStatus.Failed    => Color.Error,
+        _                     => Color.Default
+    };
+
+    // Step 5/A: Display event count and topology summary for testing
     private void ShowEventCount()
     {
         if (_eventService is not null)
         {
             _eventCount = _eventService.EventCount;
             Console.WriteLine($"[BatchDetail] Current event store has {_eventCount} events");
-            StateHasChanged();
         }
+
+        if (_topology is not null)
+        {
+            Console.WriteLine($"[BatchDetail] Topology: {_topology.Nodes.Count} nodes, {_topology.Edges.Count} edges, " +
+                               $"chunks={_topology.TotalChunks}, done={_topology.TotalDone}, inProgress={_topology.TotalInProgress}, " +
+                               $"progress={_topology.EstimatedProgress:P0}");
+
+            foreach (var node in _topology.Nodes)
+            {
+                Console.WriteLine($"  - {node.Label} [{node.HeaderState}] x{node.InstanceCount} instances");
+                foreach (var p in node.Pipelines)
+                {
+                    Console.WriteLine($"      · {p.Name} [{p.State}] done={p.DoneCount} inProgress={p.InProgressCount} " +
+                                       $"errors={p.ErrorCount} progress={p.Progress:P0} instances={p.Instances.Count}");
+                }
+            }
+
+            foreach (var edge in _topology.Edges)
+            {
+                Console.WriteLine($"  -> {edge.Source}/{edge.SourcePipeline} => {edge.Target}/{edge.TargetPipeline} " +
+                                   $"[{edge.State}] done={edge.DoneCount} waiting={edge.WaitingEstimate}");
+            }
+        }
+
+        StateHasChanged();
     }
 
     public void Dispose()
@@ -165,94 +277,116 @@
 
 <div class="bm-page-fill bm-batch-detail">
 
-    <!-- Floating sub-header -->
-    <div class="bm-batch-subheader @( _loading ? "loading" : "" )" title="Batch info">
-        <div class="bm-batch-subheader-left">
-            <div class="bm-batch-icon">
-                <MudIcon Icon="@Icons.Material.Outlined.Hexagon" />
-            </div>
-            <div class="bm-batch-meta">
-                <div class="bm-batch-name">@(_details?.BatchName ?? "Loading…")</div>
-                <div class="bm-batch-submeta">
-                    <span class="bm-monospace">@(_details?.RunId ?? string.Empty)</span>
-                    <span class="bm-muted"> • @(_details?.Type ?? "")</span>
+    <!-- ── Top bar (§8.1) — fixed height, part of layout flow ── -->
+    <div class="bm-detail-topbar @( _loading ? "loading" : "" )">
+        <div class="bm-detail-topbar-left">
+            <span class="bm-status-chip-dot bm-status-@(EffectiveStatus.ToString().ToLower())"></span>
+            <span class="bm-status-chip-label bm-status-@(EffectiveStatus.ToString().ToLower())">@EffectiveStatus.ToString()</span>
+
+            <span class="bm-detail-batch-name">@(_details?.BatchName ?? "Loading…")</span>
+
+            @if (_topology is not null)
+            {
+                <span class="bm-detail-count bm-detail-count-done" title="Done">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircleOutline" Size="Size.Small" />
+                    @DoneCount.ToString("N0")
+                </span>
+                <span class="bm-detail-count bm-detail-count-inprogress" title="In progress">
+                    <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" />
+                    @InProgressCount.ToString("N0")
+                </span>
+
+                <div class="bm-detail-progress">
+                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor" Size="Size.Small" Class="bm-detail-progress-bar" />
+                    <span class="bm-detail-progress-label">~@(ProgressPercent)% estimated</span>
                 </div>
-            </div>
+            }
         </div>
 
-        <div class="bm-batch-subheader-actions">
-            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Class="bm-status-chip">@(_details?.Status.ToString() ?? "--")</MudChip>
-            <!-- Step 5: Debug button to show event count -->
+        <div class="bm-detail-topbar-actions">
+            <!-- Debug button: dumps event/topology summary to console (Step 5/A) -->
             <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ShowEventCount">
                 Events: @_eventCount
             </MudButton>
-            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CancelBatchAsync" Disabled="@(_details?.Status != BatchStatus.Running)">
-                Cancel
-            </MudButton>
-            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenTimeline">
-                Open Timeline
-            </MudButton>
+
+            <MudTooltip Text="Open Timeline">
+                <MudIconButton Icon="@Icons.Material.Outlined.Timeline" Size="Size.Small" OnClick="OpenTimeline" />
+            </MudTooltip>
+
+            @if (EffectiveStatus == BatchStatus.Running)
+            {
+                <MudTooltip Text="Cancel batch">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Stop" Size="Size.Small" Color="Color.Error" OnClick="CancelBatchAsync" />
+                </MudTooltip>
+            }
+
+            <MudTooltip Text="@(_detailsExpanded ? "Collapse details" : "Expand details")">
+                <MudIconButton Icon="@(_detailsExpanded ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                               Size="Size.Small" OnClick="ToggleDetailsStrip" />
+            </MudTooltip>
         </div>
     </div>
 
-    <!-- Main content area -->
-    <div class="bm-batch-detail-grid">
-        <!-- Step 6: Graph with D3 rendering -->
-        <div class="bm-batch-graph">
+    <!-- ── Details strip (§8.1) — expands below top bar on chevron click ── -->
+    @if (_detailsExpanded)
+    {
+        <div class="bm-detail-strip">
             @if (_loading)
             {
-                <div class="bm-graph-loading">Loading…</div>
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
             }
-            else if (_topology == null)
+            else if (_details is null)
             {
-                <div class="bm-graph-loading">Waiting for events…</div>
+                <MudText Class="bm-muted">Details not available</MudText>
             }
             else
             {
-                <BatchMonitor.Components.D3FlowGraph Topology="@_topology" />
+                <div class="bm-detail-strip-grid">
+                    <div class="bm-details-row">
+                        <div class="bm-details-key">RunId</div>
+                        <div class="bm-details-value bm-monospace">@_details.RunId</div>
+                    </div>
+                    <div class="bm-details-row">
+                        <div class="bm-details-key">Type</div>
+                        <div class="bm-details-value">@_details.Type</div>
+                    </div>
+                    <div class="bm-details-row">
+                        <div class="bm-details-key">StartTime</div>
+                        <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
+                    </div>
+                    <div class="bm-details-row">
+                        <div class="bm-details-key">Duration</div>
+                        <div class="bm-details-value">@FormatDuration(_details.Duration)</div>
+                    </div>
+                    @foreach (var kv in _details.Metadata)
+                    {
+                        <div class="bm-details-row">
+                            <div class="bm-details-key">@kv.Key</div>
+                            <div class="bm-details-value">@kv.Value</div>
+                        </div>
+                    }
+                </div>
             }
         </div>
+    }
 
-        <!-- Right details panel -->
-        <div class="bm-batch-details-panel @( _rightPanelCollapsed ? "collapsed" : "" )">
-            <div class="bm-details-toggle" @onclick="ToggleRightPanel">
-                <MudIcon Icon="@(_rightPanelCollapsed ? Icons.Material.Outlined.ChevronLeft : Icons.Material.Outlined.ChevronRight)" />
-            </div>
-            <div class="bm-details-body">
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Details</MudText>
-                @if (_loading)
-                {
-                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-                }
-                else if (_details is null)
-                {
-                    <MudText>Not available</MudText>
-                }
-                else
-                {
-                    <div class="bm-details-list">
-                        @foreach (var kv in _details.Metadata)
-                        {
-                            <div class="bm-details-row">
-                                <div class="bm-details-key">@kv.Key</div>
-                                <div class="bm-details-value">@kv.Value</div>
-                            </div>
-                        }
-                        <div class="bm-details-row">
-                            <div class="bm-details-key">Started</div>
-                            <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
-                        </div>
-                        <div class="bm-details-row">
-                            <div class="bm-details-key">Duration</div>
-                            <div class="bm-details-value">@FormatDuration(_details.Duration)</div>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
+    <!-- ── Graph area (§8.2) — fills remaining height ── -->
+    <div class="bm-batch-graph">
+        @if (_loading)
+        {
+            <div class="bm-graph-loading">Loading…</div>
+        }
+        else if (_topology == null || _topology.Nodes.Count == 0)
+        {
+            <div class="bm-graph-loading bm-graph-loading-pulse">Waiting for first events…</div>
+        }
+        else
+        {
+            <BatchMonitor.Components.D3FlowGraph Topology="@_topology" IsVisible="@IsFocused" />
+        }
     </div>
 
-    <!-- Bottom slider placeholder (disabled/empty) -->
+    <!-- ── Bottom slider (§8.4) — placeholder, wired in a later step ── -->
     <div class="bm-batch-detail-footer">
         <MudSlider Disabled="true" Min="0" Max="100" Value="0" />
     </div>

@@ -84,8 +84,22 @@ html, body {
 .bm-content-area {
     height: calc(100vh - var(--bm-tabbar-h));
     overflow: hidden;
+    position: relative;
+}
+
+/* Each open tab (and Home) renders into its own pane, kept alive in the
+   DOM at all times; only the active pane is shown. This avoids tearing
+   down/rebuilding tab components (polling loops, D3 graph state, etc.)
+   on every focus change — see design doc §4 tab lifecycle. */
+.bm-content-pane {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+}
+.bm-content-pane.bm-pane-hidden {
+    display: none;
 }
 
 /* ================================================================
@@ -291,42 +305,17 @@ html, body {
     display: flex;
     align-items: center;
     gap: 2px;
-    overflow-x: hidden;
+    overflow-x: auto;
     overflow-y: hidden;
     flex: 1 1 auto;
     min-width: 0;
-    scrollbar-width: none;
+    scrollbar-width: none;        /* Firefox */
     padding: 0;
+    scroll-behavior: smooth;
 }
 .bm-tabs-scroll::-webkit-scrollbar { display: none; }
 
-/* Tabs that don't fit the visible strip width are hidden from layout
-   and surfaced via the overflow "▼" menu instead. */
-.bm-tab-hidden {
-    display: none;
-}
-
-/* Offscreen measurement strip: one copy of every tab, always laid out so JS
-   can read natural widths, but never visible/interactive/scrollable. */
-.bm-tabs-measure {
-    position: absolute;
-    top: -9999px;
-    left: -9999px;
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    visibility: hidden;
-    pointer-events: none;
-}
-/* Measurement copies report their natural (unclamped) content width so JS
-   can decide the ideal width per tab before clamping to [min,max]. */
-.bm-tabs-measure .bm-tab {
-    max-width: none;
-    min-width: 0;
-    width: auto;
-}
-
-/* Individual tab */
+/* Individual tab — no pointer cursor (matches Chrome/VS Code behaviour) */
 .bm-tab {
     display: flex;
     align-items: center;
@@ -334,22 +323,20 @@ html, body {
     padding: 0 6px 0 9px;
     height: 30px;
     border-radius: var(--bm-radius-sm);
-    cursor: pointer;
+    cursor: default;
     flex-shrink: 0;
-    /* JS sets an inline `width` in px once measured/laid out. Until then,
-       size naturally to content within sane bounds. */
     width: fit-content;
     min-width: 90px;
     max-width: 190px;
     border: 1px solid transparent;
-    transition: background var(--bm-transition), border-color var(--bm-transition), width var(--bm-transition);
+    transition: background var(--bm-transition), border-color var(--bm-transition);
     user-select: none;
 }
-.bm-tab:hover   { background: var(--mud-palette-action-default-hover); }
-.bm-tab.active  { background: rgba(47,129,244,0.12); border-color: rgba(47,129,244,0.28); }
+.bm-tab:hover  { background: var(--mud-palette-action-default-hover); }
+.bm-tab.active { background: rgba(47,129,244,0.12); border-color: rgba(47,129,244,0.28); }
 
-/* Drag and drop */
-.bm-tab[draggable="true"] { cursor: grab; }
+/* Drag and drop — grab only while actively dragging, not on hover */
+.bm-tab[draggable="true"]:active { cursor: grabbing; }
 .bm-tab.dragging {
     opacity: 0.4;
     cursor: grabbing;
@@ -361,6 +348,7 @@ html, body {
     background: var(--mud-palette-primary);
     border-radius: 1px;
     flex-shrink: 0;
+    pointer-events: none;
 }
 
 .bm-tab-icon { flex-shrink: 0; font-size: 14px !important; color: var(--mud-palette-text-secondary); }
@@ -376,7 +364,7 @@ html, body {
     color: var(--mud-palette-text-primary);
 }
 
-/* Smaller env badge in tab bar */
+/* Env badge */
 .bm-tab-env-badge {
     padding: 0 4px;
     border-radius: 5px;
@@ -388,7 +376,7 @@ html, body {
     line-height: 1.7;
 }
 
-/* Close button — native <button> for reliable click */
+/* Close button */
 .bm-tab-close-btn {
     display: flex;
     align-items: center;
@@ -408,19 +396,6 @@ html, body {
 .bm-tab.active .bm-tab-close-btn { opacity: 1; }
 .bm-tab-close-btn:hover { background: rgba(248,81,73,0.15); color: #F85149; }
 .bm-tab-close-btn .mud-icon-root { font-size: 13px !important; }
-
-/* Overflow */
-.bm-tab-overflow-wrap {
-    flex-shrink: 0;
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-}
-.bm-tab-overflow {
-    flex-shrink: 0;
-}
-.bm-overflow-item { display: flex; align-items: center; font-size: 0.8125rem; cursor: grab; }
-.bm-overflow-env  { font-size: 0.7rem; font-family: var(--bm-font-mono); opacity: 0.65; }
 
 /* ================================================================
    PAGE SHELL
@@ -703,62 +678,100 @@ html, body {
 #blazor-error-ui .dismiss { cursor: pointer; float: right; padding: 0 4px; }
 
 
-/* ---------- Step 4 UI styles (append to end of app.css) ---------- */
+/* ---------- Batch Detail tab — top bar / details strip / graph / slider (§8) ---------- */
 
-.bm-batch-detail { position: relative; padding: 8px 12px; height: 100%; display:flex; flex-direction:column; gap:8px; }
+.bm-batch-detail { padding: 8px 12px; height: 100%; display:flex; flex-direction:column; gap:8px; overflow:hidden; }
 
-/* floating sub-header */
-.bm-batch-subheader {
-    position: absolute;
-    top: 8px;
-    left: calc(var(--bm-main-left, 0px) + 12px);
-    right: calc(72px + 12px); /* leave room for right panel toggle */
-    display:flex;
+/* ── Top bar (§8.1) — fixed ~40px row, part of layout flow ── */
+.bm-detail-topbar {
+    flex-shrink: 0;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items:center;
-    padding:8px 12px;
-    border-radius:8px;
+    gap: 12px;
+    padding: 4px 12px;
+    border-radius: 8px;
     background: rgba(255,255,255,0.04);
-    backdrop-filter: blur(8px);
     box-shadow: 0 1px 0 rgba(0,0,0,0.12);
-    z-index: 5;
-    transition: transform 160ms ease, opacity 160ms ease;
 }
-.bm-batch-subheader .bm-batch-meta { margin-left:8px; }
-.bm-batch-subheader .bm-batch-name { font-weight:700; }
-.bm-batch-subheader .bm-batch-submeta { font-size:0.85rem; color:var(--mud-palette-text-secondary); margin-top:2px; }
-.bm-batch-subheader-actions { display:flex; gap:8px; align-items:center; }
+.bm-detail-topbar.loading { opacity: 0.6; }
 
-/* main grid */
-.bm-batch-detail-grid { margin-top:56px; display:flex; flex:1; gap:12px; align-items:stretch; overflow:hidden; }
+.bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
+.bm-detail-topbar-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
 
-/* graph area */
-.bm-batch-graph { flex:1; border-radius:10px; background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); display:flex; align-items:center; justify-content:center; min-height:260px; }
+.bm-detail-batch-name { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 240px; }
+
+/* Status chip: coloured dot + label, green pulse when Running (§3, §8.1) */
+.bm-status-chip-dot {
+    display:inline-block; width:8px; height:8px; border-radius:50%;
+    flex-shrink:0;
+}
+.bm-status-chip-label {
+    font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
+    font-family: var(--bm-font-mono); white-space:nowrap;
+}
+.bm-status-chip-dot.bm-status-running    { background-color:#3FB950; }
+.bm-status-chip-dot.bm-status-completed  { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-failed     { background-color:#F85149; }
+.bm-status-chip-dot.bm-status-unknown    { background-color:#8B949E; }
+
+.bm-status-chip-label.bm-status-running    { color:#3FB950; }
+.bm-status-chip-label.bm-status-completed  { color:#8B949E; }
+.bm-status-chip-label.bm-status-failed     { color:#F85149; }
+.bm-status-chip-label.bm-status-unknown    { color:#8B949E; }
+
+.bm-status-chip-dot.bm-status-running { animation: bm-pulse 2s ease-in-out infinite; }
+
+/* Done / in-progress counts: ✓ N  ⟳ N */
+.bm-detail-count {
+    display:inline-flex; align-items:center; gap:4px;
+    font-family: var(--bm-font-mono); font-size:0.8rem; white-space:nowrap;
+}
+.bm-detail-count-done .mud-icon-root { color:#3FB950; }
+.bm-detail-count-inprogress .mud-icon-root { color:#388BFD; }
+
+/* Inline progress bar + "~N% estimated" label */
+.bm-detail-progress {
+    display:flex; align-items:center; gap:8px;
+    min-width: 140px; max-width: 220px; flex: 0 1 180px;
+}
+.bm-detail-progress-bar { flex:1; border-radius:4px; }
+.bm-detail-progress-label { font-size:0.75rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }
+
+/* ── Details strip (§8.1) — expands below top bar, max ~200px, scrollable ── */
+.bm-detail-strip {
+    flex-shrink: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+}
+.bm-detail-strip-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px 24px;
+}
+@media (max-width: 720px) {
+    .bm-detail-strip-grid { grid-template-columns: 1fr; }
+}
+.bm-details-row { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; min-width:0; }
+.bm-details-key { font-size:0.75rem; color:var(--mud-palette-text-secondary); white-space:nowrap; flex-shrink:0; }
+.bm-details-value { font-size:0.85rem; font-family:var(--bm-font-mono); text-align:right; word-break:break-word; min-width:0; }
+
+/* ── Graph area (§8.2) — fills remaining height ── */
+.bm-batch-graph {
+    flex: 1; min-height: 0;
+    border-radius:10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent);
+    display:flex; align-items:center; justify-content:center;
+    position: relative;
+    overflow: hidden;
+}
 .bm-graph-loading { color:var(--mud-palette-text-secondary); }
+.bm-graph-loading-pulse { animation: bm-pulse 2.4s ease-in-out infinite; }
 .bm-graph-canvas { width:100%; height:100%; background: transparent; border-radius:8px; }
 
-/* details panel */
-.bm-batch-details-panel {
-    width: 320px;
-    max-width: 40%;
-    border-radius:10px;
-    background: rgba(255,255,255,0.03);
-    backdrop-filter: blur(8px);
-    overflow: auto;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-    position: relative;
-    display:flex;
-    flex-direction:column;
-}
-.bm-batch-details-panel.collapsed { width: 44px; overflow: visible; }
-.bm-details-toggle { position:absolute; left:-28px; top:12px; width:28px; height:28px; display:flex; align-items:center; justify-content:center; background:transparent; cursor:pointer; }
-.bm-details-body { padding:12px; }
-.bm-details-list { display:flex; flex-direction:column; gap:8px; }
-.bm-details-row { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
-.bm-details-key { font-size:0.75rem; color:var(--mud-palette-text-secondary); width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.bm-details-value { font-size:0.85rem; font-family:var(--bm-font-mono); text-align:right; word-break:break-word; }
-
-/* footer slider */
-.bm-batch-detail-footer { padding:6px 0; }
-
-@import url('d3-graph.css');
+/* ── Bottom slider (§8.4) ── */
+.bm-batch-detail-footer { flex-shrink:0; padding:6px 4px; }

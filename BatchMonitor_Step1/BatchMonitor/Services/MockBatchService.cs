@@ -11,8 +11,22 @@ public class MockBatchService : IBatchService
 {
     private static readonly string[] Types = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] Entities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
-    private static readonly string[] Services = { "Ingester", "Validator", "Transformer", "Enricher", "Loader" };
-    private static readonly string[] ProcessIds = { "proc-1", "proc-2", "proc-3", "proc-4" };
+
+    /// <summary>
+    /// Each service has one or more pipelines (unique per service, one input topic each).
+    /// The list order also defines the default flow order for the mock data generator.
+    /// </summary>
+    private static readonly (string Service, string[] Pipelines)[] ServicePipelines =
+    {
+        ("Ingester",    new[] { "ingest-main" }),
+        ("Validator",   new[] { "validate-main", "validate-retry" }),
+        ("Transformer", new[] { "transform-main" }),
+        ("Enricher",    new[] { "enrich-main", "enrich-lookup" }),
+        ("Loader",      new[] { "load-main" }),
+    };
+
+    private static readonly string[] Servers = { "server01", "server02" };
+    private static readonly string[] ProcessIds = { "4821", "4822", "5103", "5104" };
 
     private readonly List<BatchSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
@@ -122,8 +136,8 @@ public class MockBatchService : IBatchService
             return Task.FromResult(new List<PerformanceEvent>());
         }
 
-        // Return only events >= from timestamp
-        var filtered = allEvents.Where(e => e.Timestamp >= from).ToList();
+        // Return only events with Start >= from timestamp
+        var filtered = allEvents.Where(e => e.Start >= from).ToList();
         return Task.FromResult(filtered);
     }
 
@@ -144,46 +158,115 @@ public class MockBatchService : IBatchService
 
     // ── Private ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Generates a realistic chunk flow per batch:
+    /// each chunk visits every (service, pipeline) hop in <see cref="ServicePipelines"/>
+    /// order, except for "enrich-lookup" which is a fan-out branch some chunks
+    /// take in addition to "enrich-main" (so Enricher has two incoming edges
+    /// from Transformer and Loader sees a converged stream — a simple
+    /// fan-out/fan-in shape to exercise the flow graph).
+    /// A small fraction of chunks error out partway through and never finish
+    /// their current pipeline (Finish stays null), and a small fraction of
+    /// "in-flight" chunks on the last pipeline are left with Finish = null
+    /// to simulate a running batch.
+    /// </summary>
     private void GenerateMockEvents(Random rng)
     {
-        // Generate events for the first few batches
         foreach (var batch in _store.Take(10))
         {
             var events = new List<PerformanceEvent>();
-            var eventCount = rng.Next(50, 150);
             var batchStart = batch.Start;
             var chunksGenerated = rng.Next(20, 40);
+            var isRunning = batch.Status == BatchStatus.Running;
 
-            // Generate chunks that flow through the service pipeline
             for (int chunkIdx = 0; chunkIdx < chunksGenerated; chunkIdx++)
             {
-                var chunkId = $"chunk-{chunkIdx:D4}";
-                var chunkStartTime = batchStart.AddSeconds(chunkIdx * 5 + rng.Next(0, 3));
+                var chunkId = $"CHK-{chunkIdx:D4}";
+                var cursor = batchStart.AddSeconds(chunkIdx * 5 + rng.Next(0, 3));
+                var chunkErrored = rng.Next(0, 100) < 8;
+                var errorHop = chunkErrored ? rng.Next(0, ServicePipelines.Length) : -1;
 
-                // Each chunk flows through each service in order
-                for (int serviceIdx = 0; serviceIdx < Services.Length; serviceIdx++)
+                for (int hopIdx = 0; hopIdx < ServicePipelines.Length; hopIdx++)
                 {
-                    var service = Services[serviceIdx];
-                    var processId = ProcessIds[rng.Next(0, ProcessIds.Length)];
-                    var timestamp = chunkStartTime.AddSeconds(serviceIdx * 2 + rng.Next(0, 2));
+                    var (service, pipelines) = ServicePipelines[hopIdx];
+                    var pipeline = pipelines[0];
 
-                    events.Add(new PerformanceEvent
+                    AddEvent(events, chunkId, service, pipeline, cursor, rng, isLastHop: hopIdx == ServicePipelines.Length - 1,
+                        isRunningBatch: isRunning, willError: chunkErrored && errorHop == hopIdx);
+
+                    // Fan-out: Enricher has a secondary "enrich-lookup" pipeline
+                    // that some chunks also pass through (in addition to enrich-main).
+                    if (service == "Enricher" && pipelines.Length > 1 && rng.Next(0, 100) < 40)
                     {
-                        ChunkId = chunkId,
-                        Service = service,
-                        ProcessId = processId,
-                        Timestamp = timestamp,
-                        DurationMs = rng.Next(50, 1000),
-                        Status = rng.Next(0, 100) < 85 ? "Success" : (rng.Next(0, 100) < 50 ? "Failed" : "Skipped"),
-                        Message = rng.Next(0, 100) < 15 ? "Validation failed" : null,
-                        RecordCount = rng.Next(10, 500),
-                        MemoryMb = rng.Next(50, 300),
-                        CpuPercent = rng.Next(20, 85)
-                    });
+                        var lookupCursor = cursor.AddSeconds(rng.Next(1, 4));
+                        AddEvent(events, chunkId, service, pipelines[1], lookupCursor, rng, isLastHop: false,
+                            isRunningBatch: isRunning, willError: false);
+                    }
+
+                    // Fan-out: Validator has a "validate-retry" pipeline that a
+                    // small fraction of chunks visit before continuing.
+                    if (service == "Validator" && pipelines.Length > 1 && rng.Next(0, 100) < 15)
+                    {
+                        var retryCursor = cursor.AddSeconds(rng.Next(1, 3));
+                        AddEvent(events, chunkId, service, pipelines[1], retryCursor, rng, isLastHop: false,
+                            isRunningBatch: isRunning, willError: false);
+                    }
+
+                    if (chunkErrored && errorHop == hopIdx)
+                    {
+                        // Chunk stops here — does not proceed to subsequent hops.
+                        break;
+                    }
+
+                    cursor = cursor.AddSeconds(rng.Next(2, 6));
                 }
             }
 
-            _eventsByRunId[batch.RunId] = events.OrderBy(e => e.Timestamp).ToList();
+            _eventsByRunId[batch.RunId] = events.OrderBy(e => e.Start).ToList();
         }
+    }
+
+    private static void AddEvent(
+        List<PerformanceEvent> events,
+        string chunkId,
+        string service,
+        string pipeline,
+        DateTime start,
+        Random rng,
+        bool isLastHop,
+        bool isRunningBatch,
+        bool willError)
+    {
+        var server = Servers[rng.Next(0, Servers.Length)];
+        var processId = ProcessIds[rng.Next(0, ProcessIds.Length)];
+        var durationSeconds = rng.Next(1, 5);
+
+        DateTime? finish = start.AddSeconds(durationSeconds);
+        string? error = null;
+
+        if (willError)
+        {
+            error = "Validation failed: schema mismatch";
+            // Errored chunks still record a finish time (failed, not hung).
+        }
+        else if (isRunningBatch && isLastHop && rng.Next(0, 100) < 25)
+        {
+            // Simulate some chunks still in progress on the final pipeline
+            // of a running batch.
+            finish = null;
+        }
+
+        events.Add(new PerformanceEvent
+        {
+            ChunkId = chunkId,
+            Service = service,
+            Pipeline = pipeline,
+            Server = server,
+            ProcessId = processId,
+            Start = start,
+            Finish = finish,
+            Error = error,
+            RecordCount = rng.Next(10, 500),
+        });
     }
 }

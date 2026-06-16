@@ -14,7 +14,7 @@
         break;
 
     case TabType.BatchDetail:
-        <BatchMonitor.Pages.BatchDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" />
+        <BatchMonitor.Pages.BatchDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />
         break;
 
     case TabType.Services:
