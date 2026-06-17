@@ -591,6 +591,10 @@ html, body {
 .bm-footer-count    { flex-shrink: 0; white-space: nowrap; }
 .bm-pagination-ctrl { flex: 1; display: flex; justify-content: center; }
 .bm-rows-select     { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* Shrink the inner input text of the rows-per-page MudSelect */
+.bm-rows-select .mud-select-input,
+.bm-rows-select .mud-input-slot,
+.bm-rows-select .mud-input { font-size: 0.72rem !important; }
 
 /* ================================================================
    SETTINGS

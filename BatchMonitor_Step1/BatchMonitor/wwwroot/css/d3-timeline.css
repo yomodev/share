@@ -33,12 +33,15 @@
     flex: 1;
     min-height: 0;
     position: relative;
-    overflow-y: auto;   /* vertical scrollbar for tall content */
+    overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: thin;
 }
+/* Only show scrollbar when content overflows */
 .bm-tl-canvas-wrap::-webkit-scrollbar { width: 6px; }
+.bm-tl-canvas-wrap::-webkit-scrollbar-track { background: transparent; }
 .bm-tl-canvas-wrap::-webkit-scrollbar-thumb { background: rgba(139,148,158,0.3); border-radius: 3px; }
+.bm-tl-canvas-wrap::-webkit-scrollbar-thumb:hover { background: rgba(139,148,158,0.5); }
 
 .bm-tl-canvas {
     position: relative;

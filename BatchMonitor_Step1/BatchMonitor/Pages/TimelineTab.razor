@@ -31,6 +31,7 @@
     private const int DialogPageSize = 25;
 
     // ── JS interop ────────────────────────────────────────────────────────
+    private string _instanceKey = Guid.NewGuid().ToString("N");
     private ElementReference _canvasRef;
     private ElementReference _bottomRef;
     private bool _jsInitialised = false;
@@ -55,7 +56,7 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _canvasRef, _bottomRef, GetOptions());
+                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 _jsInitialised = true;
                 await PushDataAsync();
             }
@@ -151,7 +152,7 @@
         try
         {
             var payload = BuildPayload();
-            await JS.InvokeVoidAsync("BatchMonitor.Timeline.update", payload);
+            await JS.InvokeVoidAsync("BatchMonitor.Timeline.update", _instanceKey, payload);
         }
         catch (Exception ex)
         {
@@ -226,13 +227,13 @@
     private async Task ResetView()
     {
         if (!_jsInitialised) return;
-        await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView");
+        await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView", _instanceKey);
         await PushDataAsync();
     }
 
     private void ExportCsv()
     {
-        _ = JS.InvokeVoidAsync("BatchMonitor.Timeline.exportCsv");
+        _ = JS.InvokeVoidAsync("BatchMonitor.Timeline.exportCsv", _instanceKey);
     }
 
     private async Task TriggerImport()
@@ -421,6 +422,21 @@
         await PushDataAsync();
     }
 
+    // ── Dialog row click / double-click ───────────────────────────────────
+    // MouseEventArgs.Detail = click count: 1 = single, 2 = double.
+    private async Task OnDialogRowClick(BatchSummary item, MouseEventArgs mouse)
+    {
+        if (mouse.Detail == 2)
+        {
+            _dialogSelected = item;
+            await ConfirmAddBatch();
+        }
+        else
+        {
+            _dialogSelected = _dialogSelected?.RunId == item.RunId ? null : item;
+        }
+    }
+
     private bool IsAlreadyLoaded(BatchSummary b) =>
         _batches.Any(x => x.RunId == b.RunId && x.Env == _dialogEnv);
 
@@ -437,7 +453,7 @@
 
         if (_jsInitialised)
         {
-            try { await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose"); }
+            try { await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose", _instanceKey); }
             catch { }
         }
     }
@@ -508,12 +524,12 @@
             </MudTooltip>
 
             <MudTooltip Text="Export CSV">
-                <MudIconButton Icon="@Icons.Material.Outlined.Download"
+                <MudIconButton Icon="@Icons.Material.Outlined.Save"
                                Size="Size.Small" OnClick="ExportCsv" />
             </MudTooltip>
 
             <MudTooltip Text="Import CSV">
-                <MudIconButton Icon="@Icons.Material.Outlined.Upload"
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
                                Size="Size.Small" OnClick="TriggerImport" />
             </MudTooltip>
 
@@ -522,7 +538,7 @@
 
             <MudTooltip Text="Remove batch from view">
                 <span>
-                    <MudMenu Icon="@Icons.Material.Outlined.DeleteOutline" Size="Size.Small"
+                    <MudMenu Icon="@Icons.Material.Outlined.LayersClear" Size="Size.Small"
                              Dense="true" Disabled="@(!_batches.Any())"
                              AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
                         @foreach (var b in _batches)
@@ -543,6 +559,7 @@
 
             <MudButton StartIcon="@Icons.Material.Outlined.Add"
                        Variant="Variant.Outlined" Size="Size.Small"
+                       Class="ml-2"
                        OnClick="OpenAddDialog">
                 Add
             </MudButton>
@@ -567,7 +584,7 @@
     <div class="bm-tl-bottom-panel" @ref="_bottomRef"></div>
 
     <!-- Add Batch dialog -->
-    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true })">
+    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">
         <TitleContent>
             <MudText Typo="Typo.h6">Add Batch</MudText>
         </TitleContent>
@@ -596,8 +613,7 @@
             else
             {
                 <MudDataGrid T="BatchSummary" Items="@_dialogBatches"
-                             RowClick="@(e => _dialogSelected = _dialogSelected?.RunId == e.Item.RunId ? null : e.Item)"
-                             RowDoubleClick="@(async (DataGridRowClickEventArgs<BatchSummary> e) => { _dialogSelected = e.Item; await ConfirmAddBatch(); })"
+                             RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
                              RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
                              Dense="true" Hover="true" Striped="false" Bordered="false">
                     <Columns>
