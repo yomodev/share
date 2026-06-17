@@ -27,30 +27,30 @@
 .bm-tl-filter { min-width: 160px; max-width: 220px; }
 .bm-tl-select { min-width: 160px; max-width: 200px; }
 
-/* ── Canvas ──────────────────────────────────────────────────────── */
+/* ── Canvas wrap — scrolls vertically, fixed horizontally ───────── */
 
-/* Wrapper fills remaining height; scrolls vertically per spec §2
-   ("outer container scrolls vertically"). */
 .bm-tl-canvas-wrap {
     flex: 1;
     min-height: 0;
     position: relative;
-    overflow-y: auto;
+    overflow-y: auto;   /* vertical scrollbar for tall content */
     overflow-x: hidden;
+    scrollbar-width: thin;
 }
+.bm-tl-canvas-wrap::-webkit-scrollbar { width: 6px; }
+.bm-tl-canvas-wrap::-webkit-scrollbar-thumb { background: rgba(139,148,158,0.3); border-radius: 3px; }
 
-/* The actual D3 attachment point — fills wrapper width; height is
-   driven by the SVG content (set by d3-timeline.js). */
 .bm-tl-canvas {
-    width: 100%;
-    min-height: 100%;
     position: relative;
+    width: 100%;
+    /* Height is set by JS to match content. */
 }
 
 .bm-tl-svg {
     display: block;
     width: 100%;
-    /* height is set explicitly by JS to match content */
+    /* Height set by JS. */
+    cursor: crosshair;
 }
 
 .bm-tl-empty {
@@ -62,6 +62,24 @@
     justify-content: center;
     color: var(--mud-palette-text-secondary);
     pointer-events: none;
+}
+
+/* ── Fixed bottom panel: TICK_H(22) + HEAT_H(16) + SEL_H(28) + 4 = 70px */
+
+.bm-tl-bottom-panel {
+    flex-shrink: 0;
+    height: 52px;
+    border-top: 1px solid var(--mud-palette-divider);
+    overflow: visible;
+    position: relative;
+    z-index: 10;
+    background: var(--mud-palette-background);
+}
+
+.bm-tl-bot-svg {
+    display: block;
+    width: 100%;
+    overflow: visible;
 }
 
 /* ── Batch header text ───────────────────────────────────────────── */
@@ -97,22 +115,23 @@
     fill: #FF00FF;
 }
 
-/* ── Range selector brush ────────────────────────────────────────── */
+/* ── Range selector (d3.brushX overlay on heatmap) ──────────────── */
 
-.bm-tl-brush .selection {
-    fill: rgba(56,139,253,0.2);
+.bm-tl-sel-layer .selection {
+    fill: rgba(56,139,253,0.18);
     stroke: #388BFD;
-    stroke-width: 1px;
+    stroke-width: 1.5px;
 }
-
-.bm-tl-brush .handle { fill: #388BFD; cursor: ew-resize; }
-
-.bm-tl-reset-link {
-    font-size: 0.67rem;
-    fill: var(--mud-palette-text-secondary);
-    transition: fill 120ms;
+.bm-tl-sel-layer .handle--w,
+.bm-tl-sel-layer .handle--e {
+    fill: #388BFD;
+    opacity: 0.85;
 }
-.bm-tl-reset-link:hover { fill: var(--mud-palette-primary); }
+/* Make the overlay transparent so the heatmap underneath is visible. */
+.bm-tl-sel-layer .overlay {
+    fill: transparent !important;
+    cursor: crosshair;
+}
 
 /* ── Tooltip ─────────────────────────────────────────────────────── */
 
@@ -176,7 +195,7 @@
 }
 .bm-tl-tt-row span:first-child { color: var(--mud-palette-text-secondary); flex-shrink: 0; }
 .bm-tl-tt-row span:last-child  { font-family: var(--bm-font-mono, monospace); text-align: right; word-break: break-all; }
-.bm-tl-tt-error { color: #F85149 !important; }
+.bm-tl-tt-error, .bm-tl-tt-err { color: #F85149 !important; }
 
 .bm-tl-tt-footer {
     padding: 4px 12px 6px;

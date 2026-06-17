@@ -1,744 +1,782 @@
-// Batch Monitor — Timeline Tab  (Step 10)
-//
-// Renders a multi-batch timeline using D3 v7 (no dagre — layout is manual).
+// Batch Monitor — Timeline Tab (Step 10 rev 8 — clean architecture)
 //
 // Architecture:
-//   - One SVG fills the canvas div; horizontal zoom/pan is shared across all batches.
-//   - Each batch gets a vertical "section": batch header, lane rows, tick scale.
-//   - Below all sections: global range selector + global heatmap (fixed height, scrolls with sections).
-//   - Zoom/pan: D3 zoom, x-axis only (scaleX drives everything; y unchanged).
 //
-// Key layout constants (all in pixels unless noted):
-//   HEADER_H  = 28     — batch header row
-//   LANE_H    = 26     — minimum lane height (one sub-row)
-//   SUBROW_H  = 22     — individual sub-row within a lane
-//   TICK_H    = 28     — tick scale strip at bottom of each batch
-//   HEATMAP_H = 32     — global heatmap strip
-//   SELECTOR_H= 24     — global range selector brush strip
-//   LABEL_W   = 0      — no lane labels per spec (§5: "no lane labels")
-//   BLOCK_RX  = 2      — message block corner radius
-//   MIN_BLOCK_W = 2    — below this width blocks merge into LOD density
+// X-AXIS (time, relative ms from 0 per batch):
+//   - xScale: linear, domain [0, frozenDomainMax], range [0, svgW]
+//   - frozenDomainMax: set on first data load (max finish time across all
+//     batches), then ONLY grows — never shrinks. xZoom is NEVER touched
+//     by incoming data updates. Blocks stay put.
+//   - xZoom: only changes via user interaction (wheel, drag, keyboard,
+//     range selector). Hard limits: left=0, right=frozenDomainMax.
+//   - New events beyond frozenDomainMax: frozenDomainMax grows,
+//     xScale domain expands, xZoom untouched → blocks don't move,
+//     new events appear in heatmap/selector only until user pans right.
+//
+// Y-AXIS (rows):
+//   - Canvas wrap scrolls vertically; header + bottom panel are fixed.
+//   - Per batch: 1 header row + N group rows.
+//   - Group row height = number of sub-rows × SUBROW_H (no cap, no LOD).
+//   - Sub-rows: greedy interval packing, no limit.
+//   - Dashed lines separate group rows.
+//
+// HIGHLIGHTING:
+//   - Hovering a block highlights all blocks with same chunkId across
+//     all batches (same chunk processed by multiple services).
+//
+// BOTTOM PANEL (fixed):
+//   - Global tick scale (absolute time if batchStartEpochMs known, else relative)
+//   - Heatmap: density vertical lines on neutral bg
+//   - Range selector: draggable viewport window overlay
 
 window.BatchMonitor = window.BatchMonitor || {};
 
 window.BatchMonitor.Timeline = (function () {
 
     // ── Constants ─────────────────────────────────────────────────────────
-    const HEADER_H    = 28;
-    const LANE_H_MIN  = 26;
-    const SUBROW_H    = 22;
-    const SUBROW_PAD  = 2;
-    const TICK_H      = 28;
-    const HEATMAP_H   = 32;
-    const SELECTOR_H  = 24;
-    const SECTION_GAP = 16;
-    const BLOCK_RX    = 2;
-    const MIN_BLOCK_W = 2;
-    const LOD_OPACITY_MIN = 0.25;
-    const LOD_OPACITY_MAX = 0.85;
-    const T           = 250;  // transition ms
+    const HEADER_H   = 26;   // batch title row
+    const SUBROW_H   = 12;   // height of one sub-row inside a group row
+    const ROW_PAD    = 3;    // padding above/below sub-rows within group row
+    const BLOCK_GAP  = 2;    // vertical gap between sub-rows inside a group row
+    const SECTION_GAP = 6;   // gap between batch sections
+    const BLOCK_RX   = 4;
+    const MIN_BLOCK_W = 1;   // blocks narrower than this become LOD lines
+    const TICK_H     = 22;
+    const HEAT_H     = 14;
+    const SEL_H      = 26;
+    const PAD        = 8;    // left/right padding in bottom panel
+    const BOT_PAD_T  = 8;    // top padding between tick scale and heatmap
+    const BOT_PAD_B  = 8;    // bottom padding below heatmap
+    const BOTTOM_H   = TICK_H + BOT_PAD_T + HEAT_H + BOT_PAD_B;  // 22+8+14+8 = 52
 
-    // Curated colour palette — deterministic hash maps colour-key → index.
     const PALETTE = [
         '#388BFD','#3FB950','#F0A500','#DB61A2','#A371F7',
         '#E06C75','#56B6C2','#D19A66','#61AFEF','#98C379',
         '#C678DD','#E5C07B','#BE5046','#2BBAC5','#FF8C42',
+        '#79C0FF','#56D364','#E3B341','#F78166',
     ];
-
-    const STATUS_COLOR = {
-        done:       '#3FB950',
-        inprogress: '#388BFD',
-        error:      '#F85149',
-    };
-
+    const STATUS_COLOR = { done:'#3FB950', inprogress:'#388BFD', error:'#F85149' };
     const CURSOR_COLOR = '#FF00FF';
-    const GRID_MAJOR   = '#30363D';
-    const GRID_MINOR   = '#21262D';
-    const SEPARATOR    = '#30363D';
-
-    // ── State ─────────────────────────────────────────────────────────────
+    const GRID_MAJOR   = 'rgba(255,255,255,0.10)';
+    const GRID_MID     = 'rgba(255,255,255,0.04)';
+    const SEPARATOR    = 'rgba(255,255,255,0.08)';
+    const HEAT_BG      = '#161620';
+    const HEAT_LINE    = '#388BFD';
+    const BG_COLOR     = '#13131a';
 
     let _state = null;
 
-    // ── Public API ─────────────────────────────────────────────────────────
+    // ── Init ──────────────────────────────────────────────────────────────
 
-    function init(containerEl, options) {
-        if (!containerEl) return;
+    function init(laneEl, bottomEl, options) {
+        if (!laneEl || !bottomEl) return;
         if (_state) dispose();
 
-        const svg = d3.select(containerEl).append('svg')
+        // Lane SVG — width 100%, height set by JS to content height.
+        // Scrolling is handled by the .bm-tl-canvas-wrap CSS overflow:auto.
+        const laneSvg = d3.select(laneEl).append('svg')
             .attr('class', 'bm-tl-svg')
             .attr('width', '100%')
             .attr('height', '100%');
 
-        // Clip path for the lane area (prevents blocks overflowing into headers/ticks).
-        const defs = svg.append('defs');
-        defs.append('clipPath').attr('id', 'bm-tl-lane-clip')
-            .append('rect').attr('id', 'bm-tl-lane-clip-rect');
+        // Layer order: grid → cursor → blocks → headers (headers on top for readability)
+        const gridL   = laneSvg.append('g').attr('class', 'bm-tl-grid-layer');
+        const cursorL = laneSvg.append('g').attr('class', 'bm-tl-cursor-layer').style('pointer-events','none');
+        const blockL  = laneSvg.append('g').attr('class', 'bm-tl-block-layer');
+        const headerL = laneSvg.append('g').attr('class', 'bm-tl-header-layer');
 
-        const root  = svg.append('g').attr('class', 'bm-tl-root');
-        const lanes = root.append('g').attr('class', 'bm-tl-lanes');
-        const cursor= root.append('g').attr('class', 'bm-tl-cursor').style('pointer-events', 'none');
-        const bottom= root.append('g').attr('class', 'bm-tl-bottom');
+        const cursorLine = cursorL.append('line')
+            .style('stroke', CURSOR_COLOR).style('stroke-width', 1.5).style('opacity', 0);
 
-        // Tooltip div.
-        const tooltip = d3.select(containerEl).append('div')
-            .attr('class', 'bm-tl-tooltip')
-            .style('opacity', 0)
-            .style('pointer-events', 'none');
+        // Bottom SVG — fixed height.
+        const botSvg = d3.select(bottomEl).append('svg')
+            .attr('class', 'bm-tl-bot-svg')
+            .attr('width', '100%').attr('height', BOTTOM_H);
 
-        // Cursor line elements.
-        const cursorLine = cursor.append('line')
-            .attr('class', 'bm-tl-cursor-line')
-            .style('stroke', CURSOR_COLOR)
-            .style('stroke-width', 1)
-            .style('opacity', 0);
+        // Bottom layers (paint order matters):
+        //   1. tickL    — opaque background + tick labels (at y=0)
+        //   2. heatL    — density lines (at y=TICK_H)
+        //   3. selL     — brush overlay on heatmap (centred, taller than heatmap)
+        //   4. curBotL  — cursor label pill (on top of everything)
+        const tickL   = botSvg.append('g').attr('class','bm-tl-tick-layer');
+        // Heatmap: below tick scale + top padding, padded left/right.
+        const HEAT_Y  = TICK_H + BOT_PAD_T;
+        const heatL   = botSvg.append('g').attr('class','bm-tl-heat-layer')
+            .attr('transform', `translate(0,${HEAT_Y})`);
+        // Selector: centred over heatmap vertically (taller → protrudes above/below).
+        const SEL_OFFSET = HEAT_Y + Math.floor((HEAT_H - SEL_H) / 2);
+        const selL    = botSvg.append('g').attr('class','bm-tl-sel-layer')
+            .attr('transform', `translate(0,${SEL_OFFSET})`);
+        const curBotL = botSvg.append('g').attr('class','bm-tl-curbot-layer').style('pointer-events','none');
 
-        const cursorLabels = cursor.append('g').attr('class', 'bm-tl-cursor-labels');
+        // Block hover tooltip.
+        const tooltip = d3.select(laneEl).append('div')
+            .attr('class','bm-tl-tooltip')
+            .style('opacity',0).style('pointer-events','none');
 
-        // D3 zoom (x-only).
-        const xScale = d3.scaleLinear();  // domain set in update
-        let   xZoom  = d3.zoomIdentity;
+        // X-scale and zoom.
+        const xScale = d3.scaleLinear().domain([0,1]).range([0,800]);
 
         const zoom = d3.zoom()
-            .scaleExtent([0.05, 200])
-            .on('zoom', (event) => {
-                xZoom = event.transform;
-                renderWithZoom();
+            .scaleExtent([1, 5000])  // min scale=1: can't zoom out past "show all"
+            .on('zoom', event => {
+                if (!_state) return;
+                const t    = event.transform;
+                const W    = _state.svgW;
+                const fMax = _state.frozenDomainMax || 1;
+
+                // Clamp rules:
+                //   tx <= 0         → leftmost visible time never goes negative
+                //   tx >= W*(1-t.k) → rightmost pixel of frozenDomainMax stays reachable
+                //   But globalMax may exceed frozenDomainMax (new live events), so also
+                //   allow panning far enough right to see globalMax:
+                //   xS_rescaled(globalMax) = tx + k * (gMax/fMax * W) >= 0
+                //   → tx >= -k * gMax/fMax * W
+                const gMax = _state.globalMax || fMax;
+                const rightLimit = -t.k * (gMax / fMax) * W;
+                const txClamped = Math.max(rightLimit, Math.min(0, t.x));
+                const clamped = d3.zoomIdentity.translate(txClamped, 0).scale(t.k);
+                _state.xZoom = clamped;
+                renderLanes();
+                renderTicks();
+                syncSelector();
             });
 
-        svg.call(zoom)
-            .on('mousemove', onMouseMove)
-            .on('mouseleave', onMouseLeave)
-            .call(d3.drag()
-                .on('start', () => svg.style('cursor', 'grabbing'))
-                .on('end',   () => svg.style('cursor', 'crosshair')));
+        laneSvg.call(zoom).style('cursor','crosshair')
+            .on('mousemove.cur', onMouseMove)
+            .on('mouseleave.cur', onMouseLeave);
 
-        svg.style('cursor', 'crosshair');
-
-        // Keyboard shortcuts.
-        const keydown = (e) => handleKey(e);
-        document.addEventListener('keydown', keydown);
-
-        // Cursor fade timer.
-        let cursorTimer = null;
+        const kd = e => handleKey(e);
+        document.addEventListener('keydown', kd);
 
         _state = {
-            containerEl, svg, root, lanes, cursor, bottom, tooltip,
-            cursorLine, cursorLabels, defs,
-            xScale, xZoom, zoom,
-            data: null,
-            layout: null,
-            cursorTimer,
-            keydownFn: keydown,
+            laneEl, bottomEl, laneSvg, botSvg,
+            gridL, cursorL, blockL, headerL, cursorLine,
+            heatL, selL, tickL, curBotL,
+            tooltip,
+            xScale, xZoom: d3.zoomIdentity, zoom,
+            data: null, layout: null,
+            svgW: 800, viewH: 600,
+            frozenDomainMax: null,   // set on first load, grows but never shrinks
+            cursorX: null, cursorTimer: null,
+            hoveredBatchIdx: -1,
+            hoveredChunkId: null,
+            keydownFn: kd,
         };
 
-        // Resize observer on the scrollable wrapper (parent of canvas).
-        const ro = new ResizeObserver(() => {
-            if (_state) { computeSvgSize(); updateSvgHeight(); renderWithZoom(); renderBottom(); }
-        });
-        const wrapper = containerEl.parentElement || containerEl;
-        ro.observe(wrapper);
-        _state.resizeObserver = ro;
+        buildSelector();
 
-        computeSvgSize();
+        const ro = new ResizeObserver(() => { if (_state) onResize(); });
+        ro.observe(laneEl.parentElement || laneEl);
+        _state.resizeObserver = ro;
+        onResize();
     }
+
+    // ── Resize ────────────────────────────────────────────────────────────
+
+    function onResize() {
+        if (!_state) return;
+        const rect = _state.laneEl.getBoundingClientRect();
+        _state.svgW  = rect.width  || 800;
+        _state.viewH = _state.laneEl.parentElement?.clientHeight || rect.height || 600;
+        _state.xScale.range([0, _state.svgW]);
+        _state.botSvg.attr('width', _state.svgW);
+        if (_state.selFn) {
+            _state.selFn.extent([[PAD, 0], [_state.svgW - PAD, SEL_H]]);
+            _state.selL.call(_state.selFn);
+        }
+        renderAll();
+    }
+
+    // ── Update (from Blazor — NEVER modifies xZoom) ───────────────────────
 
     function update(payload) {
         if (!_state) return;
         _state.data = payload;
+
+        // Compute globalMax from all batch events.
+        let newMax = 0;
+        for (const b of (payload.batches || [])) {
+            for (const e of (b.events || [])) {
+                newMax = Math.max(newMax, e.finishMs ?? e.startMs ?? 0);
+            }
+        }
+        if (newMax < 1000) newMax = 1000;
+
+        // Always track globalMax separately (for heatmap/selector proportions).
+        _state.globalMax = newMax;
+
+        if (_state.frozenDomainMax === null) {
+            // FIRST LOAD ONLY: freeze xScale domain to current data range.
+            // xScale.domain([0, frozenDomainMax]) NEVER changes after this.
+            // xZoom NEVER changes from incoming data after this.
+            // New events beyond frozenDomainMax are off-screen until user pans.
+            _state.frozenDomainMax = newMax;
+            _state.xScale.domain([0, newMax]);
+            _state.xZoom = d3.zoomIdentity;
+            // Apply without triggering the zoom event handler.
+            const prevOn = _state.zoom.on('zoom');
+            _state.zoom.on('zoom', null);
+            _state.laneSvg.call(_state.zoom.transform, d3.zoomIdentity);
+            _state.zoom.on('zoom', prevOn);
+        }
+        // On subsequent updates: xScale.domain and xZoom are NEVER touched here.
+        // globalMax grows silently; heatmap/selector use globalMax for proportions.
+
         computeLayout();
-        renderAll();
+        updateLaneSvgHeight();
+        renderLanes();
+        renderTicks();
+        renderHeatmap();
+        syncSelector();
     }
 
     function resetView() {
         if (!_state) return;
-        _state.svg.call(_state.zoom.transform, d3.zoomIdentity);
+        _state.xZoom = d3.zoomIdentity;
+        _state.laneSvg.call(_state.zoom.transform, d3.zoomIdentity);
     }
 
     function dispose() {
         if (!_state) return;
         document.removeEventListener('keydown', _state.keydownFn);
         _state.resizeObserver?.disconnect();
-        // Clear SVG contents but don't remove the element itself — Blazor
-        // owns the container div and will crash with "removeChild" if D3
-        // removes a child element that Blazor still references.
-        _state.svg.selectAll('*').remove();
+        _state.laneSvg.selectAll('*').remove();
+        _state.botSvg.selectAll('*').remove();
         _state.tooltip.remove();
         clearTimeout(_state.cursorTimer);
         _state = null;
     }
 
-    function exportCsv() {
-        if (!_state?.data) return;
-        const rows = [];
-        rows.push('RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,StartAbs,FinishAbs,StartRelMs,FinishRelMs,DurationMs,Status,Error');
-
-        for (const batch of (_state.data.batches || [])) {
-            for (const e of (batch.events || [])) {
-                const finishMs  = e.finishMs ?? '';
-                const durMs     = e.finishMs != null ? (e.finishMs - e.startMs).toFixed(0) : '';
-                rows.push([
-                    csv(batch.runId), csv(batch.batchName), csv(e.chunkId),
-                    csv(e.source), csv(e.pipeline), csv(e.service),
-                    csv(e.processId), csv(e.server),
-                    '', '',   // StartAbs / FinishAbs (not available client-side without batch start date)
-                    e.startMs.toFixed(1), finishMs, durMs,
-                    csv(e.status), csv(e.error ?? ''),
-                ].join(','));
-            }
-        }
-
-        const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href = url; a.download = 'timeline.csv'; a.click();
-        URL.revokeObjectURL(url);
-    }
-
-    function csv(v) { return `"${String(v ?? '').replace(/"/g, '""')}"`; }
-
-    // ── SVG sizing ────────────────────────────────────────────────────────
-
-    function computeSvgSize() {
-        if (!_state) return;
-        const rect = _state.containerEl.getBoundingClientRect();
-        _state.svgW  = rect.width  || 800;
-        // Viewport height = parent wrapper's visible height (for heatmap positioning).
-        _state.viewH = _state.containerEl.parentElement?.clientHeight || rect.height || 600;
-
-        _state.defs.select('#bm-tl-lane-clip-rect')
-            .attr('width', _state.svgW)
-            .attr('height', _state.viewH);
-    }
-
-    function updateSvgHeight() {
-        if (!_state?.layout) return;
-        const contentH = _state.layout.totalLanesH + SELECTOR_H + HEATMAP_H + 16;
-        _state.svgH = Math.max(_state.viewH || 600, contentH);
-        _state.svg.attr('height', _state.svgH);
-
-        _state.defs.select('#bm-tl-lane-clip-rect')
-            .attr('width', _state.svgW)
-            .attr('height', _state.svgH);
-    }
-
-    // ── Layout computation ────────────────────────────────────────────────
+    // ── Layout ────────────────────────────────────────────────────────────
 
     function computeLayout() {
         if (!_state?.data) return;
-
         const { data } = _state;
-        const batches  = data.batches || [];
         const groupBy  = data.groupBy  || 'ServicePipeline';
         const colourBy = data.colourBy || 'Source';
         const filter   = (data.filter || '').toLowerCase();
-        const stack    = data.stackView || false;
 
-        // Build per-batch layout sections.
-        const sections = batches.map(batch => buildSection(batch, groupBy, colourBy, filter, stack));
-
-        // Global time domain: union of all batch relative ranges.
-        let globalMax = 0;
-        for (const sec of sections) globalMax = Math.max(globalMax, sec.domainMax);
-        if (globalMax <= 0) globalMax = 1000;
-
-        _state.xScale.domain([0, globalMax]);
-
-        // Assign Y offsets to sections (stacked vertically).
         let y = 0;
-        for (const sec of sections) {
-            sec.y = y;
-            y += HEADER_H + sec.laneHeight + TICK_H + SECTION_GAP;
+        const sections = [];
+
+        for (const batch of (data.batches || [])) {
+            const groups = buildGroups(batch, groupBy, colourBy, filter);
+            // Total height for this section.
+            const sectionH = HEADER_H + groups.reduce((s, g) => s + g.rowH, 0) + SECTION_GAP;
+            sections.push({ batch, groups, y, sectionH });
+            y += sectionH;
         }
 
-        const totalLanesH = y;
-        _state.layout = { sections, globalMax, totalLanesH };
+        _state.layout = { sections, totalH: y };
     }
 
-    function buildSection(batch, groupBy, colourBy, filter, stack) {
-        // Group events by the GroupBy key.
-        const groups = new Map();
+    function buildGroups(batch, groupBy, colourBy, filter) {
+        // Group events by key.
+        // Skip in-progress events (no finish time) — they have no definite end
+        // so cannot be meaningfully positioned on a fixed-viewport timeline.
+        const map = new Map();
         for (const e of (batch.events || [])) {
+            if (e.finishMs == null) continue;   // skip in-progress
             if (filter && !matchesFilter(e, filter)) continue;
             const key = groupKey(e, groupBy);
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(e);
+            if (!map.has(key)) map.set(key, []);
+            map.get(key).push(e);
         }
 
-        const lanes = [];
-        let laneHeight = 0;
-
-        for (const [key, events] of groups) {
-            const subrows = packSubrows(events, stack);
-            const h = Math.max(LANE_H_MIN, subrows.length * SUBROW_H);
-            lanes.push({ key, events, subrows, h });
-            laneHeight += h;
+        const groups = [];
+        for (const [key, events] of map) {
+            // Pack into sub-rows (no cap, no LOD).
+            const subrows = packSubrows(events);
+            const rowH    = ROW_PAD * 2 + subrows.length * (SUBROW_H + BLOCK_GAP);
+            groups.push({ key, events, subrows, rowH, colourBy });
         }
-        if (lanes.length === 0) laneHeight = LANE_H_MIN;
-
-        // Domain max for this batch.
-        let domainMax = 0;
-        for (const e of (batch.events || [])) {
-            domainMax = Math.max(domainMax, e.finishMs ?? e.startMs);
-        }
-
-        return { batch, lanes, laneHeight, domainMax, y: 0 };
+        return groups;
     }
 
-    function matchesFilter(e, filter) {
-        return (e.chunkId   || '').toLowerCase().includes(filter)
-            || (e.source    || '').toLowerCase().includes(filter)
-            || (e.pipeline  || '').toLowerCase().includes(filter)
-            || (e.service   || '').toLowerCase().includes(filter)
-            || (e.processId || '').toLowerCase().includes(filter)
-            || (e.server    || '').toLowerCase().includes(filter);
-    }
-
-    function groupKey(e, groupBy) {
-        switch (groupBy) {
-            case 'ServicePipeline':    return `${e.service} / ${e.pipeline}`;
-            case 'PidServicePipeline': return `${e.server}:${e.processId} / ${e.service} / ${e.pipeline}`;
-            case 'Service':            return e.service;
-            case 'Pipeline':           return e.pipeline;
-            case 'Pid':                return `${e.server}:${e.processId}`;
-            default:                   return `${e.service} / ${e.pipeline}`;
-        }
-    }
-
-    // ── Sub-row packing ───────────────────────────────────────────────────
-    // Greedy interval packing: assign each event to the first sub-row
-    // where it doesn't overlap with already-placed events.
-    // Capped at MAX_SUBROWS per lane — events that don't fit become LOD.
-
-    const MAX_SUBROWS = 8;
-
-    function packSubrows(events, stack) {
+    function packSubrows(events) {
+        // Sort by start time, greedy interval packing (first-fit from top).
+        // For packing purposes, in-progress events use a small estimated width
+        // so they don't permanently block all subsequent events from the row.
+        // The rendered block still uses xS(finishMs ?? frozenDomainMax).
+        const AVG_DURATION_MS = 5000;  // packing estimate for in-progress events
         const sorted = [...events].sort((a, b) => a.startMs - b.startMs);
         const subrows = [];
-
         for (const e of sorted) {
-            const xStart = e.startMs;
-            const xEnd   = e.finishMs ?? e.startMs + 1;
-
+            const xs   = e.startMs;
+            // For packing: use actual finish if known; estimate if in-progress.
+            const xePack = e.finishMs ?? (xs + AVG_DURATION_MS);
             let placed = false;
             for (const row of subrows) {
-                const last = row[row.length - 1];
-                if (xStart >= last.xEnd) {
-                    row.push({ event: e, xStart, xEnd });
+                if (xs >= row[row.length-1].xEndPack) {
+                    row.push({ event: e, xStart: xs, xEnd: e.finishMs ?? (xs + (_state.frozenDomainMax||1000)), xEndPack: xePack });
                     placed = true;
                     break;
                 }
             }
-            // Only create a new subrow if under the cap; otherwise let the
-            // block render as LOD (width < MIN_BLOCK_W check in renderBlocks).
-            if (!placed && subrows.length < MAX_SUBROWS) {
-                subrows.push([{ event: e, xStart, xEnd }]);
-            } else if (!placed) {
-                // Add to the last subrow — it will likely render as LOD.
-                subrows[subrows.length - 1].push({ event: e, xStart, xEnd });
-            }
+            if (!placed) subrows.push([{ event: e, xStart: xs, xEnd: e.finishMs ?? (xs + (_state.frozenDomainMax||1000)), xEndPack: xePack }]);
         }
-
         return subrows;
     }
 
-    // ── Colour mapping ────────────────────────────────────────────────────
-
-    function colourKey(e, colourBy) {
-        switch (colourBy) {
-            case 'Pipeline': return e.pipeline;
-            case 'Service':  return e.service;
-            case 'Status':   return e.status;
-            default:         return e.source;
-        }
+    function updateLaneSvgHeight() {
+        if (!_state?.layout) return;
+        const h = Math.max(_state.viewH, _state.layout.totalH + 16);
+        _state.laneSvg.attr('height', h);
     }
 
-    function colourForKey(key, colourBy) {
-        if (colourBy === 'Status') return STATUS_COLOR[key] || '#8B949E';
-        return PALETTE[hashStr(key) % PALETTE.length];
-    }
-
-    function hashStr(s) {
-        let h = 0;
-        for (let i = 0; i < s.length; i++) h = Math.imul(31, h) + s.charCodeAt(i) | 0;
-        return Math.abs(h);
-    }
-
-    // ── Full render ────────────────────────────────────────────────────────
+    // ── Render lanes ──────────────────────────────────────────────────────
 
     function renderAll() {
         if (!_state?.layout) return;
-        computeSvgSize();
-        updateSvgHeight();
-        _state.xScale.range([0, _state.svgW]);
-        renderWithZoom();
-        renderBottom();
+        renderLanes();
+        renderTicks();
+        renderHeatmap();
+        syncSelector();
     }
 
-    function renderWithZoom() {
+    function renderLanes() {
         if (!_state?.layout) return;
-        const { sections } = _state.layout;
         const xS = _state.xZoom.rescaleX(_state.xScale);
-
-        const secSel = _state.lanes.selectAll('g.bm-tl-section')
-            .data(sections, d => d.batch.runId);
-
-        secSel.exit().transition().duration(T).style('opacity', 0).remove();
-
-        const secEnter = secSel.enter().append('g')
-            .attr('class', 'bm-tl-section')
-            .attr('transform', d => `translate(0,${d.y})`)
-            .style('opacity', 0);
-
-        secEnter.append('g').attr('class', 'bm-tl-grid');
-        secEnter.append('g').attr('class', 'bm-tl-blocks');
-        secEnter.append('g').attr('class', 'bm-tl-batch-header');
-        secEnter.append('g').attr('class', 'bm-tl-tick-scale');
-
-        // Fade in only on first appearance.
-        secEnter.transition().duration(T).style('opacity', 1);
-
-        const secMerged = secEnter.merge(secSel);
-
-        // Existing sections: update position immediately, no opacity transition.
-        secSel.style('opacity', 1)
-            .transition().duration(T)
-            .attr('transform', d => `translate(0,${d.y})`);
-
-        secMerged.each(function(sec) {
-            renderSection(d3.select(this), sec, xS);
-        });
-    }
-
-    function renderSection(sel, sec, xS) {
-        renderBatchHeader(sel.select('.bm-tl-batch-header'), sec);
-        renderGrid(sel.select('.bm-tl-grid'), sec, xS);
-        renderBlocks(sel.select('.bm-tl-blocks'), sec, xS);
-        renderTickScale(sel.select('.bm-tl-tick-scale'), sec, xS);
-    }
-
-    // ── Batch header ──────────────────────────────────────────────────────
-
-    function renderBatchHeader(sel, sec) {
-        sel.selectAll('*').remove();
-
-        // Separator line.
-        sel.append('line')
-            .attr('x1', 0).attr('x2', _state.svgW)
-            .attr('y1', HEADER_H - 0.5).attr('y2', HEADER_H - 0.5)
-            .style('stroke', SEPARATOR).style('stroke-width', 1);
-
-        // LIVE dot.
-        const liveX = 10;
-        if (sec.batch.isLive) {
-            sel.append('circle').attr('class', 'bm-tl-live-dot')
-                .attr('cx', liveX).attr('cy', HEADER_H / 2)
-                .attr('r', 5).style('fill', '#3FB950');
-        }
-
-        // Batch name + RunId.
-        const textX = sec.batch.isLive ? liveX + 12 : liveX;
-        sel.append('text').attr('class', 'bm-tl-batch-name')
-            .attr('x', textX).attr('y', HEADER_H / 2)
-            .attr('dy', '0.32em')
-            .text(sec.batch.batchName);
-
-        sel.append('text').attr('class', 'bm-tl-batch-runid')
-            .attr('x', textX + measureText(sec.batch.batchName, '0.82rem', 600) + 10)
-            .attr('y', HEADER_H / 2)
-            .attr('dy', '0.32em')
-            .text(sec.batch.runId);
-    }
-
-    function measureText(text, size, weight) {
-        // Rough estimate: 0.55 × font-size × char count.
-        const px = parseFloat(size) * 16 * 0.55;
-        return px * text.length;
-    }
-
-    // ── Background grid ────────────────────────────────────────────────────
-
-    function renderGrid(sel, sec, xS) {
-        sel.selectAll('*').remove();
-
-        const top    = HEADER_H;
-        const height = sec.laneHeight + TICK_H;
-
-        const ticks = xS.ticks(Math.floor(_state.svgW / 80));
-
-        // Minor ticks (every step between major ticks).
-        const step   = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
-        const minorStep = step / 5;
-        if (minorStep > 0) {
-            const minorTicks = d3.range(
-                Math.floor(xS.invert(0) / minorStep) * minorStep,
-                xS.invert(_state.svgW) + minorStep,
-                minorStep
-            );
-            sel.selectAll('line.minor').data(minorTicks).enter()
-                .append('line').attr('class', 'minor')
-                .attr('x1', d => xS(d)).attr('x2', d => xS(d))
-                .attr('y1', top).attr('y2', top + height)
-                .style('stroke', GRID_MINOR).style('stroke-width', 0.5);
-        }
-
-        // Major ticks.
-        sel.selectAll('line.major').data(ticks).enter()
-            .append('line').attr('class', 'major')
-            .attr('x1', d => xS(d)).attr('x2', d => xS(d))
-            .attr('y1', top).attr('y2', top + height)
-            .style('stroke', GRID_MAJOR).style('stroke-width', 1);
-
-        // Lane separator horizontal lines.
-        let laneY = HEADER_H;
-        for (const lane of sec.lanes) {
-            sel.append('line')
-                .attr('x1', 0).attr('x2', _state.svgW)
-                .attr('y1', laneY).attr('y2', laneY)
-                .style('stroke', SEPARATOR).style('stroke-width', 1)
-                .style('stroke-dasharray', '4 4');
-            laneY += lane.h;
-        }
-    }
-
-    // ── Message blocks ─────────────────────────────────────────────────────
-
-    function renderBlocks(sel, sec, xS) {
+        const W  = _state.svgW;
+        const H  = parseFloat(_state.laneSvg.attr('height')) || _state.viewH;
         const colourBy = _state.data?.colourBy || 'Source';
+        const { sections } = _state.layout;
 
-        // Flatten all events with their absolute y positions.
+        // ── Global vertical grid lines (spanning full SVG height) ──
+        _state.gridL.selectAll('*').remove();
+        const ticks = xS.ticks(Math.floor(W / 90));
+        const step  = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
+        if (step > 0) {
+            for (const t of ticks.map(t => t + step/2)) {
+                _state.gridL.append('line')
+                    .attr('x1',xS(t)).attr('x2',xS(t))
+                    .attr('y1',0).attr('y2',H)
+                    .style('stroke',GRID_MID).style('stroke-width',0.5);
+            }
+        }
+        for (const t of ticks) {
+            _state.gridL.append('line')
+                .attr('x1',xS(t)).attr('x2',xS(t))
+                .attr('y1',0).attr('y2',H)
+                .style('stroke',GRID_MAJOR).style('stroke-width',1);
+        }
+
+        // ── Sections ──
+        const secSel = _state.blockL.selectAll('g.bm-tl-sec')
+            .data(sections, d => d.batch.runId);
+        secSel.exit().remove();
+        const secEnter = secSel.enter().append('g').attr('class','bm-tl-sec');
+        secEnter.append('g').attr('class','bm-tl-sec-lines');
+        secEnter.append('g').attr('class','bm-tl-sec-blocks');
+        const secMerged = secEnter.merge(secSel);
+        secMerged.attr('transform', d => `translate(0,${d.y})`);
+        secMerged.each(function(sec) {
+            renderSectionLines(d3.select(this).select('.bm-tl-sec-lines'), sec, W);
+            renderSectionBlocks(d3.select(this).select('.bm-tl-sec-blocks'), sec, xS, W, colourBy);
+        });
+
+        // ── Headers (on top, bg rect only under text) ──
+        const hdrSel = _state.headerL.selectAll('g.bm-tl-hdr')
+            .data(sections, d => d.batch.runId);
+        hdrSel.exit().remove();
+        const hdrEnter = hdrSel.enter().append('g').attr('class','bm-tl-hdr');
+        hdrEnter.merge(hdrSel)
+            .attr('transform', d => `translate(0,${d.y})`)
+            .each(function(sec) { renderHeader(d3.select(this), sec); });
+
+        // ── Cursor line (full SVG height) ──
+        _state.cursorLine.attr('y1',0).attr('y2',H);
+        if (_state.cursorX != null)
+            _state.cursorLine.attr('x1',_state.cursorX).attr('x2',_state.cursorX);
+    }
+
+    function renderSectionLines(sel, sec, W) {
+        sel.selectAll('*').remove();
+        // Bottom border of section.
+        const secH = sec.sectionH - SECTION_GAP;
+        sel.append('line')
+            .attr('x1',0).attr('x2',W)
+            .attr('y1',secH).attr('y2',secH)
+            .style('stroke',GRID_MAJOR).style('stroke-width',1);
+
+        // Group row separator dashes.
+        let rowY = HEADER_H;
+        for (const grp of sec.groups) {
+            sel.append('line')
+                .attr('x1',0).attr('x2',W)
+                .attr('y1',rowY).attr('y2',rowY)
+                .style('stroke',SEPARATOR).style('stroke-width',1)
+                .style('stroke-dasharray','3 5');
+            rowY += grp.rowH;
+        }
+    }
+
+    function renderSectionBlocks(sel, sec, xS, W, colourBy) {
         const blockData = [];
-        let laneY = HEADER_H;
 
-        for (const lane of sec.lanes) {
-            let subrowY = laneY;
-            for (const subrow of lane.subrows) {
-                for (const { event: e } of subrow) {
-                    const x  = xS(e.startMs);
-                    const x2 = xS(e.finishMs ?? (e.startMs + (_state.layout?.globalMax ?? 1000)));
-                    const w  = Math.max(0, x2 - x);
+        let rowY = HEADER_H;
+        for (let gi = 0; gi < sec.groups.length; gi++) {
+            const grp = sec.groups[gi];
+            for (let si = 0; si < grp.subrows.length; si++) {
+                const subrow = grp.subrows[si];
+                const sy = rowY + ROW_PAD + si * SUBROW_H;
+                for (let bi = 0; bi < subrow.length; bi++) {
+                    const e   = subrow[bi].event;
+                    const x   = xS(e.startMs);
+                    const xe  = e.finishMs != null ? xS(e.finishMs) : xS(_state.frozenDomainMax || 1000);
+                    const w   = Math.max(0, xe - x);
+                    // Viewport cull.
+                    if (x > W || x + Math.max(w, MIN_BLOCK_W) < 0) continue;
                     const key = colourKey(e, colourBy);
                     blockData.push({
                         e, x, w, key,
-                        y: subrowY + SUBROW_PAD,
-                        h: SUBROW_H - SUBROW_PAD * 2,
-                        colour: colourForKey(key, colourBy),
-                        lod: w < MIN_BLOCK_W,
+                        colour:      colourForKey(key, colourBy),
+                        batchRunId:  sec.batch.runId,
+                        batchBse:    sec.batch.batchStartEpochMs || 0,
+                        // Stable key: never pixel-based.
+                        stableKey: `${sec.batch.runId}:${gi}:${si}:${bi}`,
+                        y: sy,
+                        h: SUBROW_H - 1,
                     });
                 }
-                subrowY += SUBROW_H;
             }
-            laneY += lane.h;
+            rowY += grp.rowH;
         }
 
-        // Viewport culling: only render blocks visible in [0, svgW].
-        const visible = blockData.filter(d => d.x < _state.svgW && d.x + Math.max(d.w, 1) > 0);
-
-        // Separate normal blocks from LOD blocks.
-        const normal = visible.filter(d => !d.lod);
-        const lod    = visible.filter(d => d.lod);
-
-        // Normal blocks.
-        const rects = sel.selectAll('rect.bm-tl-block').data(normal, d => d.e.chunkId + d.y);
-
+        const rects = sel.selectAll('rect.bm-tl-block').data(blockData, d => d.stableKey);
         rects.exit().remove();
-
-        rects.enter().append('rect').attr('class', 'bm-tl-block')
-            .attr('rx', BLOCK_RX)
-            .style('cursor', 'crosshair')
-            .on('mouseenter', (event, d) => onBlockHover(event, d, sel, colourBy))
-            .on('mouseleave', () => onBlockLeave(sel))
+        rects.enter().append('rect').attr('class','bm-tl-block').attr('rx', BLOCK_RX)
+            .on('mouseenter', (ev, d) => onBlockEnter(ev, d))
+            .on('mouseleave', (ev, d) => onBlockLeave(ev, d))
             .merge(rects)
             .attr('x', d => d.x)
             .attr('y', d => d.y)
-            .attr('width', d => Math.max(1, d.w))
+            .attr('width',  d => Math.max(MIN_BLOCK_W, d.w))
             .attr('height', d => d.h)
-            .style('fill', d => d.colour)
-            .style('stroke', d => d3.color(d.colour)?.darker(0.4) ?? d.colour)
-            .style('stroke-width', d => d.e.status === 'inprogress' ? 0 : 0.5)
-            .style('stroke-dasharray', d => d.e.status === 'inprogress' ? '3 3' : null)
-            .style('fill-opacity', d => d.e.status === 'inprogress' ? 0.65 : 1);
-
-        // LOD density bars (per-lane, vertical lines with opacity ∝ density).
-        const lodBars = sel.selectAll('line.bm-tl-lod').data(lod, d => d.e.chunkId + d.y);
-        lodBars.exit().remove();
-        lodBars.enter().append('line').attr('class', 'bm-tl-lod')
-            .merge(lodBars)
-            .attr('x1', d => d.x).attr('x2', d => d.x)
-            .attr('y1', d => d.y)
-            .attr('y2', d => d.y + d.h)
-            .style('stroke', d => d.colour)
-            .style('stroke-width', 1)
-            .style('opacity', LOD_OPACITY_MAX);
+            .style('fill',         d => d.colour)
+            .style('fill-opacity', d => {
+                if (_state.hoveredChunkId == null) return d.e.status === 'inprogress' ? 0.6 : 1;
+                return d.e.chunkId === _state.hoveredChunkId ? 1 : 0.15;
+            })
+            .style('stroke', d => d3.color(d.colour)?.darker(.5) ?? d.colour)
+            .style('stroke-width', d => d.e.chunkId === _state.hoveredChunkId ? 1.5 : 0.5);
     }
 
-    // ── Tick scale ─────────────────────────────────────────────────────────
-
-    function renderTickScale(sel, sec, xS) {
+    function renderHeader(sel, sec) {
         sel.selectAll('*').remove();
+        const lx  = 8;
+        const cy  = HEADER_H / 2;
 
-        const y = HEADER_H + sec.laneHeight;
+        if (sec.batch.isLive) {
+            sel.append('circle').attr('class','bm-tl-live-dot')
+                .attr('cx', lx).attr('cy', cy).attr('r', 5).style('fill','#3FB950');
+        }
 
-        sel.append('line')
-            .attr('x1', 0).attr('x2', _state.svgW)
-            .attr('y1', y).attr('y2', y)
-            .style('stroke', GRID_MAJOR).style('stroke-width', 1);
+        const tx = sec.batch.isLive ? lx + 14 : lx;
+        const nameW   = sec.batch.batchName.length * 7;
+        const runIdW  = sec.batch.runId.length   * 6;
+        const bgW     = nameW + runIdW + 24;
+        const bgH     = HEADER_H - 4;
 
-        const ticks = xS.ticks(Math.floor(_state.svgW / 80));
-        const fmt   = d => {
-            const ms = Math.round(d);
-            const s  = Math.floor(ms / 1000);
-            const m  = Math.floor(s / 60);
-            const h  = Math.floor(m / 60);
-            if (h > 0)  return `${h}h${String(m % 60).padStart(2,'0')}m`;
-            if (m > 0)  return `${m}m${String(s % 60).padStart(2,'0')}s`;
-            if (s > 0)  return `${s}s`;
-            return `${ms}ms`;
-        };
+        // Background only under the text (not full row width).
+        sel.append('rect')
+            .attr('x', tx - 4).attr('y', (HEADER_H - bgH)/2)
+            .attr('width', bgW).attr('height', bgH)
+            .attr('rx', 3)
+            .style('fill', BG_COLOR).style('opacity', 0.88);
+
+        // Truncate batch name if too long to prevent overlap with runId.
+        const MAX_NAME_CHARS = 28;
+        const displayName = sec.batch.batchName.length > MAX_NAME_CHARS
+            ? sec.batch.batchName.slice(0, MAX_NAME_CHARS) + '…'
+            : sec.batch.batchName;
+        const displayNameW = displayName.length * 7;
+
+        sel.append('text').attr('class','bm-tl-batch-name')
+            .attr('x', tx).attr('y', cy).attr('dy','0.32em')
+            .text(displayName);
+
+        sel.append('text').attr('class','bm-tl-batch-runid')
+            .attr('x', tx + displayNameW + 10).attr('y', cy).attr('dy','0.32em')
+            .text(sec.batch.runId);
+    }
+
+    // ── Tick scale ────────────────────────────────────────────────────────
+
+    function renderTicks() {
+        if (!_state?.layout) return;
+        const xS  = _state.xZoom.rescaleX(_state.xScale);
+        const W   = _state.svgW;
+        const bse = getHoveredBatchStart();
+
+        _state.tickL.selectAll('*').remove();
+
+        // Background.
+        _state.tickL.append('rect')
+            .attr('width', W).attr('height', TICK_H)
+            .style('fill', BG_COLOR);
+        _state.tickL.append('line')
+            .attr('x1',0).attr('x2',W).attr('y1',0).attr('y2',0)
+            .style('stroke', GRID_MAJOR).style('stroke-width',1);
+
+        const ticks = xS.ticks(Math.floor(W / 100));
+        const step  = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
+
+        if (step > 0) {
+            for (const t of ticks.map(t => t + step/2)) {
+                const x = xS(t);
+                if (!isFinite(x)) continue;
+                _state.tickL.append('line')
+                    .attr('x1',x).attr('x2',x)
+                    .attr('y1',TICK_H-3).attr('y2',TICK_H)
+                    .style('stroke',GRID_MID).style('stroke-width',0.5);
+            }
+        }
 
         for (const t of ticks) {
             const x = xS(t);
-            sel.append('line')
-                .attr('x1', x).attr('x2', x)
-                .attr('y1', y).attr('y2', y + 6)
-                .style('stroke', GRID_MAJOR).style('stroke-width', 1);
-
-            sel.append('text').attr('class', 'bm-tl-tick-label')
-                .attr('x', x).attr('y', y + 18)
-                .attr('text-anchor', 'middle')
-                .text(fmt(t));
+            if (!isFinite(x)) continue;
+            _state.tickL.append('line')
+                .attr('x1',x).attr('x2',x)
+                .attr('y1',TICK_H-5).attr('y2',TICK_H)
+                .style('stroke',GRID_MAJOR).style('stroke-width',1);
+            _state.tickL.append('text').attr('class','bm-tl-tick-label')
+                .attr('x',x).attr('y',TICK_H-8).attr('text-anchor','middle')
+                .text(bse ? fmtAbsHMS(bse+t) : fmtRelHMS(t));
         }
     }
 
-    // ── Global heatmap + range selector (bottom) ──────────────────────────
-
-    function renderBottom() {
-        if (!_state?.layout) return;
-
-        const { totalLanesH, globalMax } = _state.layout;
-        const y0 = totalLanesH;
-        const W  = _state.svgW;
-
-        _state.bottom.attr('transform', `translate(0,${y0})`);
-        _state.bottom.selectAll('*').remove();
-
-        // Range selector brush.
-        const brushY  = 0;
-        const heatY   = SELECTOR_H;
-
-        // Brush background.
-        _state.bottom.append('rect')
-            .attr('x', 0).attr('y', brushY)
-            .attr('width', W).attr('height', SELECTOR_H)
-            .style('fill', '#0E1117');
-
-        // Brush: maps full domain → full SVG width, bidirectionally linked to zoom.
-        const brushScale = d3.scaleLinear().domain([0, globalMax]).range([0, W]);
-
-        const brush = d3.brushX()
-            .extent([[0, brushY], [W, brushY + SELECTOR_H - 2]])
-            .on('brush end', (event) => {
-                if (event.sourceEvent?.type === 'zoom') return;
-                if (!event.selection) return;
-                const [x0, x1] = event.selection;
-                const newXScale = _state.xScale.copy().range([
-                    -x0 * (W / (x1 - x0)),
-                    W - x0 * (W / (x1 - x0)),
-                ]).domain([0, globalMax]);
-                const t = d3.zoomIdentity
-                    .scale(W / (x1 - x0))
-                    .translate(-x0, 0);
-                _state.svg.call(_state.zoom.transform, t);
-            });
-
-        _state.bottom.append('g').attr('class', 'bm-tl-brush').call(brush);
-
-        // Reflect current zoom in brush selection.
-        const xS = _state.xZoom.rescaleX(_state.xScale);
-        const sel0 = Math.max(0, brushScale(xS.invert(0)));
-        const sel1 = Math.min(W, brushScale(xS.invert(W)));
-        if (sel1 > sel0 + 1) {
-            _state.bottom.select('.bm-tl-brush').call(brush.move, [sel0, sel1]);
-        }
-
-        // Global heatmap below brush.
-        renderHeatmap(_state.bottom, heatY, W);
-
-        // Reset view label.
-        _state.bottom.append('text').attr('class', 'bm-tl-reset-link')
-            .attr('x', W - 6).attr('y', SELECTOR_H / 2)
-            .attr('dy', '0.32em').attr('text-anchor', 'end')
-            .text('↺ Reset view')
-            .style('cursor', 'pointer')
-            .on('click', resetView);
+    function getHoveredBatchStart() {
+        if (!_state?.layout) return null;
+        const secs = _state.layout.sections;
+        const idx  = _state.hoveredBatchIdx;
+        const sec  = (idx >= 0 && idx < secs.length) ? secs[idx] : secs[0];
+        return sec?.batch?.batchStartEpochMs || null;
     }
 
-    function renderHeatmap(parent, y, W) {
-        if (!_state?.layout) return;
+    // ── Heatmap ───────────────────────────────────────────────────────────
 
-        const { globalMax } = _state.layout;
-        const buckets = 200;
+    function renderHeatmap() {
+        if (!_state?.layout || !_state.frozenDomainMax) return;
+        // Use globalMax so heatmap shows ALL events including those beyond viewport.
+        const fMax    = _state.globalMax || _state.frozenDomainMax;
+        const W       = _state.svgW - PAD * 2;
+        const buckets = Math.min(500, Math.floor(W));
         const counts  = new Array(buckets).fill(0);
 
         for (const sec of _state.layout.sections) {
             for (const e of (sec.batch.events || [])) {
-                const b = Math.floor((e.startMs / globalMax) * (buckets - 1));
+                const b = Math.floor((e.startMs / fMax) * (buckets - 1));
                 if (b >= 0 && b < buckets) counts[b]++;
             }
         }
 
-        const maxCount = Math.max(1, ...counts);
-        const bW = W / buckets;
+        const maxC = Math.max(1, ...counts);
+        const bW   = W / buckets;
 
-        // Colour scale: #0E1117 → #388BFD → #3FB950 → #E6EDF3
-        const heatScale = d3.scaleSequential()
-            .domain([0, maxCount])
-            .interpolator(d3.interpolateRgbBasis(['#0E1117','#388BFD','#3FB950','#E6EDF3']));
+        _state.heatL.selectAll('*').remove();
+        _state.heatL.append('rect')
+            .attr('x', PAD).attr('width', W).attr('height', HEAT_H)
+            .style('fill', HEAT_BG);
 
-        parent.selectAll('rect.bm-tl-heat').data(counts).enter()
-            .append('rect').attr('class', 'bm-tl-heat')
-            .attr('x', (_, i) => i * bW)
-            .attr('y', y)
-            .attr('width', Math.ceil(bW) + 0.5)
-            .attr('height', HEATMAP_H)
-            .style('fill', d => d > 0 ? heatScale(d) : '#0E1117');
+        for (let i = 0; i < buckets; i++) {
+            if (counts[i] === 0) continue;
+            const op = 0.12 + 0.88 * (counts[i] / maxC);
+            _state.heatL.append('line')
+                .attr('x1', PAD + i*bW + bW/2)
+                .attr('x2', PAD + i*bW + bW/2)
+                .attr('y1', 0).attr('y2', HEAT_H)
+                .style('stroke', HEAT_LINE)
+                .style('stroke-width', Math.max(1, bW - 0.5))
+                .style('opacity', op);
+        }
     }
 
-    // ── Block hover ────────────────────────────────────────────────────────
+    // ── Range selector ────────────────────────────────────────────────────
 
-    function onBlockHover(event, d, sel, colourBy) {
-        // Highlight same-key blocks, dim others.
-        sel.selectAll('rect.bm-tl-block')
-            .style('opacity', b => colourKey(b.e, colourBy) === d.key ? 1 : 0.3)
-            .style('stroke', b => colourKey(b.e, colourBy) === d.key
-                ? d3.color(b.colour)?.brighter(0.5) ?? b.colour : b.colour)
-            .style('stroke-width', b => colourKey(b.e, colourBy) === d.key ? '2px' : '0.5px');
+    function buildSelector() {
+        if (!_state) return;
+        const W = _state.svgW;
+        // d3.brushX for simplicity — but ONLY its visual; drag interaction
+        // is wired separately so it doesn't interfere with lane zoom.
+        const brush = d3.brushX()
+            .extent([[PAD, 0], [W - PAD, SEL_H]])
+            .on('brush', event => {
+                if (!event.sourceEvent || !event.selection) return;
+                const [px0, px1] = event.selection;
+                applyBrushSelection(px0, px1);
+            });
 
+        _state.selFn = brush;
+        _state.selL.call(brush);
+        syncSelector();
+    }
+
+    function applyBrushSelection(px0, px1) {
+        if (!_state?.frozenDomainMax) return;
+        const gMax    = _state.globalMax || _state.frozenDomainMax;
+        const fMax    = _state.frozenDomainMax;
+        const W       = _state.svgW;
+        const usableW = W - PAD * 2;
+        // px0, px1 are in [PAD, W-PAD] mapped over [0, gMax].
+        // Convert brush pixels to time values in [0, gMax].
+        const brushScale = d3.scaleLinear().domain([PAD, W - PAD]).range([0, gMax]);
+        const t0ms = brushScale(px0);
+        const t1ms = brushScale(px1);
+        const visMs = t1ms - t0ms;
+        if (visMs < 1) return;
+        // Convert [t0ms, t1ms] to xZoom on xScale (which maps [0, fMax] → [0, W]).
+        // xS(t) = xZoom.x + t * xZoom.k.  We want xS(t0ms)=0 and xS(t1ms)=W.
+        // xZoom.k = W / (visMs / fMax * W) = fMax / visMs
+        // xZoom.x = -t0ms * k / fMax * W
+        const k  = fMax / visMs;
+        const tx = -(t0ms / fMax) * W * k;
+        const t  = d3.zoomIdentity.translate(tx, 0).scale(k);
+        _state.xZoom = t;
+        _state.laneSvg.call(_state.zoom.transform, t);
+    }
+
+    function syncSelector() {
+        if (!_state?.selFn || !_state.frozenDomainMax) return;
+        // Use globalMax so selector shows viewport window as fraction of ALL data.
+        const gMax    = _state.globalMax || _state.frozenDomainMax;
+        const fMax    = _state.frozenDomainMax;
+        const W       = _state.svgW;
+        const xS      = _state.xZoom.rescaleX(_state.xScale);
+
+        // The viewport shows [t0ms, t1ms] in the frozen domain.
+        // The selector maps [0, gMax] → [PAD, W-PAD].
+        // Position selector handles at t0ms and t1ms, clamped.
+        const t0ms = xS.invert(0);
+        const t1ms = xS.invert(W);
+        const brushScale = d3.scaleLinear().domain([0, gMax]).range([PAD, W - PAD]);
+        const s0 = Math.max(PAD,   Math.min(W - PAD, brushScale(Math.max(0, t0ms))));
+        const s1 = Math.max(PAD,   Math.min(W - PAD, brushScale(Math.min(gMax, t1ms))));
+
+        if (isFinite(s0) && isFinite(s1) && s1 > s0 + 1) {
+            _state.selL.call(_state.selFn.move, [s0, s1]);
+        }
+    }
+
+    // ── Cursor ────────────────────────────────────────────────────────────
+
+    function onMouseMove(event) {
+        if (!_state?.layout) return;
+        const [mx, my] = d3.pointer(event);
+        _state.cursorX = mx;
+
+        _state.cursorLine.attr('x1',mx).attr('x2',mx).style('opacity',1);
+
+        // Determine which section mouse is over.
+        const secs = _state.layout.sections;
+        let hovIdx = -1;
+        for (let i = 0; i < secs.length; i++) {
+            const s = secs[i];
+            if (my >= s.y && my < s.y + s.sectionH) { hovIdx = i; break; }
+        }
+        if (_state.hoveredBatchIdx !== hovIdx) {
+            _state.hoveredBatchIdx = hovIdx;
+            renderTicks();
+        }
+
+        const xS     = _state.xZoom.rescaleX(_state.xScale);
+        const timeMs = xS.invert(mx);
+        const bse    = getHoveredBatchStart();
+
+        renderCursorLabel(mx, timeMs, bse);
+
+        clearTimeout(_state.cursorTimer);
+        _state.cursorTimer = setTimeout(() => {
+            if (!_state) return;
+            _state.cursorLine.style('opacity',0);
+            _state.cursorBotG?.selectAll('*').remove();
+            _state.curBotL.selectAll('*').remove();
+        }, 2000);
+    }
+
+    function renderCursorLabel(mx, timeMs, bse) {
+        const g = _state.curBotL;
+        g.selectAll('*').remove();
+
+        // Vertical line in bottom panel.
+        g.append('line')
+            .attr('x1',mx).attr('x2',mx)
+            .attr('y1',0).attr('y2',TICK_H + HEAT_H/2)
+            .style('stroke',CURSOR_COLOR).style('stroke-width',1.5).style('opacity',0.8);
+
+        const relLabel = fmtRelHMS(timeMs);
+        const absLabel = bse ? ` (${fmtAbsHMS(bse + timeMs)})` : '';
+        const label    = relLabel + absLabel;
+        const lw       = label.length * 6.5 + 12;
+        const lh       = 15;
+        let   lx       = mx - lw/2;
+        lx = Math.max(2, Math.min((_state.svgW||800) - lw - 2, lx));
+
+        g.append('rect')
+            .attr('x',lx).attr('y',2)
+            .attr('width',lw).attr('height',lh).attr('rx',3)
+            .style('fill',CURSOR_COLOR);
+        g.append('text')
+            .attr('x',lx+lw/2).attr('y',2+lh/2)
+            .attr('text-anchor','middle').attr('dy','0.35em')
+            .style('fill','#fff').style('font-size','0.6rem')
+            .style('font-weight','700')
+            .style('font-family','var(--bm-font-mono,monospace)')
+            .text(label);
+    }
+
+    function onMouseLeave() {
+        if (!_state) return;
+        _state.cursorX = null;
+        _state.cursorLine.style('opacity',0);
+        _state.curBotL.selectAll('*').remove();
+    }
+
+    // ── Block hover / highlight ───────────────────────────────────────────
+
+    function onBlockEnter(event, d) {
+        _state.hoveredChunkId = d.e.chunkId;
+        // Re-render all sections to apply highlight across batches.
+        if (_state.layout) {
+            const xS = _state.xZoom.rescaleX(_state.xScale);
+            const W  = _state.svgW;
+            const colourBy = _state.data?.colourBy || 'Source';
+            _state.blockL.selectAll('g.bm-tl-sec').each(function(sec) {
+                d3.select(this).select('.bm-tl-sec-blocks')
+                    .selectAll('rect.bm-tl-block')
+                    .style('fill-opacity', b => b.e.chunkId === _state.hoveredChunkId ? 1 : 0.12)
+                    .style('stroke-width', b => b.e.chunkId === _state.hoveredChunkId ? '1.5px' : '0.5px');
+            });
+        }
         showTooltip(event, d);
     }
 
-    function onBlockLeave(sel) {
-        // Restore all blocks.
-        sel.selectAll('rect.bm-tl-block')
-            .transition().duration(150)
-            .style('opacity', null)
-            .style('stroke', b => d3.color(b.colour)?.darker(0.4) ?? b.colour)
-            .style('stroke-width', '0.5px');
-
+    function onBlockLeave(event, d) {
+        _state.hoveredChunkId = null;
+        _state.blockL.selectAll('rect.bm-tl-block')
+            .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
+            .style('stroke-width','0.5px');
         hideTooltip();
     }
 
+    // ── Tooltip ───────────────────────────────────────────────────────────
+
     function showTooltip(event, d) {
-        const e = d.e;
-        const dur  = e.finishMs != null ? `${Math.round(e.finishMs - e.startMs).toLocaleString()}ms` : '—';
-        const statusLabel = e.status === 'done' ? '✓ Done'
-            : e.status === 'inprogress' ? '⟳ In Progress' : '✗ Error';
+        const e    = d.e;
+        const bse  = d.batchBse;
+        const durMs = e.finishMs != null ? Math.round(e.finishMs - e.startMs) : null;
+        const durStr = durMs != null ? `${durMs.toLocaleString()}ms` : '(in progress)';
+        const statusLabel = e.status==='done'?'✓ Done':e.status==='inprogress'?'⟳ In Progress':'✗ Error';
         const statusClass = `bm-tl-tt-${e.status}`;
-        const fmtMs = ms => {
-            const s = ms / 1000;
-            return `+${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${(s%60).toFixed(3).padStart(6,'0')}`;
-        };
+
+        const startRel = fmtRelMs(e.startMs);
+        const startAbs = bse ? fmtAbsMs(bse+e.startMs) : '';
+        const startStr = startAbs ? `${startRel} (${startAbs})` : startRel;
+
+        const finRel = e.finishMs!=null ? fmtRelMs(e.finishMs) : `${fmtRelMs(e.startMs)}…`;
+        const finAbs = bse&&e.finishMs!=null ? fmtAbsMs(bse+e.finishMs) : '';
+        const finStr = finAbs ? `${finRel} (${finAbs})` : finRel;
 
         _state.tooltip.html(`
             <div class="bm-tl-tt-header">
@@ -751,31 +789,24 @@ window.BatchMonitor.Timeline = (function () {
             <div class="bm-tl-tt-row"><span>Service</span><span>${esc(e.service)}</span></div>
             <div class="bm-tl-tt-row"><span>PID</span><span>${esc(e.processId)}</span></div>
             <div class="bm-tl-tt-row"><span>Server</span><span>${esc(e.server)}</span></div>
-            <div class="bm-tl-tt-row"><span>Start</span><span>${fmtMs(e.startMs)}</span></div>
-            ${e.finishMs != null ? `<div class="bm-tl-tt-row"><span>End</span><span>${fmtMs(e.finishMs)}</span></div>` : ''}
-            <div class="bm-tl-tt-row"><span>Duration</span><span>${dur}</span></div>
-            ${e.error ? `<div class="bm-tl-tt-row bm-tl-tt-error"><span>Error</span><span>${esc(e.error)}</span></div>` : ''}
+            <div class="bm-tl-tt-sep"></div>
+            <div class="bm-tl-tt-row"><span>Start</span><span>${startStr}</span></div>
+            <div class="bm-tl-tt-row"><span>Finish</span><span>${finStr}</span></div>
+            <div class="bm-tl-tt-row"><span>Duration</span><span>${durStr}</span></div>
+            ${e.error?`<div class="bm-tl-tt-row bm-tl-tt-err"><span>Error</span><span>${esc(e.error)}</span></div>`:''}
             <div class="bm-tl-tt-sep"></div>
             <div class="bm-tl-tt-footer" id="bm-tl-tt-footer">Ctrl+click to copy</div>
         `)
-        .style('opacity', 1)
-        .style('pointer-events', 'auto');
+        .style('opacity',1).style('pointer-events','auto');
 
-        // Ctrl+click to copy.
-        _state.tooltip.on('click', (ev) => {
+        _state.tooltip.on('click', ev => {
             if (!ev.ctrlKey) return;
-            const text = [
-                `ChunkId: ${e.chunkId}`, `Source: ${e.source}`,
-                `Pipeline: ${e.pipeline}`, `Service: ${e.service}`,
-                `PID: ${e.processId}`, `Server: ${e.server}`,
-                `Status: ${e.status}`, `Duration: ${dur}`,
-            ].join('\n');
-            navigator.clipboard?.writeText(text);
-            document.getElementById('bm-tl-tt-footer').textContent = 'Copied ✓';
-            setTimeout(() => {
-                const f = document.getElementById('bm-tl-tt-footer');
-                if (f) f.textContent = 'Ctrl+click to copy';
-            }, 1000);
+            navigator.clipboard?.writeText(
+                [`ChunkId: ${e.chunkId}`,`Source: ${e.source}`,
+                 `Start: ${startStr}`,`Finish: ${finStr}`,
+                 `Duration: ${durStr}`].join('\n'));
+            const f = document.getElementById('bm-tl-tt-footer');
+            if (f) { f.textContent='Copied ✓'; setTimeout(()=>{if(f)f.textContent='Ctrl+click to copy';},1000); }
         });
 
         positionTooltip(event);
@@ -783,119 +814,152 @@ window.BatchMonitor.Timeline = (function () {
 
     function positionTooltip(event) {
         if (!_state) return;
-        const rect = _state.containerEl.getBoundingClientRect();
-        let x = event.clientX - rect.left + 12;
-        let y = event.clientY - rect.top - 8;
-
-        const ttW = 280, ttH = 200;
-        if (x + ttW > rect.width  - 8) x = event.clientX - rect.left - ttW - 12;
-        if (y + ttH > rect.height - 8) y = event.clientY - rect.top  - ttH - 12;
-        if (y < 0) y = event.clientY - rect.top + 16;
-
-        _state.tooltip.style('left', `${x}px`).style('top', `${y}px`);
+        const rect = _state.laneEl.getBoundingClientRect();
+        let x=event.clientX-rect.left+12, y=event.clientY-rect.top-8;
+        const pw=280,ph=230;
+        if (x+pw>rect.width-8)  x=event.clientX-rect.left-pw-12;
+        if (y+ph>rect.height-8) y=event.clientY-rect.top-ph-12;
+        if (y<0) y=event.clientY-rect.top+16;
+        x=Math.max(4,x); y=Math.max(4,y);
+        _state.tooltip.style('left',`${x}px`).style('top',`${y}px`);
     }
 
-    function hideTooltip() {
-        _state?.tooltip.style('opacity', 0).style('pointer-events', 'none');
-    }
+    function hideTooltip() { _state?.tooltip.style('opacity',0).style('pointer-events','none'); }
 
-    function esc(s) {
-        return String(s ?? '').replace(/[&<>"']/g,
-            c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    }
-
-    // ── Cursor line ────────────────────────────────────────────────────────
-
-    function onMouseMove(event) {
-        if (!_state?.layout) return;
-        const [mx] = d3.pointer(event);
-        const xS = _state.xZoom.rescaleX(_state.xScale);
-
-        const totalH = _state.layout.totalLanesH + SELECTOR_H + HEATMAP_H;
-
-        _state.cursorLine
-            .attr('x1', mx).attr('x2', mx)
-            .attr('y1', 0).attr('y2', totalH)
-            .style('opacity', 1);
-
-        // Time label at each batch section.
-        const timeMs = xS.invert(mx);
-        _state.cursorLabels.selectAll('*').remove();
-
-        for (const sec of _state.layout.sections) {
-            const labelY = sec.y + HEADER_H + sec.laneHeight + TICK_H - 4;
-            const label  = fmtRelTime(timeMs);
-
-            _state.cursorLabels.append('rect')
-                .attr('x', Math.min(mx + 4, _state.svgW - 130))
-                .attr('y', labelY - 12)
-                .attr('width', 120).attr('height', 16)
-                .attr('rx', 3)
-                .style('fill', '#13131a').style('opacity', 0.85);
-
-            _state.cursorLabels.append('text').attr('class', 'bm-tl-cursor-label')
-                .attr('x', Math.min(mx + 8, _state.svgW - 126))
-                .attr('y', labelY)
-                .text(label);
-        }
-
-        // Fade after 1.5s of stillness.
-        clearTimeout(_state.cursorTimer);
-        _state.cursorTimer = setTimeout(() => {
-            _state?.cursorLine.style('opacity', 0);
-            _state?.cursorLabels.selectAll('*').remove();
-        }, 1500);
-    }
-
-    function onMouseLeave() {
-        _state?.cursorLine.style('opacity', 0);
-        _state?.cursorLabels.selectAll('*').remove();
-    }
-
-    function fmtRelTime(ms) {
-        if (!isFinite(ms)) return '';
-        const s   = Math.max(0, ms) / 1000;
-        const h   = Math.floor(s / 3600);
-        const m   = Math.floor((s % 3600) / 60);
-        const sec = (s % 60).toFixed(3);
-        return `+${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${sec.padStart(6,'0')}`;
-    }
-
-    // ── Keyboard shortcuts ─────────────────────────────────────────────────
+    // ── Keyboard ──────────────────────────────────────────────────────────
 
     function handleKey(e) {
         if (!_state) return;
-        const tag = document.activeElement?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
-        const W  = _state.svgW || 800;
-        const t  = _state.xZoom;
-        const k  = t.k;
-
-        let newT = null;
-        switch (e.key) {
-            case '+': case '=': newT = t.scale(k * 1.3); break;
-            case '-':           newT = t.scale(k / 1.3); break;
-            case 'ArrowLeft':
-                newT = e.shiftKey ? t.translate(W * 0.5, 0) : t.translate(W * 0.1, 0); break;
-            case 'ArrowRight':
-                newT = e.shiftKey ? t.translate(-W * 0.5, 0) : t.translate(-W * 0.1, 0); break;
+        const tag=document.activeElement?.tagName;
+        if (tag==='INPUT'||tag==='TEXTAREA') return;
+        const W    = _state.svgW||800;
+        const t    = _state.xZoom;
+        let nt = null;
+        switch(e.key) {
+            case '=': case '+':
+                nt = d3.zoomIdentity.translate(t.x, 0).scale(t.k * 1.25);
+                break;
+            case '-':
+                nt = d3.zoomIdentity.translate(t.x, 0).scale(Math.max(1, t.k / 1.25));
+                break;
+            case 'ArrowLeft': {
+                const dx = e.shiftKey ? W*0.5 : W*0.1;
+                // Clamp: don't go past t=0 (tx <= 0).
+                const newTx = Math.min(0, t.x + dx);
+                nt = d3.zoomIdentity.translate(newTx, 0).scale(t.k);
+                break;
+            }
+            case 'ArrowRight': {
+                const dx = e.shiftKey ? W*0.5 : W*0.1;
+                const gMaxKb = _state.globalMax || _state.frozenDomainMax || 1;
+                const fMaxKb = _state.frozenDomainMax || 1;
+                const rightLimitKb = -t.k * (gMaxKb / fMaxKb) * W;
+                const newTx = Math.max(rightLimitKb, t.x - dx);
+                nt = d3.zoomIdentity.translate(newTx, 0).scale(t.k);
+                break;
+            }
             case 'Home':
-                newT = d3.zoomIdentity.translate(0, 0); break;
-            case 'End':
-                if (_state.layout) {
-                    const xS  = t.rescaleX(_state.xScale);
-                    const maxX = xS(_state.layout.globalMax);
-                    newT = t.translate(W - maxX - 20, 0);
-                }
+                nt = d3.zoomIdentity;
                 break;
             default: return;
         }
-        if (e.key === '0' && e.ctrlKey) { resetView(); return; }
-        if (newT) {
-            e.preventDefault();
-            _state.svg.call(_state.zoom.transform, newT);
+        if (nt) { e.preventDefault(); _state.laneSvg.call(_state.zoom.transform, nt); }
+    }
+
+    // ── Format helpers ────────────────────────────────────────────────────
+
+    // HH:MM:SS — for tick scale and cursor label.
+    function fmtRelHMS(ms) {
+        if (!isFinite(ms)||ms<0) ms=0;
+        const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    }
+    function fmtAbsHMS(epochMs) {
+        if (!isFinite(epochMs)) return '';
+        const d=new Date(epochMs);
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+    }
+    // HH:MM:SS.mmm — for tooltip only.
+    function fmtRelMs(ms) {
+        if (!isFinite(ms)||ms<0) ms=0;
+        const s=ms/1000, h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=(s%60).toFixed(3);
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${sec.padStart(6,'0')}`;
+    }
+    function fmtAbsMs(epochMs) {
+        if (!isFinite(epochMs)) return '';
+        const d=new Date(epochMs);
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+    }
+
+    // ── Colour / group helpers ────────────────────────────────────────────
+
+    function groupKey(e, g) {
+        switch(g) {
+            case 'ServicePipeline':    return `${e.service} / ${e.pipeline}`;
+            case 'PidServicePipeline': return `${e.server}:${e.processId} / ${e.service} / ${e.pipeline}`;
+            case 'Service':  return e.service;
+            case 'Pipeline': return e.pipeline;
+            case 'Pid':      return `${e.server}:${e.processId}`;
+            default:         return `${e.service} / ${e.pipeline}`;
         }
+    }
+    function colourKey(e, c) {
+        switch(c) {
+            case 'Pipeline': return e.pipeline;
+            case 'Service':  return e.service;
+            case 'Status':   return e.status;
+            default:         return e.source;
+        }
+    }
+    function colourForKey(key, c) {
+        return c==='Status'?(STATUS_COLOR[key]||'#8B949E'):PALETTE[hashStr(key)%PALETTE.length];
+    }
+    function hashStr(s) {
+        let h=0; for(let i=0;i<s.length;i++) h=Math.imul(31,h)+s.charCodeAt(i)|0; return Math.abs(h);
+    }
+    function matchesFilter(e, f) {
+        return [e.chunkId,e.source,e.pipeline,e.service,e.processId,e.server]
+            .some(v => (v||'').toLowerCase().includes(f));
+    }
+
+    function esc(s) {
+        return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function csv(v) { return `"${String(v??'').replace(/"/g,'""')}"`; }
+
+    // ── Export ────────────────────────────────────────────────────────────
+
+    async function exportCsv() {
+        if (!_state?.data) return;
+        const rows=['RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,StartRelMs,FinishRelMs,DurationMs,Status,Error'];
+        for (const b of (_state.data.batches||[])) {
+            for (const e of (b.events||[])) {
+                rows.push([csv(b.runId),csv(b.batchName),csv(e.chunkId),
+                    csv(e.source),csv(e.pipeline),csv(e.service),
+                    csv(e.processId),csv(e.server),
+                    e.startMs.toFixed(1),e.finishMs??'',
+                    e.finishMs!=null?(e.finishMs-e.startMs).toFixed(0):'',
+                    csv(e.status),csv(e.error??'')].join(','));
+            }
+        }
+        const content = rows.join('\r\n');
+        const fname   = `timeline_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+        if (window.showSaveFilePicker) {
+            try {
+                const fh = await window.showSaveFilePicker({
+                    suggestedName: fname,
+                    types:[{description:'CSV',accept:{'text/csv':['.csv']}}],
+                });
+                const w = await fh.createWritable();
+                await w.write(content); await w.close(); return;
+            } catch(ex) { if (ex.name==='AbortError') return; }
+        }
+        const blob=new Blob([content],{type:'text/csv;charset=utf-8;'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url; a.download=fname; a.style.display='none';
+        document.body.appendChild(a); a.click();
+        setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},200);
     }
 
     return { init, update, resetView, exportCsv, dispose };

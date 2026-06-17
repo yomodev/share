@@ -10,9 +10,9 @@ public class TimelineBatch : IAsyncDisposable
 {
     public string RunId { get; }
     public string Env   { get; }
-    public string BatchName { get; private set; } = string.Empty;
-    public bool   IsLive    { get; private set; }
-    public DateTime BatchStart { get; private set; }
+    public string BatchName  { get; internal set; } = string.Empty;
+    public bool   IsLive     { get; internal set; }
+    public DateTime BatchStart { get; internal set; }
 
     private readonly IBatchService _batchService;
     private readonly SignalRConnectionService _signalR;
@@ -102,6 +102,23 @@ public class TimelineBatch : IAsyncDisposable
     {
         UpsertEvent(evt);
         await _onUpdated();
+    }
+
+    /// <summary>Public upsert used by CSV import.</summary>
+    public void UpsertEventPublic(PerformanceEvent e) => UpsertEvent(e);
+
+    /// <summary>Creates a CSV-imported batch with no live subscription or polling.</summary>
+    public static TimelineBatch CreateFromCsv(string runId, string env, IEnumerable<PerformanceEvent> events)
+    {
+        // Use dummy services — CSV batches never poll or subscribe.
+        var batch = new TimelineBatch(env, runId, null!, null!, () => Task.CompletedTask)
+        {
+            BatchName  = runId,
+            BatchStart = DateTime.UtcNow,
+            IsLive     = false,
+        };
+        foreach (var e in events) batch.UpsertEvent(e);
+        return batch;
     }
 
     // ── Event store ───────────────────────────────────────────────────────

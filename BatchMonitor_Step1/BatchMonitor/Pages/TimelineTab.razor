@@ -32,6 +32,7 @@
 
     // ── JS interop ────────────────────────────────────────────────────────
     private ElementReference _canvasRef;
+    private ElementReference _bottomRef;
     private bool _jsInitialised = false;
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
@@ -54,7 +55,7 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _canvasRef, GetOptions());
+                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _canvasRef, _bottomRef, GetOptions());
                 _jsInitialised = true;
                 await PushDataAsync();
             }
@@ -168,10 +169,11 @@
             filter    = _filterText,
             batches   = _batches.Select(b => new
             {
-                runId     = b.RunId,
-                env       = b.Env,
-                batchName = b.BatchName,
-                isLive    = b.IsLive,
+                runId             = b.RunId,
+                env               = b.Env,
+                batchName         = b.BatchName,
+                isLive            = b.IsLive,
+                batchStartEpochMs = new DateTimeOffset(b.BatchStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
                 {
                     chunkId   = e.ChunkId,
@@ -223,14 +225,146 @@
 
     private async Task ResetView()
     {
-        if (_jsInitialised)
-            await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView");
+        if (!_jsInitialised) return;
+        await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView");
+        await PushDataAsync();
     }
 
     private void ExportCsv()
     {
-        // CSV export fires via JS — build blob client-side from the current data.
         _ = JS.InvokeVoidAsync("BatchMonitor.Timeline.exportCsv");
+    }
+
+    private async Task TriggerImport()
+    {
+        await JS.InvokeVoidAsync("eval", "document.getElementById('bm-tl-import-input').click()");
+    }
+
+    private async Task OnImportFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null) return;
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024); // 10 MB max
+            using var reader = new System.IO.StreamReader(stream);
+            var csv = await reader.ReadToEndAsync();
+            await ImportCsvAsync(csv);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Timeline] Import error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Parses a timeline CSV export and upserts events into existing or new
+    /// TimelineBatch instances, grouped by RunId (§10 import spec).
+    /// </summary>
+    private async Task ImportCsvAsync(string csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return;
+
+        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return;
+
+        // Parse header to find column indices.
+        var header = ParseCsvLine(lines[0]);
+        int idx(string name) => Array.FindIndex(header, h => h.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        var iRunId    = idx("RunId");
+        var iChunkId  = idx("ChunkId");
+        var iSource   = idx("Source");
+        var iPipeline = idx("Pipeline");
+        var iService  = idx("Service");
+        var iPid      = idx("PID");
+        var iServer   = idx("Server");
+        var iStartMs  = idx("StartRelMs");
+        var iFinishMs = idx("FinishRelMs");
+        var iStatus   = idx("Status");
+        var iError    = idx("Error");
+
+        if (iRunId < 0 || iChunkId < 0) return; // unrecognised format
+
+        // Group rows by RunId.
+        var byRunId = new Dictionary<string, List<PerformanceEvent>>();
+
+        foreach (var line in lines.Skip(1))
+        {
+            var cols = ParseCsvLine(line);
+            if (cols.Length <= Math.Max(iRunId, iChunkId)) continue;
+
+            var runId = cols[iRunId];
+            if (string.IsNullOrEmpty(runId)) continue;
+
+            if (!byRunId.TryGetValue(runId, out var evts))
+                byRunId[runId] = evts = new List<PerformanceEvent>();
+
+            DateTime? finish = null;
+            if (iFinishMs >= 0 && iFinishMs < cols.Length &&
+                double.TryParse(cols[iFinishMs], out var fms))
+                finish = DateTime.UtcNow.AddMilliseconds(fms); // placeholder absolute; relative only
+
+            double startMs = 0;
+            if (iStartMs >= 0 && iStartMs < cols.Length)
+                double.TryParse(cols[iStartMs], out startMs);
+
+            evts.Add(new PerformanceEvent
+            {
+                ChunkId   = iChunkId  >= 0 && iChunkId  < cols.Length ? cols[iChunkId]  : string.Empty,
+                Source    = iSource   >= 0 && iSource   < cols.Length ? cols[iSource]   : string.Empty,
+                Pipeline  = iPipeline >= 0 && iPipeline < cols.Length ? cols[iPipeline] : string.Empty,
+                Service   = iService  >= 0 && iService  < cols.Length ? cols[iService]  : string.Empty,
+                ProcessId = iPid      >= 0 && iPid      < cols.Length ? cols[iPid]      : string.Empty,
+                Server    = iServer   >= 0 && iServer   < cols.Length ? cols[iServer]   : string.Empty,
+                Start     = DateTime.UtcNow.AddMilliseconds(startMs),
+                Finish    = finish,
+                Error     = iError    >= 0 && iError    < cols.Length ? cols[iError]    : null,
+            });
+        }
+
+        // Upsert into existing or new batches.
+        foreach (var (runId, events) in byRunId)
+        {
+            await _batchLock.WaitAsync();
+            try
+            {
+                var existing = _batches.FirstOrDefault(b => b.RunId == runId);
+                if (existing is not null)
+                {
+                    // Merge into existing batch.
+                    foreach (var e in events)
+                        existing.UpsertEventPublic(e);
+                }
+                else
+                {
+                    // Create a CSV-only batch (no live subscription, no polling).
+                    var batch = TimelineBatch.CreateFromCsv(runId, Environment, events);
+                    _batches.Add(batch);
+                }
+            }
+            finally { _batchLock.Release(); }
+        }
+
+        await PushDataAsync();
+        StateHasChanged();
+    }
+
+    private static string[] ParseCsvLine(string line)
+    {
+        // Simple CSV parser — handles quoted fields with embedded commas/quotes.
+        var result = new List<string>();
+        bool inQuote = false;
+        var current = new System.Text.StringBuilder();
+        foreach (char c in line.TrimEnd('\r'))
+        {
+            if (c == '"') { inQuote = !inQuote; }
+            else if (c == ',' && !inQuote) { result.Add(current.ToString()); current.Clear(); }
+            else current.Append(c);
+        }
+        result.Add(current.ToString());
+        return result.ToArray();
     }
 
     // ── Add Batch dialog ──────────────────────────────────────────────────
@@ -283,6 +417,8 @@
         if (_dialogSelected is null) return;
         _addDialogOpen = false;
         await LoadBatchAsync(_dialogEnv, _dialogSelected.RunId);
+        // Push immediately regardless of pause state — user explicitly added a batch.
+        await PushDataAsync();
     }
 
     private bool IsAlreadyLoaded(BatchSummary b) =>
@@ -376,23 +512,34 @@
                                Size="Size.Small" OnClick="ExportCsv" />
             </MudTooltip>
 
-            <!-- Remove batch menu -->
-            <MudMenu Icon="@Icons.Material.Outlined.DeleteOutline" Size="Size.Small"
-                     Dense="true" Disabled="@(!_batches.Any())"
-                     AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                @foreach (var b in _batches)
-                {
-                    var runId = b.RunId;
-                    var env   = b.Env;
-                    <MudMenuItem OnClick="@(() => RemoveBatchAsync(runId, env))">
-                        @b.BatchName <span class="bm-muted">@b.RunId</span>
-                    </MudMenuItem>
-                }
-                <MudDivider />
-                <MudMenuItem OnClick="RemoveAllBatchesAsync">
-                    <MudText Color="Color.Error">Remove all</MudText>
-                </MudMenuItem>
-            </MudMenu>
+            <MudTooltip Text="Import CSV">
+                <MudIconButton Icon="@Icons.Material.Outlined.Upload"
+                               Size="Size.Small" OnClick="TriggerImport" />
+            </MudTooltip>
+
+            <InputFile id="bm-tl-import-input" OnChange="OnImportFileSelected"
+                       accept=".csv" style="display:none" />
+
+            <MudTooltip Text="Remove batch from view">
+                <span>
+                    <MudMenu Icon="@Icons.Material.Outlined.DeleteOutline" Size="Size.Small"
+                             Dense="true" Disabled="@(!_batches.Any())"
+                             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                        @foreach (var b in _batches)
+                        {
+                            var runId = b.RunId;
+                            var env   = b.Env;
+                            <MudMenuItem OnClick="@(() => RemoveBatchAsync(runId, env))">
+                                @b.BatchName <span class="bm-muted">@b.RunId</span>
+                            </MudMenuItem>
+                        }
+                        <MudDivider />
+                        <MudMenuItem OnClick="RemoveAllBatchesAsync">
+                            <MudText Color="Color.Error">Remove all</MudText>
+                        </MudMenuItem>
+                    </MudMenu>
+                </span>
+            </MudTooltip>
 
             <MudButton StartIcon="@Icons.Material.Outlined.Add"
                        Variant="Variant.Outlined" Size="Size.Small"
@@ -402,10 +549,7 @@
         </div>
     </div>
 
-    <!-- D3 canvas — contains only the SVG appended by d3-timeline.js.
-         No Blazor-managed children inside this div; the empty state is
-         rendered as an absolute overlay so it never interferes with the
-         SVG appended by D3. -->
+    <!-- D3 canvas — scrollable lane area. No Blazor children inside. -->
     <div class="bm-tl-canvas-wrap">
         <div class="bm-tl-canvas" @ref="_canvasRef"></div>
 
@@ -417,6 +561,10 @@
             </div>
         }
     </div>
+
+    <!-- Fixed bottom panel: global tick scale + range selector brush.
+         Always visible, never scrolls. D3 appends its own SVG here. -->
+    <div class="bm-tl-bottom-panel" @ref="_bottomRef"></div>
 
     <!-- Add Batch dialog -->
     <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true })">
@@ -449,6 +597,7 @@
             {
                 <MudDataGrid T="BatchSummary" Items="@_dialogBatches"
                              RowClick="@(e => _dialogSelected = _dialogSelected?.RunId == e.Item.RunId ? null : e.Item)"
+                             RowDoubleClick="@(async (DataGridRowClickEventArgs<BatchSummary> e) => { _dialogSelected = e.Item; await ConfirmAddBatch(); })"
                              RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
                              Dense="true" Hover="true" Striped="false" Bordered="false">
                     <Columns>
