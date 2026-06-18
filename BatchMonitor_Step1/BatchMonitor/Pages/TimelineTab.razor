@@ -18,7 +18,8 @@
     private string _filterText = string.Empty;
     private GroupByOption _groupBy = GroupByOption.ServicePipeline;
     private ColourByOption _colourBy = ColourByOption.Source;
-    private bool _stackView = false;
+    private bool _stackView   = false;
+    private bool _showTooltip = true;
 
     // ── Shortcuts dialog ──────────────────────────────────────────────────
     private bool _shortcutsOpen = false;
@@ -252,6 +253,13 @@
         _pendingJsPush = true;
     }
 
+    private async Task ToggleTooltipAsync()
+    {
+        _showTooltip = !_showTooltip;
+        if (_jsInitialised)
+            await JS.InvokeVoidAsync("BatchMonitor.Timeline.setTooltipVisible", _instanceKey, _showTooltip);
+    }
+
     private async Task ResetView()
     {
         if (!_jsInitialised) return;
@@ -309,9 +317,8 @@
         var iService  = idx("Service");
         var iPid      = idx("PID");
         var iServer   = idx("Server");
-        var iStartMs  = idx("StartRelMs");
-        var iFinishMs = idx("FinishRelMs");
-        var iStatus   = idx("Status");
+        var iStart    = idx("Start");
+        var iFinish   = idx("Finish");
         var iError    = idx("Error");
 
         if (iRunId < 0 || iChunkId < 0) return; // unrecognised format
@@ -330,26 +337,26 @@
             if (!byRunId.TryGetValue(runId, out var evts))
                 byRunId[runId] = evts = new List<PerformanceEvent>();
 
-            DateTime? finish = null;
-            if (iFinishMs >= 0 && iFinishMs < cols.Length &&
-                double.TryParse(cols[iFinishMs], out var fms))
-                finish = DateTime.UtcNow.AddMilliseconds(fms); // placeholder absolute; relative only
+            string Col(int i) => i >= 0 && i < cols.Length ? cols[i] : string.Empty;
 
-            double startMs = 0;
-            if (iStartMs >= 0 && iStartMs < cols.Length)
-                double.TryParse(cols[iStartMs], out startMs);
+            DateTime? ParseDt(string raw) =>
+                DateTime.TryParse(raw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
+                    ? dt : null;
+
+            var startDt  = ParseDt(Col(iStart))  ?? DateTime.UtcNow;
+            var finishDt = ParseDt(Col(iFinish));
 
             evts.Add(new PerformanceEvent
             {
-                ChunkId   = iChunkId  >= 0 && iChunkId  < cols.Length ? cols[iChunkId]  : string.Empty,
-                Source    = iSource   >= 0 && iSource   < cols.Length ? cols[iSource]   : string.Empty,
-                Pipeline  = iPipeline >= 0 && iPipeline < cols.Length ? cols[iPipeline] : string.Empty,
-                Service   = iService  >= 0 && iService  < cols.Length ? cols[iService]  : string.Empty,
-                ProcessId = iPid      >= 0 && iPid      < cols.Length ? cols[iPid]      : string.Empty,
-                Server    = iServer   >= 0 && iServer   < cols.Length ? cols[iServer]   : string.Empty,
-                Start     = DateTime.UtcNow.AddMilliseconds(startMs),
-                Finish    = finish,
-                Error     = iError    >= 0 && iError    < cols.Length ? cols[iError]    : null,
+                ChunkId   = Col(iChunkId),
+                Source    = Col(iSource),
+                Pipeline  = Col(iPipeline),
+                Service   = Col(iService),
+                ProcessId = Col(iPid),
+                Server    = Col(iServer),
+                Start     = startDt,
+                Finish    = finishDt,
+                Error     = string.IsNullOrEmpty(Col(iError)) ? null : Col(iError),
             });
         }
 
@@ -523,7 +530,7 @@
                 Group by
                 <select class="bm-tl-native-select" value="@_groupBy" @onchange="OnGroupByChanged" disabled="@_stackView">
                     <option value="@GroupByOption.ServicePipeline">Service / Pipeline</option>
-                    <option value="@GroupByOption.PidServicePipeline">PID / Service / Pipeline</option>
+                    <option value="@GroupByOption.PidServicePipeline">Service / Pipeline / PID</option>
                     <option value="@GroupByOption.Service">Service</option>
                     <option value="@GroupByOption.Pipeline">Pipeline</option>
                     <option value="@GroupByOption.Pid">PID</option>
@@ -546,6 +553,12 @@
                 <MudIconButton Icon="@Icons.Material.Outlined.ViewColumn"
                                Color="@(_stackView ? Color.Primary : Color.Default)"
                                Size="Size.Small" OnClick="ToggleStackView" />
+            </MudTooltip>
+
+            <MudTooltip Text="@(_showTooltip ? "Hide message popup" : "Show message popup")">
+                <MudIconButton Icon="@(_showTooltip ? Icons.Material.Outlined.SpeakerNotes : Icons.Material.Outlined.SpeakerNotesOff)"
+                               Color="@(_showTooltip ? Color.Default : Color.Primary)"
+                               Size="Size.Small" OnClick="ToggleTooltipAsync" />
             </MudTooltip>
 
             <MudTooltip Text="Reset view">
@@ -640,6 +653,7 @@
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
                     <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
                     <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+click block</td><td>Copy message details to clipboard</td></tr>
                 </tbody>
             </MudSimpleTable>
         </DialogContent>

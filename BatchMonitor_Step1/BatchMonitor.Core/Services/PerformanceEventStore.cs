@@ -64,11 +64,8 @@ public class PerformanceEventStore
 
         lock (_lock)
         {
-            var key = evt.CompositeKey;
-            if (!_events.TryGetValue(key, out var existing) || evt.Timestamp > existing.Timestamp)
-            {
-                _events[key] = evt;
-            }
+            if (!_events.TryGetValue(evt.Id, out var existing) || evt.Timestamp > existing.Timestamp)
+                _events[evt.Id] = evt;
         }
     }
 

@@ -111,12 +111,14 @@ public class TimelineBatch : IAsyncDisposable
     public static TimelineBatch CreateFromCsv(string runId, string env, IEnumerable<PerformanceEvent> events)
     {
         // Use dummy services — CSV batches never poll or subscribe.
+        var eventList = events.ToList();
         var batch = new TimelineBatch(env, runId, null!, null!, () => Task.CompletedTask)
         {
             BatchName  = runId,
-            BatchStart = DateTime.UtcNow,
+            BatchStart = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
             IsLive     = false,
         };
+        events = eventList;
         foreach (var e in events) batch.UpsertEvent(e);
         return batch;
     }
@@ -136,9 +138,10 @@ public class TimelineBatch : IAsyncDisposable
 
     private void UpsertLocked(PerformanceEvent e)
     {
-        // Key by ChunkId — last version (newest Timestamp) wins per spec.
-        if (!_events.TryGetValue(e.ChunkId, out var existing) || e.Timestamp > existing.Timestamp)
-            _events[e.ChunkId] = e;
+        // Key by Id — each message is a distinct immutable record.
+        // ChunkId is a business key shared across many messages; Id is the unique message key.
+        if (!_events.TryGetValue(e.Id, out var existing) || e.Timestamp > existing.Timestamp)
+            _events[e.Id] = e;
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────

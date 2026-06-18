@@ -55,32 +55,69 @@ window.BatchMonitor.Timeline = (function () {
     function update(key, payload) {
         const s = _instances.get(key);
         if (!s) return;
-        const nEvents = payload.batches?.reduce((a,b) => a + (b.events?.length ?? 0), 0) ?? 0;
+        hideTooltip(s);
+        s.hoveredChunkId  = null;
+        s.hoveredBatchIdx = -1;
         s.data = payload;
 
-        let newMax = 0;
-        for (const b of (payload.batches || []))
-            for (const e of (b.events || []))
-                newMax = Math.max(newMax, e.finishMs ?? e.startMs ?? 0);
-        if (newMax < 1000) newMax = 1000;
-        s.globalMax = newMax;
+        const isStack  = !!(payload.stackView);
+        const wasStack = s.isStack ?? false;
+        s.isStack = isStack;
 
-        // Keep minimum zoom in sync so the user can always scroll-wheel out to see
-        // events that arrived after the initial domain was frozen.
-        if (s.frozenDomainMax) {
-            const minK = Math.min(1, s.frozenDomainMax / newMax);
-            s.zoom.scaleExtent([minK, 5000]);
-        }
+        if (isStack) {
+            // Domain = max(sum of durations per chunkId) — represents the longest
+            // accumulated processing time across all chunks in view.
+            const chunkDurs = new Map();
+            for (const b of (payload.batches || []))
+                for (const e of (b.events || [])) {
+                    const dur = Math.max(0, (e.finishMs ?? e.startMs) - e.startMs);
+                    chunkDurs.set(e.chunkId, (chunkDurs.get(e.chunkId) || 0) + dur);
+                }
+            const stackMax = chunkDurs.size > 0
+                ? Math.max(1000, ...chunkDurs.values())
+                : 1000;
 
-        // Only freeze the domain once we have real event data. If we freeze on an
-        // empty update (batches=0 or no events yet), frozenDomainMax becomes 1000ms
-        // and all real events render off-screen to the right, making the view blank.
-        const hasEvents = nEvents > 0;
-        if (s.frozenDomainMax === null && hasEvents) {
-            s.frozenDomainMax = newMax;
-            s.xScale.domain([0, newMax]);
-            s.xZoom = d3.zoomIdentity;
-            applyZoom(s, d3.zoomIdentity);
+            if (!wasStack) {
+                // Entering stack view: set domain and reset zoom to fit.
+                s.frozenDomainMax = stackMax;
+                s.globalMax       = stackMax;
+                s.xScale.domain([0, stackMax]);
+                s.xZoom = d3.zoomIdentity;
+                applyZoom(s, d3.zoomIdentity);
+                s.zoom.scaleExtent([1, 5000]);
+            } else {
+                // Already in stack view: grow domain if new chunks are longer.
+                if (stackMax > s.frozenDomainMax) {
+                    s.frozenDomainMax = stackMax;
+                    s.globalMax       = stackMax;
+                }
+            }
+        } else {
+            if (wasStack) {
+                // Leaving stack view: clear frozen domain so normal mode re-freezes
+                // on the wall-clock max of the current data.
+                s.frozenDomainMax = null;
+            }
+
+            let newMax = 0;
+            for (const b of (payload.batches || []))
+                for (const e of (b.events || []))
+                    newMax = Math.max(newMax, e.finishMs ?? e.startMs ?? 0);
+            if (newMax < 1000) newMax = 1000;
+            s.globalMax = newMax;
+
+            if (s.frozenDomainMax) {
+                const minK = Math.min(1, s.frozenDomainMax / newMax);
+                s.zoom.scaleExtent([minK, 5000]);
+            }
+
+            const nEvents = (payload.batches || []).reduce((a, b) => a + (b.events?.length ?? 0), 0);
+            if (s.frozenDomainMax === null && nEvents > 0) {
+                s.frozenDomainMax = newMax;
+                s.xScale.domain([0, newMax]);
+                s.xZoom = d3.zoomIdentity;
+                applyZoom(s, d3.zoomIdentity);
+            }
         }
 
         computeLayout(s);
@@ -158,9 +195,12 @@ window.BatchMonitor.Timeline = (function () {
             svgW: 800, viewH: 600,
             frozenDomainMax: null,
             globalMax: null,
+            isStack: false,
+            showTooltip: true,
             cursorX: null, cursorTimer: null,
             hoveredBatchIdx: -1,
             hoveredChunkId: null,
+            hoveredBlockData: null,
             subrowHOverride: null,
             selFn: null,
             isVisible: true,
@@ -353,8 +393,11 @@ window.BatchMonitor.Timeline = (function () {
 
     function updateLaneSvgHeight(s) {
         if (!s.layout) return;
-        const h = Math.max(s.viewH, s.layout.totalH + 16);
+        const h    = Math.max(s.viewH, s.layout.totalH + 16);
         s.laneSvg.attr('height', h);
+        // Clamp scroll so removing a batch doesn't leave the viewport in empty space.
+        const wrap = s.laneEl.parentElement;
+        if (wrap) wrap.scrollTop = Math.min(wrap.scrollTop, Math.max(0, h - wrap.clientHeight));
     }
 
     // ── Render ────────────────────────────────────────────────────────────
@@ -459,7 +502,7 @@ window.BatchMonitor.Timeline = (function () {
                         w: Math.max(1, w),
                         colour: colourForKey(ck, colourBy),
                         bse:    sec.batch.batchStartEpochMs || 0,
-                        stableKey: `${sec.batch.runId}:${gi}:${si}:${bi}`,
+                        stableKey: `${sec.batch.runId}:${e.id}`,
                         y: sy,
                         h: Math.max(1, SH - 1),
                     });
@@ -484,7 +527,8 @@ window.BatchMonitor.Timeline = (function () {
             .style('stroke',       d => d3.color(d.colour)?.darker(.5) ?? d.colour)
             .style('stroke-width', d => d.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px')
             .on('mouseenter', (ev, d) => onBlockEnter(s, ev, d))
-            .on('mouseleave', (ev, d) => onBlockLeave(s, ev, d));
+            .on('mouseleave', (ev, d) => onBlockLeave(s, ev, d))
+            .on('click',      (ev, d) => { if (ev.ctrlKey) copyBlockDetails(s, d); });
     }
 
     function renderHeader(s, sel, sec) {
@@ -671,23 +715,31 @@ window.BatchMonitor.Timeline = (function () {
     function renderCursorBot(s, mx, timeMs, bse) {
         s.curBotL.selectAll('*').remove();
 
+        // When popup is hidden and hovering a block, show chunkId above the time.
+        const lines = [];
+        if (!s.showTooltip && s.hoveredChunkId) lines.push(s.hoveredChunkId);
         const relL = fmtRelHMS(timeMs);
         const absL = bse ? ` (${fmtAbsHMS(bse + timeMs)})` : '';
-        const label = relL + absL;
-        const lw  = label.length * 6.5 + 12;
-        const lh  = 15;
+        lines.push(relL + absL);
+
+        const lh  = lines.length > 1 ? 11 : 15;
+        const lw  = Math.max(...lines.map(l => l.length * 6.2 + 10));
         let   lx  = mx - lw / 2;
         lx = Math.max(2, Math.min((s.svgW || 800) - lw - 2, lx));
 
-        s.curBotL.append('rect').attr('x', lx).attr('y', 2)
-            .attr('width', lw).attr('height', lh).attr('rx', 3)
-            .style('fill', CURSOR_COLOR);
-        s.curBotL.append('text').attr('x', lx + lw / 2).attr('y', 2 + lh / 2)
-            .attr('text-anchor', 'middle').attr('dy', '0.35em')
-            .style('fill', '#fff').style('font-size', '0.6rem')
-            .style('font-weight', '700')
-            .style('font-family', 'var(--bm-font-mono,monospace)')
-            .text(label);
+        let y = 2;
+        for (const line of lines) {
+            s.curBotL.append('rect').attr('x', lx).attr('y', y)
+                .attr('width', lw).attr('height', lh).attr('rx', 2)
+                .style('fill', CURSOR_COLOR);
+            s.curBotL.append('text').attr('x', lx + lw / 2).attr('y', y + lh / 2)
+                .attr('text-anchor', 'middle').attr('dy', '0.35em')
+                .style('fill', '#fff').style('font-size', lines.length > 1 ? '0.55rem' : '0.6rem')
+                .style('font-weight', '700')
+                .style('font-family', 'var(--bm-font-mono,monospace)')
+                .text(line);
+            y += lh + 1;
+        }
     }
 
     function onMouseLeave(s) {
@@ -699,15 +751,17 @@ window.BatchMonitor.Timeline = (function () {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        s.hoveredChunkId = d.e.chunkId;
+        s.hoveredChunkId  = d.e.chunkId;
+        s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.chunkId === s.hoveredChunkId ? 1 : 0.12)
             .style('stroke-width', b => b.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px');
-        showTooltip(s, event, d);
+        if (s.showTooltip) showTooltip(s, event, d);
     }
 
     function onBlockLeave(s, event, d) {
-        s.hoveredChunkId = null;
+        s.hoveredChunkId   = null;
+        s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
             .style('stroke-width', '0.5px');
@@ -736,6 +790,7 @@ window.BatchMonitor.Timeline = (function () {
                 <span class="bm-tl-tt-status ${stClass}">${stLabel}</span>
             </div>
             <div class="bm-tl-tt-sep"></div>
+            <div class="bm-tl-tt-row"><span>Id</span><span>${esc(e.id)}</span></div>
             <div class="bm-tl-tt-row"><span>Source</span><span>${esc(e.source)}</span></div>
             <div class="bm-tl-tt-row"><span>Pipeline</span><span>${esc(e.pipeline)}</span></div>
             <div class="bm-tl-tt-row"><span>Service</span><span>${esc(e.service)}</span></div>
@@ -746,19 +801,7 @@ window.BatchMonitor.Timeline = (function () {
             <div class="bm-tl-tt-row"><span>Finish</span><span>${finStr}</span></div>
             <div class="bm-tl-tt-row"><span>Duration</span><span>${durStr}</span></div>
             ${e.error ? `<div class="bm-tl-tt-row bm-tl-tt-err"><span>Error</span><span>${esc(e.error)}</span></div>` : ''}
-            <div class="bm-tl-tt-sep"></div>
-            <div class="bm-tl-tt-footer" id="bm-tl-tt-footer">Ctrl+click to copy</div>
-        `).style('opacity', 1).style('pointer-events', 'auto');
-
-        s.tooltip.on('click', ev => {
-            if (!ev.ctrlKey) return;
-            navigator.clipboard?.writeText(
-                [`ChunkId: ${e.chunkId}`, `Source: ${e.source}`,
-                 `Start: ${startStr}`, `Finish: ${finStr}`,
-                 `Duration: ${durStr}`].join('\n'));
-            const f = document.getElementById('bm-tl-tt-footer');
-            if (f) { f.textContent = 'Copied ✓'; setTimeout(() => { if(f) f.textContent='Ctrl+click to copy'; }, 1000); }
-        });
+        `).style('opacity', 1).style('pointer-events', 'none');
 
         positionTooltip(s, event);
     }
@@ -800,6 +843,59 @@ window.BatchMonitor.Timeline = (function () {
 
     function hideTooltip(s) {
         s.tooltip.style('opacity', 0).style('pointer-events', 'none');
+    }
+
+    function copyBlockDetails(s, d) {
+        const e   = d.e;
+        const bse = d.bse;
+        const dur = e.finishMs != null ? Math.round(e.finishMs - e.startMs) : null;
+        const durStr   = dur != null ? `${dur.toLocaleString()}ms` : '(in progress)';
+        const stLabel  = e.status === 'done' ? 'Done' : e.status === 'inprogress' ? 'In Progress' : 'Error';
+        const sRel     = fmtRelMs(e.startMs);
+        const sAbs     = bse ? fmtAbsMs(bse + e.startMs) : '';
+        const startStr = sAbs ? `${sRel} (${sAbs})` : sRel;
+        const fRel     = e.finishMs != null ? fmtRelMs(e.finishMs) : `${fmtRelMs(e.startMs)}…`;
+        const fAbs     = bse && e.finishMs != null ? fmtAbsMs(bse + e.finishMs) : '';
+        const finStr   = fAbs ? `${fRel} (${fAbs})` : fRel;
+        const lines    = [
+            `ChunkId:  ${e.chunkId}`,
+            `Status:   ${stLabel}`,
+            `Source:   ${e.source}`,
+            `Pipeline: ${e.pipeline}`,
+            `Service:  ${e.service}`,
+            `PID:      ${e.processId}`,
+            `Server:   ${e.server}`,
+            `Start:    ${startStr}`,
+            `Finish:   ${finStr}`,
+            `Duration: ${durStr}`,
+        ];
+        if (e.error) lines.push(`Error:    ${e.error}`);
+        navigator.clipboard?.writeText(lines.join('\n')).then(() => showCopyToast());
+    }
+
+    function showCopyToast() {
+        const el = document.createElement('div');
+        el.textContent = 'Copied to clipboard';
+        Object.assign(el.style, {
+            position:      'fixed',
+            bottom:        '28px',
+            left:          '50%',
+            transform:     'translateX(-50%)',
+            background:    '#3FB950',
+            color:         '#fff',
+            padding:       '7px 20px',
+            borderRadius:  '6px',
+            fontSize:      '0.8rem',
+            fontWeight:    '600',
+            fontFamily:    'var(--bm-font-mono, monospace)',
+            zIndex:        '99999',
+            pointerEvents: 'none',
+            opacity:       '1',
+            transition:    'opacity 0.35s ease',
+        });
+        document.body.appendChild(el);
+        setTimeout(() => { el.style.opacity = '0'; }, 1400);
+        setTimeout(() => { document.body.removeChild(el); }, 1750);
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────
@@ -857,17 +953,27 @@ window.BatchMonitor.Timeline = (function () {
     // ── Export ────────────────────────────────────────────────────────────
 
     async function doExport(s) {
-        const rows = ['RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,StartRelMs,FinishRelMs,DurationMs,Status,Error'];
-        for (const b of (s.data.batches || []))
-            for (const e of (b.events || []))
-                rows.push([csv(b.runId), csv(b.batchName), csv(e.chunkId),
-                    csv(e.source), csv(e.pipeline), csv(e.service),
-                    csv(e.processId), csv(e.server),
-                    e.startMs.toFixed(1), e.finishMs ?? '',
-                    e.finishMs != null ? (e.finishMs - e.startMs).toFixed(0) : '',
-                    csv(e.status), csv(e.error ?? '')].join(','));
+        const firstName = (s.data?.batches?.[0]?.batchName ?? 'export')
+            .replace(/[^a-zA-Z0-9_-]/g, '_');
+        const ts    = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const fname = `${firstName}_${ts}.csv`;
+
+        const rows = ['RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,Start,Finish,Error'];
+        for (const b of (s.data.batches || [])) {
+            const bse = b.batchStartEpochMs || 0;
+            for (const e of (b.events || [])) {
+                const startIso  = new Date(bse + e.startMs).toISOString();
+                const finishIso = e.finishMs != null ? new Date(bse + e.finishMs).toISOString() : '';
+                rows.push([
+                    b.runId, b.batchName, e.chunkId,
+                    e.source, e.pipeline, e.service,
+                    e.processId, e.server,
+                    startIso, finishIso,
+                    csv(e.error ?? ''),
+                ].join(','));
+            }
+        }
         const content = rows.join('\r\n');
-        const fname   = `timeline_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
         if (window.showSaveFilePicker) {
             try {
                 const fh = await window.showSaveFilePicker({ suggestedName: fname,
@@ -908,7 +1014,7 @@ window.BatchMonitor.Timeline = (function () {
     function groupKey(e, g) {
         switch (g) {
             case 'ServicePipeline':    return `${e.service} / ${e.pipeline}`;
-            case 'PidServicePipeline': return `${e.server}:${e.processId} / ${e.service} / ${e.pipeline}`;
+            case 'PidServicePipeline': return `${e.service} / ${e.pipeline} / ${e.server}:${e.processId}`;
             case 'Service':  return e.service;
             case 'Pipeline': return e.pipeline;
             case 'Pid':      return `${e.server}:${e.processId}`;
@@ -947,6 +1053,13 @@ window.BatchMonitor.Timeline = (function () {
         if (visible) requestAnimationFrame(() => { if (!s.disposed) onResize(s); });
     }
 
-    return { init, update, resetView, exportCsv, dispose, setVisible };
+    function setTooltipVisible(key, show) {
+        const s = _instances.get(key);
+        if (!s) return;
+        s.showTooltip = show;
+        if (!show) hideTooltip(s);
+    }
+
+    return { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
 
 })();

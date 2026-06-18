@@ -6,6 +6,9 @@ namespace BatchMonitor.Models;
 /// </summary>
 public class PerformanceEvent
 {
+    /// <summary>Unique message identifier — one per (chunk × service instance × processing attempt).</summary>
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..16];
+
     /// <summary>Unique chunk identifier (TypePrefix + IncrementalNumber).</summary>
     public string ChunkId { get; set; } = string.Empty;
 
