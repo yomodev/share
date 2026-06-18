@@ -7,6 +7,7 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+    position: relative;
 }
 
 /* ── Control bar ─────────────────────────────────────────────────── */
@@ -26,6 +27,37 @@
 
 .bm-tl-filter { min-width: 160px; max-width: 220px; }
 .bm-tl-select { min-width: 160px; max-width: 200px; }
+
+.bm-tl-native-label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.65rem;
+    color: var(--mud-palette-text-secondary);
+    gap: 1px;
+}
+
+.bm-tl-native-select {
+    background: transparent;
+    color: var(--mud-palette-text-primary);
+    border: 1px solid rgba(255,255,255,0.23);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    height: 32px;
+    min-width: 140px;
+    cursor: pointer;
+    outline: none;
+}
+
+.bm-tl-native-select:hover  { border-color: var(--mud-palette-text-primary); }
+.bm-tl-native-select:focus  { border-color: var(--mud-palette-primary); border-width: 2px; }
+.bm-tl-native-label--disabled { opacity: 0.38; pointer-events: none; }
+
+.bm-tl-native-select option {
+    background: var(--mud-palette-appbar-background, #1e1e2e);
+    color: var(--mud-palette-text-primary);
+}
 
 /* ── Canvas wrap — scrolls vertically, fixed horizontally ───────── */
 
@@ -58,20 +90,22 @@
 
 .bm-tl-empty {
     position: absolute;
-    inset: 0;
+    top: 0; left: 0; right: 0;
+    bottom: 56px; /* clear the bottom panel */
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     color: var(--mud-palette-text-secondary);
     pointer-events: none;
+    z-index: 1;
 }
 
 /* ── Fixed bottom panel: TICK_H(22) + HEAT_H(16) + SEL_H(28) + 4 = 70px */
 
 .bm-tl-bottom-panel {
     flex-shrink: 0;
-    height: 52px;
+    height: 56px;
     border-top: 1px solid var(--mud-palette-divider);
     overflow: visible;
     position: relative;
@@ -207,6 +241,25 @@
     text-align: center;
     border-top: 1px solid var(--mud-palette-divider);
     cursor: default;
+}
+
+/* ── Shortcuts dialog ────────────────────────────────────────────── */
+
+.bm-tl-shortcuts-table td:first-child {
+    white-space: nowrap;
+    font-family: var(--bm-font-mono, monospace);
+    font-size: 0.78rem;
+}
+
+.bm-tl-shortcuts-table kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 4px;
+    background: var(--mud-palette-background-grey);
+    font-family: var(--bm-font-mono, monospace);
+    font-size: 0.75rem;
+    line-height: 1.4;
 }
 
 /* ── Add Batch dialog ────────────────────────────────────────────── */

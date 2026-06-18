@@ -20,6 +20,9 @@
     private ColourByOption _colourBy = ColourByOption.Source;
     private bool _stackView = false;
 
+    // ── Shortcuts dialog ──────────────────────────────────────────────────
+    private bool _shortcutsOpen = false;
+
     // ── Add Batch dialog ──────────────────────────────────────────────────
     private bool _addDialogOpen = false;
     private List<BatchSummary> _dialogBatches = new();
@@ -38,6 +41,10 @@
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
 
+    // Set by control-bar handlers so OnAfterRenderAsync pushes data to JS
+    // AFTER Blazor finishes the render.
+    private bool _pendingJsPush = false;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
@@ -48,6 +55,12 @@
         {
             await LoadBatchAsync(Environment, InitialRunId);
         }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_jsInitialised)
+            await JS.InvokeVoidAsync("BatchMonitor.Timeline.setVisible", _instanceKey, IsFocused);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -64,6 +77,14 @@
             {
                 Console.WriteLine($"[Timeline] JS init error: {ex.Message}");
             }
+        }
+        else if (_pendingJsPush && _jsInitialised)
+        {
+            // Push runs here — AFTER Blazor has committed the render batch (including
+            // MudBlazor's popover close). This prevents the double-batch race that
+            // causes "Cannot read properties of null (reading 'removeChild')".
+            _pendingJsPush = false;
+            await PushDataAsync();
         }
     }
 
@@ -200,28 +221,35 @@
 
     // ── Control bar handlers ──────────────────────────────────────────────
 
-    private async Task OnGroupByChanged(GroupByOption v)
+    // Native-select handlers — no MudBlazor popover involved, no crash.
+    private void OnGroupByChanged(ChangeEventArgs e)
     {
-        _groupBy = v;
-        await PushDataAsync();
+        if (Enum.TryParse<GroupByOption>(e.Value?.ToString(), out var v))
+        {
+            _groupBy = v;
+            _pendingJsPush = true;
+        }
     }
 
-    private async Task OnColourByChanged(ColourByOption v)
+    private void OnColourByChanged(ChangeEventArgs e)
     {
-        _colourBy = v;
-        await PushDataAsync();
+        if (Enum.TryParse<ColourByOption>(e.Value?.ToString(), out var v))
+        {
+            _colourBy = v;
+            _pendingJsPush = true;
+        }
     }
 
-    private async Task OnFilterChanged(string v)
+    private void OnFilterChanged(string v)
     {
         _filterText = v;
-        await PushDataAsync();
+        _ = InvokeAsync(PushDataAsync);
     }
 
-    private async Task ToggleStackView()
+    private void ToggleStackView()
     {
         _stackView = !_stackView;
-        await PushDataAsync();
+        _pendingJsPush = true;
     }
 
     private async Task ResetView()
@@ -491,24 +519,26 @@
                           Variant="Variant.Outlined" Margin="Margin.Dense"
                           Class="bm-tl-filter" />
 
-            <MudSelect T="GroupByOption" Label="Group by" Value="_groupBy"
-                       ValueChanged="OnGroupByChanged"
-                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-select">
-                <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
-                <MudSelectItem Value="GroupByOption.PidServicePipeline">PID / Service / Pipeline</MudSelectItem>
-                <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
-                <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
-                <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
-            </MudSelect>
+            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
+                Group by
+                <select class="bm-tl-native-select" value="@_groupBy" @onchange="OnGroupByChanged" disabled="@_stackView">
+                    <option value="@GroupByOption.ServicePipeline">Service / Pipeline</option>
+                    <option value="@GroupByOption.PidServicePipeline">PID / Service / Pipeline</option>
+                    <option value="@GroupByOption.Service">Service</option>
+                    <option value="@GroupByOption.Pipeline">Pipeline</option>
+                    <option value="@GroupByOption.Pid">PID</option>
+                </select>
+            </label>
 
-            <MudSelect T="ColourByOption" Label="Colour by" Value="_colourBy"
-                       ValueChanged="OnColourByChanged"
-                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-select">
-                <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
-                <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
-                <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
-                <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
-            </MudSelect>
+            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
+                Colour by
+                <select class="bm-tl-native-select" value="@_colourBy" @onchange="OnColourByChanged" disabled="@_stackView">
+                    <option value="@ColourByOption.Source">Source</option>
+                    <option value="@ColourByOption.Pipeline">Pipeline</option>
+                    <option value="@ColourByOption.Service">Service</option>
+                    <option value="@ColourByOption.Status">Status</option>
+                </select>
+            </label>
         </div>
 
         <div class="bm-tl-controls-right">
@@ -521,6 +551,11 @@
             <MudTooltip Text="Reset view">
                 <MudIconButton Icon="@Icons.Material.Outlined.ZoomOutMap"
                                Size="Size.Small" OnClick="ResetView" />
+            </MudTooltip>
+
+            <MudTooltip Text="Keyboard shortcuts">
+                <MudIconButton Icon="@Icons.Material.Outlined.Keyboard"
+                               Size="Size.Small" OnClick="@(() => _shortcutsOpen = true)" />
             </MudTooltip>
 
             <MudTooltip Text="Export CSV">
@@ -566,22 +601,52 @@
         </div>
     </div>
 
-    <!-- D3 canvas — scrollable lane area. No Blazor children inside. -->
-    <div class="bm-tl-canvas-wrap">
+    <!-- D3 canvas — scrollable lane area. No Blazor children inside; child list
+         must not change after init because D3 owns the SVG inside _canvasRef. -->
+    <div class="bm-tl-canvas-wrap" style="position:relative">
         <div class="bm-tl-canvas" @ref="_canvasRef"></div>
-
-        @if (!_batches.Any())
-        {
-            <div class="bm-tl-empty">
-                <MudIcon Icon="@Icons.Material.Outlined.Timeline" Style="font-size:3rem; opacity:0.25" />
-                <div class="bm-muted" style="margin-top:8px">No batches loaded — click <strong>Add</strong> to begin</div>
-            </div>
-        }
     </div>
+
+    @if (!_batches.Any())
+    {
+        <div class="bm-tl-empty">
+            <MudIcon Icon="@Icons.Material.Outlined.Timeline" Style="font-size:3rem; opacity:0.25" />
+            <div class="bm-muted" style="margin-top:8px">No batches loaded — click <strong>Add</strong> to begin</div>
+        </div>
+    }
 
     <!-- Fixed bottom panel: global tick scale + range selector brush.
          Always visible, never scrolls. D3 appends its own SVG here. -->
     <div class="bm-tl-bottom-panel" @ref="_bottomRef"></div>
+
+    <!-- Shortcuts dialog -->
+    <MudDialog @bind-Visible="_shortcutsOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Keyboard Shortcuts</MudText>
+        </TitleContent>
+        <DialogContent>
+            <MudSimpleTable Dense="true" Hover="false" Bordered="false" Striped="false" Class="bm-tl-shortcuts-table">
+                <thead>
+                    <tr>
+                        <th>Shortcut</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Pan timeline left / right</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Zoom out (toward cursor)</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                    <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
+                    <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
+                </tbody>
+            </MudSimpleTable>
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => _shortcutsOpen = false)">Close</MudButton>
+        </DialogActions>
+    </MudDialog>
 
     <!-- Add Batch dialog -->
     <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">

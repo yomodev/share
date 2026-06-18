@@ -21,7 +21,7 @@ window.BatchMonitor.Timeline = (function () {
     const HEAT_H    = 14;
     const SEL_H     = 26;
     const BOT_PAD_T = 8;
-    const BOT_PAD_B = 8;
+    const BOT_PAD_B = 12;
     const PAD       = 8;
     const BOTTOM_H  = TICK_H + BOT_PAD_T + HEAT_H + BOT_PAD_B;
 
@@ -49,11 +49,13 @@ window.BatchMonitor.Timeline = (function () {
         const s = createInstance(laneEl, bottomEl, options);
         _instances.set(key, s);
         onResize(s);
+        requestAnimationFrame(() => { if (!s.disposed) onResize(s); });
     }
 
     function update(key, payload) {
         const s = _instances.get(key);
         if (!s) return;
+        const nEvents = payload.batches?.reduce((a,b) => a + (b.events?.length ?? 0), 0) ?? 0;
         s.data = payload;
 
         let newMax = 0;
@@ -63,7 +65,18 @@ window.BatchMonitor.Timeline = (function () {
         if (newMax < 1000) newMax = 1000;
         s.globalMax = newMax;
 
-        if (s.frozenDomainMax === null) {
+        // Keep minimum zoom in sync so the user can always scroll-wheel out to see
+        // events that arrived after the initial domain was frozen.
+        if (s.frozenDomainMax) {
+            const minK = Math.min(1, s.frozenDomainMax / newMax);
+            s.zoom.scaleExtent([minK, 5000]);
+        }
+
+        // Only freeze the domain once we have real event data. If we freeze on an
+        // empty update (batches=0 or no events yet), frozenDomainMax becomes 1000ms
+        // and all real events render off-screen to the right, making the view blank.
+        const hasEvents = nEvents > 0;
+        if (s.frozenDomainMax === null && hasEvents) {
             s.frozenDomainMax = newMax;
             s.xScale.domain([0, newMax]);
             s.xZoom = d3.zoomIdentity;
@@ -150,27 +163,17 @@ window.BatchMonitor.Timeline = (function () {
             hoveredChunkId: null,
             subrowHOverride: null,
             selFn: null,
+            isVisible: true,
         };
 
-        // Wire D3 zoom — captures s via closure, safe because s is already assigned.
+        // Wire D3 zoom — wheel events are handled separately on the bottom panel;
+        // the lane SVG uses D3 zoom only for programmatic transforms (applyZoom).
         const zoom = d3.zoom()
             .scaleExtent([1, 5000])
-            .filter(event => {
-                if (event.type === 'wheel' && !event.ctrlKey) {
-                    const wrap = laneEl.parentElement;
-                    if (wrap && wrap.scrollHeight > wrap.clientHeight + 2) return false;
-                }
-                return !event.button;
-            })
+            .filter(event => event.type !== 'wheel' && !event.button)
             .on('zoom', event => {
                 if (!s.frozenDomainMax) return;
-                const t    = event.transform;
-                const W    = s.svgW;
-                const fMax = s.frozenDomainMax;
-                const gMax = s.globalMax || fMax;
-                const rightLimit = -(t.k * (gMax / fMax) * W - W);
-                const tx = Math.max(rightLimit, Math.min(0, t.x));
-                s.xZoom = d3.zoomIdentity.translate(tx, 0).scale(t.k);
+                s.xZoom = clampTransform(s, event.transform);
                 renderLanes(s);
                 renderTicks(s);
                 syncSelector(s);
@@ -188,6 +191,27 @@ window.BatchMonitor.Timeline = (function () {
         // Brush selector.
         buildSelector(s);
 
+        // Wheel on bottom panel zooms toward mouse position, but only when the
+        // mouse is over the brush selection rectangle (the blue handle).
+        const wh = e => {
+            if (!s.isVisible || !s.frozenDomainMax) return;
+            const bx      = e.clientX - s.bottomEl.getBoundingClientRect().left;
+            const brushSel = d3.brushSelection(s.selL.node());
+            if (!brushSel || bx < brushSel[0] || bx > brushSel[1]) return;
+            e.preventDefault();
+            const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+            const t    = s.xZoom;
+            const W    = s.svgW;
+            const gMax = s.globalMax || s.frozenDomainMax;
+            // Map bottom-panel mouse X → time → lane pixel, zoom toward that pixel.
+            const tMouse = Math.max(0, Math.min(gMax,
+                d3.scaleLinear().domain([PAD, W - PAD]).range([0, gMax])(bx)));
+            const mx = s.xZoom.rescaleX(s.xScale)(tMouse);
+            applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
+        };
+        bottomEl.addEventListener('wheel', wh, { passive: false });
+        s.wheelFn = wh;
+
         // Resize observer.
         const ro = new ResizeObserver(() => { if (!s.disposed) onResize(s); });
         ro.observe(laneEl.parentElement || laneEl);
@@ -199,6 +223,7 @@ window.BatchMonitor.Timeline = (function () {
     function disposeInstance(s) {
         s.disposed = true;
         document.removeEventListener('keydown', s.keydownFn);
+        s.bottomEl?.removeEventListener('wheel', s.wheelFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
         try { s.laneSvg.remove(); } catch {}
@@ -206,22 +231,24 @@ window.BatchMonitor.Timeline = (function () {
         try { s.tooltip.remove(); } catch {}
     }
 
-    // Apply a zoom transform without triggering the zoom event (avoids loops).
+    // Clamp a proposed transform: keeps k ≥ minK and tx in [rightLimit, 0].
+    // minK ensures the viewport never exceeds globalMax width.
+    // tx ≤ 0 ensures t=0 stays at or to the left of pixel 0 (no negative time).
+    function clampTransform(s, t) {
+        const W    = s.svgW || 800;
+        const fMax = s.frozenDomainMax || 1;
+        const gMax = s.globalMax || fMax;
+        const minK = Math.min(1, fMax / gMax);
+        const k    = Math.max(minK, t.k);
+        const rightLimit = -(k * (gMax / fMax) * W - W);
+        const tx = Math.max(rightLimit, Math.min(0, t.x));
+        return d3.zoomIdentity.translate(tx, 0).scale(k);
+    }
+
+    // Apply a zoom transform: clamps first so D3's internal state stays clean,
+    // then fires the zoom handler which updates s.xZoom and renders.
     function applyZoom(s, t) {
-        s.zoom.on('zoom', null);
-        s.laneSvg.call(s.zoom.transform, t);
-        s.zoom.on('zoom', event => {
-            if (!s.frozenDomainMax) return;
-            const W    = s.svgW;
-            const fMax = s.frozenDomainMax;
-            const gMax = s.globalMax || fMax;
-            const rightLimit = -(event.transform.k * (gMax / fMax) * W - W);
-            const tx = Math.max(rightLimit, Math.min(0, event.transform.x));
-            s.xZoom = d3.zoomIdentity.translate(tx, 0).scale(event.transform.k);
-            renderLanes(s);
-            renderTicks(s);
-            syncSelector(s);
-        });
+        s.laneSvg.call(s.zoom.transform, clampTransform(s, t));
     }
 
     // ── Resize ────────────────────────────────────────────────────────────
@@ -422,15 +449,13 @@ window.BatchMonitor.Timeline = (function () {
                 for (let bi = 0; bi < subrow.length; bi++) {
                     const item = subrow[bi];
                     const e    = item.event;
-                    const xSt  = item.stack ? item.xStart : xS(e.startMs);
-                    const xEn  = item.stack ? item.xEnd   : xS(e.finishMs ?? e.startMs);
-                    const x    = item.stack ? xSt : xSt;
-                    const w    = Math.max(0, (item.stack ? xEn - xSt : xS(e.finishMs ?? e.startMs) - xS(e.startMs)));
-                    if (!item.stack && (xS(e.startMs) > W || xS(e.finishMs ?? e.startMs) < 0)) continue;
+                    const x = xS(item.xStart);
+                    const w = Math.max(0, xS(item.xEnd) - x);
+                    if (x > W || x + w < 0) continue;
                     const ck   = colourKey(e, colourBy);
                     blockData.push({
                         e, ck,
-                        x: item.stack ? xSt : xS(e.startMs),
+                        x,
                         w: Math.max(1, w),
                         colour: colourForKey(ck, colourBy),
                         bse:    sec.batch.batchStartEpochMs || 0,
@@ -645,9 +670,6 @@ window.BatchMonitor.Timeline = (function () {
 
     function renderCursorBot(s, mx, timeMs, bse) {
         s.curBotL.selectAll('*').remove();
-        s.curBotL.append('line')
-            .attr('x1', mx).attr('x2', mx).attr('y1', 0).attr('y2', TICK_H + HEAT_H / 2)
-            .style('stroke', CURSOR_COLOR).style('stroke-width', 1.5).style('opacity', 0.8);
 
         const relL = fmtRelHMS(timeMs);
         const absL = bse ? ` (${fmtAbsHMS(bse + timeMs)})` : '';
@@ -742,14 +764,37 @@ window.BatchMonitor.Timeline = (function () {
     }
 
     function positionTooltip(s, event) {
-        const rect = s.laneEl.getBoundingClientRect();
-        let x = event.clientX - rect.left + 12;
-        let y = event.clientY - rect.top  - 8;
-        const pw = 280, ph = 230;
-        if (x + pw > rect.width  - 8) x = event.clientX - rect.left - pw - 12;
-        if (y + ph > rect.height - 8) y = event.clientY - rect.top  - ph - 12;
-        if (y < 0) y = event.clientY - rect.top + 16;
-        x = Math.max(4, x); y = Math.max(4, y);
+        const node = s.tooltip.node();
+        const tw = node.offsetWidth  || 280;
+        const th = node.offsetHeight || 230;
+
+        const laneRect = s.laneEl.getBoundingClientRect();
+        const wrap     = s.laneEl.parentElement;
+
+        // Position in laneEl coordinate space (accounts for scroll automatically
+        // because laneRect.top moves as the content scrolls).
+        const mx = event.clientX - laneRect.left;
+        const my = event.clientY - laneRect.top;
+
+        // Visible vertical window inside the scroll container, minus the bottom panel.
+        const scrollTop   = wrap ? wrap.scrollTop   : 0;
+        const visBottom   = wrap
+            ? scrollTop + wrap.clientHeight - BOTTOM_H - 6
+            : my + 400;
+        const visTop = scrollTop + 4;
+
+        let x = mx + 14;
+        let y = my - 8;
+
+        // Flip right→left if tooltip would overflow the lane width.
+        if (x + tw > laneRect.width - 4) x = mx - tw - 14;
+        x = Math.max(4, x);
+
+        // Flip down→up if tooltip would go under the range selector or off screen.
+        if (y + th > visBottom) y = my - th - 12;
+        // Don't let it go above the visible scroll top.
+        if (y < visTop) y = visTop;
+
         s.tooltip.style('left', `${x}px`).style('top', `${y}px`);
     }
 
@@ -760,21 +805,23 @@ window.BatchMonitor.Timeline = (function () {
     // ── Keyboard ──────────────────────────────────────────────────────────
 
     function handleKey(s, e) {
-        if (!s || s.disposed) return;
+        if (!s || s.disposed || !s.isVisible) return;
         const tag = document.activeElement?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        const W    = s.svgW || 800;
-        const t    = s.xZoom;
-        const wrap = s.laneEl?.parentElement;
+        const W   = s.svgW || 800;
+        const t   = s.xZoom;
 
-        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            e.preventDefault();
-            const vScroll = wrap && wrap.scrollHeight > wrap.clientHeight + 2;
-            if (vScroll && !e.ctrlKey) {
-                if (wrap) wrap.scrollTop += e.key === 'ArrowDown' ? 60 : -60;
-            } else {
+        // Ctrl+arrows: zoom (Left/Right) or bar-height (Up/Down).
+        if (e.ctrlKey) {
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                const factor = e.key === 'ArrowRight' ? 1.25 : 1 / 1.25;
+                const mx = s.cursorX ?? 0;  // use cursor position if over lane, else left edge
+                applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
+            } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
                 const sh = s.subrowHOverride ?? SUBROW_H;
-                s.subrowHOverride = Math.max(1, sh + (e.key === 'ArrowUp' ? 1 : -1));
+                s.subrowHOverride = Math.max(1, sh + (e.key === 'ArrowDown' ? 1 : -1));
                 computeLayout(s);
                 updateLaneSvgHeight(s);
                 renderAll(s);
@@ -782,6 +829,7 @@ window.BatchMonitor.Timeline = (function () {
             return;
         }
 
+        // Plain arrows: pan. Up/Down fall through to browser (native vertical scroll).
         let nt = null;
         switch (e.key) {
             case '=': case '+':
@@ -793,10 +841,10 @@ window.BatchMonitor.Timeline = (function () {
                 nt = d3.zoomIdentity.translate(Math.min(0, t.x + dx), 0).scale(t.k); break;
             }
             case 'ArrowRight': {
-                const dx   = e.shiftKey ? W * 0.5 : W * 0.1;
-                const gMx  = s.globalMax || s.frozenDomainMax || 1;
-                const fMx  = s.frozenDomainMax || 1;
-                const rl   = -(t.k * (gMx / fMx) * W - W);
+                const dx  = e.shiftKey ? W * 0.5 : W * 0.1;
+                const gMx = s.globalMax || s.frozenDomainMax || 1;
+                const fMx = s.frozenDomainMax || 1;
+                const rl  = -(t.k * (gMx / fMx) * W - W);
                 nt = d3.zoomIdentity.translate(Math.max(rl, t.x - dx), 0).scale(t.k); break;
             }
             case 'Home':
@@ -892,6 +940,13 @@ window.BatchMonitor.Timeline = (function () {
     }
     function csv(v) { return `"${String(v ?? '').replace(/"/g, '""')}"`; }
 
-    return { init, update, resetView, exportCsv, dispose };
+    function setVisible(key, visible) {
+        const s = _instances.get(key);
+        if (!s) return;
+        s.isVisible = visible;
+        if (visible) requestAnimationFrame(() => { if (!s.disposed) onResize(s); });
+    }
+
+    return { init, update, resetView, exportCsv, dispose, setVisible };
 
 })();

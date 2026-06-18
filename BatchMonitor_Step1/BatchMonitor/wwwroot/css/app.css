@@ -174,9 +174,6 @@ html, body {
     display: none;
 }
 
-/* ── Spacer ──────────────────────────────────────────────────────── */
-.bm-nav-spacer { flex: 1; }
-
 /* ── Bottom block ────────────────────────────────────────────────── */
 .bm-sidebar-bottom {
     flex-shrink: 0;

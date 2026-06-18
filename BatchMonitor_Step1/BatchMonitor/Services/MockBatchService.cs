@@ -55,6 +55,9 @@ public class MockBatchService : IBatchService
     // Background push simulation for running batches.
     private readonly CancellationTokenSource _bgCts = new();
 
+    // In-flight chunks: chunkId → next hop index still to be processed.
+    private readonly Dictionary<string, int> _inFlightChunks = new();
+
     public MockBatchService(IHubContext<BatchEventsHub>? hubContext = null)
     {
         _hubContext = hubContext;
@@ -210,28 +213,49 @@ public class MockBatchService : IBatchService
     private List<PerformanceEvent> GenerateLiveEvents(string runId, ref int counter, Random rng)
     {
         var events = new List<PerformanceEvent>();
-        var count  = rng.Next(1, 4);
 
-        for (int i = 0; i < count; i++)
+        // Spawn 1-2 brand-new chunks into the in-flight pool each tick.
+        int newChunks = rng.Next(1, 3);
+        for (int i = 0; i < newChunks; i++)
+            _inFlightChunks[$"LIVE-{counter++:D5}"] = 0;
+
+        // For each in-flight chunk, each service independently decides whether
+        // it has finished processing the chunk this tick (~60% chance per service).
+        var done = new List<string>();
+        foreach (var (chunkId, nextHop) in _inFlightChunks)
         {
-            var hopIdx  = rng.Next(0, ServicePipelines.Length);
-            var (service, pipelines) = ServicePipelines[hopIdx];
-            var pipeline = pipelines[rng.Next(0, pipelines.Length)];
-            var start    = DateTime.UtcNow.AddSeconds(-rng.Next(0, 3));
+            if (rng.Next(0, 100) >= 60) continue; // this service not ready yet
+
+            var (service, pipelines) = ServicePipelines[nextHop];
+            var pipeline  = pipelines[rng.Next(0, pipelines.Length)];
+            var start     = DateTime.UtcNow.AddSeconds(-rng.Next(1, 8));
+            var isError   = rng.Next(0, 100) < 8;
+            var isLastHop = nextHop == ServicePipelines.Length - 1;
 
             events.Add(new PerformanceEvent
             {
-                ChunkId     = $"LIVE-{counter++:D5}",
+                ChunkId     = chunkId,
                 Service     = service,
                 Pipeline    = pipeline,
                 Source      = PickSource(service, pipeline, rng),
                 Server      = Servers[rng.Next(0, Servers.Length)],
                 ProcessId   = ProcessIds[rng.Next(0, ProcessIds.Length)],
                 Start       = start,
-                Finish      = rng.Next(0, 100) < 80 ? start.AddSeconds(rng.Next(1, 4)) : null,
-                RecordCount = rng.Next(10, 200),
+                Finish      = isError ? start.AddSeconds(rng.Next(1, 3))
+                            : isLastHop && rng.Next(0, 100) < 15 ? null
+                            : start.AddSeconds(rng.Next(1, 8)),
+                Error       = isError ? "Processing error" : null,
+                RecordCount = rng.Next(10, 500),
             });
+
+            if (isError || isLastHop)
+                done.Add(chunkId);
+            else
+                _inFlightChunks[chunkId] = nextHop + 1;
         }
+
+        foreach (var id in done) _inFlightChunks.Remove(id);
+
         return events;
     }
 
