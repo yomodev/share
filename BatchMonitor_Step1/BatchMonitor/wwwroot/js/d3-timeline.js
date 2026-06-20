@@ -4,9 +4,22 @@
 // All internal functions receive the instance state `s` as first argument.
 // No module-level mutable state — everything is in the instance map.
 
-window.BatchMonitor = window.BatchMonitor || {};
+// ES module — exported functions are the public API consumed via Blazor JS isolation.
+import { parse, evaluate } from './filter.js';
 
-window.BatchMonitor.Timeline = (function () {
+// Field aliases and searchable fields for the timeline event objects (camelCase).
+const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'chunkId', 'server'];
+const TIMELINE_ALIASES = {
+    svc: 'service',      service:   'service',
+    pipe: 'pipeline',    pipeline:  'pipeline',
+    srv: 'server',       server:    'server',
+    pid: 'processId',    processid: 'processId',
+    src: 'source',       source:    'source',
+    chunk: 'chunkId',    chunkid:   'chunkId',
+    dur: 'duration',     duration:  'duration',
+    start: 'startUtc',   startutc:  'startUtc',
+    finish: 'finishUtc', finishutc: 'finishUtc',
+};
 
     const _instances = new Map();
 
@@ -59,6 +72,21 @@ window.BatchMonitor.Timeline = (function () {
         s.hoveredChunkId  = null;
         s.hoveredBatchIdx = -1;
         s.data = payload;
+
+        // Enrich each event with computed fields used by the filter engine.
+        // Done here once per update so computeLayout / evaluate stay generic.
+        const todayMs = new Date().setUTCHours(0, 0, 0, 0);
+        for (const batch of (payload.batches || [])) {
+            const bse = batch.batchStartEpochMs || 0;
+            for (const e of (batch.events || [])) {
+                e.startUtc  = new Date(bse + e.startMs).toISOString();
+                e.finishUtc = e.finishMs != null ? new Date(bse + e.finishMs).toISOString() : null;
+                // duration stored as today-midnight + elapsed so hh:mm filter syntax works directly.
+                e.duration  = e.finishMs != null
+                    ? new Date(todayMs + (e.finishMs - e.startMs)).toISOString()
+                    : null;
+            }
+        }
 
         const isStack  = !!(payload.stackView);
         const wasStack = s.isStack ?? false;
@@ -313,13 +341,13 @@ window.BatchMonitor.Timeline = (function () {
         if (!s.data) return;
         const groupBy  = s.data.groupBy  || 'ServicePipeline';
         const colourBy = s.data.colourBy || 'Source';
-        const filter   = (s.data.filter  || '').toLowerCase();
+        const filterAst = parse(s.data.filter || '', TIMELINE_SEARCHABLE_FIELDS, TIMELINE_ALIASES);
         const stack    = s.data.stackView || false;
 
         let y = 0;
         const sections = [];
         for (const batch of (s.data.batches || [])) {
-            const groups  = stack ? buildStackGroups(s, batch, filter) : buildGroups(s, batch, groupBy, filter);
+            const groups  = stack ? buildStackGroups(s, batch, filterAst) : buildGroups(s, batch, groupBy, filterAst);
             const sectionH = HEADER_H + groups.reduce((a, g) => a + g.rowH, 0) + SECTION_GAP;
             sections.push({ batch, groups, y, sectionH });
             y += sectionH;
@@ -327,11 +355,11 @@ window.BatchMonitor.Timeline = (function () {
         s.layout = { sections, totalH: y };
     }
 
-    function buildGroups(s, batch, groupBy, filter) {
+    function buildGroups(s, batch, groupBy, filterAst) {
         const map = new Map();
         for (const e of (batch.events || [])) {
             if (e.finishMs == null) continue;
-            if (filter && !matchesFilter(e, filter)) continue;
+            if (!evaluate(filterAst, e)) continue;
             const key = groupKey(e, groupBy);
             if (!map.has(key)) map.set(key, []);
             map.get(key).push(e);
@@ -346,9 +374,9 @@ window.BatchMonitor.Timeline = (function () {
         return groups;
     }
 
-    function buildStackGroups(s, batch, filter) {
+    function buildStackGroups(s, batch, filterAst) {
         const events = (batch.events || []).filter(e =>
-            e.finishMs != null && (!filter || matchesFilter(e, filter)));
+            e.finishMs != null && evaluate(filterAst, e));
         const chunks = new Map();
         for (const e of events) {
             if (!chunks.has(e.chunkId)) chunks.set(e.chunkId, []);
@@ -911,7 +939,7 @@ window.BatchMonitor.Timeline = (function () {
         if (e.ctrlKey) {
             if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 e.preventDefault();
-                const factor = e.key === 'ArrowRight' ? 1.25 : 1 / 1.25;
+                const factor = e.key === 'ArrowLeft' ? 1.25 : 1 / 1.25;
                 const mx = s.cursorX ?? 0;  // use cursor position if over lane, else left edge
                 applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -1037,10 +1065,6 @@ window.BatchMonitor.Timeline = (function () {
         for (let i = 0; i < s.length; i++) h = Math.imul(31, h) + s.charCodeAt(i) | 0;
         return Math.abs(h);
     }
-    function matchesFilter(e, f) {
-        return [e.chunkId, e.source, e.pipeline, e.service, e.processId, e.server]
-            .some(v => (v || '').toLowerCase().includes(f));
-    }
     function esc(s) {
         return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
@@ -1060,6 +1084,4 @@ window.BatchMonitor.Timeline = (function () {
         if (!show) hideTooltip(s);
     }
 
-    return { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
-
-})();
+export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };

@@ -1,0 +1,199 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@inject IMongoService MongoSvc
+@implements IDisposable
+
+<div class="bm-page bm-page-fill bm-inspector">
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+        <span class="bm-inspector-topic">
+            <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" Class="bm-inspector-topic-icon" />
+            @_database.<span style="opacity:.5;">@_collection</span>
+        </span>
+
+        <MudTextField T="string"
+                      Value="@_search"
+                      ValueChanged="OnSearchChanged"
+                      Placeholder="Search documents…"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Clearable="true"
+                      Dense="true"
+                      Margin="Margin.Dense"
+                      Variant="Variant.Outlined"
+                      Class="bm-filter-input" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           Disabled="_loading"
+                           OnClick="LoadAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
+    </div>
+
+    <!-- Table -->
+    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
+
+        <MudTable T="MongoDocument"
+                  Items="_docs"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  FixedHeader="true"
+                  Height="100%"
+                  SelectedItem="_selected"
+                  SelectedItemChanged="OnRowSelected"
+                  Class="bm-batch-table bm-inspector-table">
+            <HeaderContent>
+                <MudTh Style="width:200px;">_id</MudTh>
+                <MudTh>Preview</MudTh>
+                <MudTh Style="width:170px;">Timestamp (UTC)</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                    <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
+                </MudTd>
+                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                    <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
+                </MudTd>
+                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                    @if (context.Timestamp.HasValue)
+                    {
+                        <span class="bm-kafka-mono bm-muted">
+                            @context.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="bm-muted">—</span>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+
+    <!-- Footer -->
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @_totalCount.ToString("N0") doc@(_totalCount == 1 ? "" : "s")
+        </MudText>
+        <MudPagination Count="_totalPages"
+                       Selected="_page"
+                       SelectedChanged="OnPageChanged"
+                       ShowFirstButton="true"
+                       ShowLastButton="true"
+                       Size="Size.Small"
+                       Class="bm-pagination-ctrl" />
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
+                       Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Style="width:68px;">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+            </MudSelect>
+        </div>
+    </div>
+
+    <!-- Detail panel -->
+    @if (_selected is not null)
+    {
+        <div class="bm-inspector-detail">
+            <div class="bm-inspector-detail-header">
+                <span class="bm-kafka-mono">
+                    <strong>@_selected.Id</strong>
+                    @if (_selected.Timestamp.HasValue)
+                    {
+                        <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                    }
+                </span>
+                <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                               Size="Size.Small"
+                               OnClick="@(() => _selected = null)" />
+            </div>
+            <div class="bm-inspector-detail-body">
+                <pre class="bm-inspector-value">@FormatJson(_selected.Json)</pre>
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public string EntityId    { get; set; } = string.Empty;  // "database/collection"
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private string _database   = string.Empty;
+    private string _collection = string.Empty;
+
+    private List<MongoDocument> _docs       = new();
+    private MongoDocument?      _selected   = null;
+    private string              _search     = string.Empty;
+    private bool                _loading    = true;
+    private long                _totalCount = 0;
+    private int                 _page = 1, _pageSize = 25, _totalPages = 1;
+    private CancellationTokenSource _cts = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var parts   = EntityId.Split('/', 2);
+        _database   = parts.Length > 0 ? parts[0] : string.Empty;
+        _collection = parts.Length > 1 ? parts[1] : string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var skip = (_page - 1) * _pageSize;
+            var (docs, total) = await MongoSvc.GetDocumentsAsync(
+                Environment, _database, _collection, _search, skip, _pageSize, _cts.Token);
+            _docs        = docs.ToList();
+            _totalCount  = total;
+            _totalPages  = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+        }
+        catch (OperationCanceledException) { }
+        finally { _loading = false; }
+    }
+
+    private async void OnSearchChanged(string s)
+    {
+        _search = s;
+        _page   = 1;
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async void OnPageChanged(int p) { _page = p; await LoadAsync(); StateHasChanged(); }
+    private async void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; await LoadAsync(); StateHasChanged(); }
+
+    private void OnRowSelected(MongoDocument? doc)
+        => _selected = ReferenceEquals(_selected, doc) ? null : doc;
+
+    private static string TruncateJson(string json)
+        => json.Length > 140 ? json[..140] + "…" : json;
+
+    private static string FormatJson(string raw)
+    {
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(raw);
+            return System.Text.Json.JsonSerializer.Serialize(
+                doc.RootElement,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch { return raw; }
+    }
+
+    public void Dispose() => _cts.Cancel();
+}

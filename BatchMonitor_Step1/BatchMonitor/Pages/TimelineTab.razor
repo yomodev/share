@@ -14,8 +14,23 @@
     private readonly List<TimelineBatch> _batches = new();
     private readonly SemaphoreSlim _batchLock = new(1, 1);
 
-    // ── Control bar state ─────────────────────────────────────────────────
+    // ── Filter ────────────────────────────────────────────────────────────
     private string _filterText = string.Empty;
+
+    private static readonly (string Aliases, string Label)[] _timelineFieldHints =
+    [
+        ("svc / service",   "service name"),
+        ("pipe / pipeline", "pipeline name"),
+        ("src / source",    "source identifier"),
+        ("chunk / chunkId", "chunk ID"),
+        ("srv / server",    "server / host"),
+        ("pid / processId", "process ID"),
+        ("dur / duration",  "event duration  (hh:mm or hh:mm:ss)"),
+        ("start",           "event start time (UTC)"),
+        ("finish",          "event finish time (UTC)"),
+    ];
+
+    // ── Control bar state ─────────────────────────────────────────────────
     private GroupByOption _groupBy = GroupByOption.ServicePipeline;
     private ColourByOption _colourBy = ColourByOption.Source;
     private bool _stackView   = false;
@@ -38,7 +53,7 @@
     private string _instanceKey = Guid.NewGuid().ToString("N");
     private ElementReference _canvasRef;
     private ElementReference _bottomRef;
-    private bool _jsInitialised = false;
+    private IJSObjectReference? _tlModule;
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
 
@@ -60,8 +75,8 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_jsInitialised)
-            await JS.InvokeVoidAsync("BatchMonitor.Timeline.setVisible", _instanceKey, IsFocused);
+        if (_tlModule is not null)
+            await _tlModule.InvokeVoidAsync("setVisible", _instanceKey, IsFocused);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -70,8 +85,8 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.Timeline.init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
-                _jsInitialised = true;
+                _tlModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js");
+                await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
             catch (Exception ex)
@@ -79,7 +94,7 @@
                 Console.WriteLine($"[Timeline] JS init error: {ex.Message}");
             }
         }
-        else if (_pendingJsPush && _jsInitialised)
+        else if (_pendingJsPush && _tlModule is not null)
         {
             // Push runs here — AFTER Blazor has committed the render batch (including
             // MudBlazor's popover close). This prevents the double-batch race that
@@ -89,7 +104,7 @@
         }
     }
 
-    protected override bool ShouldRender() => IsFocused || !_jsInitialised;
+    protected override bool ShouldRender() => IsFocused || _tlModule is null;
 
     // ── Batch loading ─────────────────────────────────────────────────────
 
@@ -170,11 +185,11 @@
 
     private async Task PushDataAsync()
     {
-        if (!_jsInitialised) return;
+        if (_tlModule is null) return;
         try
         {
             var payload = BuildPayload();
-            await JS.InvokeVoidAsync("BatchMonitor.Timeline.update", _instanceKey, payload);
+            await _tlModule.InvokeVoidAsync("update", _instanceKey, payload);
         }
         catch (Exception ex)
         {
@@ -205,10 +220,10 @@
                     service   = e.Service,
                     processId = e.ProcessId,
                     server    = e.Server,
-                    startMs   = (e.Start - b.BatchStart).TotalMilliseconds,
-                    finishMs  = e.Finish.HasValue ? (e.Finish.Value - b.BatchStart).TotalMilliseconds : (double?)null,
-                    error     = e.Error,
-                    status    = e.IsError ? "error" : e.IsDone ? "done" : "inprogress",
+                    startMs  = (e.Start - b.BatchStart).TotalMilliseconds,
+                    finishMs = e.Finish.HasValue ? (e.Finish.Value - b.BatchStart).TotalMilliseconds : (double?)null,
+                    error    = e.Error,
+                    status      = e.IsError ? "error" : e.IsDone ? "done" : "inprogress",
                 }).ToList(),
             }).ToList(),
         };
@@ -256,20 +271,21 @@
     private async Task ToggleTooltipAsync()
     {
         _showTooltip = !_showTooltip;
-        if (_jsInitialised)
-            await JS.InvokeVoidAsync("BatchMonitor.Timeline.setTooltipVisible", _instanceKey, _showTooltip);
+        if (_tlModule is not null)
+            await _tlModule.InvokeVoidAsync("setTooltipVisible", _instanceKey, _showTooltip);
     }
 
     private async Task ResetView()
     {
-        if (!_jsInitialised) return;
-        await JS.InvokeVoidAsync("BatchMonitor.Timeline.resetView", _instanceKey);
+        if (_tlModule is null) return;
+        await _tlModule.InvokeVoidAsync("resetView", _instanceKey);
         await PushDataAsync();
     }
 
     private void ExportCsv()
     {
-        _ = JS.InvokeVoidAsync("BatchMonitor.Timeline.exportCsv", _instanceKey);
+        if (_tlModule is not null)
+            _ = _tlModule.InvokeVoidAsync("exportCsv", _instanceKey);
     }
 
     private async Task TriggerImport()
@@ -486,10 +502,11 @@
         try { foreach (var b in _batches) await b.DisposeAsync(); }
         finally { _batchLock.Release(); }
 
-        if (_jsInitialised)
+        if (_tlModule is not null)
         {
-            try { await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose", _instanceKey); }
+            try { await _tlModule.InvokeVoidAsync("dispose", _instanceKey); }
             catch { }
+            await _tlModule.DisposeAsync();
         }
     }
 
@@ -519,12 +536,11 @@
     <!-- Control bar -->
     <div class="bm-tl-controls">
         <div class="bm-tl-controls-left">
-            <MudTextField T="string" Placeholder="Filter…" Adornment="Adornment.Start"
-                          AdornmentIcon="@Icons.Material.Outlined.Search"
-                          Value="@_filterText" ValueChanged="OnFilterChanged"
-                          Immediate="true" DebounceInterval="250"
-                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Class="bm-tl-filter" />
+            <FilterBox Value="@_filterText"
+                       OnFilterChanged="OnFilterChanged"
+                       DebounceMs="250"
+                       Class="bm-tl-filter"
+                       FieldHints="@_timelineFieldHints" />
 
             <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
                 Group by

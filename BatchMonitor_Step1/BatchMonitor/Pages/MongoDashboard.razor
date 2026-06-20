@@ -1,0 +1,242 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@using BatchMonitor.Filtering
+@inject IMongoService MongoSvc
+@inject TabService TabService
+@implements IDisposable
+
+<div class="bm-page bm-page-fill">
+
+    <!-- DB info bar -->
+    @if (_databases.Count > 0)
+    {
+        var db = _databases.FirstOrDefault(d => d.Name == _selectedDb);
+        <div class="bm-kafka-cluster-bar">
+            <span class="bm-kafka-stat">
+                <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-kafka-stat-icon" />
+                Databases
+                <strong>@_databases.Count</strong>
+            </span>
+            @if (db is not null)
+            {
+                <span class="bm-kafka-stat">
+                    <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" Class="bm-kafka-stat-icon" />
+                    Collections
+                    <strong>@db.CollectionCount</strong>
+                </span>
+                <span class="bm-kafka-stat-label">
+                    <code>@db.Name</code>&nbsp;·&nbsp;@FormatBytes(db.SizeBytes)
+                </span>
+            }
+        </div>
+    }
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+        <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                   Class="bm-mongo-db-select" Label="Database">
+            @foreach (var db in _databases)
+            {
+                <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
+            }
+        </MudSelect>
+
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter collections…"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           Disabled="_loading"
+                           OnClick="LoadCollectionsAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
+    </div>
+
+    <!-- Table -->
+    <div class="bm-table-wrap">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
+
+        <MudTable T="MongoCollectionSummary"
+                  Items="_paged"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  FixedHeader="true"
+                  Height="100%"
+                  Class="bm-batch-table">
+            <HeaderContent>
+                <MudTh>
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.Name">Collection</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:130px; text-align:right;">
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.DocumentCount">Documents</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:120px; text-align:right;">
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.StorageSizeBytes">Storage</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:100px; text-align:right;">
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.AvgDocSizeBytes">Avg Doc</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
+                <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-topic-name">@context.Name</span>
+                </MudTd>
+                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
+                </MudTd>
+                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
+                </MudTd>
+                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-mono">@FormatBytes(context.AvgDocSizeBytes)</span>
+                </MudTd>
+                <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
+                    @context.IndexCount
+                </MudTd>
+                <MudTd Style="text-align:center;">
+                    <div class="bm-row-actions">
+                        <MudTooltip Text="Browse documents">
+                            <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenInspector(context.Name))" />
+                        </MudTooltip>
+                    </div>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+
+    <!-- Footer -->
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @_filtered.Count collection@(_filtered.Count == 1 ? "" : "s")
+        </MudText>
+        <MudPagination Count="_totalPages"
+                       Selected="_page"
+                       SelectedChanged="OnPageChanged"
+                       ShowFirstButton="true"
+                       ShowLastButton="true"
+                       Size="Size.Small"
+                       Class="bm-pagination-ctrl" />
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
+                       Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Style="width:68px;">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+            </MudSelect>
+        </div>
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private List<MongoDatabaseInfo>      _databases = new();
+    private List<MongoCollectionSummary> _all       = new();
+    private List<MongoCollectionSummary> _filtered  = new();
+    private List<MongoCollectionSummary> _paged     = new();
+    private string  _selectedDb       = string.Empty;
+    private string  _filterText       = string.Empty;
+    private string  _filterParseError = string.Empty;
+    private bool    _loading          = true;
+    private int     _page = 1, _pageSize = 25, _totalPages = 1;
+    private CancellationTokenSource _cts = new();
+
+    private static readonly string[] SearchableFields = ["Name"];
+    private static readonly FilterParser Parser = new(SearchableFields,
+        new Dictionary<string, string> { ["name"] = "Name", ["collection"] = "Name" });
+
+    private static readonly (string Aliases, string Label)[] _fieldHints =
+    [
+        ("name / collection", "collection name"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _databases = (await MongoSvc.GetDatabasesAsync(Environment, _cts.Token)).ToList();
+        if (_databases.Count > 0)
+        {
+            _selectedDb = _databases[0].Name;
+            await LoadCollectionsAsync();
+        }
+        else { _loading = false; }
+    }
+
+    private async Task OnDbChanged(string db)
+    {
+        _selectedDb = db;
+        await LoadCollectionsAsync();
+    }
+
+    private async Task LoadCollectionsAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var cols = await MongoSvc.GetCollectionsAsync(Environment, _selectedDb, _cts.Token);
+            _all = cols.ToList();
+            ApplyFilter();
+        }
+        catch (OperationCanceledException) { }
+        finally { _loading = false; }
+    }
+
+    private void OnFilterChanged(string text)
+    {
+        _filterText = text;
+        _filterParseError = string.Empty;
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = Parser.Parse(text); }
+            catch (FilterParseException ex) { _filterParseError = ex.Message; }
+        }
+        _filtered = node is null
+            ? _all
+            : _all.Where(c => FilterEvaluator.Evaluate(node, c)).ToList();
+        _page = 1;
+        RebuildPage();
+    }
+
+    private void ApplyFilter() => OnFilterChanged(_filterText);
+
+    private void RebuildPage()
+    {
+        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
+        _page       = Math.Clamp(_page, 1, _totalPages);
+        _paged      = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+    }
+
+    private void OnPageChanged(int p) { _page = p; RebuildPage(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
+
+    private void OpenInspector(string collection)
+        => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));
+
+    private static string FormatBytes(long b) => b switch
+    {
+        < 1024               => $"{b} B",
+        < 1024 * 1024        => $"{b / 1024} KB",
+        < 1024L * 1024 * 1024 => $"{b / (1024 * 1024)} MB",
+        _                    => $"{b / (1024L * 1024 * 1024)} GB",
+    };
+
+    public void Dispose() => _cts.Cancel();
+}

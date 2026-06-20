@@ -1,16 +1,16 @@
 // Batch Monitor — client-side utilities
 
-window.BatchMonitor = window.BatchMonitor || {};
-
 // ── localStorage helpers ──────────────────────────────────────────────────
 
-window.BatchMonitor.getLocalStorage = (key) => {
+/** @param {string} key @returns {string|null} */
+export function getLocalStorage(key) {
     try { return localStorage.getItem(key); } catch { return null; }
-};
+}
 
-window.BatchMonitor.setLocalStorage = (key, value) => {
+/** @param {string} key @param {string} value */
+export function setLocalStorage(key, value) {
     try { localStorage.setItem(key, value); } catch { }
-};
+}
 
 // ── Tab bar: horizontal scroll + JS-driven drag-and-drop ─────────────────
 //
@@ -22,7 +22,11 @@ window.BatchMonitor.setLocalStorage = (key, value) => {
 // No Blazor round-trips during the drag itself, so no "unavailable" cursor
 // flash and no shaking from repeated async re-renders.
 
-window.BatchMonitor.initTabDrag = (containerEl, dotnetHelper) => {
+/**
+ * @param {HTMLElement} containerEl
+ * @param {{ invokeMethodAsync: (method: string, ...args: any[]) => Promise<void> }} dotnetHelper
+ */
+export function initTabDrag(containerEl, dotnetHelper) {
     if (!containerEl) return;
 
     let dragId = null;
@@ -120,22 +124,23 @@ window.BatchMonitor.initTabDrag = (containerEl, dotnetHelper) => {
 
         dotnetHelper.invokeMethodAsync('OnTabDropped', id, targetIndex);
     });
-};
+}
 
-// Scroll the active tab into view (called after focus changes).
-window.BatchMonitor.scrollTabIntoView = (tabId) => {
+/** @param {HTMLElement} containerEl */
+export function scrollTabIntoView(tabId) {
     const el = document.querySelector(`[data-tab-id="${tabId}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-};
+}
 
 // Translate vertical mouse-wheel events into horizontal scroll on the tab
 // strip, so the user can scroll through tabs without needing a trackpad
 // horizontal swipe.
-window.BatchMonitor.initTabWheelScroll = (containerEl) => {
+/** @param {HTMLElement} containerEl */
+export function initTabWheelScroll(containerEl) {
     if (!containerEl) return;
     containerEl.addEventListener('wheel', e => {
         if (e.deltaY === 0) return;
         e.preventDefault();
         containerEl.scrollLeft += e.deltaY * 0.8;
     }, { passive: false });
-};
+}

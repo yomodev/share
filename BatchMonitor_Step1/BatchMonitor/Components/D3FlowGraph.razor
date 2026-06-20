@@ -18,7 +18,7 @@
     [Parameter] public bool IsVisible { get; set; } = true;
 
     private ElementReference _containerRef;
-    private bool _initialized;
+    private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -27,10 +27,10 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.init", _containerRef, GetHandleKey());
-                _initialized = true;
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js");
+                await _module.InvokeVoidAsync("init", _containerRef, GetHandleKey());
                 _previousIsVisible = IsVisible;
-                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.setVisible", GetHandleKey(), IsVisible);
+                await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
             }
             catch (Exception ex)
@@ -42,14 +42,14 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (!_initialized) return;
+        if (_module is null) return;
 
         if (IsVisible != _previousIsVisible)
         {
             _previousIsVisible = IsVisible;
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.setVisible", GetHandleKey(), IsVisible);
+                await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
             }
             catch (Exception ex)
             {
@@ -64,9 +64,10 @@
 
     private async Task PushTopologyAsync()
     {
+        if (_module is null) return;
         try
         {
-            await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.update", GetHandleKey(), Topology);
+            await _module.InvokeVoidAsync("update", GetHandleKey(), Topology);
         }
         catch (Exception ex)
         {
@@ -76,19 +77,21 @@
 
     private async Task FitToViewAsync()
     {
+        if (_module is null) return;
         try
         {
-            await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.fitToView", GetHandleKey());
+            await _module.InvokeVoidAsync("fitToView", GetHandleKey());
         }
         catch { }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_initialized)
+        if (_module is not null)
         {
-            try { await JS.InvokeVoidAsync("BatchMonitor.D3FlowGraphInterop.dispose", GetHandleKey()); }
+            try { await _module.InvokeVoidAsync("dispose", GetHandleKey()); }
             catch { }
+            await _module.DisposeAsync();
         }
     }
 }

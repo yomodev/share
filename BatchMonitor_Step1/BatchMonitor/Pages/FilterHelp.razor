@@ -1,0 +1,223 @@
+<div class="bm-help-page bm-help-page--tab">
+
+    <div class="bm-help-header">
+        <h1 class="bm-help-title">Filter syntax</h1>
+        <p class="bm-help-lead">
+            Every filter box in Batch Monitor speaks the same language.
+            Type one or many terms, use operators to combine them, and prefix a
+            term with a field name to narrow down where it looks.
+        </p>
+    </div>
+
+    <!-- ── Combining terms ─────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Combining terms</h2>
+
+        <p>
+            By default, terms separated by a <strong>space</strong> are ANDed together —
+            every term must match. Use a <strong>comma</strong> to OR terms — any one must match.
+        </p>
+
+        <table class="bm-help-table">
+            <thead><tr><th>Syntax</th><th>Meaning</th><th>Example</th></tr></thead>
+            <tbody>
+                <tr><td><code>a b</code> or <code>a &amp; b</code></td><td>AND — both must match</td><td><code>Loader Transform</code></td></tr>
+                <tr><td><code>a , b</code> or <code>a | b</code></td><td>OR — either must match</td><td><code>Loader , Parser</code></td></tr>
+                <tr><td><code>!a</code></td><td>NOT — must not match</td><td><code>!error</code></td></tr>
+                <tr><td><code>(…)</code></td><td>group to control precedence</td><td><code>Loader (error , timeout)</code></td></tr>
+            </tbody>
+        </table>
+
+        <div class="bm-help-callout">
+            <strong>Precedence:</strong> NOT binds tightest, then AND (space), then OR (comma).
+            So <code>car bike , plane dog</code> means <em>(car AND bike) OR (plane AND dog)</em>.
+            Use parentheses when in doubt.
+        </div>
+    </section>
+
+    <!-- ── Text matching ───────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Text matching</h2>
+
+        <table class="bm-help-table">
+            <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td><code>field:value</code></td>
+                    <td>Case-insensitive <strong>contains</strong> — "Loader" matches "BatchLoader", "loaderMain", etc.</td>
+                </tr>
+                <tr>
+                    <td><code>field:"Value"</code></td>
+                    <td>Double quotes → case-<strong>sensitive</strong> contains</td>
+                </tr>
+                <tr>
+                    <td><code>field:'value'</code></td>
+                    <td>Single quotes → case-<strong>insensitive</strong> contains (same as no quotes)</td>
+                </tr>
+                <tr>
+                    <td><code>field:Load*</code></td>
+                    <td><strong>Glob</strong> — <code>*</code> matches any number of characters, <code>?</code> matches exactly one</td>
+                </tr>
+                <tr>
+                    <td><code>field:=Value</code></td>
+                    <td><strong>Exact</strong> match (whole value, case-insensitive). Wildcards not allowed here.</td>
+                </tr>
+                <tr>
+                    <td><code>field:null</code></td>
+                    <td>Field is <strong>null or missing</strong></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="bm-help-callout">
+            <strong>Tip:</strong> a term with no <code>field:</code> prefix searches across
+            <em>all</em> text fields in the current view. <code>Loader</code> alone will
+            match any record where any searchable field contains "Loader".
+        </div>
+    </section>
+
+    <!-- ── Field-scoped groups ─────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Field-scoped groups</h2>
+        <p>
+            You can give several values for the same field using parentheses after the colon.
+            Space inside the group means AND; comma means OR.
+        </p>
+        <table class="bm-help-table">
+            <thead><tr><th>Example</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr><td><code>svc:(Loader Transform)</code></td><td>service contains "Loader" AND "Transform"</td></tr>
+                <tr><td><code>svc:(Loader , Transform)</code></td><td>service is "Loader" OR "Transform"</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ── Comparisons ─────────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Comparisons &amp; ranges</h2>
+
+        <p>Use comparison operators before the value for numeric and date fields.</p>
+
+        <table class="bm-help-table">
+            <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr><td><code>field:&gt;100</code></td><td>Greater than 100</td></tr>
+                <tr><td><code>field:&gt;=100</code></td><td>Greater than or equal to 100</td></tr>
+                <tr><td><code>field:&lt;100</code></td><td>Less than 100</td></tr>
+                <tr><td><code>field:&lt;=100</code></td><td>Less than or equal to 100</td></tr>
+                <tr><td><code>field:10..50</code></td><td>Between 10 and 50 <strong>inclusive</strong></td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ── Dates ───────────────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Dates &amp; times</h2>
+
+        <p>All date/time values are interpreted as UTC.</p>
+
+        <table class="bm-help-table">
+            <thead><tr><th>Form</th><th>Example</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr><td>Named</td><td><code>today</code>, <code>yesterday</code>, <code>now</code></td><td>Start of today / yesterday / current instant (UTC)</td></tr>
+                <tr><td>Relative offset</td><td><code>-7d</code>, <code>-2h</code>, <code>-30m</code>, <code>-1w</code></td><td>N days / hours / minutes / weeks ago from now</td></tr>
+                <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
+                <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
+                <tr><td>Time of day</td><td><code>09:30</code>, <code>14:00:00</code></td><td>That time on today's UTC date</td></tr>
+            </tbody>
+        </table>
+
+        <p>Combine with comparison operators or <code>..</code> ranges:</p>
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>start:&gt;-7d</code> <span>— started in the last 7 days</span></div>
+            <div class="bm-help-ex"><code>start:2024-01-01..2024-12-31</code> <span>— started in 2024</span></div>
+            <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code> <span>— started during business hours today</span></div>
+        </div>
+
+        <p style="margin-top:14px;">
+            The <code>dur</code> field uses the same <code>hh:mm</code> / <code>hh:mm:ss</code> notation
+            but measures <strong>elapsed time from midnight</strong>, so the numbers mean duration, not a clock time.
+        </p>
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>dur:&gt;00:01</code>     <span>— longer than 1 minute</span></div>
+            <div class="bm-help-ex"><code>dur:&gt;01:00</code>     <span>— longer than 1 hour</span></div>
+            <div class="bm-help-ex"><code>dur:00:30..02:00</code> <span>— between 30 min and 2 hours</span></div>
+            <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>  <span>— under 30 seconds</span></div>
+        </div>
+    </section>
+
+    <!-- ── Timeline fields ─────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Timeline fields</h2>
+        <p>Use either the short alias or the full name — they are interchangeable.</p>
+
+        <table class="bm-help-table bm-help-table--fields">
+            <thead><tr><th>Alias</th><th>Full name</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>svc</code></td><td><code>service</code></td><td>Service name</td></tr>
+                <tr><td><code>pipe</code></td><td><code>pipeline</code></td><td>Pipeline name</td></tr>
+                <tr><td><code>src</code></td><td><code>source</code></td><td>Source identifier</td></tr>
+                <tr><td><code>chunk</code></td><td><code>chunkId</code></td><td>Chunk ID</td></tr>
+                <tr><td><code>srv</code></td><td><code>server</code></td><td>Server / host name</td></tr>
+                <tr><td><code>pid</code></td><td><code>processId</code></td><td>Process ID</td></tr>
+                <tr><td><code>dur</code></td><td><code>duration</code></td><td>Event duration — use <code>hh:mm</code> or <code>hh:mm:ss</code></td></tr>
+                <tr><td><code>start</code></td><td><code>startUtc</code></td><td>Event start time (UTC)</td></tr>
+                <tr><td><code>finish</code></td><td><code>finishUtc</code></td><td>Event finish time (UTC)</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ── Batch list fields ───────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Batch list fields</h2>
+
+        <table class="bm-help-table bm-help-table--fields">
+            <thead><tr><th>Alias</th><th>Full name</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>batch</code></td><td><code>BatchName</code></td><td>Batch name</td></tr>
+                <tr><td><code>run</code></td><td><code>RunId</code></td><td>Run identifier</td></tr>
+                <tr><td><code>type</code></td><td><code>Type</code></td><td>Batch type</td></tr>
+                <tr><td><code>status</code></td><td><code>Status</code></td><td>Running / Completed / Failed / …</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ── Examples ───────────────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Examples</h2>
+
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>Loader</code>
+                <span>— any event whose service, pipeline, source, chunk, or server contains "Loader"</span></div>
+            <div class="bm-help-ex"><code>svc:Loader</code>
+                <span>— service contains "Loader" (case-insensitive)</span></div>
+            <div class="bm-help-ex"><code>svc:"Loader"</code>
+                <span>— service contains "Loader" (case-sensitive)</span></div>
+            <div class="bm-help-ex"><code>svc:=Loader</code>
+                <span>— service is exactly "Loader"</span></div>
+            <div class="bm-help-ex"><code>svc:Load*</code>
+                <span>— service starts with "Load" (glob)</span></div>
+            <div class="bm-help-ex"><code>svc:Loader !error</code>
+                <span>— service contains "Loader" AND no field contains "error"</span></div>
+            <div class="bm-help-ex"><code>svc:(Loader , Parser)</code>
+                <span>— service is "Loader" or "Parser"</span></div>
+            <div class="bm-help-ex"><code>dur:&gt;00:01</code>
+                <span>— events that took more than 1 minute</span></div>
+            <div class="bm-help-ex"><code>dur:00:30..02:00</code>
+                <span>— events between 30 min and 2 hours</span></div>
+            <div class="bm-help-ex"><code>pipe:null</code>
+                <span>— events with no pipeline assigned</span></div>
+            <div class="bm-help-ex"><code>start:&gt;-1h</code>
+                <span>— events that started in the last hour</span></div>
+            <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code>
+                <span>— events that started during business hours today (UTC)</span></div>
+            <div class="bm-help-ex"><code>svc:Loader start:&gt;-1h dur:&gt;00:01</code>
+                <span>— Loader events from the last hour that took more than 1 minute</span></div>
+        </div>
+    </section>
+
+</div>
+
+@code {
+    // Static help page — no backing state needed.
+}

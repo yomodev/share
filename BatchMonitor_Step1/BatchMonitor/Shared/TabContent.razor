@@ -23,18 +23,24 @@
         break;
 
     case TabType.Kafka:
-        <BatchMonitor.Pages.PlaceholderPage Title="Kafka"
-            Icon="@Icons.Material.Outlined.Stream" Environment="@env" />
+        <BatchMonitor.Pages.KafkaDashboard Environment="@env" />
+        break;
+
+    case TabType.KafkaGroups:
+        <BatchMonitor.Pages.KafkaGroupsDashboard Environment="@env" />
         break;
 
     case TabType.MongoDB:
-        <BatchMonitor.Pages.PlaceholderPage Title="MongoDB"
-            Icon="@Icons.Material.Outlined.Storage" Environment="@env" />
+        <BatchMonitor.Pages.MongoDashboard Environment="@env" />
         break;
 
-    case TabType.Errors:
-        <BatchMonitor.Pages.PlaceholderPage Title="Errors"
-            Icon="@Icons.Material.Outlined.BugReport" Environment="@env" />
+    case TabType.MongoDetail:
+        <BatchMonitor.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
+        break;
+
+    case TabType.Logs:
+        <BatchMonitor.Pages.PlaceholderPage Title="Logs"
+            Icon="@Icons.Material.Outlined.Article" Environment="@env" />
         break;
 
     case TabType.Settings:
@@ -47,6 +53,14 @@
             Environment="@env"
             InitialRunId="@Tab.EntityId"
             IsFocused="@Tab.IsActive" />
+        break;
+
+    case TabType.KafkaDetail:
+        <BatchMonitor.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
+        break;
+
+    case TabType.FilterHelp:
+        <BatchMonitor.Pages.FilterHelp />
         break;
 
     default:

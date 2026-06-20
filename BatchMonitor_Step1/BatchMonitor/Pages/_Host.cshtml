@@ -63,10 +63,8 @@
         })();
     </script>
 
-    <!-- Application JS files -->
-    <script src="js/d3-graph.js"></script>
-    <script src="js/d3-animation.js"></script>
-    <script src="js/d3-timeline.js"></script>
-    <script src="js/app.js"></script>
+    <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
+         filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
+    <link rel="modulepreload" href="js/filter.js" />
 </body>
 </html>

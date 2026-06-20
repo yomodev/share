@@ -1,0 +1,14 @@
+@inherits LayoutComponentBase
+@inject ThemeService ThemeService
+
+<MudThemeProvider Theme="@ThemeService.ActiveTheme" IsDarkMode="@ThemeService.IsDark" />
+<MudPopoverProvider />
+
+<div class="bm-help-shell">
+    @Body
+</div>
+
+@code {
+    // Standalone layout used by in-app help pages so they open cleanly in a new tab
+    // without the main tab-bar and sidebar chrome.
+}

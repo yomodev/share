@@ -10,8 +10,9 @@
 //  - Row border bar: clipped to node interior via SVG clipPath, never overflows.
 //  - Edges: paint-order ensures labels are readable on both themes.
 
-window.BatchMonitor = window.BatchMonitor || {};
-window.BatchMonitor.D3Graph = (function () {
+import { createState, sampleEdge, tick } from './d3-animation.js';
+
+const D3Graph = (() => {
 
     const NODE_WIDTH    = 234;
     const HEADER_HEIGHT = 32;
@@ -157,7 +158,7 @@ window.BatchMonitor.D3Graph = (function () {
 
         const handle = {
             containerEl, svg, root, eLayer, nLayer, zoom, popover, defs,
-            animState: window.BatchMonitor.D3Animation.createState(),
+            animState: createState(),
             currentGraph: null, pendingTopology: null,
             layoutTimer: null, rafId: null, lastFrameTime: null,
             userZoomed: false, isVisible: true, disposed: false,
@@ -605,10 +606,9 @@ window.BatchMonitor.D3Graph = (function () {
     function renderAnimationFrame(handle, dt, now) {
         if (!handle.currentGraph) return;
 
-        const anim = window.BatchMonitor.D3Animation;
         handle.eLayer.selectAll('g.bm-edge').each(function(d) {
-            const s = anim.sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
-            const r = anim.tick(s, dt);
+            const s = sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
+            const r = tick(s, dt);
             const col = sc(d.data?.state);
             const w   = edgeW(d.data) + r.thicknessBoost;
 
@@ -669,15 +669,17 @@ window.BatchMonitor.D3Graph = (function () {
     return { init, update, fitToView, resetZoom, setVisible, dispose };
 })();
 
-// ── Blazor interop ────────────────────────────────────────────────────────
-window.BatchMonitor.D3FlowGraphInterop = (function () {
-    const handles = new Map();
-    const G = window.BatchMonitor.D3Graph;
-    return {
-        init(el, key)            { if (handles.has(key)) G.dispose(handles.get(key)); handles.set(key, G.init(el)); },
-        update(key, topo)        { const h = handles.get(key); if (h) G.update(h, topo); },
-        fitToView(key)           { const h = handles.get(key); if (h) { G.resetZoom(h); G.fitToView(h, true); } },
-        setVisible(key, visible) { const h = handles.get(key); if (h) G.setVisible(h, visible); },
-        dispose(key)             { const h = handles.get(key); if (h) { G.dispose(h); handles.delete(key); } },
-    };
-})();
+// ── Blazor interop exports ────────────────────────────────────────────────
+
+const _handles = new Map();
+
+/** @param {Element} el @param {string} key */
+export function init(el, key)            { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el)); }
+/** @param {string} key @param {object} topo */
+export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
+/** @param {string} key */
+export function fitToView(key)           { const h = _handles.get(key); if (h) { D3Graph.resetZoom(h); D3Graph.fitToView(h, true); } }
+/** @param {string} key @param {boolean} visible */
+export function setVisible(key, visible) { const h = _handles.get(key); if (h) D3Graph.setVisible(h, visible); }
+/** @param {string} key */
+export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }

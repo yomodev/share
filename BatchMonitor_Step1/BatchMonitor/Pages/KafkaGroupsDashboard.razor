@@ -1,0 +1,235 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@using BatchMonitor.Filtering
+@inject IKafkaService KafkaSvc
+@implements IDisposable
+
+<div class="bm-page bm-page-fill bm-inspector">
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter consumer groups…"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           Disabled="_loading"
+                           OnClick="LoadAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
+    </div>
+
+    <!-- Table -->
+    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
+
+        <MudTable T="KafkaConsumerGroupOverview"
+                  Items="_filtered"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  FixedHeader="true"
+                  Height="100%"
+                  SelectedItem="_selected"
+                  SelectedItemChanged="OnRowSelected"
+                  Class="bm-batch-table">
+            <HeaderContent>
+                <MudTh>
+                    <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.GroupId">Group ID</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:120px;">
+                    <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.State">State</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:90px; text-align:right;">
+                    <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TopicCount">Topics</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:110px; text-align:right;">
+                    <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TotalLag">Total Lag</MudTableSortLabel>
+                </MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                    <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
+                </MudTd>
+                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                             Color="@StateColor(context.State)">@context.State</MudChip>
+                </MudTd>
+                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                    @context.TopicCount
+                </MudTd>
+                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                    @if (context.TotalLag > 0)
+                    {
+                        <span class="bm-kafka-lag-warn">
+                            @context.TotalLag.ToString("N0")
+                            <MudIcon Icon="@Icons.Material.Outlined.Warning"
+                                     Size="Size.Small" Class="bm-kafka-lag-icon" />
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="bm-kafka-mono">0</span>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+
+    <!-- Detail panel -->
+    @if (_selected is not null)
+    {
+        <div class="bm-inspector-detail">
+            <div class="bm-inspector-detail-header">
+                <span class="bm-kafka-mono">
+                    <strong>@_selected.GroupId</strong>
+                    &nbsp;·&nbsp; @_selected.State
+                    &nbsp;·&nbsp; @_selected.TopicCount topic@(_selected.TopicCount == 1 ? "" : "s")
+                </span>
+                <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                               Size="Size.Small"
+                               OnClick="@(() => { _selected = null; _topicLags = null; })" />
+            </div>
+            <div class="bm-inspector-detail-body">
+                @if (_loadingDetail)
+                {
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                }
+                else if (_topicLags is not null)
+                {
+                    <div class="bm-inspector-section-label">Subscribed topics</div>
+                    <table class="bm-kafka-info-table" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th>Topic</th>
+                                <th style="text-align:right; width:80px;">Parts</th>
+                                <th style="text-align:right; width:100px;">Lag</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _topicLags)
+                            {
+                                <tr>
+                                    <td class="bm-kafka-topic-name">@t.TopicName</td>
+                                    <td style="text-align:right;" class="bm-kafka-mono">@t.Partitions</td>
+                                    <td style="text-align:right;" class="@(t.Lag > 0 ? "bm-kafka-lag-warn" : "bm-kafka-mono")">
+                                        @t.Lag.ToString("N0")
+                                        @if (t.Lag > 0)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Outlined.Warning"
+                                                     Size="Size.Small" Class="bm-kafka-lag-icon" />
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private List<KafkaConsumerGroupOverview>  _all      = new();
+    private List<KafkaConsumerGroupOverview>  _filtered = new();
+    private KafkaConsumerGroupOverview?       _selected = null;
+    private List<KafkaGroupTopicLag>?         _topicLags    = null;
+    private bool _loading = true, _loadingDetail = false;
+    private string _filterText = string.Empty, _filterParseError = string.Empty;
+    private CancellationTokenSource _cts = new();
+
+    private static readonly string[] SearchableFields = ["GroupId", "State"];
+    private static readonly FilterParser Parser = new(SearchableFields,
+        new Dictionary<string, string>
+        {
+            ["group"]   = "GroupId",
+            ["groupid"] = "GroupId",
+            ["state"]   = "State",
+        });
+
+    private static readonly (string Aliases, string Label)[] _fieldHints =
+    [
+        ("group / groupid", "consumer group ID"),
+        ("state",           "Stable / Rebalancing / Dead / Empty"),
+    ];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _selected = null;
+        _topicLags = null;
+        StateHasChanged();
+        try
+        {
+            var groups = await KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
+            _all = groups.ToList();
+            ApplyFilter();
+        }
+        catch (OperationCanceledException) { }
+        finally { _loading = false; }
+    }
+
+    private void OnFilterChanged(string text)
+    {
+        _filterText = text;
+        _filterParseError = string.Empty;
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = Parser.Parse(text); }
+            catch (FilterParseException ex) { _filterParseError = ex.Message; }
+        }
+        _filtered = node is null
+            ? _all
+            : _all.Where(g => FilterEvaluator.Evaluate(node, g)).ToList();
+    }
+
+    private void ApplyFilter() => OnFilterChanged(_filterText);
+
+    private async void OnRowSelected(KafkaConsumerGroupOverview? group)
+    {
+        if (group is null || ReferenceEquals(_selected, group))
+        {
+            _selected  = null;
+            _topicLags = null;
+            StateHasChanged();
+            return;
+        }
+        _selected      = group;
+        _topicLags     = null;
+        _loadingDetail = true;
+        StateHasChanged();
+        try
+        {
+            var lags   = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+            _topicLags = lags.ToList();
+        }
+        catch (OperationCanceledException) { }
+        finally { _loadingDetail = false; StateHasChanged(); }
+    }
+
+    private static Color StateColor(string state) => state switch
+    {
+        "Stable"      => Color.Success,
+        "Rebalancing" => Color.Warning,
+        "Dead"        => Color.Error,
+        "Empty"       => Color.Default,
+        _             => Color.Default,
+    };
+
+    public void Dispose() => _cts.Cancel();
+}

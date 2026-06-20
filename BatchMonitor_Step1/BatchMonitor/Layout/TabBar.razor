@@ -50,6 +50,7 @@
 @code {
     private ElementReference _stripRef;
     private DotNetObjectReference<TabBar>? _selfRef;
+    private IJSObjectReference? _appModule;
 
     protected override void OnInitialized() =>
         TabService.OnChange += OnTabsChanged;
@@ -59,20 +60,21 @@
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js");
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.initTabDrag", _stripRef, _selfRef);
-                await JS.InvokeVoidAsync("BatchMonitor.initTabWheelScroll", _stripRef);
+                await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
+                await _appModule.InvokeVoidAsync("initTabWheelScroll", _stripRef);
             }
             catch { }
         }
 
         // Scroll active tab into view after every render that changes tabs.
-        if (TabService.ActiveTab is not null)
+        if (_appModule is not null && TabService.ActiveTab is not null)
         {
             try
             {
-                await JS.InvokeVoidAsync("BatchMonitor.scrollTabIntoView", TabService.ActiveTab.Id);
+                await _appModule.InvokeVoidAsync("scrollTabIntoView", TabService.ActiveTab.Id);
             }
             catch { }
         }
@@ -94,5 +96,6 @@
     {
         TabService.OnChange -= OnTabsChanged;
         _selfRef?.Dispose();
+        if (_appModule is not null) await _appModule.DisposeAsync();
     }
 }

@@ -1,0 +1,127 @@
+@inject BatchMonitor.Services.TabService _tabSvc
+@* Reusable debounced filter input with inline help popup.
+   Value           — controlled value; set from parent so programmatic clear works.
+   OnFilterChanged — fired after DebounceMs of inactivity.
+   ParseError      — non-null shows a red outline (no inline text, preserves toolbar height).
+   FieldHints      — context-specific fields shown in the cheat sheet popup.
+   Class           — applied to the wrapper div for flex-layout integration. *@
+
+<div class="bm-filter-box @Class">
+
+    <MudTextField T="string"
+                  Placeholder="@Placeholder"
+                  Adornment="Adornment.Start"
+                  AdornmentIcon="@Icons.Material.Outlined.Search"
+                  Value="@Value"
+                  ValueChanged="NotifyChanged"
+                  Immediate="true"
+                  DebounceInterval="@DebounceMs"
+                  Variant="Variant.Outlined"
+                  Margin="Margin.Dense"
+                  Error="@(ParseError is not null)"
+                  Clearable="true"
+                  OnClearButtonClick="ClearAsync"
+                  Style="flex:1;min-width:0;" />
+
+    <MudMenu @ref="_menu"
+             AnchorOrigin="Origin.BottomRight"
+             TransformOrigin="Origin.TopRight"
+             Dense="true"
+             PopoverClass="bm-filter-cs-popover">
+        <ActivatorContent>
+            <MudIconButton Icon="@Icons.Material.Outlined.HelpOutline"
+                           Size="Size.Small"
+                           Color="Color.Default"
+                           title="Filter syntax help"
+                           OnClick="@(async e => await context.ToggleAsync(e))" />
+        </ActivatorContent>
+        <ChildContent>
+            <div class="bm-filter-cs" @onclick:stopPropagation="true">
+
+                <div class="bm-cs-cols">
+
+                    <!-- Left column -->
+                    <div class="bm-cs-col">
+                        <div class="bm-cs-head">Combine</div>
+                        <div class="bm-cs-row"><code>a b</code>   <span>AND (both must match)</span></div>
+                        <div class="bm-cs-row"><code>a , b</code> <span>OR (either must match)</span></div>
+                        <div class="bm-cs-row"><code>!a</code>    <span>NOT</span></div>
+                        <div class="bm-cs-row"><code>(…)</code>   <span>group / precedence</span></div>
+
+                        <div class="bm-cs-head">Compare &amp; range</div>
+                        <div class="bm-cs-row"><code>field:&gt;100</code>   <span>greater than</span></div>
+                        <div class="bm-cs-row"><code>field:&gt;=100</code>  <span>greater than or equal</span></div>
+                        <div class="bm-cs-row"><code>field:10..50</code><span>between (inclusive)</span></div>
+                    </div>
+
+                    <!-- Right column -->
+                    <div class="bm-cs-col">
+                        <div class="bm-cs-head">Match</div>
+                        <div class="bm-cs-row"><code>field:value</code>  <span>contains (case-insensitive)</span></div>
+                        <div class="bm-cs-row"><code>field:"Value"</code><span>contains (case-sensitive)</span></div>
+                        <div class="bm-cs-row"><code>field:Load*</code>  <span>glob — * any chars, ? one char</span></div>
+                        <div class="bm-cs-row"><code>field:=Value</code> <span>exact match</span></div>
+                        <div class="bm-cs-row"><code>field:null</code>   <span>is null / missing</span></div>
+
+                        <div class="bm-cs-head">Dates &amp; duration</div>
+                        <div class="bm-cs-row"><code>today</code>        <span>start of today (UTC)</span></div>
+                        <div class="bm-cs-row"><code>-7d</code>          <span>7 days ago · also -2h -30m -1w</span></div>
+                        <div class="bm-cs-row"><code>2024-06-15</code>   <span>absolute date (UTC)</span></div>
+                        <div class="bm-cs-row"><code>09:30</code>        <span>time of day (today UTC)</span></div>
+                        <div class="bm-cs-row"><code>dur:&gt;00:01</code><span>duration &gt; 1 min (hh:mm)</span></div>
+                    </div>
+
+                </div>
+
+                @if (FieldHints.Length > 0)
+                {
+                    <hr class="bm-cs-divider" />
+                    <div class="bm-cs-head">Fields</div>
+                    <div class="bm-cs-cols">
+                        @foreach (var (aliases, label) in FieldHints)
+                        {
+                            <div class="bm-cs-row"><code>@aliases</code><span>@label</span></div>
+                        }
+                    </div>
+                }
+
+                <hr class="bm-cs-divider" />
+
+                <div class="bm-cs-footer">
+                    <span class="bm-cs-docs-link" @onclick="OpenFullReference" style="cursor:pointer;">
+                        Full reference ↗
+                    </span>
+                </div>
+
+            </div>
+        </ChildContent>
+    </MudMenu>
+
+</div>
+
+@code {
+    [Parameter] public string  Value           { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> OnFilterChanged { get; set; }
+    [Parameter] public string? ParseError      { get; set; }
+    [Parameter] public string? Class           { get; set; }
+    [Parameter] public int     DebounceMs      { get; set; } = 300;
+    [Parameter] public string  Placeholder     { get; set; } = "Filter…";
+
+    [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
+
+    private MudMenu? _menu;
+
+    private async Task OpenFullReference()
+    {
+        if (_menu is not null) await _menu.CloseMenuAsync();
+        _tabSvc.OpenOrFocus(TabModel.CreateFilterHelp());
+    }
+
+    private Task NotifyChanged(string v) => OnFilterChanged.InvokeAsync(v);
+
+    private async Task ClearAsync()
+    {
+        Value = string.Empty;
+        await OnFilterChanged.InvokeAsync(string.Empty);
+    }
+}

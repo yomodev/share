@@ -1,4 +1,5 @@
 using BatchMonitor.Configuration;
+using BatchMonitor.Core.Services;
 using BatchMonitor.Hubs;
 using BatchMonitor.Services;
 using Microsoft.AspNetCore.SignalR;
@@ -37,6 +38,9 @@ public class Program
         //   builder.Services.AddSingleton<IBatchService, MongoBatchService>();
         builder.Services.AddSingleton<IBatchService, MockBatchService>(sp =>
             new MockBatchService(sp.GetRequiredService<IHubContext<BatchEventsHub>>()));
+
+        builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
+        builder.Services.AddSingleton<IMongoService, MockMongoService>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

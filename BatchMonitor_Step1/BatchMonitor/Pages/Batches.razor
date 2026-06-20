@@ -1,24 +1,19 @@
 @inject IBatchService BatchService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@using BatchMonitor.Filtering
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
 
     <!-- ── Toolbar: filter + refresh ────────────────────────────────── -->
     <div class="bm-batch-toolbar">
-        <MudTextField @bind-Value="_searchText"
-                      Placeholder="Search name, run ID…"
-                      Adornment="Adornment.Start"
-                      AdornmentIcon="@Icons.Material.Outlined.Search"
-                      Immediate="true"
-                      DebounceInterval="300"
-                      OnDebounceIntervalElapsed="ApplyFilter"
-                      Variant="Variant.Outlined"
-                      Margin="Margin.Dense"
-                      Class="bm-filter-input"
-                      Clearable="true"
-                      OnClearButtonClick="ClearFilter" />
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter batches…"
+                   Class="bm-filter-input"
+                   FieldHints="@_batchFieldHints" />
 
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
@@ -74,29 +69,29 @@
                 <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd Style="padding-left:12px;">
+                <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenDetail(context))">
                     <StatusIcon Status="@context.Status" />
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2">@context.BatchName</MudText>
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
                         @context.Start.ToString("yyyy-MM-dd HH:mm:ss")
                     </MudText>
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace">
                         @FormatDuration(context.Duration)
                     </MudText>
                 </MudTd>
-                <MudTd>
+                <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
                         @context.Status
                     </span>
@@ -167,7 +162,19 @@
     private int _page     = 1;
     private int _pageSize = 25;
     private bool _loading = false;
-    private string _searchText = string.Empty;
+    private string  _filterText       = string.Empty;
+    private string? _filterParseError = null;
+
+    private static readonly string[] BatchSearchableFields = ["BatchName", "RunId", "Type", "Status"];
+    private static readonly FilterParser BatchFilterParser   = new(BatchSearchableFields);
+
+    private static readonly (string Aliases, string Label)[] _batchFieldHints =
+    [
+        ("batch / batchname", "batch name"),
+        ("run / runid",       "run identifier"),
+        ("type",              "batch type"),
+        ("status",            "Running / Completed / Failed"),
+    ];
 
     private List<BatchSummary> _all      = new();
     private List<BatchSummary> _filtered = new();
@@ -200,25 +207,28 @@
         }
     }
 
-    private void ApplyFilter()
+    private void OnFilterChanged(string text)
     {
-        var filter = string.IsNullOrWhiteSpace(_searchText)
-            ? _all
-            : _all.Where(b =>
-                b.BatchName.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
-                b.RunId.Contains(_searchText, StringComparison.OrdinalIgnoreCase)).ToList();
+        _filterText = text;
+        _filterParseError = null;
 
-        _filtered = filter;
-        _page     = 1;
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = BatchFilterParser.Parse(text); }
+            catch (FilterParseException ex) { _filterParseError = ex.Message; }
+        }
+
+        _filtered = node is null
+            ? _all
+            : _all.Where(b => FilterEvaluator.Evaluate(node, b)).ToList();
+
+        _page = 1;
         RebuildPage();
         StateHasChanged();
     }
 
-    private void ClearFilter()
-    {
-        _searchText = string.Empty;
-        ApplyFilter();
-    }
+    private void ApplyFilter() => OnFilterChanged(_filterText);
 
     private void RebuildPage() =>
         _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
@@ -229,7 +239,8 @@
 
     private async Task RefreshAsync()
     {
-        _searchText = string.Empty;
+        _filterText       = string.Empty;
+        _filterParseError = null;
         await LoadAsync();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }

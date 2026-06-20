@@ -1,0 +1,189 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@inject IKafkaService KafkaSvc
+@implements IDisposable
+
+<div class="bm-page bm-page-fill bm-inspector">
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+        <span class="bm-inspector-topic">
+            <MudIcon Icon="@Icons.Material.Outlined.MoveToInbox" Size="Size.Small" Class="bm-inspector-topic-icon" />
+            @TopicName
+        </span>
+
+        <MudTooltip Text="@(_running ? "Pause" : "Resume")">
+            <MudIconButton Icon="@(_running ? Icons.Material.Outlined.Pause : Icons.Material.Outlined.PlayArrow)"
+                           Size="Size.Small"
+                           Color="@(_running ? Color.Warning : Color.Success)"
+                           OnClick="ToggleRunning" />
+        </MudTooltip>
+
+        <MudTooltip Text="Clear">
+            <MudIconButton Icon="@Icons.Material.Outlined.ClearAll"
+                           Size="Size.Small"
+                           OnClick="Clear" />
+        </MudTooltip>
+
+        <MudSelect T="int" Value="_maxMessages" ValueChanged="OnMaxChanged"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                   Style="width:110px;" Label="Max msgs">
+            <MudSelectItem Value="50">50</MudSelectItem>
+            <MudSelectItem Value="100">100</MudSelectItem>
+            <MudSelectItem Value="250">250</MudSelectItem>
+            <MudSelectItem Value="500">500</MudSelectItem>
+        </MudSelect>
+
+        <span class="bm-inspector-count bm-muted">
+            @_messages.Count msg@(_messages.Count == 1 ? "" : "s")
+        </span>
+    </div>
+
+    <!-- Message table -->
+    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
+
+        <MudTable T="KafkaMessage"
+                  Items="_messages"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  FixedHeader="true"
+                  Height="100%"
+                  SelectedItem="_selected"
+                  SelectedItemChanged="OnRowSelected"
+                  Class="bm-batch-table bm-inspector-table">
+            <HeaderContent>
+                <MudTh Style="width:90px;">Offset</MudTh>
+                <MudTh Style="width:60px;">Part</MudTh>
+                <MudTh Style="width:180px;">Key</MudTh>
+                <MudTh>Value</MudTh>
+                <MudTh Style="width:160px;">Timestamp (UTC)</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd><span class="bm-kafka-mono">@context.Offset</span></MudTd>
+                <MudTd><span class="bm-kafka-mono">@context.Partition</span></MudTd>
+                <MudTd>
+                    <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
+                </MudTd>
+                <MudTd>
+                    <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
+                </MudTd>
+                <MudTd>
+                    <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+
+    <!-- Detail panel -->
+    @if (_selected is not null)
+    {
+        <div class="bm-inspector-detail">
+            <div class="bm-inspector-detail-header">
+                <span class="bm-kafka-mono">
+                    offset <strong>@_selected.Offset</strong>
+                    &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
+                    &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
+                </span>
+                <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                               Size="Size.Small"
+                               OnClick="@(() => _selected = null)" />
+            </div>
+            <div class="bm-inspector-detail-body">
+                @if (_selected.Headers.Count > 0)
+                {
+                    <div class="bm-inspector-section-label">Headers</div>
+                    <div class="bm-inspector-headers">
+                        @foreach (var h in _selected.Headers)
+                        {
+                            <span class="bm-inspector-header-key">@h.Key</span>
+                            <span class="bm-kafka-mono bm-inspector-header-val">@h.Value</span>
+                        }
+                    </div>
+                }
+                <div class="bm-inspector-section-label">Value</div>
+                <pre class="bm-inspector-value">@FormatJson(_selected.Value)</pre>
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public string TopicName   { get; set; } = string.Empty;
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private List<KafkaMessage> _messages    = new();
+    private KafkaMessage?      _selected    = null;
+    private bool               _running     = true;
+    private bool               _loading     = false;
+    private int                _maxMessages = 100;
+    private CancellationTokenSource _cts = new();
+
+    protected override Task OnInitializedAsync()
+    {
+        _ = StreamAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task StreamAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, _maxMessages, _cts.Token))
+            {
+                if (!_running) continue;
+                _messages.Insert(0, msg);
+                if (_messages.Count > _maxMessages)
+                    _messages.RemoveAt(_messages.Count - 1);
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private void ToggleRunning() => _running = !_running;
+
+    private void Clear()
+    {
+        _messages.Clear();
+        _selected = null;
+    }
+
+    private void OnMaxChanged(int max)
+    {
+        _maxMessages = max;
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        _messages.Clear();
+        _selected = null;
+        _ = StreamAsync();
+    }
+
+    private void OnRowSelected(KafkaMessage? msg)
+        => _selected = ReferenceEquals(_selected, msg) ? null : msg;
+
+    private static string TruncateValue(string v)
+        => v.Length > 120 ? v[..120] + "…" : v;
+
+    private static string FormatJson(string raw)
+    {
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(raw);
+            return System.Text.Json.JsonSerializer.Serialize(
+                doc.RootElement,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch { return raw; }
+    }
+
+    public void Dispose() => _cts.Cancel();
+}

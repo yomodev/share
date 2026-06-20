@@ -22,10 +22,10 @@
     border-bottom: 1px solid var(--mud-palette-divider);
 }
 
-.bm-tl-controls-left  { display: flex; align-items: center; gap: 8px; }
-.bm-tl-controls-right { display: flex; align-items: center; gap: 4px; }
+.bm-tl-controls-left  { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
+.bm-tl-controls-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
-.bm-tl-filter { min-width: 160px; max-width: 220px; }
+.bm-tl-filter { min-width: 160px; flex: 1 1 0; }
 .bm-tl-select { min-width: 160px; max-width: 200px; }
 
 .bm-tl-native-label {

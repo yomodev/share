@@ -1,0 +1,73 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@inject IKafkaService KafkaSvc
+
+<MudDialog>
+    <TitleContent>
+        <span class="bm-kafka-dialog-title">@TopicName</span>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+        }
+        else if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+        }
+        else
+        {
+            <table class="bm-kafka-info-table" style="width:100%;">
+                <tbody>
+                    <tr><td>Retention</td>     <td><code>@FormatRetention(_config!.RetentionMs)</code></td></tr>
+                    <tr><td>Cleanup</td>       <td><code>@_config!.CleanupPolicy</code></td></tr>
+                    <tr><td>Max msg bytes</td> <td><code>@FormatBytes(_config!.MaxMessageBytes)</code></td></tr>
+                    <tr><td>Min in-sync</td>   <td><code>@_config!.MinInSyncReplicas</code></td></tr>
+                    <tr><td>Compression</td>   <td><code>@_config!.CompressionType</code></td></tr>
+                    <tr><td>Partitions</td>    <td><code>@_config!.PartitionCount</code></td></tr>
+                    <tr><td>Repl factor</td>   <td><code>@_config!.ReplicationFactor</code></td></tr>
+                </tbody>
+            </table>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Close()" Variant="Variant.Text">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string TopicName   { get; set; } = string.Empty;
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private KafkaTopicConfig? _config  = null;
+    private bool              _loading = true;
+    private string?           _error   = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try   { _config = await KafkaSvc.GetTopicConfigAsync(Environment, TopicName); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private static string FormatRetention(long ms) => ms switch
+    {
+        < 0                => "∞",
+        0                  => "0",
+        < 3_600_000        => $"{ms / 60_000}m",
+        < 86_400_000       => $"{ms / 3_600_000}h",
+        < 7L * 86_400_000  => $"{ms / 86_400_000}d",
+        < 30L * 86_400_000 => $"{ms / (7L * 86_400_000)}w",
+        _                  => $"{ms / (30L * 86_400_000)}mo",
+    };
+
+    private static string FormatBytes(long b) => b switch
+    {
+        < 1024               => $"{b} B",
+        < 1024 * 1024        => $"{b / 1024} KB",
+        < 1024L * 1024 * 1024 => $"{b / (1024 * 1024)} MB",
+        _                    => $"{b / (1024L * 1024 * 1024)} GB",
+    };
+}

@@ -1,0 +1,87 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@inject IKafkaService KafkaSvc
+
+<MudDialog>
+    <TitleContent>
+        <span class="bm-kafka-dialog-title">@TopicName</span>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+        }
+        else if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+        }
+        else if (_groups.Count == 0)
+        {
+            <div class="bm-kafka-info-empty">No subscribed consumer groups.</div>
+        }
+        else
+        {
+            <table class="bm-kafka-info-table bm-kafka-info-table--groups" style="width:100%;">
+                <thead>
+                    <tr><th>Group ID</th><th>State</th><th>Lag</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var g in _groups)
+                    {
+                        <tr>
+                            <td class="bm-kafka-group-id">@g.GroupId</td>
+                            <td>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                         Color="@StateColor(g.State)">@g.State</MudChip>
+                            </td>
+                            <td class="@(g.TotalLag > 0 ? "bm-kafka-lag-warn" : "")">
+                                @if (g.State == "Dead")
+                                {
+                                    <span>—</span>
+                                }
+                                else
+                                {
+                                    @g.TotalLag.ToString("N0")
+                                    @if (g.TotalLag > 0)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Outlined.Warning"
+                                                 Size="Size.Small" Class="bm-kafka-lag-icon" />
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Close()" Variant="Variant.Text">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string TopicName   { get; set; } = string.Empty;
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private List<KafkaTopicConsumerGroup> _groups  = new();
+    private bool                          _loading = true;
+    private string?                       _error   = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try   { _groups = (await KafkaSvc.GetTopicConsumerGroupsAsync(Environment, TopicName)).ToList(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private static Color StateColor(string state) => state switch
+    {
+        "Stable"      => Color.Success,
+        "Rebalancing" => Color.Warning,
+        "Dead"        => Color.Error,
+        _             => Color.Default,
+    };
+}

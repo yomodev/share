@@ -1,0 +1,266 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@using BatchMonitor.Filtering
+@inject IKafkaService KafkaSvc
+@inject TabService TabService
+@inject IDialogService DialogService
+@implements IDisposable
+
+<div class="bm-page bm-page-fill">
+
+    <!-- Cluster info bar -->
+    @if (_cluster is not null)
+    {
+        var online  = _cluster.Brokers.Count(b => b.IsOnline);
+        var total   = _cluster.Brokers.Count;
+        var healthy = online == total;
+        <div class="bm-kafka-cluster-bar">
+            <span class="bm-kafka-stat">
+                <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-kafka-stat-icon" />
+                Brokers
+                <strong class="@(healthy ? "bm-kafka-ok" : "bm-kafka-warn")">@online/@total</strong>
+            </span>
+            <span class="bm-kafka-stat">
+                <MudIcon Icon="@Icons.Material.Outlined.Topic" Size="Size.Small" Class="bm-kafka-stat-icon" />
+                Topics
+                <strong>@_allTopics.Count</strong>
+            </span>
+            <span class="bm-kafka-stat-label">
+                Cluster&nbsp;<code>@_cluster.ClusterId</code>
+                &nbsp;·&nbsp;Controller&nbsp;<code>@_cluster.ControllerId</code>
+            </span>
+        </div>
+    }
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter topics…"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           Disabled="_loading"
+                           OnClick="LoadAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
+    </div>
+
+    <!-- Table -->
+    <div class="bm-table-wrap">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
+
+        <MudTable T="KafkaTopicSummary"
+                  Items="_paged"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  FixedHeader="true"
+                  Height="100%"
+                  Class="bm-batch-table">
+            <HeaderContent>
+                <MudTh>
+                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
+                </MudTh>
+                <MudTh>
+                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
+                </MudTh>
+                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-topic-name">@context.Name</span>
+                </MudTd>
+                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    @context.PartitionCount
+                </MudTd>
+                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <span class="bm-kafka-mono">@FormatMessages(context)</span>
+                </MudTd>
+                <MudTd Style="text-align:center;">
+                    <div class="bm-row-actions">
+                        <MudTooltip Text="Topic config">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenInfoDialog(context.Name))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Consumer groups">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Group"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenGroupsDialog(context.Name))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Inspect messages">
+                            <MudIconButton Icon="@Icons.Material.Outlined.MoveToInbox"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenInspector(context.Name))" />
+                        </MudTooltip>
+                    </div>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </div>
+
+    <!-- Pagination footer -->
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @_filtered.Count topic@(_filtered.Count == 1 ? "" : "s")
+        </MudText>
+        <MudPagination Count="_totalPages"
+                       Selected="_page"
+                       SelectedChanged="OnPageChanged"
+                       ShowFirstButton="true"
+                       ShowLastButton="true"
+                       Size="Size.Small"
+                       Class="bm-pagination-ctrl" />
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int"
+                       Value="_pageSize"
+                       ValueChanged="OnPageSizeChanged"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Style="width:68px">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+            </MudSelect>
+        </div>
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private KafkaClusterInfo?        _cluster    = null;
+    private List<KafkaTopicSummary>  _allTopics  = new();
+    private List<KafkaTopicSummary>  _filtered   = new();
+    private List<KafkaTopicSummary>  _paged      = new();
+    private string                   _filterText      = string.Empty;
+    private string?                  _filterParseError = null;
+    private bool                     _loading    = true;
+    private CancellationTokenSource  _cts        = new();
+
+    private int _page      = 1;
+    private int _pageSize  = 25;
+    private int _totalPages = 1;
+
+    private static readonly string[] SearchableFields = ["Name", "CleanupPolicy"];
+    private static readonly FilterParser Parser = new(SearchableFields,
+        new Dictionary<string, string>
+        {
+            ["name"]    = "Name",
+            ["topic"]   = "Name",
+            ["cleanup"] = "CleanupPolicy",
+            ["policy"]  = "CleanupPolicy",
+        });
+
+    private static readonly (string Aliases, string Label)[] _fieldHints =
+    [
+        ("name / topic",    "topic name"),
+        ("cleanup / policy","cleanup policy (delete / compact)"),
+    ];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
+            var t2 = KafkaSvc.GetTopicsAsync(Environment, _cts.Token);
+            await Task.WhenAll(t1, t2);
+            _cluster   = t1.Result;
+            _allTopics = t2.Result.ToList();
+            ApplyFilter();
+        }
+        catch (OperationCanceledException) { }
+        finally { _loading = false; }
+    }
+
+    private void OnFilterChanged(string text)
+    {
+        _filterText       = text;
+        _filterParseError = null;
+        FilterNode? node  = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = Parser.Parse(text); }
+            catch (FilterParseException ex) { _filterParseError = ex.Message; }
+        }
+        _filtered = node is null
+            ? _allTopics
+            : _allTopics.Where(t => FilterEvaluator.Evaluate(node, t)).ToList();
+        _page = 1;
+        RebuildPage();
+    }
+
+    private void ApplyFilter() => OnFilterChanged(_filterText);
+
+    private void RebuildPage()
+    {
+        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
+        _page       = Math.Clamp(_page, 1, _totalPages);
+        _paged      = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+    }
+
+    private void OnPageChanged(int page)
+    {
+        _page = page;
+        RebuildPage();
+    }
+
+    private void OnPageSizeChanged(int size)
+    {
+        _pageSize = size;
+        _page     = 1;
+        RebuildPage();
+    }
+
+    private async Task OpenInfoDialog(string topicName)
+    {
+        var p = new DialogParameters<KafkaTopicInfoDialog>
+        {
+            { x => x.TopicName,   topicName   },
+            { x => x.Environment, Environment },
+        };
+        var opts = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<KafkaTopicInfoDialog>($"{topicName} — config", p, opts);
+    }
+
+    private async Task OpenGroupsDialog(string topicName)
+    {
+        var p = new DialogParameters<KafkaConsumerGroupsDialog>
+        {
+            { x => x.TopicName,   topicName   },
+            { x => x.Environment, Environment },
+        };
+        var opts = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<KafkaConsumerGroupsDialog>($"{topicName} — consumer groups", p, opts);
+    }
+
+    private void OpenInspector(string topicName)
+        => TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topicName, Environment));
+
+    private static string FormatMessages(KafkaTopicSummary t)
+    {
+        var prefix = t.CleanupPolicy.Contains("compact") ? "~" : "";
+        return prefix + t.MessageCount.ToString("N0");
+    }
+
+    public void Dispose() => _cts.Cancel();
+}
