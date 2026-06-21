@@ -1594,3 +1594,73 @@ html, body {
     white-space: nowrap;
     max-width: 60%;
 }
+
+/* ── Services Page ───────────────────────────────────────────────── */
+
+.bm-svc-cards {
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.bm-svc-group-header {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--mud-palette-text-secondary);
+    padding: 12px 4px 6px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    margin-bottom: 10px;
+}
+
+.bm-svc-card-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.bm-svc-card {
+    width: 200px;
+    border-radius: var(--bm-radius) !important;
+    border-left: 4px solid transparent !important;
+    transition: box-shadow 0.15s;
+}
+
+.bm-svc-card:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15) !important;
+}
+
+.bm-svc-online  { border-left-color: #3FB950 !important; }
+.bm-svc-offline { border-left-color: #F85149 !important; }
+
+.bm-svc-card-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.bm-svc-card-row-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 2px;
+}
+
+.bm-svc-card-created {
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+.bm-svc-table {
+    margin: 0;
+}
+
+.bm-svc-group-th {
+    background: var(--mud-palette-action-default-hover) !important;
+    font-size: 12px !important;
+}

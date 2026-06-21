@@ -20,6 +20,9 @@ public class Program
         builder.Services.Configure<AppSettings>(
             builder.Configuration.GetSection(AppSettings.SectionName));
 
+        builder.Services.Configure<HeartbeatSettings>(
+            builder.Configuration.GetSection(HeartbeatSettings.SectionName));
+
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
         builder.Services.AddServerSideBlazor();
@@ -42,6 +45,9 @@ public class Program
         builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
         builder.Services.AddSingleton<IMongoService, MockMongoService>();
         builder.Services.AddSingleton<IInfraHealthService, MockInfraHealthService>();
+        // Swap to MongoHeartbeatService when connecting to a real cluster:
+        //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+        builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

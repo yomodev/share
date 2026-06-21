@@ -1,0 +1,217 @@
+@using BatchMonitor.Models
+@using BatchMonitor.Services
+@inject IHeartbeatService HeartbeatSvc
+@inject TabService TabService
+@implements IAsyncDisposable
+
+<div class="bm-page">
+
+    <!-- Toolbar -->
+    <div class="bm-batch-toolbar">
+
+        <MudTextField @bind-Value="_filterText"
+                      Placeholder="Filter by name, host, PID…"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Immediate="true"
+                      Clearable="true"
+                      Class="bm-filter-input"
+                      Style="max-width:280px" />
+
+        <MudSelect T="string" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                   Label="Group by" Style="max-width:160px" Dense="true" Margin="Margin.Dense">
+            <MudSelectItem Value="@("None")">None</MudSelectItem>
+            <MudSelectItem Value="@("ServiceName")">Service Name</MudSelectItem>
+            <MudSelectItem Value="@("HostName")">Host Name</MudSelectItem>
+        </MudSelect>
+
+        <MudToggleIconButton @bind-Toggled="_graphView"
+                             Icon="@Icons.Material.Outlined.TableRows"
+                             ToggledIcon="@Icons.Material.Outlined.GridView"
+                             Size="Size.Small" />
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           OnClick="LoadAsync" />
+        </MudTooltip>
+
+        @if (_lastUpdated.HasValue)
+        {
+            <span class="bm-toolbar-hint">Updated @_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+        }
+
+    </div>
+
+    <!-- Content -->
+    @if (_loading && _statuses is null)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+    else if (_statuses is not null)
+    {
+        var rows = ApplyFilter(_statuses);
+
+        @if (_graphView)
+        {
+            <div class="bm-svc-cards">
+                @foreach (var group in GetGroups(rows))
+                {
+                    @if (group.Key != null)
+                    {
+                        <div class="bm-svc-group-header">@group.Key</div>
+                    }
+                    <div class="bm-svc-card-row">
+                        @foreach (var s in group)
+                        {
+                            <MudCard Class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
+                                <MudCardContent>
+                                    <div class="bm-svc-card-title">
+                                        <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
+                                                 Size="Size.Small"
+                                                 Color="@(s.IsOnline ? Color.Success : Color.Error)" />
+                                        <strong>@s.ServiceName</strong>
+                                    </div>
+                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.Computer" Size="Size.Small" />@s.HostName</div>
+                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.Tag" Size="Size.Small" />PID @s.ProcessId</div>
+                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.AccessTime" Size="Size.Small" />@FormatAge(s.UpdatedDateTime)</div>
+                                    <div class="bm-svc-card-row-item bm-svc-card-created">Since @s.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm")</div>
+                                </MudCardContent>
+                            </MudCard>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <MudTable Items="rows" Dense="true" Hover="true" Striped="true"
+                      GroupBy="_tableGrouping" Class="bm-svc-table">
+                <ColGroup>
+                    <col style="width:28px" />
+                    <col />
+                    <col />
+                    <col style="width:100px" />
+                    <col style="width:160px" />
+                    <col style="width:160px" />
+                </ColGroup>
+                <HeaderContent>
+                    <MudTh></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.ServiceName)">Service</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.HostName)">Host</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.ProcessId)">PID</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.UpdatedDateTime)">Last Heartbeat</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.CreatedDateTime)">Started</MudTableSortLabel></MudTh>
+                </HeaderContent>
+                <GroupHeaderTemplate>
+                    <MudTh colspan="6" Class="bm-svc-group-th">
+                        <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Small" Class="mr-1" />
+                        @context.Key
+                        <MudChip T="string" Size="Size.Small" Class="ml-2">@context.Items.Count()</MudChip>
+                    </MudTh>
+                </GroupHeaderTemplate>
+                <RowTemplate>
+                    <MudTd>
+                        <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
+                                 Size="Size.Small"
+                                 Color="@(context.IsOnline ? Color.Success : Color.Error)" />
+                    </MudTd>
+                    <MudTd DataLabel="Service">@context.ServiceName</MudTd>
+                    <MudTd DataLabel="Host">@context.HostName</MudTd>
+                    <MudTd DataLabel="PID">@context.ProcessId</MudTd>
+                    <MudTd DataLabel="Last Heartbeat">@FormatAge(context.UpdatedDateTime)</MudTd>
+                    <MudTd DataLabel="Started">@context.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm")</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    }
+
+</div>
+
+@code {
+    [Parameter] public string Env { get; set; } = string.Empty;
+
+    private List<ServiceStatus>? _statuses;
+    private string _filterText = string.Empty;
+    private string _groupBy    = "None";
+    private bool   _graphView  = false;
+    private bool   _loading    = false;
+    private DateTime? _lastUpdated;
+
+    private PeriodicTimer? _timer;
+    private TableGroupDefinition<ServiceStatus>? _tableGrouping;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _ = StartPollingAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _statuses    = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            _lastUpdated = DateTime.UtcNow;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task StartPollingAsync()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        while (await _timer.WaitForNextTickAsync())
+        {
+            await LoadAsync();
+        }
+    }
+
+    private void OnGroupByChanged(string value)
+    {
+        _groupBy = value;
+        _tableGrouping = value switch
+        {
+            "ServiceName" => new TableGroupDefinition<ServiceStatus> { GroupName = "Service", Selector = s => s.ServiceName, Expandable = true, IsInitiallyExpanded = true },
+            "HostName"    => new TableGroupDefinition<ServiceStatus> { GroupName = "Host",    Selector = s => s.HostName,    Expandable = true, IsInitiallyExpanded = true },
+            _             => null,
+        };
+    }
+
+    private List<ServiceStatus> ApplyFilter(List<ServiceStatus> source)
+    {
+        if (string.IsNullOrWhiteSpace(_filterText)) return source;
+        var q = _filterText.Trim();
+        return source.Where(s =>
+            s.ServiceName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+            s.HostName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+            s.ProcessId.ToString().Contains(q) ||
+            s.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm").Contains(q, StringComparison.OrdinalIgnoreCase)
+        ).ToList();
+    }
+
+    private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
+        _groupBy switch
+        {
+            "ServiceName" => rows.GroupBy(s => (string?)s.ServiceName),
+            "HostName"    => rows.GroupBy(s => (string?)s.HostName),
+            _             => rows.GroupBy(_ => (string?)null),
+        };
+
+    private static string FormatAge(DateTime updatedUtc)
+    {
+        var age = DateTime.UtcNow - updatedUtc;
+        if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
+        if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
+        return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Dispose();
+    }
+}
