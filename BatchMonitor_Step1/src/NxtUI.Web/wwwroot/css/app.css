@@ -1598,62 +1598,80 @@ html, body {
 /* ── Services Page ───────────────────────────────────────────────── */
 
 .bm-svc-cards {
-    padding: 16px;
+    padding: 12px 16px;
     overflow-y: auto;
 }
 
 .bm-svc-group-header {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--mud-palette-text-secondary);
-    padding: 12px 4px 6px;
+    padding: 10px 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .bm-svc-card-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 
 .bm-svc-card {
-    width: 200px;
-    border-radius: var(--bm-radius) !important;
-    border-left: 4px solid transparent !important;
+    width: 172px;
+    padding: 8px 10px;
+    border-radius: var(--bm-radius);
+    border-left: 3px solid transparent;
+    background: var(--mud-palette-surface);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     transition: box-shadow 0.15s;
+    cursor: default;
 }
 
 .bm-svc-card:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15) !important;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.18);
 }
 
-.bm-svc-online  { border-left-color: #3FB950 !important; }
-.bm-svc-offline { border-left-color: #F85149 !important; }
+.bm-svc-online  { border-left-color: #3FB950; }
+.bm-svc-offline { border-left-color: #F85149; }
 
-.bm-svc-card-title {
+.bm-svc-card-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 14px;
-    margin-bottom: 8px;
+    gap: 5px;
+    margin-bottom: 3px;
 }
 
-.bm-svc-card-row-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--mud-palette-text-secondary);
-    margin-bottom: 2px;
+.bm-svc-dot {
+    flex-shrink: 0;
 }
 
-.bm-svc-card-created {
-    margin-top: 6px;
+.bm-svc-card-name {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-svc-card-host {
     font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 4px;
+    padding-left: 2px;
+}
+
+.bm-svc-card-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    border-top: 1px solid var(--mud-palette-divider);
+    padding-top: 4px;
+    margin-top: 2px;
 }
 
 .bm-svc-table {

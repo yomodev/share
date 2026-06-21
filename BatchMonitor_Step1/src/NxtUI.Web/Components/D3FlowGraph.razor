@@ -91,7 +91,8 @@
         {
             try { await _module.InvokeVoidAsync("dispose", GetHandleKey()); }
             catch { }
-            await _module.DisposeAsync();
+            try { await _module.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
         }
     }
 }

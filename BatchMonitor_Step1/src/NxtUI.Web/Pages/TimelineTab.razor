@@ -510,10 +510,14 @@
         {
             try { await _tlModule.InvokeVoidAsync("dispose", _instanceKey); }
             catch { }
-            await _tlModule.DisposeAsync();
+            try { await _tlModule.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
         }
         if (_appModule is not null)
-            await _appModule.DisposeAsync();
+        {
+            try { await _appModule.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     // ── Enums ─────────────────────────────────────────────────────────────

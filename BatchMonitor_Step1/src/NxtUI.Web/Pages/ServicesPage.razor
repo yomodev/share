@@ -64,20 +64,20 @@
                     <div class="bm-svc-card-row">
                         @foreach (var s in group)
                         {
-                            <MudCard Class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
-                                <MudCardContent>
-                                    <div class="bm-svc-card-title">
-                                        <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
-                                                 Size="Size.Small"
-                                                 Color="@(s.IsOnline ? Color.Success : Color.Error)" />
-                                        <strong>@s.ServiceName</strong>
-                                    </div>
-                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.Computer" Size="Size.Small" />@s.HostName</div>
-                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.Tag" Size="Size.Small" />PID @s.ProcessId</div>
-                                    <div class="bm-svc-card-row-item"><MudIcon Icon="@Icons.Material.Outlined.AccessTime" Size="Size.Small" />@FormatAge(s.UpdatedDateTime)</div>
-                                    <div class="bm-svc-card-row-item bm-svc-card-created">Since @s.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm")</div>
-                                </MudCardContent>
-                            </MudCard>
+                            <div class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
+                                <div class="bm-svc-card-header">
+                                    <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
+                                             Size="Size.Small"
+                                             Color="@(s.IsOnline ? Color.Success : Color.Error)"
+                                             Class="bm-svc-dot" />
+                                    <span class="bm-svc-card-name">@s.ServiceName</span>
+                                </div>
+                                <div class="bm-svc-card-host">@s.HostName</div>
+                                <div class="bm-svc-card-meta">
+                                    <span>PID @s.ProcessId</span>
+                                    <span>@FormatAge(s.UpdatedDateTime)</span>
+                                </div>
+                            </div>
                         }
                     </div>
                 }
@@ -134,12 +134,12 @@
     private List<ServiceStatus>? _statuses;
     private string _filterText = string.Empty;
     private string _groupBy    = "None";
-    private bool   _graphView  = false;
+    private bool   _graphView  = true;
     private bool   _loading    = false;
     private DateTime? _lastUpdated;
 
     private PeriodicTimer? _timer;
-    private TableGroupDefinition<ServiceStatus>? _tableGrouping;
+    private TableGroupDefinition<ServiceStatus>? _tableGrouping = null;
 
     protected override async Task OnInitializedAsync()
     {
