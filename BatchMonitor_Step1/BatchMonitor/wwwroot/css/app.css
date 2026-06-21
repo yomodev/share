@@ -324,7 +324,7 @@ html, body {
     flex-shrink: 0;
     width: fit-content;
     min-width: 90px;
-    max-width: 320px;
+    max-width: 250px;
     border: 1px solid transparent;
     transition: background var(--bm-transition), border-color var(--bm-transition);
     user-select: none;

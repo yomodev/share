@@ -26,7 +26,7 @@
                                    StartIcon="@Icons.Material.Outlined.DarkMode"
                                    Size="Size.Small"
                                    Color="Color.Primary"
-                                   OnClick="@(() => SetThemeAsync(true))"
+                                   OnClick="@(() => SetTheme(true))"
                                    Class="bm-theme-btn">
                             Dark
                         </MudButton>
@@ -34,7 +34,7 @@
                                    StartIcon="@Icons.Material.Outlined.LightMode"
                                    Size="Size.Small"
                                    Color="Color.Primary"
-                                   OnClick="@(() => SetThemeAsync(false))"
+                                   OnClick="@(() => SetTheme(false))"
                                    Class="bm-theme-btn">
                             Light
                         </MudButton>
@@ -69,28 +69,14 @@
         ThemeService.OnChange += OnThemeExternallyChanged;
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        try
-        {
-            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", "bm_theme");
-            if (stored is not null)
-            {
-                _isDark = stored != "light";
-                ThemeService.IsDark = _isDark;
-                StateHasChanged();
-            }
-        }
-        catch { }
-    }
-
-    private async Task SetThemeAsync(bool dark)
+    private void SetTheme(bool dark)
     {
         _isDark = dark;
         ThemeService.IsDark = dark;
-        try { await JS.InvokeVoidAsync("localStorage.setItem", "bm_theme", dark ? "dark" : "light"); }
-        catch { }
+        var value = dark ? "dark" : "light";
+        _ = JS.InvokeVoidAsync("eval",
+            $"localStorage.setItem('bm-theme','{value}');" +
+            $"document.cookie='bm-theme={value};path=/;max-age=31536000';");
     }
 
     private void OnThemeExternallyChanged()

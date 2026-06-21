@@ -1,7 +1,7 @@
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 
-<MudThemeProvider Theme="@ThemeService.ActiveTheme" IsDarkMode="@ThemeService.IsDark" />
+<MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
 <MudPopoverProvider />
 
 <div class="bm-help-shell">

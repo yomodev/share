@@ -1,9 +1,11 @@
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 @inject TabService TabService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
 @implements IDisposable
 
-<MudThemeProvider Theme="@ThemeService.ActiveTheme" IsDarkMode="@ThemeService.IsDark" />
+<MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
 <MudDialogProvider />
 <MudSnackbarProvider />
 <MudPopoverProvider />
@@ -42,17 +44,69 @@
 </MudLayout>
 
 @code {
+    // Guard flag: prevents tab→URL→tab→URL infinite loops.
+    private bool _syncingFromUrl;
+
     protected override void OnInitialized()
     {
         ThemeService.OnChange += StateHasChanged;
-        TabService.OnChange   += StateHasChanged;
+        TabService.OnChange   += OnTabsChanged;
+        Nav.LocationChanged   += OnLocationChanged;
+
+        // Open the tab that matches the initial URL (e.g. shared link / browser refresh).
+        SyncTabFromUrl(Nav.Uri);
     }
 
     private void OnDrawerOpenChanged(bool open) => StateHasChanged();
 
+    // ── Tab → URL ────────────────────────────────────────────────────────
+
+    private void OnTabsChanged()
+    {
+        StateHasChanged();
+        if (_syncingFromUrl) return;
+
+        var targetUrl = TabService.ActiveTab?.GetUrl() ?? "/";
+        var currentPath = new Uri(Nav.Uri).AbsolutePath;
+        if (targetUrl != currentPath)
+            Nav.NavigateTo(targetUrl);
+    }
+
+    // ── URL → Tab ────────────────────────────────────────────────────────
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        SyncTabFromUrl(e.Location);
+        StateHasChanged();
+    }
+
+    private void SyncTabFromUrl(string uri)
+    {
+        var path = new Uri(uri).AbsolutePath;
+        _syncingFromUrl = true;
+        try
+        {
+            if (path == "/")
+            {
+                TabService.GoHome();
+            }
+            else
+            {
+                var tab = TabModel.FromUrl(path);
+                if (tab is not null)
+                    TabService.OpenOrFocus(tab);
+            }
+        }
+        finally
+        {
+            _syncingFromUrl = false;
+        }
+    }
+
     public void Dispose()
     {
         ThemeService.OnChange -= StateHasChanged;
-        TabService.OnChange   -= StateHasChanged;
+        TabService.OnChange   -= OnTabsChanged;
+        Nav.LocationChanged   -= OnLocationChanged;
     }
 }
