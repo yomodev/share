@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
@@ -35,6 +36,10 @@ public static class FilterEvaluator
             (MatchType.Contains, StringValue sv) =>
                 (raw.ToString() ?? "").Contains(sv.Value,
                     t.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase),
+
+            (MatchType.Contains, NumberValue nv) =>
+                (raw.ToString() ?? "").Contains(nv.Value.ToString(CultureInfo.InvariantCulture),
+                    StringComparison.OrdinalIgnoreCase),
 
             (MatchType.Exact, StringValue sv) =>
                 string.Equals(raw.ToString(), sv.Value,

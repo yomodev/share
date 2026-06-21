@@ -42,6 +42,9 @@ public static class MongoFilterBuilder
             (MatchType.Contains, StringValue sv) =>
                 B.Regex(t.Field, ContainsRegex(sv.Value, t.CaseSensitive)),
 
+            (MatchType.Contains, NumberValue nv) =>
+                B.Regex(t.Field, ContainsRegex(nv.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), false)),
+
             (MatchType.Glob, StringValue sv) =>
                 B.Regex(t.Field, GlobRegex(sv.Value, t.CaseSensitive)),
 

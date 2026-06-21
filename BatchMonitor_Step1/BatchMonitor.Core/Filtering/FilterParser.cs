@@ -417,8 +417,13 @@ public sealed class FilterParser
         return new StringValue(text);
     }
 
-    private static bool TryParseNumber(string text, out double result) =>
-        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+    private static bool TryParseNumber(string text, out double result)
+    {
+        // Leading-zero strings (e.g. "0114") are identifiers, not numbers.
+        if (text.Length > 1 && text[0] == '0' && char.IsDigit(text[1]))
+        { result = 0; return false; }
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+    }
 
     // ── Date parsing ───────────────────────────────────────────────────────
 
