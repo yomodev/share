@@ -12,6 +12,26 @@ export function setLocalStorage(key, value) {
     try { localStorage.setItem(key, value); } catch { }
 }
 
+/** @param {string} value — "dark" | "light" */
+export function saveTheme(value) {
+    try { localStorage.setItem('bm-theme', value); } catch { }
+    document.cookie = `bm-theme=${value};path=/;max-age=31536000`;
+}
+
+/** Focuses the first focusable input inside a wrapper element after the next animation frame. @param {HTMLElement} wrapper */
+export function focusAfterFrame(wrapper) {
+    if (!wrapper) return;
+    requestAnimationFrame(() => {
+        const el = wrapper.querySelector('input, textarea') ?? wrapper;
+        el.focus();
+    });
+}
+
+/** Clicks the first input inside a wrapper element (used for hidden InputFile). @param {HTMLElement} wrapper */
+export function clickInputInside(wrapper) {
+    if (wrapper) wrapper.querySelector('input')?.click();
+}
+
 // ── Tab bar: horizontal scroll + JS-driven drag-and-drop ─────────────────
 //
 // Drag logic runs entirely in the browser:

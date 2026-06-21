@@ -6,14 +6,16 @@
     <DialogContent>
         <div style="display:flex; flex-direction:column; gap:16px; min-width:340px;">
 
-            <MudTextField @ref="_field"
-                          @bind-Value="_name"
-                          Label="Tab name"
-                          Variant="Variant.Outlined"
-                          Margin="Margin.Dense"
-                          MaxLength="64"
-                          Immediate="true"
-                          OnKeyDown="OnKeyDown" />
+            <span @ref="_fieldRef">
+                <MudTextField @ref="_field"
+                              @bind-Value="_name"
+                              Label="Tab name"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              MaxLength="64"
+                              Immediate="true"
+                              OnKeyDown="OnKeyDown" />
+            </span>
 
             <div>
                 <div style="font-size:0.75rem; color:var(--mud-palette-text-secondary); margin-bottom:6px;">Icon</div>
@@ -49,6 +51,7 @@
     private string _name         = string.Empty;
     private string _selectedIcon = string.Empty;
     private MudTextField<string>? _field;
+    private ElementReference _fieldRef;
 
     private static readonly (string Icon, string Label)[] _icons =
     [
@@ -88,8 +91,10 @@
     {
         if (firstRender && _field is not null)
         {
-            await Task.Delay(100);
-            await _field.FocusAsync();
+            // Use requestAnimationFrame so focus runs after the dialog open animation.
+            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+            await appModule.InvokeVoidAsync("focusAfterFrame", _fieldRef);
+            await appModule.DisposeAsync();
         }
     }
 

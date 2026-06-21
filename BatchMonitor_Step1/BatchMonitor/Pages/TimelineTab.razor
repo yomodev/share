@@ -53,7 +53,9 @@
     private string _instanceKey = Guid.NewGuid().ToString("N");
     private ElementReference _canvasRef;
     private ElementReference _bottomRef;
+    private ElementReference _importWrapRef;
     private IJSObjectReference? _tlModule;
+    private IJSObjectReference? _appModule;
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
 
@@ -85,7 +87,8 @@
         {
             try
             {
-                _tlModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=3");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=3");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
@@ -290,7 +293,8 @@
 
     private async Task TriggerImport()
     {
-        await JS.InvokeVoidAsync("eval", "document.getElementById('bm-tl-import-input').click()");
+        if (_appModule is not null)
+            await _appModule.InvokeVoidAsync("clickInputInside", _importWrapRef);
     }
 
     private async Task OnImportFileSelected(InputFileChangeEventArgs e)
@@ -508,6 +512,8 @@
             catch { }
             await _tlModule.DisposeAsync();
         }
+        if (_appModule is not null)
+            await _appModule.DisposeAsync();
     }
 
     // ── Enums ─────────────────────────────────────────────────────────────
@@ -597,8 +603,9 @@
                                Size="Size.Small" OnClick="TriggerImport" />
             </MudTooltip>
 
-            <InputFile id="bm-tl-import-input" OnChange="OnImportFileSelected"
-                       accept=".csv" style="display:none" />
+            <span @ref="_importWrapRef" style="display:none">
+                <InputFile OnChange="OnImportFileSelected" accept=".csv" />
+            </span>
 
             <MudTooltip Text="Remove batch from view">
                 <span>

@@ -1,7 +1,8 @@
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
-@implements IDisposable
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
 
 <MudDrawer @bind-Open="_drawerOpen"
            Variant="DrawerVariant.Mini"
@@ -119,26 +120,10 @@
     [Parameter] public EventCallback<bool> DrawerOpenChanged { get; set; }
 
     private bool _drawerOpen = true;
+    private IJSObjectReference? _appModule;
 
-    // Active state: tab must exist AND be the active tab
     private bool IsTabActive(string tabId) =>
         TabService.IsOpen(tabId) && TabService.IsActive(tabId);
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        try
-        {
-            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", "bm_sidebar_open");
-            if (stored is not null)
-            {
-                _drawerOpen = stored != "false";
-                await DrawerOpenChanged.InvokeAsync(_drawerOpen);
-                StateHasChanged();
-            }
-        }
-        catch { }
-    }
 
     protected override void OnInitialized()
     {
@@ -146,12 +131,25 @@
         EnvService.OnChange += StateHasChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+        var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
+        if (stored is not null)
+        {
+            _drawerOpen = stored != "false";
+            await DrawerOpenChanged.InvokeAsync(_drawerOpen);
+            StateHasChanged();
+        }
+    }
+
     private async Task ToggleDrawer()
     {
         _drawerOpen = !_drawerOpen;
         await DrawerOpenChanged.InvokeAsync(_drawerOpen);
-        try { await JS.InvokeVoidAsync("localStorage.setItem", "bm_sidebar_open", _drawerOpen.ToString().ToLower()); }
-        catch { }
+        if (_appModule is not null)
+            await _appModule.InvokeVoidAsync("setLocalStorage", "bm-sidebar-open", _drawerOpen.ToString().ToLower());
     }
 
     private void GoHome() => TabService.GoHome();
@@ -159,9 +157,11 @@
     private void OnEnvChanged(string newId) => EnvService.SelectedId = newId;
     private static string ShortId(string? id) => id is null ? "" : id.Length > 4 ? id[..4] : id;
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         TabService.OnChange -= StateHasChanged;
         EnvService.OnChange -= StateHasChanged;
+        if (_appModule is not null)
+            await _appModule.DisposeAsync();
     }
 }

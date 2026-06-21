@@ -1,6 +1,7 @@
-@implements IDisposable
+@implements IAsyncDisposable
 @inject ThemeService ThemeService
 @inject IJSRuntime JS
+@using Microsoft.JSInterop
 
 <div class="bm-settings-page">
 
@@ -62,6 +63,7 @@
 
 @code {
     private bool _isDark = true;
+    private IJSObjectReference? _appModule;
 
     protected override void OnInitialized()
     {
@@ -69,14 +71,17 @@
         ThemeService.OnChange += OnThemeExternallyChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+    }
+
     private void SetTheme(bool dark)
     {
         _isDark = dark;
         ThemeService.IsDark = dark;
-        var value = dark ? "dark" : "light";
-        _ = JS.InvokeVoidAsync("eval",
-            $"localStorage.setItem('bm-theme','{value}');" +
-            $"document.cookie='bm-theme={value};path=/;max-age=31536000';");
+        _ = _appModule?.InvokeVoidAsync("saveTheme", dark ? "dark" : "light");
     }
 
     private void OnThemeExternallyChanged()
@@ -85,6 +90,10 @@
         InvokeAsync(StateHasChanged);
     }
 
-    public void Dispose() =>
+    public async ValueTask DisposeAsync()
+    {
         ThemeService.OnChange -= OnThemeExternallyChanged;
+        if (_appModule is not null)
+            await _appModule.DisposeAsync();
+    }
 }
