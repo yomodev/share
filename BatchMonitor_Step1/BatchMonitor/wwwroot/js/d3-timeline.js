@@ -648,7 +648,7 @@ const TIMELINE_ALIASES = {
                 .style('stroke', GRID_MAJOR).style('stroke-width', 1);
             s.tickL.append('text').attr('class', 'bm-tl-tick-label')
                 .attr('x', x).attr('y', TICK_H-8).attr('text-anchor', 'middle')
-                .text(bse ? fmtAbsHMS(bse + t) : fmtRelHMS(t));
+                .text(fmtRelHMS(t));
         }
     }
 

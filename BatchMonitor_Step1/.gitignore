@@ -1,0 +1,48 @@
+# ── .NET / MSBuild ────────────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# ── Publish / deploy ──────────────────────────────────────────────────────────
+publish/
+**/Properties/launchSettings.json
+
+# ── Blazor / ASP.NET ─────────────────────────────────────────────────────────
+**/wwwroot/_content/
+**/wwwroot/css/bootstrap/
+
+# ── Node / npm ────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.pnp.*
+.yarn/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+appsettings.local.json
+appsettings.*.local.json
+secrets.json
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Rider / JetBrains ─────────────────────────────────────────────────────────
+.idea/
+*.DotSettings.user
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
