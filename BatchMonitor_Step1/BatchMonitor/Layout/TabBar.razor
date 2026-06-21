@@ -2,6 +2,7 @@
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
+@inject IDialogService DialogService
 @implements IAsyncDisposable
 
 <div class="bm-tabbar-inner">
@@ -19,6 +20,8 @@
 
             <div class="bm-tab @(isActive ? "active" : "")"
                  @onclick="@(() => TabService.Focus(tabId))"
+                 @ondblclick="@(() => RenameTabAsync(tabId, tab.Label, tab.Icon))"
+                 @ondblclick:stopPropagation="true"
                  @key="tabId"
                  data-tab-id="@tabId"
                  role="tab"
@@ -26,7 +29,7 @@
                  draggable="true">
 
                 <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
-                <span class="bm-tab-label">@tab.Label</span>
+                <span class="bm-tab-label" @key="@($"{tabId}:{tab.Label}")">@tab.Label</span>
 
                 @if (envInfo is not null)
                 {
@@ -60,7 +63,7 @@
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
             try
             {
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
@@ -82,6 +85,20 @@
 
     private void OnTabsChanged() => InvokeAsync(StateHasChanged);
 
+    private async Task RenameTabAsync(string tabId, string currentLabel, string currentIcon)
+    {
+        var parameters = new DialogParameters<TabRenameDialog>
+        {
+            { x => x.TabId,        tabId        },
+            { x => x.CurrentLabel, currentLabel },
+            { x => x.CurrentIcon,  currentIcon  },
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TabRenameDialog>("Rename tab", parameters, options);
+        await dialog.Result;
+        await InvokeAsync(StateHasChanged);
+    }
+
     /// <summary>
     /// Called from JS on drop — commits the reorder to TabService (one
     /// server call per drag; no calls during the drag itself).
@@ -91,6 +108,7 @@
     {
         TabService.Reorder(tabId, targetIndex);
     }
+
 
     public async ValueTask DisposeAsync()
     {

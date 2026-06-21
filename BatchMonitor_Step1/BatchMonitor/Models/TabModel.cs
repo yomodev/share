@@ -41,7 +41,7 @@ public class TabModel
     public string? EntityId { get; init; }
 
     /// <summary>MudBlazor icon constant string for the tab.</summary>
-    public string Icon { get; init; } = MudBlazor.Icons.Material.Outlined.Dashboard;
+    public string Icon { get; set; } = MudBlazor.Icons.Material.Outlined.Dashboard;
 
     public bool IsActive { get; set; }
 

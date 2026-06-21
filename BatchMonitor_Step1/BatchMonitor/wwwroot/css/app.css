@@ -324,7 +324,7 @@ html, body {
     flex-shrink: 0;
     width: fit-content;
     min-width: 90px;
-    max-width: 190px;
+    max-width: 320px;
     border: 1px solid transparent;
     transition: background var(--bm-transition), border-color var(--bm-transition);
     user-select: none;
@@ -332,8 +332,6 @@ html, body {
 .bm-tab:hover  { background: var(--mud-palette-action-default-hover); }
 .bm-tab.active { background: rgba(47,129,244,0.12); border-color: rgba(47,129,244,0.28); }
 
-/* Drag and drop — grab only while actively dragging, not on hover */
-.bm-tab[draggable="true"]:active { cursor: grabbing; }
 .bm-tab.dragging {
     opacity: 0.4;
     cursor: grabbing;
@@ -393,6 +391,34 @@ html, body {
 .bm-tab.active .bm-tab-close-btn { opacity: 1; }
 .bm-tab-close-btn:hover { background: rgba(248,81,73,0.15); color: #F85149; }
 .bm-tab-close-btn .mud-icon-root { font-size: 13px !important; }
+
+/* Icon picker in rename dialog */
+.bm-icon-picker {
+    display: grid;
+    grid-template-columns: repeat(8, 36px);
+    gap: 4px;
+}
+.bm-icon-picker-item {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    color: var(--mud-palette-text-secondary);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.bm-icon-picker-item:hover {
+    background: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-primary);
+}
+.bm-icon-picker-item.selected {
+    background: rgba(47,129,244,0.12);
+    border-color: var(--mud-palette-primary);
+    color: var(--mud-palette-primary);
+}
 
 /* ================================================================
    PAGE SHELL

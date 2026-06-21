@@ -91,6 +91,14 @@
         window.bmDownloadFile = window.bmSaveFile;
     </script>
 
+    <!-- Prevent text selection on double-click inside tables (dblclick triggers row actions) -->
+    <script>
+        document.addEventListener('dblclick', function (e) {
+            if (!e.target.closest('.bm-batch-table')) return;
+            window.getSelection()?.removeAllRanges();
+        });
+    </script>
+
     <!-- Ctrl+Click copies a row; Ctrl+Shift+Click copies the whole table as CSV -->
     <script>
         (function () {
@@ -152,6 +160,7 @@
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
     <link rel="modulepreload" href="js/filter.js" />
-    <link rel="modulepreload" href="js/d3-timeline.js?v=2" />
+    <link rel="modulepreload" href="js/app.js?v=2" />
+    <link rel="modulepreload" href="js/d3-timeline.js?v=3" />
 </body>
 </html>

@@ -1,0 +1,111 @@
+@using MudBlazor
+@inject TabService TabService
+@inject IJSRuntime JS
+
+<MudDialog>
+    <DialogContent>
+        <div style="display:flex; flex-direction:column; gap:16px; min-width:340px;">
+
+            <MudTextField @ref="_field"
+                          @bind-Value="_name"
+                          Label="Tab name"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          MaxLength="64"
+                          Immediate="true"
+                          OnKeyDown="OnKeyDown" />
+
+            <div>
+                <div style="font-size:0.75rem; color:var(--mud-palette-text-secondary); margin-bottom:6px;">Icon</div>
+                <div class="bm-icon-picker">
+                    @foreach (var (icon, label) in _icons)
+                    {
+                        var ico = icon;
+                        <MudTooltip Text="@label" Placement="Placement.Top">
+                            <div class="bm-icon-picker-item @(_selectedIcon == ico ? "selected" : "")"
+                                 @onclick="@(() => _selectedIcon = ico)">
+                                <MudIcon Icon="@ico" Size="Size.Small" />
+                            </div>
+                        </MudTooltip>
+                    }
+                </div>
+            </div>
+
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Confirm"
+                   Disabled="@(string.IsNullOrWhiteSpace(_name))">Rename</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string TabId        { get; set; } = string.Empty;
+    [Parameter] public string CurrentLabel { get; set; } = string.Empty;
+    [Parameter] public string CurrentIcon  { get; set; } = string.Empty;
+
+    private string _name         = string.Empty;
+    private string _selectedIcon = string.Empty;
+    private MudTextField<string>? _field;
+
+    private static readonly (string Icon, string Label)[] _icons =
+    [
+        (Icons.Material.Outlined.ViewList,       "Batches"),
+        (Icons.Material.Outlined.Hexagon,        "Batch detail"),
+        (Icons.Material.Outlined.Timeline,       "Timeline"),
+        (Icons.Material.Outlined.Stream,         "Kafka"),
+        (Icons.Material.Outlined.MoveToInbox,    "Topic"),
+        (Icons.Material.Outlined.Groups,         "Consumers"),
+        (Icons.Material.Outlined.Storage,        "MongoDB"),
+        (Icons.Material.Outlined.TableChart,     "Collection"),
+        (Icons.Material.Outlined.Dns,            "Services"),
+        (Icons.Material.Outlined.Article,        "Logs"),
+        (Icons.Material.Outlined.Dashboard,      "Dashboard"),
+        (Icons.Material.Outlined.Analytics,      "Analytics"),
+        (Icons.Material.Outlined.TrendingUp,     "Trending"),
+        (Icons.Material.Outlined.Speed,          "Performance"),
+        (Icons.Material.Outlined.BugReport,      "Bug"),
+        (Icons.Material.Outlined.Code,           "Code"),
+        (Icons.Material.Outlined.Star,           "Star"),
+        (Icons.Material.Outlined.Bookmark,       "Bookmark"),
+        (Icons.Material.Outlined.Flag,           "Flag"),
+        (Icons.Material.Outlined.Label,          "Label"),
+        (Icons.Material.Outlined.Work,           "Work"),
+        (Icons.Material.Outlined.Person,         "Person"),
+        (Icons.Material.Outlined.Notifications,  "Notifications"),
+        (Icons.Material.Outlined.Settings,       "Settings"),
+    ];
+
+    protected override void OnInitialized()
+    {
+        _name         = CurrentLabel;
+        _selectedIcon = CurrentIcon;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _field is not null)
+        {
+            await Task.Delay(100);
+            await _field.FocusAsync();
+        }
+    }
+
+    private void Confirm()
+    {
+        var trimmed = _name?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmed)) return;
+        TabService.RenameTab(TabId, trimmed, _selectedIcon);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")  Confirm();
+        else if (e.Key == "Escape") Cancel();
+    }
+}

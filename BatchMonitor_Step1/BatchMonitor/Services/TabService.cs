@@ -42,7 +42,7 @@ public class TabService
     public void Focus(string tabId)
     {
         var tab = _tabs.FirstOrDefault(t => t.Id == tabId);
-        if (tab is not null)
+        if (tab is not null && !tab.IsActive)
             SetActive(tab);
     }
 
@@ -91,6 +91,18 @@ public class TabService
 
     /// <summary>Returns true if the tab with the given id is the active tab.</summary>
     public bool IsActive(string tabId) => ActiveTab?.Id == tabId;
+
+    /// <summary>Renames the tab's display label and optionally its icon. No-op if not found or label is blank.</summary>
+    public void RenameTab(string tabId, string newLabel, string? newIcon = null)
+    {
+        newLabel = newLabel.Trim();
+        if (string.IsNullOrEmpty(newLabel)) return;
+        var tab = _tabs.FirstOrDefault(t => t.Id == tabId);
+        if (tab is null) return;
+        tab.Label = newLabel;
+        if (newIcon is not null) tab.Icon = newIcon;
+        Notify();
+    }
 
     /// <summary>
     /// Moves the tab with id <paramref name="tabId"/> so it sits immediately
