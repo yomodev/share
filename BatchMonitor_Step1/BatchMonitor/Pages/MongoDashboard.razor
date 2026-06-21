@@ -5,7 +5,6 @@
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
@@ -256,11 +255,20 @@
             new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = false });
     }
 
+    private async Task<bool> ConfirmAsync(string message, string confirmText = "Delete")
+    {
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm", new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message,     message     },
+            { x => x.ConfirmText, confirmText },
+        }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var result = await dialog.Result;
+        return result is { Canceled: false };
+    }
+
     private async Task DeleteCollectionAsync(string collection)
     {
-        bool confirmed = await JS.InvokeAsync<bool>("confirm",
-            $"Drop \"{collection}\" from {_selectedDb}?\n\nThis cannot be undone.");
-        if (!confirmed) return;
+        if (!await ConfirmAsync($"Drop \"{collection}\" from {_selectedDb}? This cannot be undone.")) return;
         await MongoSvc.DropCollectionAsync(Environment, _selectedDb, collection, _cts.Token);
         Snackbar.Add($"Collection \"{collection}\" dropped.", Severity.Success);
         await LoadCollectionsAsync();

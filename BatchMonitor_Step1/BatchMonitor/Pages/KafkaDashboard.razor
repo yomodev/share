@@ -5,7 +5,6 @@
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
@@ -438,11 +437,20 @@
         finally { _loadingDetail = false; StateHasChanged(); }
     }
 
+    private async Task<bool> ConfirmAsync(string message, string confirmText = "Delete")
+    {
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm", new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message,     message     },
+            { x => x.ConfirmText, confirmText },
+        }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var result = await dialog.Result;
+        return result is { Canceled: false };
+    }
+
     private async Task DeleteTopicAsync(string topicName)
     {
-        bool confirmed = await JS.InvokeAsync<bool>("confirm",
-            $"Delete topic \"{topicName}\"?\n\nThis permanently removes all messages and cannot be undone.");
-        if (!confirmed) return;
+        if (!await ConfirmAsync($"Delete topic \"{topicName}\"? This permanently removes all messages and cannot be undone.")) return;
         try
         {
             await KafkaSvc.DeleteTopicAsync(Environment, topicName, _cts.Token);
@@ -466,9 +474,7 @@
 
     private async Task DeleteConsumerGroupAsync(string groupId)
     {
-        bool confirmed = await JS.InvokeAsync<bool>("confirm",
-            $"Delete consumer group \"{groupId}\"?\n\nOffsets for this group will be lost.");
-        if (!confirmed) return;
+        if (!await ConfirmAsync($"Delete consumer group \"{groupId}\"? Offsets for this group will be lost.")) return;
         try
         {
             await KafkaSvc.DeleteConsumerGroupAsync(Environment, groupId, _cts.Token);
