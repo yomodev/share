@@ -48,13 +48,7 @@
                             IsActive="@IsTabActive($"dashboard:kafka:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateKafkaDashboard(EnvService.SelectedId)))" />
 
-            <SidebarNavItem Icon="@Icons.Material.Outlined.Groups"
-                            Label="Consumers"
-                            IsOpen="@_drawerOpen"
-                            IsActive="@IsTabActive($"dashboard:kafka-groups:{EnvService.SelectedId}")"
-                            OnClick="@(() => Open(TabModel.CreateKafkaGroupsDashboard(EnvService.SelectedId)))" />
-
-            <SidebarNavItem Icon="@Icons.Material.Outlined.Storage"
+<SidebarNavItem Icon="@Icons.Material.Outlined.Storage"
                             Label="MongoDB"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:mongo:{EnvService.SelectedId}")"

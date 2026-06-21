@@ -22,3 +22,17 @@ public record MongoDocument
     public string    Json      { get; init; } = string.Empty;
     public DateTime? Timestamp { get; init; }
 }
+
+public record MongoIndexInfo
+{
+    public string Name   { get; init; } = string.Empty;
+    public string Keys   { get; init; } = string.Empty;
+    public bool   Unique { get; init; }
+    public bool   Sparse { get; init; }
+}
+
+public record MongoCollectionDetails
+{
+    public MongoCollectionSummary        Summary { get; init; } = new();
+    public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
+}

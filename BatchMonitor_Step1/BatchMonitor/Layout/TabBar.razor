@@ -96,6 +96,7 @@
     {
         TabService.OnChange -= OnTabsChanged;
         _selfRef?.Dispose();
-        if (_appModule is not null) await _appModule.DisposeAsync();
+        try { if (_appModule is not null) await _appModule.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
     }
 }

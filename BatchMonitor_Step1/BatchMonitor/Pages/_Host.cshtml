@@ -63,8 +63,95 @@
         })();
     </script>
 
+    <!-- File download helper — global so any Blazor component can call it via IJSRuntime -->
+    <script>
+        window.bmSaveFile = async function(filename, content, mimeType) {
+            if (window.showSaveFilePicker) {
+                try {
+                    const ext  = filename.includes('.') ? '.' + filename.split('.').pop() : '';
+                    const desc = mimeType.includes('json') ? 'JSON file' : 'File';
+                    const accept = {};
+                    accept[mimeType] = ext ? [ext] : [];
+                    const fh = await window.showSaveFilePicker({ suggestedName: filename,
+                        types: [{ description: desc, accept }] });
+                    const w = await fh.createWritable();
+                    await w.write(content);
+                    await w.close();
+                    return;
+                } catch (ex) { if (ex.name === 'AbortError') return; }
+            }
+            const blob = new Blob([content], { type: mimeType });
+            const url  = URL.createObjectURL(blob);
+            const a    = Object.assign(document.createElement('a'), { href: url, download: filename, style: 'display:none' });
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+        };
+        // kept as alias so any older call sites still work
+        window.bmDownloadFile = window.bmSaveFile;
+    </script>
+
+    <!-- Ctrl+Click copies a row; Ctrl+Shift+Click copies the whole table as CSV -->
+    <script>
+        (function () {
+            function cellText(td) {
+                var clone = td.cloneNode(true);
+                clone.querySelectorAll('svg, button, .mud-icon-root').forEach(function (el) { el.remove(); });
+                return clone.textContent.replace(/\s+/g, ' ').trim();
+            }
+            function flashRow(tr) {
+                tr.classList.add('bm-copy-flash');
+                setTimeout(function () { tr.classList.remove('bm-copy-flash'); }, 600);
+            }
+            document.addEventListener('click', function (e) {
+                if (!e.ctrlKey) return;
+                var tr = e.target.closest('tr');
+                if (!tr || !tr.closest('.bm-batch-table')) return;
+                e.preventDefault();
+                var table = tr.closest('table');
+                if (!table) return;
+                var thead = table.querySelector('thead');
+                if (!thead) return;
+                var headers = Array.from(thead.querySelectorAll('th')).map(function (th) {
+                    var label = th.querySelector('.mud-table-sort-label');
+                    return (label ? label.textContent : th.textContent).trim();
+                });
+                if (e.shiftKey) {
+                    var skipCols = new Set(headers.map(function (h, i) {
+                        return /^actions$/i.test(h.trim()) ? i : -1;
+                    }).filter(function (i) { return i >= 0; }));
+                    var exportHeaders = headers.filter(function (_, i) { return !skipCols.has(i); });
+                    var lines = [exportHeaders.map(function (h) {
+                        return h.includes(',') ? '"' + h.replace(/"/g, '""') + '"' : h;
+                    }).join(',')];
+                    Array.from(table.querySelectorAll('tbody tr')).forEach(function (row) {
+                        var cells = Array.from(row.querySelectorAll('td'))
+                            .filter(function (_, i) { return !skipCols.has(i); })
+                            .map(function (td) {
+                                var t = cellText(td);
+                                return (t.includes(',') || t.includes('"') || t.includes('\n'))
+                                    ? '"' + t.replace(/"/g, '""') + '"' : t;
+                            });
+                        lines.push(cells.join(','));
+                    });
+                    navigator.clipboard.writeText(lines.join('\n'));
+                } else {
+                    var parts = Array.from(tr.querySelectorAll('td')).map(function (td, i) {
+                        var hdr = headers[i] || '';
+                        var val = cellText(td);
+                        if (!val) return null;
+                        return hdr ? hdr + ': ' + val : val;
+                    }).filter(Boolean);
+                    navigator.clipboard.writeText(parts.join('\n'));
+                }
+                flashRow(tr);
+            });
+        })();
+    </script>
+
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
     <link rel="modulepreload" href="js/filter.js" />
+    <link rel="modulepreload" href="js/d3-timeline.js?v=2" />
 </body>
 </html>

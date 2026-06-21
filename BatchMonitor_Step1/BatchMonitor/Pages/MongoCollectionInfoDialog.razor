@@ -1,0 +1,106 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
+@inject IMongoService MongoSvc
+
+<MudDialog Style="min-width:560px;">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" />
+            <MudText Typo="Typo.h6">@Collection.Name</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+        }
+        else if (_details is not null)
+        {
+            <!-- Stats grid -->
+            <div class="bm-info-stats">
+                <div class="bm-info-stat">
+                    <span class="bm-info-stat-label">Documents</span>
+                    <span class="bm-info-stat-val">@_details.Summary.DocumentCount.ToString("N0")</span>
+                </div>
+                <div class="bm-info-stat">
+                    <span class="bm-info-stat-label">Storage</span>
+                    <span class="bm-info-stat-val">@FormatBytes(_details.Summary.StorageSizeBytes)</span>
+                </div>
+                <div class="bm-info-stat">
+                    <span class="bm-info-stat-label">Avg Document</span>
+                    <span class="bm-info-stat-val">@FormatBytes(_details.Summary.AvgDocSizeBytes)</span>
+                </div>
+                <div class="bm-info-stat">
+                    <span class="bm-info-stat-label">Indexes</span>
+                    <span class="bm-info-stat-val">@_details.Indexes.Count</span>
+                </div>
+            </div>
+
+            <MudDivider Class="my-3" />
+
+            <!-- Indexes table -->
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Indexes</MudText>
+            <MudTable T="MongoIndexInfo"
+                      Items="_details.Indexes"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Class="bm-mini-table">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Keys</MudTh>
+                    <MudTh Style="width:70px; text-align:center;">Unique</MudTh>
+                    <MudTh Style="width:70px; text-align:center;">Sparse</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <code class="bm-mongo-id">@context.Name</code>
+                    </MudTd>
+                    <MudTd>
+                        <code class="bm-kafka-mono" style="font-size:12px;">@context.Keys</code>
+                    </MudTd>
+                    <MudTd Style="text-align:center;">
+                        @if (context.Unique)
+                        {
+                            <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Color="Color.Success" />
+                        }
+                    </MudTd>
+                    <MudTd Style="text-align:center;">
+                        @if (context.Sparse)
+                        {
+                            <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Color="Color.Info" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialogInstance.Close())" Variant="Variant.Text">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialogInstance { get; set; } = null!;
+
+    [Parameter] public MongoCollectionSummary Collection  { get; set; } = new();
+    [Parameter] public string                 Database    { get; set; } = string.Empty;
+    [Parameter] public string                 Environment { get; set; } = string.Empty;
+
+    private MongoCollectionDetails? _details;
+    private bool                    _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _details = await MongoSvc.GetCollectionDetailsAsync(Environment, Database, Collection.Name);
+        _loading = false;
+    }
+
+    private static string FormatBytes(long b) => b switch
+    {
+        < 1024                => $"{b} B",
+        < 1024 * 1024         => $"{b / 1024} KB",
+        < 1024L * 1024 * 1024 => $"{b / (1024 * 1024)} MB",
+        _                     => $"{b / (1024L * 1024 * 1024)} GB",
+    };
+}

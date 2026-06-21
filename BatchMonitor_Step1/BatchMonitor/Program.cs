@@ -41,6 +41,7 @@ public class Program
 
         builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
         builder.Services.AddSingleton<IMongoService, MockMongoService>();
+        builder.Services.AddSingleton<IInfraHealthService, MockInfraHealthService>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

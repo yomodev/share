@@ -5,6 +5,8 @@ namespace BatchMonitor.Services;
 
 public class MockMongoService : IMongoService
 {
+    private readonly HashSet<string> _dropped = new();
+
     private static readonly IReadOnlyList<MongoDatabaseInfo> _databases =
     [
         new() { Name = "bm-core",      CollectionCount = 6, SizeBytes = 1_482_000_000L },
@@ -51,7 +53,7 @@ public class MockMongoService : IMongoService
     private static MongoDocument MakeDoc(string id, string json, DateTime? ts) =>
         new() { Id = id, Json = json, Timestamp = ts };
 
-    private static string NewId(int i) => $"{(long)(i * 0x1_0000_0000L + 0xDEAD_BEEF):x16}"[..24];
+    private static string NewId(int i) => $"{unchecked((long)0xDEAD_BEEF_0000_0000UL + i):x16}{i:x8}";
     private static string ShortGuid()  => Guid.NewGuid().ToString("N")[..8];
     private static string Bool(bool b) => b ? "true" : "false";
 
@@ -114,15 +116,100 @@ public class MockMongoService : IMongoService
             DateTime.UtcNow.AddMinutes(-i)),
     };
 
+    private static readonly Dictionary<string, IReadOnlyList<MongoIndexInfo>> _indexes = new()
+    {
+        ["batches"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "batchName_status",    Keys = "{ batchName: 1, status: 1 }",             Unique = false },
+            new() { Name = "startedAt",           Keys = "{ startedAt: -1 }",                       Unique = false },
+            new() { Name = "environment_status",  Keys = "{ environment: 1, status: 1 }",           Unique = false },
+        ],
+        ["batch_steps"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "batchId",            Keys = "{ batchId: 1 }",                          Unique = false },
+            new() { Name = "stepName_status",    Keys = "{ stepName: 1, status: 1 }",              Unique = false },
+        ],
+        ["events"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "timestamp",          Keys = "{ timestamp: -1 }",                       Unique = false },
+        ],
+        ["configurations"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "key_unique",         Keys = "{ key: 1 }",                              Unique = true  },
+        ],
+        ["users"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "username_unique",    Keys = "{ username: 1 }",                         Unique = true  },
+            new() { Name = "email_unique",       Keys = "{ email: 1 }",                            Unique = true  },
+        ],
+        ["audit_log"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "timestamp",          Keys = "{ timestamp: -1 }",                       Unique = false },
+        ],
+        ["daily_metrics"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "date_unique",        Keys = "{ date: 1 }",                             Unique = true  },
+        ],
+        ["hourly_stats"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "hour_unique",        Keys = "{ hour: 1 }",                             Unique = true  },
+        ],
+        ["error_reports"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "occurredAt",         Keys = "{ occurredAt: -1 }",                      Unique = false },
+        ],
+        ["environments"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+        ],
+        ["feature_flags"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+        ],
+        ["alert_rules"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+            new() { Name = "severity",           Keys = "{ severity: 1 }",                         Unique = false },
+        ],
+        ["dashboards"] =
+        [
+            new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
+        ],
+    };
+
     public Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
         => Task.FromResult(_databases);
 
     public Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default)
     {
         var result = _collections.TryGetValue(database, out var cols)
-            ? cols
+            ? (IReadOnlyList<MongoCollectionSummary>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).ToList()
             : (IReadOnlyList<MongoCollectionSummary>)[];
         return Task.FromResult(result);
+    }
+
+    public Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default)
+    {
+        var summary = _collections.TryGetValue(database, out var cols)
+            ? cols.FirstOrDefault(c => c.Name == collection) ?? new MongoCollectionSummary { Name = collection }
+            : new MongoCollectionSummary { Name = collection };
+        var indexes = _indexes.TryGetValue(collection, out var idx) ? idx : (IReadOnlyList<MongoIndexInfo>)[new() { Name = "_id_", Keys = "{ _id: 1 }", Unique = true }];
+        return Task.FromResult(new MongoCollectionDetails { Summary = summary, Indexes = indexes });
+    }
+
+    public Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default)
+    {
+        _dropped.Add($"{database}/{collection}");
+        return Task.CompletedTask;
     }
 
     public Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(

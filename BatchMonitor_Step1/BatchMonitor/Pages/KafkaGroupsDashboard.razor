@@ -147,7 +147,8 @@
     private KafkaConsumerGroupOverview?       _selected = null;
     private List<KafkaGroupTopicLag>?         _topicLags    = null;
     private bool _loading = true, _loadingDetail = false;
-    private string _filterText = string.Empty, _filterParseError = string.Empty;
+    private string  _filterText       = string.Empty;
+    private string? _filterParseError = null;
     private CancellationTokenSource _cts = new();
 
     private static readonly string[] SearchableFields = ["GroupId", "State"];
@@ -186,7 +187,7 @@
     private void OnFilterChanged(string text)
     {
         _filterText = text;
-        _filterParseError = string.Empty;
+        _filterParseError = null;
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {

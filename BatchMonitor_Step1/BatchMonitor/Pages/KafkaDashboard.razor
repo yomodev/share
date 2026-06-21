@@ -4,9 +4,11 @@
 @inject IKafkaService KafkaSvc
 @inject TabService TabService
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @implements IDisposable
 
-<div class="bm-page bm-page-fill">
+<div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
 
     <!-- Cluster info bar -->
     @if (_cluster is not null)
@@ -34,12 +36,24 @@
 
     <!-- Toolbar -->
     <div class="bm-batch-toolbar">
+
+        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-kafka-view-toggle">
+            <MudButton Color="Color.Primary"
+                       Class="@(_viewMode == KafkaView.Topics ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                       StartIcon="@Icons.Material.Outlined.Topic"
+                       OnClick="@(() => SwitchView(KafkaView.Topics))">Topics</MudButton>
+            <MudButton Color="Color.Primary"
+                       Class="@(_viewMode == KafkaView.Consumers ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                       StartIcon="@Icons.Material.Outlined.Groups"
+                       OnClick="@(() => SwitchView(KafkaView.Consumers))">Consumers</MudButton>
+        </MudButtonGroup>
+
         <FilterBox Value="@_filterText"
                    OnFilterChanged="OnFilterChanged"
                    ParseError="@_filterParseError"
-                   Placeholder="Filter topics…"
+                   Placeholder="@(_viewMode == KafkaView.Topics ? "Filter topics…" : "Filter consumer groups…")"
                    Class="bm-filter-input"
-                   FieldHints="@_fieldHints" />
+                   FieldHints="@(_viewMode == KafkaView.Topics ? _topicFieldHints : _groupFieldHints)" />
 
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
@@ -50,115 +64,245 @@
         </MudTooltip>
     </div>
 
-    <!-- Table -->
-    <div class="bm-table-wrap">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
-        <MudTable T="KafkaTopicSummary"
-                  Items="_paged"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  FixedHeader="true"
-                  Height="100%"
-                  Class="bm-batch-table">
-            <HeaderContent>
-                <MudTh>
-                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-topic-name">@context.Name</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                    @context.PartitionCount
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@FormatMessages(context)</span>
-                </MudTd>
-                <MudTd Style="text-align:center;">
-                    <div class="bm-row-actions">
-                        <MudTooltip Text="Topic config">
-                            <MudIconButton Icon="@Icons.Material.Outlined.Info"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenInfoDialog(context.Name))" />
-                        </MudTooltip>
-                        <MudTooltip Text="Consumer groups">
-                            <MudIconButton Icon="@Icons.Material.Outlined.Group"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenGroupsDialog(context.Name))" />
-                        </MudTooltip>
-                        <MudTooltip Text="Inspect messages">
-                            <MudIconButton Icon="@Icons.Material.Outlined.MoveToInbox"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenInspector(context.Name))" />
-                        </MudTooltip>
-                    </div>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </div>
-
-    <!-- Pagination footer -->
-    <div class="bm-batch-footer">
-        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_filtered.Count topic@(_filtered.Count == 1 ? "" : "s")
-        </MudText>
-        <MudPagination Count="_totalPages"
-                       Selected="_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
-        <div class="bm-rows-select">
-            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
-            <MudSelect T="int"
-                       Value="_pageSize"
-                       ValueChanged="OnPageSizeChanged"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Margin="Margin.Dense"
-                       Style="width:68px">
-                <MudSelectItem Value="10">10</MudSelectItem>
-                <MudSelectItem Value="25">25</MudSelectItem>
-                <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-            </MudSelect>
+    <!-- ── Topics view ──────────────────────────────────────────────────── -->
+    @if (_viewMode == KafkaView.Topics)
+    {
+        <div class="bm-table-wrap">
+            @if (_loading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+            }
+            <MudTable T="KafkaTopicSummary"
+                      Items="_paged"
+                      Dense="true" Hover="true" Elevation="0"
+                      FixedHeader="true" Height="100%"
+                      Class="bm-batch-table">
+                <HeaderContent>
+                    <MudTh>
+                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="width:140px; text-align:center;">Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                        <span class="bm-kafka-topic-name">@context.Name</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                        @context.PartitionCount
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                        <span class="bm-kafka-mono">@FormatMessages(context)</span>
+                    </MudTd>
+                    <MudTd Style="text-align:center;">
+                        <div class="bm-row-actions">
+                            <MudTooltip Text="Topic config">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenInfoDialog(context.Name))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Consumer groups">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Group"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenGroupsDialog(context.Name))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Inspect messages">
+                                <MudIconButton Icon="@Icons.Material.Outlined.MoveToInbox"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenInspector(context.Name))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Delete topic">
+                                <MudIconButton Icon="@Icons.Material.Outlined.DeleteOutline"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteTopicAsync(context.Name))" />
+                            </MudTooltip>
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
         </div>
-    </div>
+
+        <div class="bm-batch-footer">
+            <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+                @_filteredTopics.Count topic@(_filteredTopics.Count == 1 ? "" : "s")
+            </MudText>
+            <MudPagination Count="_totalPages"
+                           Selected="_page"
+                           SelectedChanged="OnPageChanged"
+                           ShowFirstButton="true" ShowLastButton="true"
+                           Size="Size.Small" Class="bm-pagination-ctrl" />
+            <div class="bm-rows-select">
+                <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+                <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
+                           Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="width:68px">
+                    <MudSelectItem Value="10">10</MudSelectItem>
+                    <MudSelectItem Value="25">25</MudSelectItem>
+                    <MudSelectItem Value="50">50</MudSelectItem>
+                    <MudSelectItem Value="100">100</MudSelectItem>
+                </MudSelect>
+            </div>
+        </div>
+    }
+
+    <!-- ── Consumers view ───────────────────────────────────────────────── -->
+    @if (_viewMode == KafkaView.Consumers)
+    {
+        <div class="bm-table-wrap @(_selectedGroup is not null ? "bm-inspector-split-top" : "")">
+            @if (_loading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+            }
+            <MudTable T="KafkaConsumerGroupOverview"
+                      Items="_filteredGroups"
+                      Dense="true" Hover="true" Elevation="0"
+                      FixedHeader="true" Height="100%"
+                      SelectedItem="_selectedGroup"
+                      SelectedItemChanged="OnGroupSelected"
+                      Class="bm-batch-table">
+                <HeaderContent>
+                    <MudTh>
+                        <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.GroupId">Group ID</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="width:120px;">
+                        <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.State">State</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="width:90px; text-align:right;">
+                        <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TopicCount">Topics</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="width:110px; text-align:right;">
+                        <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TotalLag">Total Lag</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                        <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                 Color="@StateColor(context.State)">@context.State</MudChip>
+                    </MudTd>
+                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                        @context.TopicCount
+                    </MudTd>
+                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                        @if (context.TotalLag > 0)
+                        {
+                            <span class="bm-kafka-lag-warn">
+                                @context.TotalLag.ToString("N0")
+                                <MudIcon Icon="@Icons.Material.Outlined.Warning"
+                                         Size="Size.Small" Class="bm-kafka-lag-icon" />
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="bm-kafka-mono">0</span>
+                        }
+                    </MudTd>
+                    <MudTd Style="text-align:center;">
+                        <div class="bm-row-actions">
+                            <MudTooltip Text="Delete consumer group">
+                                <MudIconButton Icon="@Icons.Material.Outlined.DeleteOutline"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteConsumerGroupAsync(context.GroupId))" />
+                            </MudTooltip>
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </div>
+
+        @if (_selectedGroup is not null)
+        {
+            <div class="bm-inspector-detail">
+                <div class="bm-inspector-detail-header">
+                    <span class="bm-kafka-mono">
+                        <strong>@_selectedGroup.GroupId</strong>
+                        &nbsp;·&nbsp; @_selectedGroup.State
+                        &nbsp;·&nbsp; @_selectedGroup.TopicCount topic@(_selectedGroup.TopicCount == 1 ? "" : "s")
+                    </span>
+                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                   Size="Size.Small"
+                                   OnClick="@(() => { _selectedGroup = null; _topicLags = null; })" />
+                </div>
+                <div class="bm-inspector-detail-body">
+                    @if (_loadingDetail)
+                    {
+                        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                    }
+                    else if (_topicLags is not null)
+                    {
+                        <div class="bm-inspector-section-label">Subscribed topics</div>
+                        <table class="bm-kafka-info-table" style="width:100%;">
+                            <thead>
+                                <tr>
+                                    <th>Topic</th>
+                                    <th style="text-align:right; width:80px;">Parts</th>
+                                    <th style="text-align:right; width:100px;">Lag</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in _topicLags)
+                                {
+                                    <tr>
+                                        <td class="bm-kafka-topic-name">@t.TopicName</td>
+                                        <td style="text-align:right;" class="bm-kafka-mono">@t.Partitions</td>
+                                        <td style="text-align:right;" class="@(t.Lag > 0 ? "bm-kafka-lag-warn" : "bm-kafka-mono")">
+                                            @t.Lag.ToString("N0")
+                                            @if (t.Lag > 0)
+                                            {
+                                                <MudIcon Icon="@Icons.Material.Outlined.Warning"
+                                                         Size="Size.Small" Class="bm-kafka-lag-icon" />
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        }
+    }
 
 </div>
 
 @code {
+    private enum KafkaView { Topics, Consumers }
+
     [Parameter] public string Environment { get; set; } = string.Empty;
 
-    private KafkaClusterInfo?        _cluster    = null;
-    private List<KafkaTopicSummary>  _allTopics  = new();
-    private List<KafkaTopicSummary>  _filtered   = new();
-    private List<KafkaTopicSummary>  _paged      = new();
-    private string                   _filterText      = string.Empty;
-    private string?                  _filterParseError = null;
-    private bool                     _loading    = true;
-    private CancellationTokenSource  _cts        = new();
+    // Shared
+    private KafkaClusterInfo? _cluster  = null;
+    private KafkaView         _viewMode = KafkaView.Topics;
+    private bool              _loading  = true;
+    private string            _filterText       = string.Empty;
+    private string?           _filterParseError = null;
+    private CancellationTokenSource _cts = new();
 
-    private int _page      = 1;
-    private int _pageSize  = 25;
-    private int _totalPages = 1;
+    // Topics
+    private List<KafkaTopicSummary> _allTopics      = new();
+    private List<KafkaTopicSummary> _filteredTopics = new();
+    private List<KafkaTopicSummary> _paged          = new();
+    private int _page = 1, _pageSize = 25, _totalPages = 1;
 
-    private static readonly string[] SearchableFields = ["Name", "CleanupPolicy"];
-    private static readonly FilterParser Parser = new(SearchableFields,
+    // Consumers
+    private List<KafkaConsumerGroupOverview> _allGroups      = new();
+    private List<KafkaConsumerGroupOverview> _filteredGroups = new();
+    private KafkaConsumerGroupOverview?      _selectedGroup  = null;
+    private List<KafkaGroupTopicLag>?        _topicLags      = null;
+    private bool _loadingDetail = false;
+
+    // Filter parsers
+    private static readonly FilterParser TopicParser = new(["Name", "CleanupPolicy"],
         new Dictionary<string, string>
         {
             ["name"]    = "Name",
@@ -167,10 +311,24 @@
             ["policy"]  = "CleanupPolicy",
         });
 
-    private static readonly (string Aliases, string Label)[] _fieldHints =
+    private static readonly FilterParser GroupParser = new(["GroupId", "State"],
+        new Dictionary<string, string>
+        {
+            ["group"]   = "GroupId",
+            ["groupid"] = "GroupId",
+            ["state"]   = "State",
+        });
+
+    private static readonly (string Aliases, string Label)[] _topicFieldHints =
     [
-        ("name / topic",    "topic name"),
-        ("cleanup / policy","cleanup policy (delete / compact)"),
+        ("name / topic",     "topic name"),
+        ("cleanup / policy", "cleanup policy (delete / compact)"),
+    ];
+
+    private static readonly (string Aliases, string Label)[] _groupFieldHints =
+    [
+        ("group / groupid", "consumer group ID"),
+        ("state",           "Stable / Rebalancing / Dead / Empty"),
     ];
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
@@ -181,15 +339,39 @@
         StateHasChanged();
         try
         {
-            var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
-            var t2 = KafkaSvc.GetTopicsAsync(Environment, _cts.Token);
-            await Task.WhenAll(t1, t2);
-            _cluster   = t1.Result;
-            _allTopics = t2.Result.ToList();
+            if (_viewMode == KafkaView.Topics)
+            {
+                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
+                var t2 = KafkaSvc.GetTopicsAsync(Environment, _cts.Token);
+                await Task.WhenAll(t1, t2);
+                _cluster   = t1.Result;
+                _allTopics = t2.Result.ToList();
+            }
+            else
+            {
+                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
+                var t2 = KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
+                await Task.WhenAll(t1, t2);
+                _cluster       = t1.Result;
+                _allGroups     = t2.Result.ToList();
+                _selectedGroup = null;
+                _topicLags     = null;
+            }
             ApplyFilter();
         }
         catch (OperationCanceledException) { }
         finally { _loading = false; }
+    }
+
+    private void SwitchView(KafkaView view)
+    {
+        if (_viewMode == view) return;
+        _viewMode         = view;
+        _filterText       = string.Empty;
+        _filterParseError = null;
+        _selectedGroup    = null;
+        _topicLags        = null;
+        _ = LoadAsync();
     }
 
     private void OnFilterChanged(string text)
@@ -199,36 +381,106 @@
         FilterNode? node  = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = Parser.Parse(text); }
+            try
+            {
+                node = (_viewMode == KafkaView.Topics ? TopicParser : GroupParser).Parse(text);
+            }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
-        _filtered = node is null
-            ? _allTopics
-            : _allTopics.Where(t => FilterEvaluator.Evaluate(node, t)).ToList();
-        _page = 1;
-        RebuildPage();
+
+        if (_viewMode == KafkaView.Topics)
+        {
+            _filteredTopics = node is null
+                ? _allTopics
+                : _allTopics.Where(t => FilterEvaluator.Evaluate(node, t)).ToList();
+            _page = 1;
+            RebuildPage();
+        }
+        else
+        {
+            _filteredGroups = node is null
+                ? _allGroups
+                : _allGroups.Where(g => FilterEvaluator.Evaluate(node, g)).ToList();
+        }
     }
 
     private void ApplyFilter() => OnFilterChanged(_filterText);
 
     private void RebuildPage()
     {
-        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
+        _totalPages = Math.Max(1, (int)Math.Ceiling(_filteredTopics.Count / (double)_pageSize));
         _page       = Math.Clamp(_page, 1, _totalPages);
-        _paged      = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged      = _filteredTopics.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
     }
 
-    private void OnPageChanged(int page)
+    private void OnPageChanged(int page)   { _page = page;  RebuildPage(); }
+    private void OnPageSizeChanged(int sz) { _pageSize = sz; _page = 1; RebuildPage(); }
+
+    private async void OnGroupSelected(KafkaConsumerGroupOverview? group)
     {
-        _page = page;
-        RebuildPage();
+        if (group is null || ReferenceEquals(_selectedGroup, group))
+        {
+            _selectedGroup = null;
+            _topicLags     = null;
+            StateHasChanged();
+            return;
+        }
+        _selectedGroup = group;
+        _topicLags     = null;
+        _loadingDetail = true;
+        StateHasChanged();
+        try
+        {
+            var lags   = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+            _topicLags = lags.ToList();
+        }
+        catch (OperationCanceledException) { }
+        finally { _loadingDetail = false; StateHasChanged(); }
     }
 
-    private void OnPageSizeChanged(int size)
+    private async Task DeleteTopicAsync(string topicName)
     {
-        _pageSize = size;
-        _page     = 1;
-        RebuildPage();
+        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Delete topic \"{topicName}\"?\n\nThis permanently removes all messages and cannot be undone.");
+        if (!confirmed) return;
+        try
+        {
+            await KafkaSvc.DeleteTopicAsync(Environment, topicName, _cts.Token);
+            Snackbar.Add($"Topic \"{topicName}\" deleted.", Severity.Success);
+        }
+        catch
+        {
+            try
+            {
+                await KafkaSvc.SetTopicRetentionAsync(Environment, topicName, 1, _cts.Token);
+                Snackbar.Add($"Could not delete \"{topicName}\" — retention set to 1 ms (messages will expire shortly).", Severity.Warning);
+            }
+            catch
+            {
+                Snackbar.Add($"Failed to delete or clear topic \"{topicName}\".", Severity.Error);
+                return;
+            }
+        }
+        await LoadAsync();
+    }
+
+    private async Task DeleteConsumerGroupAsync(string groupId)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Delete consumer group \"{groupId}\"?\n\nOffsets for this group will be lost.");
+        if (!confirmed) return;
+        try
+        {
+            await KafkaSvc.DeleteConsumerGroupAsync(Environment, groupId, _cts.Token);
+            if (_selectedGroup?.GroupId == groupId) { _selectedGroup = null; _topicLags = null; }
+            Snackbar.Add($"Consumer group \"{groupId}\" deleted.", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add($"Failed to delete consumer group \"{groupId}\".", Severity.Error);
+            return;
+        }
+        await LoadAsync();
     }
 
     private async Task OpenInfoDialog(string topicName)
@@ -238,8 +490,8 @@
             { x => x.TopicName,   topicName   },
             { x => x.Environment, Environment },
         };
-        var opts = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
-        await DialogService.ShowAsync<KafkaTopicInfoDialog>($"{topicName} — config", p, opts);
+        await DialogService.ShowAsync<KafkaTopicInfoDialog>($"{topicName} — config", p,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 
     private async Task OpenGroupsDialog(string topicName)
@@ -249,8 +501,8 @@
             { x => x.TopicName,   topicName   },
             { x => x.Environment, Environment },
         };
-        var opts = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
-        await DialogService.ShowAsync<KafkaConsumerGroupsDialog>($"{topicName} — consumer groups", p, opts);
+        await DialogService.ShowAsync<KafkaConsumerGroupsDialog>($"{topicName} — consumer groups", p,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 
     private void OpenInspector(string topicName)
@@ -261,6 +513,14 @@
         var prefix = t.CleanupPolicy.Contains("compact") ? "~" : "";
         return prefix + t.MessageCount.ToString("N0");
     }
+
+    private static Color StateColor(string state) => state switch
+    {
+        "Stable"      => Color.Success,
+        "Rebalancing" => Color.Warning,
+        "Dead"        => Color.Error,
+        _             => Color.Default,
+    };
 
     public void Dispose() => _cts.Cancel();
 }

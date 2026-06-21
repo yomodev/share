@@ -46,12 +46,43 @@ const TIMELINE_ALIASES = {
     ];
     const STATUS_COLOR = { done:'#3FB950', inprogress:'#388BFD', error:'#F85149' };
     const CURSOR_COLOR = '#FF00FF';
-    const GRID_MAJOR   = 'rgba(255,255,255,0.10)';
-    const GRID_MID     = 'rgba(255,255,255,0.04)';
-    const SEPARATOR    = 'rgba(255,255,255,0.08)';
-    const HEAT_BG      = '#161620';
+    let   GRID_MAJOR   = 'rgba(255,255,255,0.10)';
+    let   GRID_MID     = 'rgba(255,255,255,0.04)';
+    let   SEPARATOR    = 'rgba(255,255,255,0.08)';
+    let   HEAT_BG      = '#161620';
     const HEAT_LINE    = '#388BFD';
-    const BG_COLOR     = '#13131a';
+    let   BG_COLOR     = '#13131a';
+
+    function _cssVar(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+    function refreshColors() {
+        // MudBlazor stores palette values as bare "r,g,b" components (no rgb() wrapper).
+        // Wrap them so the canvas can parse them, then normalise to #rrggbb.
+        function _mudColor(varName) {
+            const v = _cssVar(varName);
+            if (!v) return '';
+            // Already a valid CSS colour (hex, named, rgb(...)):
+            if (v.startsWith('#') || v.startsWith('rgb') || /^[a-z]+$/.test(v)) return v;
+            // Bare "r,g,b" — wrap it.
+            return `rgb(${v})`;
+        }
+        const raw = _mudColor('--mud-palette-surface') || _mudColor('--mud-palette-background') || '#ffffff';
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.fillStyle = '#808080';
+        ctx.fillStyle = raw;
+        const hex = ctx.fillStyle; // #rrggbb after normalisation
+        const r = parseInt(hex.slice(1,3), 16);
+        const g = parseInt(hex.slice(3,5), 16);
+        const b = parseInt(hex.slice(5,7), 16);
+        const dark = (0.299*r + 0.587*g + 0.114*b) < 128;
+
+        BG_COLOR   = raw;
+        HEAT_BG    = dark ? '#161620' : (_mudColor('--mud-palette-background-grey') || '#eeeeee');
+        GRID_MAJOR = dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
+        GRID_MID   = dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)';
+        SEPARATOR  = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)';
+    }
 
     // ── Public API ─────────────────────────────────────────────────────────
 
@@ -431,6 +462,7 @@ const TIMELINE_ALIASES = {
     // ── Render ────────────────────────────────────────────────────────────
 
     function renderAll(s) {
+        refreshColors();
         renderLanes(s);
         renderTicks(s);
         renderHeatmap(s);

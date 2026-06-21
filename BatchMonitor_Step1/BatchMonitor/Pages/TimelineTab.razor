@@ -85,7 +85,7 @@
         {
             try
             {
-                _tlModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js");
+                _tlModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=2");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }

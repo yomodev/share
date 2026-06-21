@@ -5,6 +5,9 @@ namespace BatchMonitor.Services;
 
 public class MockKafkaService : IKafkaService
 {
+    private readonly HashSet<string> _deletedTopics = new();
+    private readonly HashSet<string> _deletedGroups = new();
+
     private static readonly KafkaClusterInfo _cluster = new()
     {
         ClusterId    = "mock-cluster-a1b2c3",
@@ -43,7 +46,12 @@ public class MockKafkaService : IKafkaService
         => Task.FromResult(_cluster);
 
     public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
-        => Task.FromResult(_topics);
+    {
+        IReadOnlyList<KafkaTopicSummary> result = _deletedTopics.Count == 0
+            ? _topics
+            : (IReadOnlyList<KafkaTopicSummary>)_topics.Where(t => !_deletedTopics.Contains(t.Name)).ToList();
+        return Task.FromResult(result);
+    }
 
     public Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
     {
@@ -85,6 +93,21 @@ public class MockKafkaService : IKafkaService
         return Task.FromResult(result);
     }
 
+    public Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default)
+    {
+        _deletedTopics.Add(topicName);
+        return Task.CompletedTask;
+    }
+
+    public Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default)
+    {
+        _deletedGroups.Add(groupId);
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default)
     {
         // invert _topicGroups: group → list of topics with their lag
@@ -107,6 +130,7 @@ public class MockKafkaService : IKafkaService
                 TotalLag   = kv.Value.Lag,
                 Topics     = kv.Value.Topics,
             })
+            .Where(g => !_deletedGroups.Contains(g.GroupId))
             .OrderBy(g => g.GroupId)
             .ToList();
         return Task.FromResult(result);
@@ -146,22 +170,25 @@ public class MockKafkaService : IKafkaService
         string env, string topicName, int maxMessages,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var topic   = _topics.FirstOrDefault(t => t.Name == topicName);
-        var parts   = topic?.PartitionCount ?? 3;
-        var baseOff = _rng.NextInt64(1_000, 5_000_000);
-        var baseTs  = DateTime.UtcNow.AddMinutes(-maxMessages * 0.4);
+        bool live    = maxMessages <= 0;
+        var topic    = _topics.FirstOrDefault(t => t.Name == topicName);
+        var parts    = topic?.PartitionCount ?? 3;
+        var baseOff  = _rng.NextInt64(1_000, 5_000_000);
+        var cap      = live ? int.MaxValue : maxMessages;
+        // For bounded fetch: start messages in the past; for live: start near now
+        var baseTs   = live ? DateTime.UtcNow.AddSeconds(-2) : DateTime.UtcNow.AddMinutes(-maxMessages * 0.4);
 
-        for (int i = 0; i < maxMessages; i++)
+        for (int i = 0; i < cap; i++)
         {
             ct.ThrowIfCancellationRequested();
 
-            var key      = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
-            var tmpl     = _valueTemplates[_rng.Next(_valueTemplates.Length)];
-            var value    = tmpl
+            var key   = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
+            var tmpl  = _valueTemplates[_rng.Next(_valueTemplates.Length)];
+            var value = tmpl
                 .Replace("{key}",    key)
                 .Replace("{n}",      (baseOff + i).ToString())
                 .Replace("{amount}", _rng.Next(10, 9999).ToString())
-                .Replace("{ts}",     baseTs.AddSeconds(i * 2).ToString("o"));
+                .Replace("{ts}",     (live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2)).ToString("o"));
 
             yield return new KafkaMessage
             {
@@ -169,13 +196,16 @@ public class MockKafkaService : IKafkaService
                 Partition = _rng.Next(0, parts),
                 Key       = key,
                 Value     = value,
-                Timestamp = baseTs.AddSeconds(i * 2),
+                Timestamp = live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2),
                 Headers   = i % 4 == 0
                     ? new() { ["correlation-id"] = Guid.NewGuid().ToString("N")[..8], ["source"] = "mock" }
                     : new(),
             };
 
-            if (i % 10 == 9)
+            // Live mode: realistic inter-message delay; bounded: fast burst with small pauses
+            if (live)
+                await Task.Delay(_rng.Next(400, 1200), ct);
+            else if (i % 10 == 9)
                 await Task.Delay(20, ct);
         }
     }

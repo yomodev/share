@@ -1,6 +1,8 @@
 @using BatchMonitor.Core.Models
 @using BatchMonitor.Core.Services
+@using BatchMonitor.Filtering
 @inject IMongoService MongoSvc
+@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -12,17 +14,12 @@
             @_database.<span style="opacity:.5;">@_collection</span>
         </span>
 
-        <MudTextField T="string"
-                      Value="@_search"
-                      ValueChanged="OnSearchChanged"
-                      Placeholder="Search documents…"
-                      Adornment="Adornment.Start"
-                      AdornmentIcon="@Icons.Material.Outlined.Search"
-                      Clearable="true"
-                      Dense="true"
-                      Margin="Margin.Dense"
-                      Variant="Variant.Outlined"
-                      Class="bm-filter-input" />
+        <FilterBox Value="@_search"
+                   OnFilterChanged="OnSearchChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Search documents…"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
 
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
@@ -56,13 +53,13 @@
                 <MudTh Style="width:170px;">Timestamp (UTC)</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     @if (context.Timestamp.HasValue)
                     {
                         <span class="bm-kafka-mono bm-muted">
@@ -114,9 +111,16 @@
                         <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
                     }
                 </span>
-                <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                               Size="Size.Small"
-                               OnClick="@(() => _selected = null)" />
+                <div style="display:flex; align-items:center; gap:4px;">
+                    <MudTooltip Text="Save as JSON">
+                        <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                                       Size="Size.Small"
+                                       OnClick="@(() => SaveDocumentAsync(_selected))" />
+                    </MudTooltip>
+                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                   Size="Size.Small"
+                                   OnClick="@(() => _selected = null)" />
+                </div>
             </div>
             <div class="bm-inspector-detail-body">
                 <pre class="bm-inspector-value">@FormatJson(_selected.Json)</pre>
@@ -133,13 +137,20 @@
     private string _database   = string.Empty;
     private string _collection = string.Empty;
 
+    private List<MongoDocument> _allDocs    = new();
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
     private string              _search     = string.Empty;
+    private string?             _filterParseError = null;
     private bool                _loading    = true;
     private long                _totalCount = 0;
     private int                 _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
+
+    private static readonly (string Aliases, string Label)[] _fieldHints =
+    [
+        ("text search", "matches anywhere in the document JSON"),
+    ];
 
     protected override async Task OnParametersSetAsync()
     {
@@ -155,30 +166,54 @@
         StateHasChanged();
         try
         {
-            var skip = (_page - 1) * _pageSize;
+            // Fetch full page from service (passes search to real backend; mock returns up to 500)
             var (docs, total) = await MongoSvc.GetDocumentsAsync(
-                Environment, _database, _collection, _search, skip, _pageSize, _cts.Token);
-            _docs        = docs.ToList();
-            _totalCount  = total;
-            _totalPages  = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+                Environment, _database, _collection, null, 0, 500, _cts.Token);
+            _allDocs    = docs.ToList();
+            _totalCount = total;
+            ApplyFilter();
         }
         catch (OperationCanceledException) { }
         finally { _loading = false; }
     }
 
-    private async void OnSearchChanged(string s)
+    private void OnSearchChanged(string s)
     {
         _search = s;
-        _page   = 1;
-        await LoadAsync();
-        StateHasChanged();
+        _filterParseError = null;
+        _page = 1;
+        ApplyFilter();
     }
 
-    private async void OnPageChanged(int p) { _page = p; await LoadAsync(); StateHasChanged(); }
-    private async void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; await LoadAsync(); StateHasChanged(); }
+    private void ApplyFilter()
+    {
+        var filtered = string.IsNullOrWhiteSpace(_search)
+            ? _allDocs
+            : _allDocs.Where(d =>
+                d.Json.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                d.Id.Contains(_search,   StringComparison.OrdinalIgnoreCase))
+              .ToList();
+        _totalCount = filtered.Count;
+        _totalPages = Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)_pageSize));
+        _page       = Math.Clamp(_page, 1, _totalPages);
+        _docs       = filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+    }
+
+    private void OnPageChanged(int p) { _page = p; ApplyFilter(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; ApplyFilter(); }
 
     private void OnRowSelected(MongoDocument? doc)
         => _selected = ReferenceEquals(_selected, doc) ? null : doc;
+
+    private async Task SaveDocumentAsync(MongoDocument? doc)
+    {
+        if (doc is null) return;
+        _selected = doc;
+        var pretty   = FormatJson(doc.Json);
+        var filename = string.Concat($"{doc.Id}.json"
+            .Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        await JS.InvokeVoidAsync("bmSaveFile", filename, pretty, "application/json");
+    }
 
     private static string TruncateJson(string json)
         => json.Length > 140 ? json[..140] + "…" : json;

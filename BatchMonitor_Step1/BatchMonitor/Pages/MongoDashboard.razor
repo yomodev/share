@@ -3,6 +3,9 @@
 @using BatchMonitor.Filtering
 @inject IMongoService MongoSvc
 @inject TabService TabService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
@@ -112,6 +115,17 @@
                                            Size="Size.Small"
                                            OnClick="@(() => OpenInspector(context.Name))" />
                         </MudTooltip>
+                        <MudTooltip Text="Collection info">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                           Size="Size.Small"
+                                           OnClick="@(() => ShowInfoAsync(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete collection">
+                            <MudIconButton Icon="@Icons.Material.Outlined.DeleteOutline"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           OnClick="@(() => DeleteCollectionAsync(context.Name))" />
+                        </MudTooltip>
                     </div>
                 </MudTd>
             </RowTemplate>
@@ -153,7 +167,7 @@
     private List<MongoCollectionSummary> _paged     = new();
     private string  _selectedDb       = string.Empty;
     private string  _filterText       = string.Empty;
-    private string  _filterParseError = string.Empty;
+    private string? _filterParseError = null;
     private bool    _loading          = true;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
@@ -201,7 +215,7 @@
     private void OnFilterChanged(string text)
     {
         _filterText = text;
-        _filterParseError = string.Empty;
+        _filterParseError = null;
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
@@ -229,6 +243,28 @@
 
     private void OpenInspector(string collection)
         => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));
+
+    private async Task ShowInfoAsync(MongoCollectionSummary col)
+    {
+        var parameters = new DialogParameters<MongoCollectionInfoDialog>
+        {
+            { x => x.Collection,  col          },
+            { x => x.Database,    _selectedDb  },
+            { x => x.Environment, Environment  },
+        };
+        await DialogService.ShowAsync<MongoCollectionInfoDialog>(col.Name, parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = false });
+    }
+
+    private async Task DeleteCollectionAsync(string collection)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Drop \"{collection}\" from {_selectedDb}?\n\nThis cannot be undone.");
+        if (!confirmed) return;
+        await MongoSvc.DropCollectionAsync(Environment, _selectedDb, collection, _cts.Token);
+        Snackbar.Add($"Collection \"{collection}\" dropped.", Severity.Success);
+        await LoadCollectionsAsync();
+    }
 
     private static string FormatBytes(long b) => b switch
     {

@@ -9,4 +9,6 @@ public interface IMongoService
     Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
         string? search, int skip, int limit, CancellationToken ct = default);
+    Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default);
+    Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default);
 }

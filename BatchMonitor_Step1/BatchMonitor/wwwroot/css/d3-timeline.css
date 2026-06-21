@@ -37,9 +37,9 @@
 }
 
 .bm-tl-native-select {
-    background: transparent;
+    background: var(--mud-palette-surface);
     color: var(--mud-palette-text-primary);
-    border: 1px solid rgba(255,255,255,0.23);
+    border: 1px solid var(--mud-palette-divider);
     border-radius: 4px;
     padding: 4px 6px;
     font-size: 0.8125rem;
@@ -55,7 +55,7 @@
 .bm-tl-native-label--disabled { opacity: 0.38; pointer-events: none; }
 
 .bm-tl-native-select option {
-    background: var(--mud-palette-appbar-background, #1e1e2e);
+    background: var(--mud-palette-surface);
     color: var(--mud-palette-text-primary);
 }
 

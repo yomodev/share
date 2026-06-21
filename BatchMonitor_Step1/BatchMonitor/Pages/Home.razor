@@ -1,11 +1,14 @@
+@using BatchMonitor.Core.Models
+@using BatchMonitor.Core.Services
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IBatchService BatchService
+@inject IInfraHealthService HealthService
 @implements IDisposable
 
 <div class="bm-home">
 
-    <!-- ── Header ─────────────────────────────────────────────────────── -->
+    <!-- ── Header ────────────────────────────────────────────────────────── -->
     <div class="bm-home-header">
         <div>
             <MudText Typo="Typo.h5" Class="bm-home-title">Operations Centre</MudText>
@@ -37,7 +40,7 @@
         </div>
     </div>
 
-    <!-- ── KPI cards ──────────────────────────────────────────────────── -->
+    <!-- ── KPI cards ─────────────────────────────────────────────────────── -->
     <MudGrid Spacing="3" Class="bm-stat-grid">
         <MudItem xs="12" sm="6" md="3">
             <div class="bm-stat-card">
@@ -85,7 +88,141 @@
         </MudItem>
     </MudGrid>
 
-    <!-- ── Mini batch summary ─────────────────────────────────────────── -->
+    <!-- ── Infrastructure health ─────────────────────────────────────────── -->
+    <div class="bm-section-header">
+        <MudText Typo="Typo.subtitle2" Class="bm-section-title">Infrastructure Health</MudText>
+        <span class="bm-muted" style="font-size:12px;">auto-refresh every 10 s</span>
+    </div>
+
+    <div class="bm-infra-grid">
+
+        <!-- Kafka card -->
+        <div class="bm-health-card bm-health-@StatusCss(_kafkaHealth?.Status)">
+            <div class="bm-health-card-header">
+                <MudIcon Icon="@Icons.Material.Outlined.Stream" Size="Size.Small" Class="bm-health-svc-icon" />
+                <span class="bm-health-name">Kafka</span>
+                @if (_kafkaChecking)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
+                }
+                else if (_kafkaHealth is not null)
+                {
+                    <span class="bm-health-pill bm-health-pill-@StatusCss(_kafkaHealth.Status)">
+                        @_kafkaHealth.Status.ToString().ToUpper()
+                    </span>
+                }
+                <span class="bm-health-time bm-muted">
+                    @(_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
+                </span>
+            </div>
+
+            <div class="bm-health-nodes">
+                @if (_kafkaHealth is not null)
+                {
+                    @foreach (var b in _kafkaHealth.Brokers)
+                    {
+                        <div class="bm-health-node">
+                            <span class="bm-health-dot @(b.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
+                            <span class="bm-health-host">@b.Host:@b.Port</span>
+                            @if (b.IsOnline && b.LatencyMs.HasValue)
+                            {
+                                <span class="bm-health-latency">@b.LatencyMs ms</span>
+                            }
+                            else if (!b.IsOnline)
+                            {
+                                <span class="bm-health-offline">offline</span>
+                            }
+                            <span class="bm-health-role bm-muted">broker @b.Id</span>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
+                        Connecting…
+                    </div>
+                }
+            </div>
+
+            @if (_kafkaHealth is not null)
+            {
+                var onlineKafka = _kafkaHealth.Brokers.Count(b => b.IsOnline);
+                var totalKafka  = _kafkaHealth.Brokers.Count;
+                <div class="bm-health-footer">
+                    <span>@onlineKafka / @totalKafka brokers online</span>
+                    @if (_kafkaHealth.Error is not null)
+                    {
+                        <span class="bm-health-err-text">@_kafkaHealth.Error</span>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- MongoDB card -->
+        <div class="bm-health-card bm-health-@StatusCss(_mongoHealth?.Status)">
+            <div class="bm-health-card-header">
+                <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-health-svc-icon" />
+                <span class="bm-health-name">MongoDB</span>
+                @if (_mongoChecking)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
+                }
+                else if (_mongoHealth is not null)
+                {
+                    <span class="bm-health-pill bm-health-pill-@StatusCss(_mongoHealth.Status)">
+                        @_mongoHealth.Status.ToString().ToUpper()
+                    </span>
+                }
+                <span class="bm-health-time bm-muted">
+                    @(_mongoHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
+                </span>
+            </div>
+
+            <div class="bm-health-nodes">
+                @if (_mongoHealth is not null)
+                {
+                    @foreach (var n in _mongoHealth.Nodes)
+                    {
+                        <div class="bm-health-node">
+                            <span class="bm-health-dot @(n.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
+                            <span class="bm-health-host">@n.Host</span>
+                            @if (n.IsOnline && n.LatencyMs.HasValue)
+                            {
+                                <span class="bm-health-latency">@n.LatencyMs ms</span>
+                            }
+                            else if (!n.IsOnline)
+                            {
+                                <span class="bm-health-offline">offline</span>
+                            }
+                            <span class="bm-health-role @(n.Role == "PRIMARY" ? "bm-health-role-primary" : "bm-muted")">
+                                @n.Role
+                            </span>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
+                        Connecting…
+                    </div>
+                }
+            </div>
+
+            @if (_mongoHealth is not null)
+            {
+                <div class="bm-health-footer">
+                    <span>@_mongoHealth.DatabaseCount databases · replica set</span>
+                    @if (_mongoHealth.Error is not null)
+                    {
+                        <span class="bm-health-err-text">@_mongoHealth.Error</span>
+                    }
+                </div>
+            }
+        </div>
+
+    </div>
+
+    <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <div class="bm-mini-summary-header">
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Batches</MudText>
@@ -143,30 +280,39 @@
 </div>
 
 @code {
-    private int _runningCount   = 0;
-    private int _completedCount = 0;
-    private int _failedCount    = 0;
-    private string _avgDuration = "--:--";
+    // Batch state
+    private int    _runningCount   = 0;
+    private int    _completedCount = 0;
+    private int    _failedCount    = 0;
+    private string _avgDuration    = "--:--";
     private List<BatchSummary> _recent = new();
+
+    // Health state
+    private KafkaHealth? _kafkaHealth   = null;
+    private MongoHealth? _mongoHealth   = null;
+    private bool         _kafkaChecking = false;
+    private bool         _mongoChecking = false;
+
+    private CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
         EnvService.OnChange += OnEnvExternalChange;
+        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
+        _ = PollHealthAsync();
     }
 
-    private async Task LoadAsync()
+    // ── Batch ─────────────────────────────────────────────────────────────
+
+    private async Task LoadBatchAsync()
     {
         try
         {
-            var batches = await BatchService.GetBatchesAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 25);
-
+            var batches = await BatchService.GetBatchesAsync(EnvService.SelectedId, DateTime.UtcNow, 25);
             _recent         = batches.Take(5).ToList();
             _runningCount   = batches.Count(b => b.Status == BatchStatus.Running);
             _failedCount    = batches.Count(b => b.Status == BatchStatus.Failed);
             _completedCount = batches.Count(b => b.Status == BatchStatus.Completed);
-
             var completed = batches.Where(b => b.End.HasValue).ToList();
             if (completed.Any())
             {
@@ -174,20 +320,75 @@
                 _avgDuration = FormatDuration(avg);
             }
         }
-        catch { /* non-critical — show zeros */ }
+        catch { /* non-critical */ }
     }
+
+    // ── Health ────────────────────────────────────────────────────────────
+
+    private async Task CheckHealthAsync()
+    {
+        _kafkaChecking = true;
+        _mongoChecking = true;
+        await InvokeAsync(StateHasChanged);
+
+        var env = EnvService.SelectedId;
+        var kafkaTask = HealthService.CheckKafkaAsync(env, _cts.Token);
+        var mongoTask = HealthService.CheckMongoAsync(env, _cts.Token);
+
+        try
+        {
+            _kafkaHealth   = await kafkaTask;
+            _kafkaChecking = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            _kafkaHealth   = new KafkaHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
+            _kafkaChecking = false;
+        }
+
+        try
+        {
+            _mongoHealth   = await mongoTask;
+            _mongoChecking = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            _mongoHealth   = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
+            _mongoChecking = false;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task PollHealthAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try { await Task.Delay(10_000, _cts.Token); }
+            catch (OperationCanceledException) { return; }
+            await CheckHealthAsync();
+        }
+    }
+
+    // ── Env change ────────────────────────────────────────────────────────
 
     private async void OnEnvExternalChange()
     {
-        await LoadAsync();
+        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
 
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
-        await LoadAsync();
+        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
     }
+
+    // ── Navigation ────────────────────────────────────────────────────────
 
     private void OpenBatchesDashboard() =>
         TabService.OpenOrFocus(TabModel.CreateBatchesDashboard(EnvService.SelectedId));
@@ -195,11 +396,25 @@
     private void OpenDetail(BatchSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateBatchDetail(b.RunId, b.BatchName, EnvService.SelectedId));
 
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static string StatusCss(HealthStatus? s) => s switch
+    {
+        HealthStatus.Healthy  => "healthy",
+        HealthStatus.Degraded => "degraded",
+        HealthStatus.Down     => "down",
+        HealthStatus.Checking => "checking",
+        _                     => "unknown",
+    };
+
     private static string FormatDuration(TimeSpan ts) =>
         ts.TotalHours >= 1
             ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 
-    public void Dispose() =>
+    public void Dispose()
+    {
         EnvService.OnChange -= OnEnvExternalChange;
+        _cts.Cancel();
+    }
 }
