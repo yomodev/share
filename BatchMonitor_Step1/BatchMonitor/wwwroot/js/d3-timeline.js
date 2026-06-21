@@ -850,7 +850,6 @@ const TIMELINE_ALIASES = {
                 <span class="bm-tl-tt-status ${stClass}">${stLabel}</span>
             </div>
             <div class="bm-tl-tt-sep"></div>
-            <div class="bm-tl-tt-row"><span>Id</span><span>${esc(e.id)}</span></div>
             <div class="bm-tl-tt-row"><span>Source</span><span>${esc(e.source)}</span></div>
             <div class="bm-tl-tt-row"><span>Pipeline</span><span>${esc(e.pipeline)}</span></div>
             <div class="bm-tl-tt-row"><span>Service</span><span>${esc(e.service)}</span></div>
