@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BatchMonitor.Core\BatchMonitor.Core.csproj" />
+    <ProjectReference Include="..\NxtUI.Core\NxtUI.Core.csproj" />
   </ItemGroup>
 
 </Project>

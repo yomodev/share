@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BatchMonitor.Core\BatchMonitor.Core.csproj" />
+    <ProjectReference Include="..\..\src\NxtUI.Core\NxtUI.Core.csproj" />
   </ItemGroup>
 
 </Project>

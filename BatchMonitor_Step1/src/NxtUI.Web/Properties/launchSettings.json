@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "BatchMonitor": {
+    "NxtUI": {
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
