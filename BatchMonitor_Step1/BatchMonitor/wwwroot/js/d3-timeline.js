@@ -5,7 +5,7 @@
 // No module-level mutable state — everything is in the instance map.
 
 // ES module — exported functions are the public API consumed via Blazor JS isolation.
-import { parse, evaluate } from './filter.js';
+import { parse, evaluate } from './filter.js?v=2';
 
 // Field aliases and searchable fields for the timeline event objects (camelCase).
 const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'chunkId', 'server'];

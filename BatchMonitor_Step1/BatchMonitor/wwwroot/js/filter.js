@@ -293,8 +293,10 @@ function parseValueAtom(ctx) {
 function interpretWord(text) {
     if (text.toLowerCase() === 'null') return { type: 'null' };
 
+    // Leading-zero strings (e.g. "0114", "007") are identifiers, not numbers.
     const num = Number(text);
-    if (!isNaN(num) && text.trim() !== '') return { type: 'number', value: num };
+    if (!isNaN(num) && text.trim() !== '' && !/^0\d/.test(text))
+        return { type: 'number', value: num };
 
     const dt = tryParseDate(text);
     if (dt !== null) return { type: 'date', value: dt };
@@ -399,7 +401,7 @@ function evalField(node, obj) {
     switch (node.matchType) {
         case 'Contains': {
             const haystack = String(raw);
-            const needle   = val.value;
+            const needle   = String(val.value);
             return node.caseSensitive
                 ? haystack.includes(needle)
                 : haystack.toLowerCase().includes(needle.toLowerCase());
