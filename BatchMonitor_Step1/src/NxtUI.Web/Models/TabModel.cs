@@ -8,15 +8,15 @@ public enum TabType
     Kafka,
     MongoDB,
     Config,
-    Logs,
+    LogBrowser,
     Settings,
     RunDetail,
     Timeline,
     ServiceDetail,
-    KafkaDetail,
+    KafkaMessages,
     KafkaGroups,
     MongoDetail,
-    LogDetail,
+    LogViewer,
     FilterHelp
 }
 
@@ -106,7 +106,7 @@ public class TabModel
     public static TabModel CreateLogsDashboard(string env) => new()
     {
         Id          = $"dashboard:logs:{env}",
-        Type        = TabType.Logs,
+        Type        = TabType.LogBrowser,
         Label       = "Logs",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Article
@@ -144,7 +144,7 @@ public class TabModel
     public static TabModel CreateKafkaTopicInspector(string topicName, string env) => new()
     {
         Id          = $"detail:kafka:{topicName}:{env}",
-        Type        = TabType.KafkaDetail,
+        Type        = TabType.KafkaMessages,
         Label       = topicName.Length > 28 ? topicName[..28] + "…" : topicName,
         Environment = env,
         EntityId    = topicName,
@@ -173,7 +173,7 @@ public class TabModel
     public static TabModel CreateLogViewer(string path, string env) => new()
     {
         Id          = $"detail:log:{Uri.EscapeDataString(path)}:{env}",
-        Type        = TabType.LogDetail,
+        Type        = TabType.LogViewer,
         Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
         Environment = env,
         EntityId    = path,
@@ -200,13 +200,13 @@ public class TabModel
         TabType.KafkaGroups => $"/kafka/{Environment}",
         TabType.MongoDB     => $"/mongo/{Environment}",
         TabType.Config      => $"/config/{Environment}",
-        TabType.Logs        => $"/logs/{Environment}",
-        TabType.LogDetail   => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
+        TabType.LogBrowser        => $"/logs/{Environment}",
+        TabType.LogViewer   => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings    => "/settings",
         TabType.FilterHelp  => "/help/filter",
         TabType.RunDetail => $"/run/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Timeline    => $"/timeline/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
-        TabType.KafkaDetail => $"/kafka/{Environment}/topic/{Uri.EscapeDataString(EntityId ?? "")}",
+        TabType.KafkaMessages => $"/kafka/{Environment}/topic/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.MongoDetail => BuildMongoDetailUrl(),
         _                   => "/"
     };

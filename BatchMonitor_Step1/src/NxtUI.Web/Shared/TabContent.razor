@@ -47,11 +47,11 @@
             Icon="@Icons.Material.Outlined.Tune" Environment="@env" />
         break;
 
-    case TabType.Logs:
+    case TabType.LogBrowser:
         <NxtUI.Pages.LogBrowser Env="@env" />
         break;
 
-    case TabType.LogDetail:
+    case TabType.LogViewer:
         <NxtUI.Pages.LogViewer Path="@Tab.EntityId" />
         break;
 
@@ -67,7 +67,7 @@
             IsFocused="@Tab.IsActive" />
         break;
 
-    case TabType.KafkaDetail:
+    case TabType.KafkaMessages:
         <NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
         break;
 
