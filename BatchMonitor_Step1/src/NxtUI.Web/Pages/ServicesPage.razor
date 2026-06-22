@@ -79,7 +79,9 @@
                                 var cardPath = DiscoverySvc.GetCachedPath(s);
                                 var cardSearching = DiscoverySvc.IsSearching(s);
                                 <div @key="@cardKey"
-                                     class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
+                                     class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")"
+                                     @ondblclick="@(() => OpenLogViewerAsync(s))"
+                                     style="cursor:pointer">
                                     <div class="bm-svc-card-header">
                                         <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                                  Size="Size.Small"
@@ -156,16 +158,16 @@
                         var rowPath     = DiscoverySvc.GetCachedPath(context);
                         var rowSearching = DiscoverySvc.IsSearching(context);
                     }
-                    <MudTd Style="padding-left:12px;">
+                    <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                  Size="Size.Small"
                                  Color="@(context.IsOnline ? Color.Success : Color.Error)" />
                     </MudTd>
-                    <MudTd DataLabel="Service"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
-                    <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
-                    <MudTd DataLabel="PID"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
-                    <MudTd DataLabel="Started"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
+                    <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
+                    <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
                             @if (rowSearching && !_copyingFor.Contains(rowKey))
