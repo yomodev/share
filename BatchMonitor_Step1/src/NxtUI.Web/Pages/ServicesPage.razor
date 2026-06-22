@@ -57,32 +57,39 @@
 
         @if (_graphView)
         {
-            <!-- Card view — grouping supported (pure Blazor, no JS conflict) -->
+            <!-- Card view — grouping supported (pure Blazor, no JS conflict).
+                 Each group is wrapped in a single @key'd container and each card
+                 is @key'd so Blazor diffs by identity, not position — otherwise
+                 changing the grouping reshuffles siblings and Blazor's patcher
+                 can compute insertBefore against a detached node. -->
             <div class="bm-svc-cards">
                 @foreach (var group in GetGroups(_filtered))
                 {
-                    @if (group.Key != null)
-                    {
-                        <div class="bm-svc-group-header">@group.Key</div>
-                    }
-                    <div class="bm-svc-card-row">
-                        @foreach (var s in group)
+                    <div class="bm-svc-group" @key="@(group.Key ?? "__ungrouped__")">
+                        @if (group.Key != null)
                         {
-                            <div class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
-                                <div class="bm-svc-card-header">
-                                    <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
-                                             Size="Size.Small"
-                                             Color="@(s.IsOnline ? Color.Success : Color.Error)"
-                                             Class="bm-svc-dot" />
-                                    <span class="bm-svc-card-name">@s.ServiceName</span>
-                                </div>
-                                <div class="bm-svc-card-host">@s.HostName</div>
-                                <div class="bm-svc-card-meta">
-                                    <span>PID @s.ProcessId</span>
-                                    <span>@FormatAge(s.UpdatedDateTime)</span>
-                                </div>
-                            </div>
+                            <div class="bm-svc-group-header">@group.Key</div>
                         }
+                        <div class="bm-svc-card-row">
+                            @foreach (var s in group)
+                            {
+                                <div @key="@($"{s.ServiceName}|{s.HostName}|{s.ProcessId}")"
+                                     class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
+                                    <div class="bm-svc-card-header">
+                                        <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
+                                                 Size="Size.Small"
+                                                 Color="@(s.IsOnline ? Color.Success : Color.Error)"
+                                                 Class="bm-svc-dot" />
+                                        <span class="bm-svc-card-name">@s.ServiceName</span>
+                                    </div>
+                                    <div class="bm-svc-card-host">@s.HostName</div>
+                                    <div class="bm-svc-card-meta">
+                                        <span>PID @s.ProcessId</span>
+                                        <span>@FormatAge(s.UpdatedDateTime)</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
                     </div>
                 }
             </div>
@@ -207,12 +214,12 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
         try
         {
             _all         = await HeartbeatSvc.GetServiceStatusesAsync(Env);
             _lastUpdated = DateTime.UtcNow;
-            ApplyFilter();
+            RecomputeFilter();
         }
         catch (Exception ex)
         {
@@ -221,7 +228,10 @@
         finally
         {
             _loading = false;
-            StateHasChanged();
+            // Always marshal renders onto the circuit's sync context — the poll
+            // timer continuation may resume off-context, and a background-thread
+            // render races the UI and corrupts the DOM (insertBefore/removeChild null).
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -234,13 +244,21 @@
 
     private void OnFilterChanged(string text)
     {
-        _filterText       = text;
+        _filterText = text;
+        RecomputeFilter();
+        StateHasChanged();
+    }
+
+    // Pure computation, no render — callable from the poll path without forcing
+    // an off-context StateHasChanged. LoadAsync renders via InvokeAsync instead.
+    private void RecomputeFilter()
+    {
         _filterParseError = null;
 
         FilterNode? node = null;
-        if (!string.IsNullOrWhiteSpace(text))
+        if (!string.IsNullOrWhiteSpace(_filterText))
         {
-            try   { node = SvcFilterParser.Parse(text); }
+            try   { node = SvcFilterParser.Parse(_filterText); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 
@@ -250,10 +268,7 @@
 
         _page = 1;
         RebuildPage();
-        StateHasChanged();
     }
-
-    private void ApplyFilter() => OnFilterChanged(_filterText);
 
     private void RebuildPage() =>
         _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
