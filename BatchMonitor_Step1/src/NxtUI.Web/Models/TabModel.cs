@@ -1,14 +1,16 @@
-namespace BatchMonitor.Models;
+namespace NxtUI.Models;
 
 public enum TabType
 {
-    Batches,
+    Runs,
     Services,
+    Pipelines,
     Kafka,
     MongoDB,
+    Config,
     Logs,
     Settings,
-    BatchDetail,
+    RunDetail,
     Timeline,
     ServiceDetail,
     KafkaDetail,
@@ -47,11 +49,11 @@ public class TabModel
 
     // ── Factory helpers ──────────────────────────────────────────────────
 
-    public static TabModel CreateBatchesDashboard(string env) => new()
+    public static TabModel CreateRunsDashboard(string env) => new()
     {
-        Id          = $"dashboard:batches:{env}",
-        Type        = TabType.Batches,
-        Label       = "Batches",
+        Id          = $"dashboard:runs:{env}",
+        Type        = TabType.Runs,
+        Label       = "Runs",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.ViewList
     };
@@ -63,6 +65,24 @@ public class TabModel
         Label       = "Services",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Dns
+    };
+
+    public static TabModel CreatePipelinesDashboard(string env) => new()
+    {
+        Id          = $"dashboard:pipelines:{env}",
+        Type        = TabType.Pipelines,
+        Label       = "Pipelines",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.AccountTree
+    };
+
+    public static TabModel CreateConfigDashboard(string env) => new()
+    {
+        Id          = $"dashboard:config:{env}",
+        Type        = TabType.Config,
+        Label       = "Config",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.Tune
     };
 
     public static TabModel CreateKafkaDashboard(string env) => new()
@@ -101,11 +121,11 @@ public class TabModel
         Icon        = MudBlazor.Icons.Material.Outlined.Settings
     };
 
-    public static TabModel CreateBatchDetail(string runId, string batchName, string env) => new()
+    public static TabModel CreateRunDetail(string runId, string Name, string env) => new()
     {
-        Id          = $"detail:batch:{runId}:{env}",
-        Type        = TabType.BatchDetail,
-        Label       = batchName,
+        Id          = $"detail:run:{runId}:{env}",
+        Type        = TabType.RunDetail,
+        Label       = Name,
         Environment = env,
         EntityId    = runId,
         Icon        = MudBlazor.Icons.Material.Outlined.Hexagon
@@ -163,15 +183,17 @@ public class TabModel
     /// <summary>Returns the canonical URL path for this tab.</summary>
     public string GetUrl() => Type switch
     {
-        TabType.Batches     => $"/batches/{Environment}",
+        TabType.Runs     => $"/runs/{Environment}",
         TabType.Services    => $"/services/{Environment}",
+        TabType.Pipelines   => $"/pipelines/{Environment}",
         TabType.Kafka       => $"/kafka/{Environment}",
         TabType.KafkaGroups => $"/kafka/{Environment}",
         TabType.MongoDB     => $"/mongo/{Environment}",
+        TabType.Config      => $"/config/{Environment}",
         TabType.Logs        => $"/logs/{Environment}",
         TabType.Settings    => "/settings",
         TabType.FilterHelp  => "/help/filter",
-        TabType.BatchDetail => $"/batch/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
+        TabType.RunDetail => $"/run/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Timeline    => $"/timeline/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.KafkaDetail => $"/kafka/{Environment}/topic/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.MongoDetail => BuildMongoDetailUrl(),
@@ -198,11 +220,14 @@ public class TabModel
 
         return parts[0].ToLowerInvariant() switch
         {
-            "batches" when parts.Length >= 2
-                => CreateBatchesDashboard(parts[1]),
+            "runs" when parts.Length >= 2
+                => CreateRunsDashboard(parts[1]),
 
             "services" when parts.Length >= 2
                 => CreateServicesDashboard(parts[1]),
+
+            "pipelines" when parts.Length >= 2
+                => CreatePipelinesDashboard(parts[1]),
 
             "kafka" when parts.Length == 2
                 => CreateKafkaDashboard(parts[1]),
@@ -219,11 +244,14 @@ public class TabModel
                        Uri.UnescapeDataString(parts[3]),
                        parts[1]),
 
-            "batch" when parts.Length >= 3
-                => CreateBatchDetail(Uri.UnescapeDataString(parts[2]), Uri.UnescapeDataString(parts[2]), parts[1]),
+            "run" when parts.Length >= 3
+                => CreateRunDetail(Uri.UnescapeDataString(parts[2]), Uri.UnescapeDataString(parts[2]), parts[1]),
 
             "timeline" when parts.Length >= 3
                 => CreateTimeline(Uri.UnescapeDataString(parts[2]), parts[1]),
+
+            "config" when parts.Length >= 2
+                => CreateConfigDashboard(parts[1]),
 
             "logs" when parts.Length >= 2
                 => CreateLogsDashboard(parts[1]),

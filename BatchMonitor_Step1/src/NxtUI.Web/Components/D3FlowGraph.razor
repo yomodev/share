@@ -1,7 +1,9 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="bm-d3-flow-graph" @ref="_containerRef">
+<div class="bm-d3-flow-graph">
+    @* D3 owns this inner div entirely — Blazor never touches its children *@
+    <div @ref="_graphRef" class="bm-d3-graph-host"></div>
     <button class="bm-graph-fit-btn" title="Fit to view" @onclick="FitToViewAsync">
         <MudIcon Icon="@Icons.Material.Outlined.CenterFocusWeak" Size="Size.Small" />
     </button>
@@ -17,7 +19,7 @@
     /// </summary>
     [Parameter] public bool IsVisible { get; set; } = true;
 
-    private ElementReference _containerRef;
+    private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
 
@@ -28,7 +30,7 @@
             try
             {
                 _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js");
-                await _module.InvokeVoidAsync("init", _containerRef, GetHandleKey());
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey());
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();

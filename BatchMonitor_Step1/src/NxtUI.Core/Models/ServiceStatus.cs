@@ -1,4 +1,4 @@
-namespace BatchMonitor.Models;
+namespace NxtUI.Models;
 
 public class ServiceStatus
 {

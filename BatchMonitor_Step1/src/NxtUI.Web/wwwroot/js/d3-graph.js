@@ -662,8 +662,9 @@ const D3Graph = (() => {
         handle.disposed = true;
         cancelAnimationFrame(handle.rafId);
         clearTimeout(handle.layoutTimer);
-        handle.svg.remove();
-        handle.popover.remove();
+        // Guard against elements already detached by Blazor's DOM patcher
+        if (handle.svg?.node()?.parentNode)     handle.svg.remove();
+        if (handle.popover?.node()?.parentNode) handle.popover.remove();
     }
 
     return { init, update, fitToView, resetZoom, setVisible, dispose };

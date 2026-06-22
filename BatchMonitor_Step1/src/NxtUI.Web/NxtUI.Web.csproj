@@ -4,8 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>BatchMonitor</RootNamespace>
-    <AssemblyName>BatchMonitor</AssemblyName>
+    <RootNamespace>NxtUI</RootNamespace>
+    <AssemblyName>NxtUI</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,7 +1,7 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 using System.Threading.Tasks;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// Per-tab event accumulator. Combines two delivery paths (Step 9):
@@ -25,7 +25,7 @@ public class PerformanceEventService : IDisposable
     // When SignalR push is active, poll much less frequently (safety net only).
     public const int SignalRFallbackPollMs   = 30_000;
 
-    private readonly IBatchService _batchService;
+    private readonly IRunService _runService;
     private readonly PerformanceEventStore _eventStore;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
@@ -46,9 +46,9 @@ public class PerformanceEventService : IDisposable
     private volatile bool _isFocused = true;
     private TaskCompletionSource? _focusRegainedSignal;
 
-    public PerformanceEventService(IBatchService batchService)
+    public PerformanceEventService(IRunService runService)
     {
-        _batchService = batchService ?? throw new ArgumentNullException(nameof(batchService));
+        _runService = runService ?? throw new ArgumentNullException(nameof(runService));
         _eventStore   = new PerformanceEventStore();
     }
 
@@ -58,13 +58,13 @@ public class PerformanceEventService : IDisposable
     // ── Startup ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads full history from batch start, then subscribes to SignalR push
-    /// (running batches) and starts a fallback polling loop.
+    /// Loads full history from run start, then subscribes to SignalR push
+    /// (live runs) and starts a fallback polling loop.
     /// </summary>
     public async Task StartAsync(
         string env,
         string runId,
-        DateTime batchStartTime,
+        DateTime startTime,
         bool isRunning,
         bool isFocused = true,
         Action? onEventsUpdated = null,
@@ -79,14 +79,14 @@ public class PerformanceEventService : IDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // 1. Load full history.
-        await LoadHistoryAsync(env, runId, batchStartTime, _cts.Token);
+        await LoadHistoryAsync(env, runId, startTime, _cts.Token);
 
         // 2. Subscribe to SignalR push for running batches.
         if (isRunning && signalR is not null)
         {
             try
             {
-                _signalRSubscription = await signalR.SubscribeToBatchAsync(
+                _signalRSubscription = await signalR.SubscribeToRunAsync(
                     env, runId, OnSignalREvent, _cts.Token);
                 _signalRActive = true;
                 Console.WriteLine($"[EventService] SignalR push active for {runId}");
@@ -144,7 +144,7 @@ public class PerformanceEventService : IDisposable
     {
         try
         {
-            var events = await _batchService.GetBatchEventsAsync(env, runId, from, ct);
+            var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
             if (events?.Count > 0)
             {
                 _eventStore.UpsertEvents(events);
@@ -184,7 +184,7 @@ public class PerformanceEventService : IDisposable
                 if (ct.IsCancellationRequested) break;
 
                 var from   = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
-                var events = await _batchService.GetBatchEventsAsync(env, runId, from, ct);
+                var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
                 if (events?.Count > 0)
                 {
                     _eventStore.UpsertEvents(events);

@@ -1,29 +1,33 @@
-@using BatchMonitor.Models
-@using BatchMonitor.Services
+@using NxtUI.Models
+@using NxtUI.Services
+@using NxtUI.Filtering
 @inject IHeartbeatService HeartbeatSvc
 @inject TabService TabService
+@inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
-<div class="bm-page">
+<div class="bm-page bm-page-fill">
 
-    <!-- Toolbar -->
+    <!-- ── Toolbar: filter + view toggle + refresh ──────────────────── -->
     <div class="bm-batch-toolbar">
 
-        <MudTextField @bind-Value="_filterText"
-                      Placeholder="Filter by name, host, PID…"
-                      Adornment="Adornment.Start"
-                      AdornmentIcon="@Icons.Material.Outlined.Search"
-                      Immediate="true"
-                      Clearable="true"
-                      Class="bm-filter-input"
-                      Style="max-width:280px" />
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter services…"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
 
-        <MudSelect T="string" Value="_groupBy" ValueChanged="OnGroupByChanged"
-                   Label="Group by" Style="max-width:160px" Dense="true" Margin="Margin.Dense">
-            <MudSelectItem Value="@("None")">None</MudSelectItem>
-            <MudSelectItem Value="@("ServiceName")">Service Name</MudSelectItem>
-            <MudSelectItem Value="@("HostName")">Host Name</MudSelectItem>
-        </MudSelect>
+        @* Grouping only applies to the card view *@
+        @if (_graphView)
+        {
+            <MudSelect T="string" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                       Label="Group by" Style="max-width:160px" Dense="true" Margin="Margin.Dense">
+                <MudSelectItem Value="@("None")">None</MudSelectItem>
+                <MudSelectItem Value="@("ServiceName")">Service Name</MudSelectItem>
+                <MudSelectItem Value="@("HostName")">Host Name</MudSelectItem>
+            </MudSelect>
+        }
 
         <MudToggleIconButton @bind-Toggled="_graphView"
                              Icon="@Icons.Material.Outlined.TableRows"
@@ -33,7 +37,8 @@
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           OnClick="LoadAsync" />
+                           OnClick="RefreshAsync"
+                           Class="bm-refresh-btn" />
         </MudTooltip>
 
         @if (_lastUpdated.HasValue)
@@ -43,19 +48,18 @@
 
     </div>
 
-    <!-- Content -->
-    @if (_loading && _statuses is null)
-    {
-        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-    }
-    else if (_statuses is not null)
-    {
-        var rows = ApplyFilter(_statuses);
+    <!-- ── Content ───────────────────────────────────────────────────── -->
+    <div class="bm-table-wrap">
+        @if (_loading && _all.Count == 0)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
 
         @if (_graphView)
         {
+            <!-- Card view — grouping supported (pure Blazor, no JS conflict) -->
             <div class="bm-svc-cards">
-                @foreach (var group in GetGroups(rows))
+                @foreach (var group in GetGroups(_filtered))
                 {
                     @if (group.Key != null)
                     {
@@ -85,61 +89,114 @@
         }
         else
         {
-            <MudTable Items="rows" Dense="true" Hover="true" Striped="true"
-                      GroupBy="_tableGrouping" Class="bm-svc-table">
-                <ColGroup>
-                    <col style="width:28px" />
-                    <col />
-                    <col />
-                    <col style="width:100px" />
-                    <col style="width:160px" />
-                    <col style="width:160px" />
-                </ColGroup>
+            <!-- Table view — usual style, sortable, paginated (no grouping) -->
+            <MudTable T="ServiceStatus"
+                      Items="@_paged"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Class="bm-batch-table"
+                      FixedHeader="true"
+                      Height="100%">
                 <HeaderContent>
-                    <MudTh></MudTh>
-                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.ServiceName)">Service</MudTableSortLabel></MudTh>
-                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.HostName)">Host</MudTableSortLabel></MudTh>
-                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.ProcessId)">PID</MudTableSortLabel></MudTh>
-                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.UpdatedDateTime)">Last Heartbeat</MudTableSortLabel></MudTh>
-                    <MudTh><MudTableSortLabel SortBy="new Func<ServiceStatus, object>(s => s.CreatedDateTime)">Started</MudTableSortLabel></MudTh>
-                </HeaderContent>
-                <GroupHeaderTemplate>
-                    <MudTh colspan="6" Class="bm-svc-group-th">
-                        <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Small" Class="mr-1" />
-                        @context.Key
-                        <MudChip T="string" Size="Size.Small" Class="ml-2">@context.Items.Count()</MudChip>
+                    <MudTh Style="width:36px;"></MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ServiceName)">Service</MudTableSortLabel>
                     </MudTh>
-                </GroupHeaderTemplate>
+                    <MudTh>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.HostName)">Host</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ProcessId)">PID</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.UpdatedDateTime)">Last Heartbeat</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.CreatedDateTime)"
+                                           InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
+                    </MudTh>
+                </HeaderContent>
                 <RowTemplate>
-                    <MudTd>
+                    <MudTd Style="padding-left:12px;">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                  Size="Size.Small"
                                  Color="@(context.IsOnline ? Color.Success : Color.Error)" />
                     </MudTd>
-                    <MudTd DataLabel="Service">@context.ServiceName</MudTd>
-                    <MudTd DataLabel="Host">@context.HostName</MudTd>
-                    <MudTd DataLabel="PID">@context.ProcessId</MudTd>
-                    <MudTd DataLabel="Last Heartbeat">@FormatAge(context.UpdatedDateTime)</MudTd>
-                    <MudTd DataLabel="Started">@context.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm")</MudTd>
+                    <MudTd DataLabel="Service"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
+                    <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
+                    <MudTd DataLabel="PID"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                 </RowTemplate>
             </MudTable>
         }
-    }
+    </div>
+
+    <!-- ── Footer: count + pagination (table view) ───────────────────── -->
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @_filtered.Count results
+        </MudText>
+
+        @if (!_graphView)
+        {
+            <MudPagination Count="@_totalPages"
+                           Selected="@_page"
+                           SelectedChanged="OnPageChanged"
+                           ShowFirstButton="true"
+                           ShowLastButton="true"
+                           Size="Size.Small"
+                           Class="bm-pagination-ctrl" />
+
+            <div class="bm-rows-select">
+                <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+                <MudSelect T="int"
+                           Value="@_pageSize"
+                           ValueChanged="OnPageSizeChanged"
+                           Dense="true"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="width:68px">
+                    <MudSelectItem Value="10">10</MudSelectItem>
+                    <MudSelectItem Value="25">25</MudSelectItem>
+                    <MudSelectItem Value="50">50</MudSelectItem>
+                    <MudSelectItem Value="100">100</MudSelectItem>
+                </MudSelect>
+            </div>
+        }
+    </div>
 
 </div>
 
 @code {
     [Parameter] public string Env { get; set; } = string.Empty;
 
-    private List<ServiceStatus>? _statuses;
-    private string _filterText = string.Empty;
-    private string _groupBy    = "None";
-    private bool   _graphView  = true;
-    private bool   _loading    = false;
+    private int  _page     = 1;
+    private int  _pageSize = 25;
+    private bool _loading  = false;
+    private string  _filterText       = string.Empty;
+    private string? _filterParseError = null;
+    private string  _groupBy          = "None";
+    private bool    _graphView        = true;
     private DateTime? _lastUpdated;
 
+    private static readonly string[] SearchableFields = ["ServiceName", "HostName", "ProcessId"];
+    private static readonly FilterParser SvcFilterParser = new(SearchableFields);
+
+    private static readonly (string Aliases, string Label)[] _fieldHints =
+    [
+        ("svcname / servicename", "service name"),
+        ("host / hostname",       "host name"),
+        ("pid / processid",       "process ID"),
+    ];
+
+    private List<ServiceStatus> _all      = new();
+    private List<ServiceStatus> _filtered = new();
+    private List<ServiceStatus> _paged    = new();
+    private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
+
     private PeriodicTimer? _timer;
-    private TableGroupDefinition<ServiceStatus>? _tableGrouping = null;
 
     protected override async Task OnInitializedAsync()
     {
@@ -150,10 +207,16 @@
     private async Task LoadAsync()
     {
         _loading = true;
+        StateHasChanged();
         try
         {
-            _statuses    = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            _all         = await HeartbeatSvc.GetServiceStatusesAsync(Env);
             _lastUpdated = DateTime.UtcNow;
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -166,32 +229,46 @@
     {
         _timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
         while (await _timer.WaitForNextTickAsync())
-        {
             await LoadAsync();
-        }
     }
 
-    private void OnGroupByChanged(string value)
+    private void OnFilterChanged(string text)
     {
-        _groupBy = value;
-        _tableGrouping = value switch
+        _filterText       = text;
+        _filterParseError = null;
+
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
         {
-            "ServiceName" => new TableGroupDefinition<ServiceStatus> { GroupName = "Service", Selector = s => s.ServiceName, Expandable = true, IsInitiallyExpanded = true },
-            "HostName"    => new TableGroupDefinition<ServiceStatus> { GroupName = "Host",    Selector = s => s.HostName,    Expandable = true, IsInitiallyExpanded = true },
-            _             => null,
-        };
+            try   { node = SvcFilterParser.Parse(text); }
+            catch (FilterParseException ex) { _filterParseError = ex.Message; }
+        }
+
+        _filtered = node is null
+            ? _all
+            : _all.Where(s => FilterEvaluator.Evaluate(node, s)).ToList();
+
+        _page = 1;
+        RebuildPage();
+        StateHasChanged();
     }
 
-    private List<ServiceStatus> ApplyFilter(List<ServiceStatus> source)
+    private void ApplyFilter() => OnFilterChanged(_filterText);
+
+    private void RebuildPage() =>
+        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+
+    private void OnPageChanged(int page)  { _page = page; RebuildPage(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
+
+    private void OnGroupByChanged(string value) => _groupBy = value;
+
+    private async Task RefreshAsync()
     {
-        if (string.IsNullOrWhiteSpace(_filterText)) return source;
-        var q = _filterText.Trim();
-        return source.Where(s =>
-            s.ServiceName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-            s.HostName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-            s.ProcessId.ToString().Contains(q) ||
-            s.CreatedDateTime.ToLocalTime().ToString("dd MMM HH:mm").Contains(q, StringComparison.OrdinalIgnoreCase)
-        ).ToList();
+        _filterText       = string.Empty;
+        _filterParseError = null;
+        await LoadAsync();
+        Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
@@ -210,8 +287,5 @@
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        _timer?.Dispose();
-    }
+    public async ValueTask DisposeAsync() => _timer?.Dispose();
 }

@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace BatchMonitor.Filtering;
+namespace NxtUI.Filtering;
 
 // ── Node hierarchy ─────────────────────────────────────────────────────────────
 //

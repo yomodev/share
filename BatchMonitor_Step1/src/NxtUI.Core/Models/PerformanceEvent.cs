@@ -1,4 +1,4 @@
-namespace BatchMonitor.Models;
+namespace NxtUI.Models;
 
 /// <summary>
 /// Lean performance event from PerformanceTracker fields (see design doc §7.5).

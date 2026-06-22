@@ -1,9 +1,9 @@
-using BatchMonitor.Configuration;
-using BatchMonitor.Models;
+using NxtUI.Configuration;
+using NxtUI.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 public class MongoHeartbeatService : IHeartbeatService
 {

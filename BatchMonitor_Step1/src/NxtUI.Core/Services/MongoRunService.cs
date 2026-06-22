@@ -1,30 +1,30 @@
-using BatchMonitor.Configuration;
-using BatchMonitor.Models;
+using NxtUI.Configuration;
+using NxtUI.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
-/// Real MongoDB implementation of <see cref="IBatchService"/>.
+/// Real MongoDB implementation of <see cref="IRunService"/>.
 /// Reads from the PerformanceTracker collection.
-/// Register this in Program.cs instead of MockBatchService when connecting to a real cluster.
+/// Register this in Program.cs instead of MockRunService when connecting to a real cluster.
 /// </summary>
-public class MongoBatchService : IBatchService
+public class MongoRunService : IRunService
 {
     private readonly MongoSettings _settings;
     private readonly MongoClient _client;
 
-    public MongoBatchService(IOptions<MongoSettings> settings)
+    public MongoRunService(IOptions<MongoSettings> settings)
     {
         _settings = settings.Value;
         _client   = new MongoClient(_settings.ConnectionString);
     }
 
-    public async Task<List<BatchSummary>> GetBatchesAsync(
+    public async Task<List<RunSummary>> GetRunsAsync(
         string env, DateTime before, int count,
-        BatchFilter? filter = null, CancellationToken ct = default)
+        RunFilter? filter = null, CancellationToken ct = default)
     {
         var db         = _client.GetDatabase(_settings.GetDatabaseName(env));
         var collection = db.GetCollection<BsonDocument>(_settings.PerformanceTrackerCollection);
@@ -40,7 +40,7 @@ public class MongoBatchService : IBatchService
                 var text = filter.SearchText.Trim();
                 var textFilter = builder.Or(
                     builder.Regex("RunId",     new BsonRegularExpression(text, "i")),
-                    builder.Regex("BatchName", new BsonRegularExpression(text, "i")),
+                    builder.Regex("Name", new BsonRegularExpression(text, "i")),
                     builder.Regex("RequestId", new BsonRegularExpression(text, "i")));
                 baseFilter &= textFilter;
             }
@@ -61,10 +61,10 @@ public class MongoBatchService : IBatchService
             .Limit(count)
             .ToListAsync(ct);
 
-        return docs.Select(MapToBatchSummary).ToList();
+        return docs.Select(MapToRunSummary).ToList();
     }
 
-    public async Task<bool> CancelBatchAsync(string env, string runId, CancellationToken ct = default)
+    public async Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default)
     {
         // TODO: implement batch cancellation via your domain logic
         // This might call a separate cancellation collection or send a Kafka message
@@ -72,15 +72,15 @@ public class MongoBatchService : IBatchService
         return true;
     }
 
-    public Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default)
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default)
     {
         // Return deterministic static details for demo
-        var details = new BatchDetails
+        var details = new RunDetails
         {
             RunId = runId ?? "RUN-UNKNOWN",
-            BatchName = $"DemoBatch_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Name = $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
             Type = "FullLoad",
-            Status = BatchStatus.Completed,
+            Status = RunStatus.Completed,
             Start = DateTime.UtcNow.AddMinutes(-42),
             End = DateTime.UtcNow.AddMinutes(-40),
             Metadata = new Dictionary<string, string>
@@ -96,7 +96,7 @@ public class MongoBatchService : IBatchService
         // For some runIds simulate running
         if (runId?.Contains("RUN-") == true && runId.EndsWith("1"))
         {
-            details.Status = BatchStatus.Running;
+            details.Status = RunStatus.Running;
             details.End = null;
         }
 
@@ -105,12 +105,12 @@ public class MongoBatchService : IBatchService
 
     // ── Mapping ──────────────────────────────────────────────────────────
 
-    private static BatchSummary MapToBatchSummary(BsonDocument doc)
+    private static RunSummary MapToRunSummary(BsonDocument doc)
     {
-        return new BatchSummary
+        return new RunSummary
         {
             RunId     = doc.GetValue("RunId",     BsonNull.Value).AsString     ?? string.Empty,
-            BatchName = doc.GetValue("BatchName", BsonNull.Value).AsString     ?? string.Empty,
+            Name = doc.GetValue("Name", BsonNull.Value).AsString    ?? string.Empty,
             Type      = doc.GetValue("Type",      BsonNull.Value).AsString     ?? string.Empty,
             Status    = ParseStatus(doc.GetValue("Status", BsonNull.Value).AsString ?? string.Empty),
             Start     = doc.GetValue("Start",     BsonNull.Value).ToUniversalTime(),
@@ -120,21 +120,21 @@ public class MongoBatchService : IBatchService
         };
     }
 
-    private static BatchStatus ParseStatus(string value) =>
+    private static RunStatus ParseStatus(string value) =>
         value.ToLowerInvariant() switch
         {
-            "running"   => BatchStatus.Running,
-            "completed" => BatchStatus.Completed,
-            "failed"    => BatchStatus.Failed,
-            _           => BatchStatus.Unknown
+            "running"   => RunStatus.Running,
+            "completed" => RunStatus.Completed,
+            "failed"    => RunStatus.Failed,
+            _           => RunStatus.Unknown
         };
 
-    public Task<List<PerformanceEvent>> GetBatchEventsAsync(string env, string runId, DateTime from, CancellationToken ct = default)
+    public Task<List<PerformanceEvent>> GetRunEventsAsync(string env, string runId, DateTime from, CancellationToken ct = default)
     {
         throw new NotImplementedException();
     }
 
-    public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
+    public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default)
     {
         throw new NotImplementedException();
     }

@@ -1,6 +1,6 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// Computes a flow graph topology from the in-memory event store.

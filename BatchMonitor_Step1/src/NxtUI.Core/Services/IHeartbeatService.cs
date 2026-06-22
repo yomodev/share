@@ -1,6 +1,6 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 public interface IHeartbeatService
 {

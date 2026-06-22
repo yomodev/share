@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using MudBlazor;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 public class ThemeService
 {

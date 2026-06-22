@@ -1,7 +1,7 @@
-using BatchMonitor.Models;
-using BatchMonitor.Services;
+using NxtUI.Models;
+using NxtUI.Services;
 
-namespace BatchMonitor.Core.Services;
+namespace NxtUI.Core.Services;
 
 public class MockHeartbeatService : IHeartbeatService
 {

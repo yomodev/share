@@ -1,8 +1,8 @@
-using BatchMonitor.Configuration;
-using BatchMonitor.Models;
+using NxtUI.Configuration;
+using NxtUI.Models;
 using Microsoft.Extensions.Options;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// Scoped service that owns the "next tab environment" selection.

@@ -1,6 +1,6 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// In-memory event store that accumulates PerformanceEvents

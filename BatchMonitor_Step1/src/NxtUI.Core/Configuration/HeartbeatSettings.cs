@@ -1,4 +1,4 @@
-namespace BatchMonitor.Configuration;
+namespace NxtUI.Configuration;
 
 public class HeartbeatSettings
 {

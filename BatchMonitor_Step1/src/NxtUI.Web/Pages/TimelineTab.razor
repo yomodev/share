@@ -1,5 +1,5 @@
-@using BatchMonitor.Models
-@inject IBatchService BatchService
+@using NxtUI.Models
+@inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -11,8 +11,8 @@
     [Parameter] public bool IsFocused { get; set; }
 
     // ── Batch data ────────────────────────────────────────────────────────
-    private readonly List<TimelineBatch> _batches = new();
-    private readonly SemaphoreSlim _batchLock = new(1, 1);
+    private readonly List<TimelineRun> _runs = new();
+    private readonly SemaphoreSlim _runLock = new(1, 1);
 
     // ── Filter ────────────────────────────────────────────────────────────
     private string _filterText = string.Empty;
@@ -41,8 +41,8 @@
 
     // ── Add Batch dialog ──────────────────────────────────────────────────
     private bool _addDialogOpen = false;
-    private List<BatchSummary> _dialogBatches = new();
-    private BatchSummary? _dialogSelected;
+    private List<RunSummary> _dialogBatches = new();
+    private RunSummary? _dialogSelected;
     private string _dialogFilter = string.Empty;
     private string _dialogEnv = string.Empty;
     private bool _dialogLoading = false;
@@ -71,7 +71,7 @@
 
         if (!string.IsNullOrEmpty(InitialRunId))
         {
-            await LoadBatchAsync(Environment, InitialRunId);
+            await LoadRunsAsync(Environment, InitialRunId);
         }
     }
 
@@ -111,58 +111,58 @@
 
     // ── Batch loading ─────────────────────────────────────────────────────
 
-    private async Task LoadBatchAsync(string env, string runId)
+    private async Task LoadRunsAsync(string env, string runId)
     {
-        await _batchLock.WaitAsync();
+        await _runLock.WaitAsync();
         try
         {
-            var existing = _batches.FirstOrDefault(b => b.RunId == runId && b.Env == env);
+            var existing = _runs.FirstOrDefault(b => b.RunId == runId && b.Env == env);
             if (existing is not null)
             {
                 // Already loaded — refresh/merge events.
-                await existing.RefreshAsync(BatchService);
+                await existing.RefreshAsync(RunService);
             }
             else
             {
-                var batch = new TimelineBatch(env, runId, BatchService, SignalR,
+                var batch = new TimelineRun(env, runId, RunService, SignalR,
                     onUpdated: async () => await DebouncedPushAsync());
                 await batch.LoadAsync();
-                _batches.Add(batch);
+                _runs.Add(batch);
             }
         }
-        finally { _batchLock.Release(); }
+        finally { _runLock.Release(); }
 
         await DebouncedPushAsync();
         StateHasChanged();
     }
 
-    private async Task RemoveBatchAsync(string runId, string env)
+    private async Task RemoveAsync(string runId, string env)
     {
-        await _batchLock.WaitAsync();
+        await _runLock.WaitAsync();
         try
         {
-            var batch = _batches.FirstOrDefault(b => b.RunId == runId && b.Env == env);
+            var batch = _runs.FirstOrDefault(b => b.RunId == runId && b.Env == env);
             if (batch is not null)
             {
                 await batch.DisposeAsync();
-                _batches.Remove(batch);
+                _runs.Remove(batch);
             }
         }
-        finally { _batchLock.Release(); }
+        finally { _runLock.Release(); }
 
         await DebouncedPushAsync();
         StateHasChanged();
     }
 
-    private async Task RemoveAllBatchesAsync()
+    private async Task RemoveAllAsync()
     {
-        await _batchLock.WaitAsync();
+        await _runLock.WaitAsync();
         try
         {
-            foreach (var b in _batches) await b.DisposeAsync();
-            _batches.Clear();
+            foreach (var b in _runs) await b.DisposeAsync();
+            _runs.Clear();
         }
-        finally { _batchLock.Release(); }
+        finally { _runLock.Release(); }
 
         await DebouncedPushAsync();
         StateHasChanged();
@@ -208,13 +208,13 @@
             colourBy  = _colourBy.ToString(),
             stackView = _stackView,
             filter    = _filterText,
-            batches   = _batches.Select(b => new
+            batches   = _runs.Select(b => new
             {
                 runId             = b.RunId,
                 env               = b.Env,
-                batchName         = b.BatchName,
+                batchName         = b.Name,
                 isLive            = b.IsLive,
-                batchStartEpochMs = new DateTimeOffset(b.BatchStart).ToUnixTimeMilliseconds(),
+                batchStartEpochMs = new DateTimeOffset(b.RunStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
                 {
                     chunkId   = e.ChunkId,
@@ -223,8 +223,8 @@
                     service   = e.Service,
                     processId = e.ProcessId,
                     server    = e.Server,
-                    startMs  = (e.Start - b.BatchStart).TotalMilliseconds,
-                    finishMs = e.Finish.HasValue ? (e.Finish.Value - b.BatchStart).TotalMilliseconds : (double?)null,
+                    startMs  = (e.Start - b.RunStart).TotalMilliseconds,
+                    finishMs = e.Finish.HasValue ? (e.Finish.Value - b.RunStart).TotalMilliseconds : (double?)null,
                     error    = e.Error,
                     status      = e.IsError ? "error" : e.IsDone ? "done" : "inprogress",
                 }).ToList(),
@@ -317,7 +317,7 @@
 
     /// <summary>
     /// Parses a timeline CSV export and upserts events into existing or new
-    /// TimelineBatch instances, grouped by RunId (§10 import spec).
+    /// TimelineRun instances, grouped by RunId (§10 import spec).
     /// </summary>
     private async Task ImportCsvAsync(string csv)
     {
@@ -383,10 +383,10 @@
         // Upsert into existing or new batches.
         foreach (var (runId, events) in byRunId)
         {
-            await _batchLock.WaitAsync();
+            await _runLock.WaitAsync();
             try
             {
-                var existing = _batches.FirstOrDefault(b => b.RunId == runId);
+                var existing = _runs.FirstOrDefault(b => b.RunId == runId);
                 if (existing is not null)
                 {
                     // Merge into existing batch.
@@ -396,11 +396,11 @@
                 else
                 {
                     // Create a CSV-only batch (no live subscription, no polling).
-                    var batch = TimelineBatch.CreateFromCsv(runId, Environment, events);
-                    _batches.Add(batch);
+                    var batch = TimelineRun.CreateFromCsv(runId, Environment, events);
+                    _runs.Add(batch);
                 }
             }
-            finally { _batchLock.Release(); }
+            finally { _runLock.Release(); }
         }
 
         await PushDataAsync();
@@ -431,17 +431,17 @@
         _dialogSelected   = null;
         _dialogFilter     = string.Empty;
         _dialogPage       = 1;
-        await LoadDialogBatchesAsync();
+        await LoadDialogAsync();
     }
 
-    private async Task LoadDialogBatchesAsync()
+    private async Task LoadDialogAsync()
     {
         _dialogLoading = true;
         StateHasChanged();
         try
         {
-            var filter = new BatchFilter { SearchText = _dialogFilter };
-            var page   = await BatchService.GetBatchesAsync(
+            var filter = new RunFilter { SearchText = _dialogFilter };
+            var page   = await RunService.GetRunsAsync(
                 _dialogEnv, DateTime.UtcNow, DialogPageSize * _dialogPage, filter);
             // Poor man's pagination: fetch N items and skip to page.
             _dialogBatches = page
@@ -457,7 +457,7 @@
         _dialogEnv      = env;
         _dialogPage     = 1;
         _dialogSelected = null;
-        await LoadDialogBatchesAsync();
+        await LoadDialogAsync();
     }
 
     private async Task OnDialogFilterChanged(string text)
@@ -465,26 +465,26 @@
         _dialogFilter   = text;
         _dialogPage     = 1;
         _dialogSelected = null;
-        await LoadDialogBatchesAsync();
+        await LoadDialogAsync();
     }
 
-    private async Task ConfirmAddBatch()
+    private async Task ConfirmAdd()
     {
         if (_dialogSelected is null) return;
         _addDialogOpen = false;
-        await LoadBatchAsync(_dialogEnv, _dialogSelected.RunId);
+        await LoadRunsAsync(_dialogEnv, _dialogSelected.RunId);
         // Push immediately regardless of pause state — user explicitly added a batch.
         await PushDataAsync();
     }
 
     // ── Dialog row click / double-click ───────────────────────────────────
     // MouseEventArgs.Detail = click count: 1 = single, 2 = double.
-    private async Task OnDialogRowClick(BatchSummary item, MouseEventArgs mouse)
+    private async Task OnDialogRowClick(RunSummary item, MouseEventArgs mouse)
     {
         if (mouse.Detail == 2)
         {
             _dialogSelected = item;
-            await ConfirmAddBatch();
+            await ConfirmAdd();
         }
         else
         {
@@ -492,8 +492,8 @@
         }
     }
 
-    private bool IsAlreadyLoaded(BatchSummary b) =>
-        _batches.Any(x => x.RunId == b.RunId && x.Env == _dialogEnv);
+    private bool IsAlreadyLoaded(RunSummary b) =>
+        _runs.Any(x => x.RunId == b.RunId && x.Env == _dialogEnv);
 
     // ── Dispose ───────────────────────────────────────────────────────────
 
@@ -502,9 +502,9 @@
         _renderDebounce?.Cancel();
         _renderDebounce?.Dispose();
 
-        await _batchLock.WaitAsync();
-        try { foreach (var b in _batches) await b.DisposeAsync(); }
-        finally { _batchLock.Release(); }
+        await _runLock.WaitAsync();
+        try { foreach (var b in _runs) await b.DisposeAsync(); }
+        finally { _runLock.Release(); }
 
         if (_tlModule is not null)
         {
@@ -611,21 +611,21 @@
                 <InputFile OnChange="OnImportFileSelected" accept=".csv" />
             </span>
 
-            <MudTooltip Text="Remove batch from view">
+            <MudTooltip Text="Remove from view">
                 <span>
                     <MudMenu Icon="@Icons.Material.Outlined.LayersClear" Size="Size.Small"
-                             Dense="true" Disabled="@(!_batches.Any())"
+                             Dense="true" Disabled="@(!_runs.Any())"
                              AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                        @foreach (var b in _batches)
+                        @foreach (var b in _runs)
                         {
                             var runId = b.RunId;
                             var env   = b.Env;
-                            <MudMenuItem OnClick="@(() => RemoveBatchAsync(runId, env))">
-                                @b.BatchName <span class="bm-muted">@b.RunId</span>
+                            <MudMenuItem OnClick="@(() => RemoveAsync(runId, env))">
+                                @b.Name <span class="bm-muted">@b.RunId</span>
                             </MudMenuItem>
                         }
                         <MudDivider />
-                        <MudMenuItem OnClick="RemoveAllBatchesAsync">
+                        <MudMenuItem OnClick="RemoveAllAsync">
                             <MudText Color="Color.Error">Remove all</MudText>
                         </MudMenuItem>
                     </MudMenu>
@@ -647,7 +647,7 @@
         <div class="bm-tl-canvas" @ref="_canvasRef"></div>
     </div>
 
-    @if (!_batches.Any())
+    @if (!_runs.Any())
     {
         <div class="bm-tl-empty">
             <MudIcon Icon="@Icons.Material.Outlined.Timeline" Style="font-size:3rem; opacity:0.25" />
@@ -718,16 +718,16 @@
             }
             else
             {
-                <MudDataGrid T="BatchSummary" Items="@_dialogBatches"
+                <MudDataGrid T="RunSummary" Items="@_dialogBatches"
                              RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
                              RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
                              Dense="true" Hover="true" Striped="false" Bordered="false">
                     <Columns>
                         <PropertyColumn Property="x => x.RunId" Title="RunId" />
-                        <PropertyColumn Property="x => x.BatchName" Title="Name" />
+                        <PropertyColumn Property="x => x.Name" Title="Name" />
                         <TemplateColumn Title="Status">
                             <CellTemplate>
-                                <BatchMonitor.Shared.StatusIcon Status="@context.Item.Status" />
+                                <NxtUI.Shared.StatusIcon Status="@context.Item.Status" />
                             </CellTemplate>
                         </TemplateColumn>
                         <PropertyColumn Property="x => x.Start" Title="Start" Format="HH:mm" />
@@ -753,7 +753,7 @@
             <MudButton OnClick="@(() => _addDialogOpen = false)">Cancel</MudButton>
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        Disabled="@(_dialogSelected is null)"
-                       OnClick="ConfirmAddBatch">
+                       OnClick="ConfirmAdd">
                 Load Batch
             </MudButton>
         </DialogActions>

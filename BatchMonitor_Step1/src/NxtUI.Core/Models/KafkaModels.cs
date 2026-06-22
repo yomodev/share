@@ -1,4 +1,4 @@
-namespace BatchMonitor.Core.Models;
+namespace NxtUI.Core.Models;
 
 public record KafkaTopicConfig
 {

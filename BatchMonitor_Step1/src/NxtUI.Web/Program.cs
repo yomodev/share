@@ -1,11 +1,11 @@
-using BatchMonitor.Configuration;
-using BatchMonitor.Core.Services;
-using BatchMonitor.Hubs;
-using BatchMonitor.Services;
+using NxtUI.Configuration;
+using NxtUI.Core.Services;
+using NxtUI.Hubs;
+using NxtUI.Services;
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 
-namespace BatchMonitor;
+namespace NxtUI;
 
 public class Program
 {
@@ -36,11 +36,11 @@ public class Program
         builder.Services.AddSignalR();
 
         // ── Batch service ─────────────────────────────────────────────────────
-        // Use MockBatchService for development / demo without a MongoDB instance.
-        // Swap to MongoBatchService when connecting to a real cluster:
-        //   builder.Services.AddSingleton<IBatchService, MongoBatchService>();
-        builder.Services.AddSingleton<IBatchService, MockBatchService>(sp =>
-            new MockBatchService(sp.GetRequiredService<IHubContext<BatchEventsHub>>()));
+        // Use MockRunService for development / demo without a MongoDB instance.
+        // Swap to MongoRunService when connecting to a real cluster:
+        //   builder.Services.AddSingleton<IRunService, MongoRunService>();
+        builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
+            new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
 
         builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
         builder.Services.AddSingleton<IMongoService, MockMongoService>();
@@ -74,8 +74,8 @@ public class Program
         app.MapControllers();
 
         app.MapBlazorHub();
-        app.MapHub<BatchHub>("/hubs/batch");
-        app.MapHub<BatchEventsHub>("/hubs/batch-events");
+        app.MapHub<RunHub>("/hubs/run");
+        app.MapHub<RunEventsHub>("/hubs/run-events");
         app.MapFallbackToPage("/_Host");
 
         app.Run();

@@ -1,4 +1,4 @@
-namespace BatchMonitor.Models;
+namespace NxtUI.Models;
 
 using System.Text.Json.Serialization;
 

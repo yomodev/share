@@ -1,4 +1,4 @@
-namespace BatchMonitor.Configuration;
+namespace NxtUI.Configuration;
 
 /// <summary>
 /// General application settings — bound from appsettings.json "App" section.

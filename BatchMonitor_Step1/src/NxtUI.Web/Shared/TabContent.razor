@@ -9,45 +9,55 @@
 
 @switch (Tab.Type)
 {
-    case TabType.Batches:
-        <BatchMonitor.Pages.Batches Environment="@env" />
+    case TabType.Runs:
+        <NxtUI.Pages.Runs Environment="@env" />
         break;
 
-    case TabType.BatchDetail:
-        <BatchMonitor.Pages.BatchDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />
+    case TabType.RunDetail:
+        <NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />
         break;
 
     case TabType.Services:
-        <BatchMonitor.Pages.ServicesPage Env="@env" />
+        <NxtUI.Pages.ServicesPage Env="@env" />
+        break;
+
+    case TabType.Pipelines:
+        <NxtUI.Pages.PlaceholderPage Title="Pipelines"
+            Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />
         break;
 
     case TabType.Kafka:
-        <BatchMonitor.Pages.KafkaDashboard Environment="@env" />
+        <NxtUI.Pages.KafkaDashboard Environment="@env" />
         break;
 
     case TabType.KafkaGroups:
-        <BatchMonitor.Pages.KafkaGroupsDashboard Environment="@env" />
+        <NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />
         break;
 
     case TabType.MongoDB:
-        <BatchMonitor.Pages.MongoDashboard Environment="@env" />
+        <NxtUI.Pages.MongoDashboard Environment="@env" />
         break;
 
     case TabType.MongoDetail:
-        <BatchMonitor.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
+        <NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
+        break;
+
+    case TabType.Config:
+        <NxtUI.Pages.PlaceholderPage Title="Config"
+            Icon="@Icons.Material.Outlined.Tune" Environment="@env" />
         break;
 
     case TabType.Logs:
-        <BatchMonitor.Pages.PlaceholderPage Title="Logs"
+        <NxtUI.Pages.PlaceholderPage Title="Logs"
             Icon="@Icons.Material.Outlined.Article" Environment="@env" />
         break;
 
     case TabType.Settings:
-        <BatchMonitor.Pages.Settings />
+        <NxtUI.Pages.Settings />
         break;
 
     case TabType.Timeline:
-        <BatchMonitor.Pages.TimelineTab
+        <NxtUI.Pages.TimelineTab
             Tab="@Tab"
             Environment="@env"
             InitialRunId="@Tab.EntityId"
@@ -55,15 +65,15 @@
         break;
 
     case TabType.KafkaDetail:
-        <BatchMonitor.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
+        <NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
         break;
 
     case TabType.FilterHelp:
-        <BatchMonitor.Pages.FilterHelp />
+        <NxtUI.Pages.FilterHelp />
         break;
 
     default:
-        <BatchMonitor.Pages.PlaceholderPage Title="@label"
+        <NxtUI.Pages.PlaceholderPage Title="@label"
             Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />
         break;
 }

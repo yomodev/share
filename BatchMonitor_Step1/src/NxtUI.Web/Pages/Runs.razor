@@ -1,7 +1,7 @@
-@inject IBatchService BatchService
+@inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
-@using BatchMonitor.Filtering
+@using NxtUI.Filtering
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
@@ -11,9 +11,9 @@
         <FilterBox Value="@_filterText"
                    OnFilterChanged="OnFilterChanged"
                    ParseError="@_filterParseError"
-                   Placeholder="Filter batches…"
+                   Placeholder="Filter runs…"
                    Class="bm-filter-input"
-                   FieldHints="@_batchFieldHints" />
+                   FieldHints="@_runFieldHints" />
 
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
@@ -30,7 +30,7 @@
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
 
-        <MudTable T="BatchSummary"
+        <MudTable T="RunSummary"
                   Items="@_paged"
                   Dense="true"
                   Hover="true"
@@ -41,29 +41,29 @@
             <HeaderContent>
                 <MudTh Style="width:36px;"></MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
-                                       SortBy="@(b => b.BatchName)">Name</MudTableSortLabel>
+                    <MudTableSortLabel T="RunSummary"
+                                       SortBy="@(b => b.Name)">Name</MudTableSortLabel>
                 </MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
+                    <MudTableSortLabel T="RunSummary"
                                        SortBy="@(b => b.RunId)">Run ID</MudTableSortLabel>
                 </MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
+                    <MudTableSortLabel T="RunSummary"
                                        SortBy="@(b => b.Type)">Type</MudTableSortLabel>
                 </MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
+                    <MudTableSortLabel T="RunSummary"
                                        SortBy="@(b => b.Start)" InitialDirection="SortDirection.Descending">
                         Started (UTC)
                     </MudTableSortLabel>
                 </MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
+                    <MudTableSortLabel T="RunSummary"
                                        SortBy="@(b => b.Duration)">Duration</MudTableSortLabel>
                 </MudTh>
                 <MudTh>
-                    <MudTableSortLabel T="BatchSummary"
+                    <MudTableSortLabel T="RunSummary"
                                        SortBy="@(b => b.Status)">Status</MudTableSortLabel>
                 </MudTh>
                 <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
@@ -73,7 +73,7 @@
                     <StatusIcon Status="@context.Status" />
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2">@context.BatchName</MudText>
+                    <MudText Typo="Typo.body2">@context.Name</MudText>
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
@@ -108,13 +108,13 @@
                                            Size="Size.Small"
                                            OnClick="@(() => OpenTimeline(context))" />
                         </MudTooltip>
-                        <MudTooltip Text="@(context.Status == BatchStatus.Running ? "Stop Batch" : "Not running")">
+                        <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
                             <span>
                                 <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
                                                Size="Size.Small"
                                                Color="Color.Error"
-                                               Disabled="@(context.Status != BatchStatus.Running)"
-                                               OnClick="@(() => StopBatchAsync(context))" />
+                                               Disabled="@(context.Status != RunStatus.Running)"
+                                               OnClick="@(() => StopRunAsync(context))" />
                             </span>
                         </MudTooltip>
                     </div>
@@ -165,20 +165,20 @@
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
 
-    private static readonly string[] BatchSearchableFields = ["BatchName", "RunId", "Type", "Status"];
-    private static readonly FilterParser BatchFilterParser   = new(BatchSearchableFields);
+    private static readonly string[] RunSearchableFields = ["Name", "RunId", "Type", "Status"];
+    private static readonly FilterParser RunFilterParser   = new(RunSearchableFields);
 
-    private static readonly (string Aliases, string Label)[] _batchFieldHints =
+    private static readonly (string Aliases, string Label)[] _runFieldHints =
     [
-        ("batch / batchname", "batch name"),
-        ("run / runid",       "run identifier"),
-        ("type",              "batch type"),
-        ("status",            "Running / Completed / Failed"),
+        ("name", "run name"),
+        ("run / runid",     "run identifier"),
+        ("type",            "run type"),
+        ("status",          "Running / Completed / Failed"),
     ];
 
-    private List<BatchSummary> _all      = new();
-    private List<BatchSummary> _filtered = new();
-    private List<BatchSummary> _paged    = new();
+    private List<RunSummary> _all      = new();
+    private List<RunSummary> _filtered = new();
+    private List<RunSummary> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
 
     private CancellationTokenSource _cts = new();
@@ -192,14 +192,14 @@
         StateHasChanged();
         try
         {
-            _all = await BatchService.GetBatchesAsync(
+            _all = await RunService.GetRunsAsync(
                 Environment, DateTime.UtcNow, 200, ct: _cts.Token);
             ApplyFilter();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load batches: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to load runs: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -215,7 +215,7 @@
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = BatchFilterParser.Parse(text); }
+            try   { node = RunFilterParser.Parse(text); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 
@@ -245,22 +245,22 @@
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }
 
-    private void OpenDetail(BatchSummary b) =>
-        TabService.OpenOrFocus(TabModel.CreateBatchDetail(b.RunId, b.BatchName, Environment));
+    private void OpenDetail(RunSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, Environment));
 
-    private void OpenTimeline(BatchSummary b) =>
+    private void OpenTimeline(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateTimeline(b.RunId, Environment));
 
-    private async Task StopBatchAsync(BatchSummary b)
+    private async Task StopRunAsync(RunSummary b)
     {
-        var ok = await BatchService.CancelBatchAsync(Environment, b.RunId, _cts.Token);
+        var ok = await RunService.CancelRunAsync(Environment, b.RunId, _cts.Token);
         if (ok)
         {
-            Snackbar.Add($"Stop requested for {b.BatchName}", Severity.Warning);
+            Snackbar.Add($"Stop requested for {b.Name}", Severity.Warning);
             await LoadAsync();
         }
         else
-            Snackbar.Add("Could not stop batch", Severity.Error);
+            Snackbar.Add("Could not stop run", Severity.Error);
     }
 
     private static string FormatDuration(TimeSpan ts) =>

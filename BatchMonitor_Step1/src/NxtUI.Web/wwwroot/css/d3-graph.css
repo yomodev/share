@@ -10,6 +10,12 @@
     border-radius: 10px;
 }
 
+/* Inner host — D3 owns everything inside here; Blazor never reconciles it */
+.bm-d3-graph-host {
+    position: absolute;
+    inset: 0;
+}
+
 .bm-d3-svg {
     display: block;
     width: 100%;

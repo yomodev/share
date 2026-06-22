@@ -1,13 +1,13 @@
-using BatchMonitor.Hubs;
-using BatchMonitor.Models;
+using NxtUI.Hubs;
+using NxtUI.Models;
 using Microsoft.AspNetCore.SignalR;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
-public class MockBatchService : IBatchService
+public class MockRunService : IRunService
 {
-    private static readonly string[] BatchTypes    = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
-    private static readonly string[] BatchEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
+    private static readonly string[] RunTypes    = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
+    private static readonly string[] RunEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
 
     private static readonly string[] Servers = {
         "node-eu-01", "node-eu-02", "node-us-01", "node-us-02",
@@ -48,7 +48,7 @@ public class MockBatchService : IBatchService
     private static readonly Dictionary<string, string[]> ServicePipelines = new();
     private static readonly Dictionary<string, string[]> PipelineSources  = new();
 
-    static MockBatchService()
+    static MockRunService()
     {
         var rng   = new Random(7);
         var pipes = AllPipelines.OrderBy(_ => rng.Next()).ToArray();
@@ -82,10 +82,10 @@ public class MockBatchService : IBatchService
 
     // ── State ─────────────────────────────────────────────────────────────
 
-    private readonly List<BatchSummary> _store;
+    private readonly List<RunSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
-    private readonly IHubContext<BatchEventsHub>? _hubContext;
+    private readonly IHubContext<RunEventsHub>? _hubContext;
     private readonly CancellationTokenSource _bgCts = new();
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
@@ -95,30 +95,30 @@ public class MockBatchService : IBatchService
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockBatchService(IHubContext<BatchEventsHub>? hubContext = null)
+    public MockRunService(IHubContext<RunEventsHub>? hubContext = null)
     {
         _hubContext = hubContext;
         var rng = new Random(42);
 
         _store = Enumerable.Range(1, 200).Select(i =>
         {
-            var type   = BatchTypes[i % BatchTypes.Length];
-            var entity = BatchEntities[i % BatchEntities.Length];
+            var type   = RunTypes[i % RunTypes.Length];
+            var entity = RunEntities[i % RunEntities.Length];
             var start  = DateTime.UtcNow.AddMinutes(-(i * 7 + rng.Next(0, 5)));
             var status = i switch
             {
-                1 or 2 => BatchStatus.Running,
-                3 or 7 => BatchStatus.Failed,
-                _      => BatchStatus.Completed,
+                1 or 2 => RunStatus.Running,
+                3 or 7 => RunStatus.Failed,
+                _      => RunStatus.Completed,
             };
-            return new BatchSummary
+            return new RunSummary
             {
                 RunId     = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
-                BatchName = $"{type}_{entity}",
+                Name = $"{type}_{entity}",
                 Type      = type,
                 Status    = status,
                 Start     = start,
-                End       = status != BatchStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
+                End       = status != RunStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
             };
         }).OrderByDescending(b => b.Start).ToList();
 
@@ -128,11 +128,11 @@ public class MockBatchService : IBatchService
             _ = SimulateLivePushAsync(_bgCts.Token);
     }
 
-    // ── IBatchService ─────────────────────────────────────────────────────
+    // ── IRunService ─────────────────────────────────────────────────────
 
-    public Task<List<BatchSummary>> GetBatchesAsync(
+    public Task<List<RunSummary>> GetRunsAsync(
         string env, DateTime before, int count,
-        BatchFilter? filter = null, CancellationToken ct = default)
+        RunFilter? filter = null, CancellationToken ct = default)
     {
         var query = _store.Where(b => b.Start < before);
         if (filter is not null && !filter.IsEmpty)
@@ -142,7 +142,7 @@ public class MockBatchService : IBatchService
                 var text = filter.SearchText.Trim();
                 query = query.Where(b =>
                     b.RunId.Contains(text, StringComparison.OrdinalIgnoreCase) ||
-                    b.BatchName.Contains(text, StringComparison.OrdinalIgnoreCase));
+                    b.Name.Contains(text, StringComparison.OrdinalIgnoreCase));
             }
             if (filter.Statuses?.Count > 0) query = query.Where(b => filter.Statuses.Contains(b.Status));
             if (filter.Types?.Count > 0)    query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
@@ -150,27 +150,27 @@ public class MockBatchService : IBatchService
         return Task.FromResult(query.Take(count).ToList());
     }
 
-    public Task<bool> CancelBatchAsync(string env, string runId, CancellationToken ct = default)
+    public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default)
     {
         var batch = _store.FirstOrDefault(b => b.RunId == runId);
-        if (batch is not null && batch.Status == BatchStatus.Running)
+        if (batch is not null && batch.Status == RunStatus.Running)
         {
-            batch.Status = BatchStatus.Failed;
+            batch.Status = RunStatus.Failed;
             batch.End    = DateTime.UtcNow;
             return Task.FromResult(true);
         }
         return Task.FromResult(false);
     }
 
-    public Task<BatchDetails> GetBatchDetailsAsync(string env, string runId, CancellationToken ct = default)
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default)
     {
         var summary = _store.FirstOrDefault(b => b.RunId == runId);
-        var details = new BatchDetails
+        var details = new RunDetails
         {
             RunId     = runId ?? "RUN-UNKNOWN",
-            BatchName = summary?.BatchName ?? $"DemoBatch_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Name = summary?.Name ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
             Type      = summary?.Type ?? "FullLoad",
-            Status    = summary?.Status ?? BatchStatus.Completed,
+            Status    = summary?.Status ?? RunStatus.Completed,
             Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
             End       = summary?.End,
             Metadata  = new Dictionary<string, string>
@@ -185,7 +185,7 @@ public class MockBatchService : IBatchService
         return Task.FromResult(details);
     }
 
-    public Task<List<PerformanceEvent>> GetBatchEventsAsync(
+    public Task<List<PerformanceEvent>> GetRunEventsAsync(
         string env, string runId, DateTime from, CancellationToken ct = default)
     {
         if (!_eventsByRunId.TryGetValue(runId, out var all))
@@ -193,7 +193,7 @@ public class MockBatchService : IBatchService
         return Task.FromResult(all.Where(e => e.Start >= from).ToList());
     }
 
-    public Task<Topology> GetBatchTopologyAsync(string env, string runId, CancellationToken ct = default)
+    public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default)
     {
         if (!_eventsByRunId.TryGetValue(runId, out var events))
             return Task.FromResult(new Topology());
@@ -229,7 +229,7 @@ public class MockBatchService : IBatchService
                     var startOffset = TimeSpan.FromSeconds(rng.Next(0, Math.Max(1, (int)duration.TotalSeconds)));
                     var start       = batch.Start + startOffset;
                     var dur         = rng.Next(1, 45);
-                    var isInProg    = batch.Status == BatchStatus.Running && rng.Next(0, 100) < 8;
+                    var isInProg    = batch.Status == RunStatus.Running && rng.Next(0, 100) < 8;
                     var isError     = !isInProg && rng.Next(0, 100) < 4;
 
                     events.Add(new PerformanceEvent
@@ -265,10 +265,10 @@ public class MockBatchService : IBatchService
             {
                 await Task.Delay(TimeSpan.FromSeconds(2), ct);
 
-                foreach (var batch in _store.Where(b => b.Status == BatchStatus.Running))
+                foreach (var batch in _store.Where(b => b.Status == RunStatus.Running))
                 {
                     var env   = "DEV1";
-                    var group = BatchEventsHub.GroupName(env, batch.RunId);
+                    var group = RunEventsHub.GroupName(env, batch.RunId);
 
                     foreach (var evt in GenerateLiveEvents(ref chunkCounter, rng))
                     {
@@ -277,12 +277,12 @@ public class MockBatchService : IBatchService
                         _eventsByRunId[batch.RunId].Add(evt);
 
                         await _hubContext!.Clients.Group(group)
-                            .SendAsync("BatchEvent", env, batch.RunId, evt, ct);
+                            .SendAsync("RunEvent", env, batch.RunId, evt, ct);
                     }
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Console.WriteLine($"[MockBatchService] {ex.Message}"); }
+            catch (Exception ex) { Console.WriteLine($"[MockRunService] {ex.Message}"); }
         }
     }
 

@@ -1,6 +1,6 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// Scoped service that owns the list of open tabs for a Blazor circuit.

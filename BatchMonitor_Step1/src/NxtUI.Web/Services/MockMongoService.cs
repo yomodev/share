@@ -1,7 +1,7 @@
-using BatchMonitor.Core.Models;
-using BatchMonitor.Core.Services;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 public class MockMongoService : IMongoService
 {
@@ -60,7 +60,7 @@ public class MockMongoService : IMongoService
     private MongoDocument GenerateDoc(string collection, int i, string id) => collection switch
     {
         "batches" => MakeDoc(id,
-            $"{{\"_id\":\"{id}\",\"batchName\":\"BatchJob-{i % 18 + 1}\",\"runId\":\"{ShortGuid()}\",\"status\":\"{Statuses[i % 3]}\",\"startedAt\":\"{DateTime.UtcNow.AddMinutes(-i * 3):o}\",\"durationMs\":{(i % 60 + 1) * 1800},\"environment\":\"prod\",\"retries\":{i % 3}}}",
+            $"{{\"_id\":\"{id}\",\"Name\":\"BatchJob-{i % 18 + 1}\",\"runId\":\"{ShortGuid()}\",\"status\":\"{Statuses[i % 3]}\",\"startedAt\":\"{DateTime.UtcNow.AddMinutes(-i * 3):o}\",\"durationMs\":{(i % 60 + 1) * 1800},\"environment\":\"prod\",\"retries\":{i % 3}}}",
             DateTime.UtcNow.AddMinutes(-i * 3)),
 
         "batch_steps" => MakeDoc(id,
@@ -121,7 +121,7 @@ public class MockMongoService : IMongoService
         ["batches"] =
         [
             new() { Name = "_id_",               Keys = "{ _id: 1 }",                              Unique = true  },
-            new() { Name = "batchName_status",    Keys = "{ batchName: 1, status: 1 }",             Unique = false },
+            new() { Name = "batchName_status",    Keys = "{ Name: 1, status: 1 }",             Unique = false },
             new() { Name = "startedAt",           Keys = "{ startedAt: -1 }",                       Unique = false },
             new() { Name = "environment_status",  Keys = "{ environment: 1, status: 1 }",           Unique = false },
         ],

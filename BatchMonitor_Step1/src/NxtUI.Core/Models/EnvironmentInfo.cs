@@ -1,4 +1,4 @@
-namespace BatchMonitor.Models;
+namespace NxtUI.Models;
 
 /// <summary>
 /// Runtime representation of an environment with resolved badge colour.

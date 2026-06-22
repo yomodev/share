@@ -1,7 +1,7 @@
-using BatchMonitor.Core.Models;
-using BatchMonitor.Core.Services;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 public class MockKafkaService : IKafkaService
 {

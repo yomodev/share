@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace BatchMonitor.Filtering;
+namespace NxtUI.Filtering;
 
 /// <summary>
 /// Parses a filter string into a <see cref="FilterNode"/> AST.
@@ -43,12 +43,16 @@ public sealed class FilterParser
             ["source"]    = "Source",
             ["chunk"]     = "ChunkId",
             ["chunkid"]   = "ChunkId",
-            // BatchSummary
-            ["batch"]     = "BatchName",
-            ["batchname"] = "BatchName",
-            ["type"]      = "Type",
+            // RunSummary
             ["run"]       = "RunId",
             ["runid"]     = "RunId",
+            ["name"]      = "Name",
+            ["type"]      = "Type",
+            // ServiceStatus
+            ["svcname"]   = "ServiceName",
+            ["servicename"] = "ServiceName",
+            ["host"]      = "HostName",
+            ["hostname"]  = "HostName",
         };
 
     public FilterParser(

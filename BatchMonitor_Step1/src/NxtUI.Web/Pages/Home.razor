@@ -1,8 +1,8 @@
-@using BatchMonitor.Core.Models
-@using BatchMonitor.Core.Services
+@using NxtUI.Core.Models
+@using NxtUI.Core.Services
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
-@inject IBatchService BatchService
+@inject IRunService RunService
 @inject IInfraHealthService HealthService
 @implements IDisposable
 
@@ -225,16 +225,16 @@
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <div class="bm-mini-summary-header">
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Batches</MudText>
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
             <MudButton Variant="Variant.Text" Size="Size.Small"
                        StartIcon="@Icons.Material.Outlined.ViewList"
-                       OnClick="OpenBatchesDashboard"
+                       OnClick="OpenRunsDashboard"
                        Class="bm-view-all-btn">
                 View All
             </MudButton>
         </div>
 
-        <MudTable T="BatchSummary"
+        <MudTable T="RunSummary"
                   Items="@_recent"
                   Dense="true"
                   Hover="true"
@@ -251,7 +251,7 @@
             <RowTemplate>
                 <MudTd><StatusIcon Status="@context.Status" /></MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.body2">@context.BatchName</MudText>
+                    <MudText Typo="Typo.body2">@context.Name</MudText>
                 </MudTd>
                 <MudTd>
                     <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
@@ -285,7 +285,7 @@
     private int    _completedCount = 0;
     private int    _failedCount    = 0;
     private string _avgDuration    = "--:--";
-    private List<BatchSummary> _recent = new();
+    private List<RunSummary> _recent = new();
 
     // Health state
     private KafkaHealth? _kafkaHealth   = null;
@@ -298,21 +298,21 @@
     protected override async Task OnInitializedAsync()
     {
         EnvService.OnChange += OnEnvExternalChange;
-        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
+        await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         _ = PollHealthAsync();
     }
 
     // ── Batch ─────────────────────────────────────────────────────────────
 
-    private async Task LoadBatchAsync()
+    private async Task LoadRunsAsync()
     {
         try
         {
-            var batches = await BatchService.GetBatchesAsync(EnvService.SelectedId, DateTime.UtcNow, 25);
+            var batches = await RunService.GetRunsAsync(EnvService.SelectedId, DateTime.UtcNow, 25);
             _recent         = batches.Take(5).ToList();
-            _runningCount   = batches.Count(b => b.Status == BatchStatus.Running);
-            _failedCount    = batches.Count(b => b.Status == BatchStatus.Failed);
-            _completedCount = batches.Count(b => b.Status == BatchStatus.Completed);
+            _runningCount   = batches.Count(b => b.Status == RunStatus.Running);
+            _failedCount    = batches.Count(b => b.Status == RunStatus.Failed);
+            _completedCount = batches.Count(b => b.Status == RunStatus.Completed);
             var completed = batches.Where(b => b.End.HasValue).ToList();
             if (completed.Any())
             {
@@ -378,23 +378,23 @@
 
     private async void OnEnvExternalChange()
     {
-        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
+        await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
 
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
-        await Task.WhenAll(LoadBatchAsync(), CheckHealthAsync());
+        await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
     // ── Navigation ────────────────────────────────────────────────────────
 
-    private void OpenBatchesDashboard() =>
-        TabService.OpenOrFocus(TabModel.CreateBatchesDashboard(EnvService.SelectedId));
+    private void OpenRunsDashboard() =>
+        TabService.OpenOrFocus(TabModel.CreateRunsDashboard(EnvService.SelectedId));
 
-    private void OpenDetail(BatchSummary b) =>
-        TabService.OpenOrFocus(TabModel.CreateBatchDetail(b.RunId, b.BatchName, EnvService.SelectedId));
+    private void OpenDetail(RunSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, EnvService.SelectedId));
 
     // ── Helpers ───────────────────────────────────────────────────────────
 

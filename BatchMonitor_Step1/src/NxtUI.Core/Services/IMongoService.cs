@@ -1,6 +1,6 @@
-using BatchMonitor.Core.Models;
+using NxtUI.Core.Models;
 
-namespace BatchMonitor.Core.Services;
+namespace NxtUI.Core.Services;
 
 public interface IMongoService
 {

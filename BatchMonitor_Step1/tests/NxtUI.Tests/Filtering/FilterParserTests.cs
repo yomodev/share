@@ -1,8 +1,8 @@
-using BatchMonitor.Filtering;
+using NxtUI.Filtering;
 using FluentAssertions;
-using MatchType = BatchMonitor.Filtering.MatchType;
+using MatchType = NxtUI.Filtering.MatchType;
 
-namespace BatchMonitor.Tests.Filtering;
+namespace NxtUI.Tests.Filtering;
 
 public class FilterParserTests
 {

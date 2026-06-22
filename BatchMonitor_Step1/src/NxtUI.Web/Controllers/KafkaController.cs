@@ -1,8 +1,8 @@
-using BatchMonitor.Core.Models;
-using BatchMonitor.Core.Services;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace BatchMonitor.Controllers;
+namespace NxtUI.Controllers;
 
 [ApiController]
 [Route("api/{env}/kafka")]

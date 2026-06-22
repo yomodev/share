@@ -1,49 +1,31 @@
-using BatchMonitor.Models;
+using NxtUI.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
 
-namespace BatchMonitor.Services;
+namespace NxtUI.Services;
 
 /// <summary>
 /// Scoped service (one per Blazor circuit) that owns a single SignalR
-/// connection to <c>/hubs/batch-events</c>.
+/// connection to <c>/hubs/run-events</c>.
 ///
-/// Multiple <see cref="BatchDetail"/> tabs share this connection — each tab
-/// calls <see cref="SubscribeToBatchAsync"/> to join its group and registers
-/// a callback via <see cref="OnBatchEvent"/>; the service fans incoming
-/// events out to all registered callbacks keyed by (env, runId).
-///
-/// Step 9: full implementation.
+/// Multiple <see cref="RunDetail"/> tabs share this connection — each tab
+/// calls <see cref="SubscribeToRunAsync"/> to join its group and registers
+/// a callback; the service fans incoming events out to all registered
+/// callbacks keyed by (env, runId).
 /// </summary>
-public class SignalRConnectionService : IAsyncDisposable
+public class SignalRConnectionService(
+    ILogger<SignalRConnectionService> logger,
+    NavigationManager nav) : IAsyncDisposable
 {
-    private readonly ILogger<SignalRConnectionService> _logger;
-    private readonly NavigationManager _nav;
-
     private HubConnection? _connection;
     private IDisposable?   _eventSubscription;
 
-    // Per-(env:runId) callbacks — multiple tabs can subscribe.
     private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public SignalRConnectionService(
-        ILogger<SignalRConnectionService> logger,
-        NavigationManager nav)
-    {
-        _logger = logger;
-        _nav    = nav;
-    }
-
     // ── Public API ────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Subscribes to live <see cref="PerformanceEvent"/> pushes for
-    /// <paramref name="runId"/>. <paramref name="handler"/> is called
-    /// on the SignalR dispatcher thread for every incoming event.
-    /// Returns a disposable that unsubscribes the handler when disposed.
-    /// </summary>
-    public async Task<IDisposable> SubscribeToBatchAsync(
+    public async Task<IDisposable> SubscribeToRunAsync(
         string env, string runId,
         Func<PerformanceEvent, Task> handler,
         CancellationToken ct = default)
@@ -63,17 +45,16 @@ public class SignalRConnectionService : IAsyncDisposable
         }
         finally { _lock.Release(); }
 
-        // Tell the server to add us to the group.
         if (_connection?.State == HubConnectionState.Connected)
         {
-            try { await _connection.InvokeAsync("SubscribeToBatch", env, runId, ct); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to join SignalR group {Key}", key); }
+            try { await _connection.InvokeAsync("SubscribeToRun", env, runId, ct); }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to join SignalR group {Key}", key); }
         }
 
         return new Unsubscriber(() => _ = UnsubscribeAsync(env, runId, handler));
     }
 
-    public async Task UnsubscribeFromBatchAsync(string env, string runId)
+    public async Task UnsubscribeFromRunAsync(string env, string runId)
     {
         var key = Key(env, runId);
         await _lock.WaitAsync();
@@ -82,8 +63,8 @@ public class SignalRConnectionService : IAsyncDisposable
 
         if (_connection?.State == HubConnectionState.Connected)
         {
-            try { await _connection.InvokeAsync("UnsubscribeFromBatch", env, runId); }
-            catch { /* best-effort */ }
+            try { await _connection.InvokeAsync("UnsubscribeFromRun", env, runId); }
+            catch { }
         }
     }
 
@@ -93,16 +74,15 @@ public class SignalRConnectionService : IAsyncDisposable
     {
         if (_connection is not null) return;
 
-        var url = _nav.ToAbsoluteUri("/hubs/batch-events").ToString();
+        var url = nav.ToAbsoluteUri("/hubs/run-events").ToString();
 
         _connection = new HubConnectionBuilder()
             .WithUrl(url)
-            .WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) })
+            .WithAutomaticReconnect([TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)])
             .Build();
 
-        // Fan incoming "BatchEvent" messages out to the correct per-batch handlers.
         _eventSubscription = _connection.On<string, string, PerformanceEvent>(
-            "BatchEvent", async (env, runId, evt) =>
+            "RunEvent", async (env, runId, evt) =>
             {
                 var key = Key(env, runId);
                 List<Func<PerformanceEvent, Task>> snapshot;
@@ -118,14 +98,13 @@ public class SignalRConnectionService : IAsyncDisposable
                 foreach (var h in snapshot)
                 {
                     try { await h(evt); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "BatchEvent handler error"); }
+                    catch (Exception ex) { logger.LogWarning(ex, "RunEvent handler error"); }
                 }
             });
 
         _connection.Reconnected += async connectionId =>
         {
-            _logger.LogInformation("SignalR reconnected ({Id})", connectionId);
-            // Re-join all groups after reconnection.
+            logger.LogInformation("SignalR reconnected ({Id})", connectionId);
             await _lock.WaitAsync();
             var keys = _handlers.Keys.ToList();
             _lock.Release();
@@ -134,8 +113,8 @@ public class SignalRConnectionService : IAsyncDisposable
                 var parts = k.Split(':', 2);
                 if (parts.Length == 2)
                 {
-                    try { await _connection.InvokeAsync("SubscribeToBatch", parts[0], parts[1]); }
-                    catch { /* best-effort */ }
+                    try { await _connection.InvokeAsync("SubscribeToRun", parts[0], parts[1]); }
+                    catch { }
                 }
             }
         };
@@ -143,11 +122,11 @@ public class SignalRConnectionService : IAsyncDisposable
         try
         {
             await _connection.StartAsync(ct);
-            _logger.LogInformation("SignalR connected to {Url}", url);
+            logger.LogInformation("SignalR connected to {Url}", url);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SignalR connection failed — events will arrive via polling only");
+            logger.LogWarning(ex, "SignalR connection failed — events will arrive via polling only");
         }
     }
 
@@ -176,14 +155,12 @@ public class SignalRConnectionService : IAsyncDisposable
         if (_connection is not null)
         {
             try { await _connection.DisposeAsync(); }
-            catch { /* best-effort */ }
+            catch { }
         }
     }
 
-    private sealed class Unsubscriber : IDisposable
+    private sealed class Unsubscriber(Action action) : IDisposable
     {
-        private readonly Action _action;
-        public Unsubscriber(Action action) => _action = action;
-        public void Dispose() => _action();
+        public void Dispose() => action();
     }
 }

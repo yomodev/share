@@ -1,5 +1,5 @@
 @page "/"
-@namespace BatchMonitor.Pages
+@namespace NxtUI.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
 @{
     Layout = null;
@@ -94,12 +94,13 @@
     <!-- Prevent text selection on double-click inside tables (dblclick triggers row actions) -->
     <script>
         document.addEventListener('dblclick', function (e) {
-            if (!e.target.closest('.bm-batch-table')) return;
+            if (!e.target.closest('.mud-table')) return;
             window.getSelection()?.removeAllRanges();
         });
     </script>
 
-    <!-- Ctrl+Click copies a row; Ctrl+Shift+Click copies the whole table as CSV -->
+    <!-- Ctrl+Click copies a row; Ctrl+Shift+Click copies the whole table as CSV.
+         Applies to every MudTable in the app (gated on .mud-table). -->
     <script>
         (function () {
             function cellText(td) {
@@ -107,14 +108,55 @@
                 clone.querySelectorAll('svg, button, .mud-icon-root').forEach(function (el) { el.remove(); });
                 return clone.textContent.replace(/\s+/g, ' ').trim();
             }
-            function flashRow(tr) {
-                tr.classList.add('bm-copy-flash');
-                setTimeout(function () { tr.classList.remove('bm-copy-flash'); }, 600);
+            function showCopyToast(message) {
+                var el = document.createElement('div');
+                el.textContent = message || 'Copied to clipboard';
+                Object.assign(el.style, {
+                    position:      'fixed',
+                    bottom:        '28px',
+                    left:          '50%',
+                    transform:     'translateX(-50%)',
+                    background:    '#3FB950',
+                    color:         '#fff',
+                    padding:       '7px 20px',
+                    borderRadius:  '6px',
+                    fontSize:      '0.8rem',
+                    fontWeight:    '600',
+                    fontFamily:    'var(--bm-font-mono, monospace)',
+                    zIndex:        '99999',
+                    pointerEvents: 'none',
+                    opacity:       '1',
+                    transition:    'opacity 0.35s ease',
+                });
+                document.body.appendChild(el);
+                setTimeout(function () { el.style.opacity = '0'; }, 1400);
+                setTimeout(function () { document.body.removeChild(el); }, 1750);
+            }
+            // Clipboard API needs a secure context (HTTPS/localhost). Fall back to
+            // the legacy execCommand path so copy still works over plain HTTP.
+            function copyText(text) {
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).catch(function () { legacyCopy(text); });
+                } else {
+                    legacyCopy(text);
+                }
+            }
+            function legacyCopy(text) {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.top = '-9999px';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (err) { /* nothing more we can do */ }
+                document.body.removeChild(ta);
             }
             document.addEventListener('click', function (e) {
                 if (!e.ctrlKey) return;
                 var tr = e.target.closest('tr');
-                if (!tr || !tr.closest('.bm-batch-table')) return;
+                if (!tr || !tr.closest('.mud-table')) return;
                 e.preventDefault();
                 var table = tr.closest('table');
                 if (!table) return;
@@ -142,7 +184,8 @@
                             });
                         lines.push(cells.join(','));
                     });
-                    navigator.clipboard.writeText(lines.join('\n'));
+                    copyText(lines.join('\n'));
+                    showCopyToast('Copied ' + (lines.length - 1) + ' rows as CSV');
                 } else {
                     var parts = Array.from(tr.querySelectorAll('td')).map(function (td, i) {
                         var hdr = headers[i] || '';
@@ -150,9 +193,9 @@
                         if (!val) return null;
                         return hdr ? hdr + ': ' + val : val;
                     }).filter(Boolean);
-                    navigator.clipboard.writeText(parts.join('\n'));
+                    copyText(parts.join('\n'));
+                    showCopyToast('Row copied to clipboard');
                 }
-                flashRow(tr);
             });
         })();
     </script>

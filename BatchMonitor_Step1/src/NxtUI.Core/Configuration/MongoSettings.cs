@@ -1,4 +1,4 @@
-namespace BatchMonitor.Configuration;
+namespace NxtUI.Configuration;
 
 /// <summary>
 /// MongoDB connection settings — bound from appsettings.json "Mongo" section.

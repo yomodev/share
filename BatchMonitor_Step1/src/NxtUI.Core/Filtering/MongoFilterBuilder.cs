@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace BatchMonitor.Filtering;
+namespace NxtUI.Filtering;
 
 /// <summary>
 /// Translates a <see cref="FilterNode"/> AST into a MongoDB

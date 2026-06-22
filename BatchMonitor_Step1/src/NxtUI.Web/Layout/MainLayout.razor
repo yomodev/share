@@ -12,13 +12,13 @@
 
 <MudLayout>
 
-    <BatchMonitor.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
+    <NxtUI.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
 
     <MudAppBar Elevation="0"
                Dense="true"
                Class="bm-tabbar"
                Fixed="true">
-        <BatchMonitor.Layout.TabBar />
+        <NxtUI.Layout.TabBar />
     </MudAppBar>
 
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
@@ -26,7 +26,7 @@
         <div class="bm-content-area">
             <!-- Home pane: always rendered, hidden when a tab is focused. -->
             <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
-                <BatchMonitor.Pages.Home />
+                <NxtUI.Pages.Home />
             </div>
 
             <!-- One persistent pane per open tab — kept alive in the DOM so
@@ -35,7 +35,7 @@
             @foreach (var tab in TabService.Tabs)
             {
                 <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
-                    <BatchMonitor.Shared.TabContent Tab="@tab" />
+                    <NxtUI.Shared.TabContent Tab="@tab" />
                 </div>
             }
         </div>

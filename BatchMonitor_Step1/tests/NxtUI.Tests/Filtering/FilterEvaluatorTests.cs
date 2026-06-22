@@ -1,7 +1,7 @@
-using BatchMonitor.Filtering;
+using NxtUI.Filtering;
 using FluentAssertions;
 
-namespace BatchMonitor.Tests.Filtering;
+namespace NxtUI.Tests.Filtering;
 
 public class FilterEvaluatorTests
 {

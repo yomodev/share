@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
-namespace BatchMonitor.Filtering;
+namespace NxtUI.Filtering;
 
 /// <summary>
 /// Evaluates a <see cref="FilterNode"/> AST against a plain C# object using
