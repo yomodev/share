@@ -75,13 +75,13 @@
                         <div class="bm-svc-card-row">
                             @foreach (var s in group)
                             {
-                                var cardKey = ServiceKey(s);
-                                var cardPath = DiscoverySvc.GetCachedPath(s);
+                                var cardKey      = ServiceKey(s);
+                                var cardPath     = DiscoverySvc.GetCachedPath(s);
                                 var cardSearching = DiscoverySvc.IsSearching(s);
                                 <div @key="@cardKey"
-                                     class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")"
+                                     class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")} {(cardSearching ? "bm-svc-searching" : "")}")"
                                      @ondblclick="@(() => OpenLogViewerAsync(s))"
-                                     style="cursor:pointer">
+                                     @onclick="@(async (MouseEventArgs e) => { if (e.CtrlKey) await CopyPathAsync(s); })">
                                     <div class="bm-svc-card-header">
                                         <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                                  Size="Size.Small"
@@ -93,26 +93,6 @@
                                     <div class="bm-svc-card-meta">
                                         <span>PID @s.ProcessId</span>
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
-                                    </div>
-                                    <div class="bm-svc-card-actions">
-                                        @if (cardSearching && !_copyingFor.Contains(cardKey))
-                                        {
-                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-svc-path-spinner" />
-                                        }
-                                        <MudTooltip Text="@(cardPath != null ? $"Copy: {cardPath}" : "Copy log path")">
-                                            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                                                           Size="Size.Small"
-                                                           Color="@(cardPath != null ? Color.Default : Color.Inherit)"
-                                                           Disabled="@_copyingFor.Contains(cardKey)"
-                                                           OnClick="@(() => CopyPathAsync(s))" />
-                                        </MudTooltip>
-                                        <MudTooltip Text="Open log viewer">
-                                            <MudIconButton Icon="@Icons.Material.Outlined.Article"
-                                                           Size="Size.Small"
-                                                           Color="@(cardPath != null ? Color.Default : Color.Inherit)"
-                                                           Disabled="@_openingLogFor.Contains(cardKey)"
-                                                           OnClick="@(() => OpenLogViewerAsync(s))" />
-                                        </MudTooltip>
                                     </div>
                                 </div>
                             }
@@ -131,7 +111,8 @@
                       Elevation="0"
                       Class="bm-batch-table"
                       FixedHeader="true"
-                      Height="100%">
+                      Height="100%"
+                      RowClassFunc="@((svc, _) => DiscoverySvc.IsSearching(svc) ? "bm-row-searching" : string.Empty)">
                 <HeaderContent>
                     <MudTh Style="width:36px;"></MudTh>
                     <MudTh>
@@ -154,9 +135,8 @@
                 </HeaderContent>
                 <RowTemplate>
                     @{
-                        var rowKey      = ServiceKey(context);
-                        var rowPath     = DiscoverySvc.GetCachedPath(context);
-                        var rowSearching = DiscoverySvc.IsSearching(context);
+                        var rowKey  = ServiceKey(context);
+                        var rowPath = DiscoverySvc.GetCachedPath(context);
                     }
                     <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -170,10 +150,6 @@
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
-                            @if (rowSearching && !_copyingFor.Contains(rowKey))
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
-                            }
                             <MudTooltip Text="@(rowPath != null ? $"Copy: {rowPath}" : "Copy log path")">
                                 <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
                                                Size="Size.Small"
