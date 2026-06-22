@@ -16,4 +16,11 @@ public class LogPathSettings
     /// First template whose path resolves wins.
     /// </summary>
     public List<string> Templates { get; set; } = new();
+
+    /// <summary>
+    /// Fixed name of the file inside the resolved folder that contains the
+    /// process memory metrics lines (see MetricsLogParser). The folder is unique
+    /// per service/PID, so this filename is constant across services.
+    /// </summary>
+    public string MetricsFileName { get; set; } = string.Empty;
 }
