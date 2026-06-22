@@ -153,6 +153,10 @@
                 try { document.execCommand('copy'); } catch (err) { /* nothing more we can do */ }
                 document.body.removeChild(ta);
             }
+            // Expose globally so Blazor server-side code can invoke them via IJSRuntime
+            window.copyText      = copyText;
+            window.showCopyToast = showCopyToast;
+
             document.addEventListener('click', function (e) {
                 if (!e.ctrlKey) return;
                 var tr = e.target.closest('tr');
@@ -203,7 +207,7 @@
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
     <link rel="modulepreload" href="js/filter.js?v=2" />
-    <link rel="modulepreload" href="js/app.js?v=2" />
+    <link rel="modulepreload" href="js/app.js?v=3" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
 </html>

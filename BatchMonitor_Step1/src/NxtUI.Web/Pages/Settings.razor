@@ -19,25 +19,33 @@
                     <div>
                         <MudText Typo="Typo.body1">Theme</MudText>
                         <MudText Typo="Typo.body2" Class="bm-muted">
-                            Choose between dark and light interface
+                            Choose dark, light, or follow your OS setting
                         </MudText>
                     </div>
                     <div class="bm-theme-switcher">
-                        <MudButton Variant="@(_isDark ? Variant.Filled : Variant.Outlined)"
+                        <MudButton Variant="@(_mode == ThemeMode.Dark ? Variant.Filled : Variant.Outlined)"
                                    StartIcon="@Icons.Material.Outlined.DarkMode"
                                    Size="Size.Small"
                                    Color="Color.Primary"
-                                   OnClick="@(() => SetTheme(true))"
+                                   OnClick="@(() => SetMode(ThemeMode.Dark))"
                                    Class="bm-theme-btn">
                             Dark
                         </MudButton>
-                        <MudButton Variant="@(!_isDark ? Variant.Filled : Variant.Outlined)"
+                        <MudButton Variant="@(_mode == ThemeMode.Light ? Variant.Filled : Variant.Outlined)"
                                    StartIcon="@Icons.Material.Outlined.LightMode"
                                    Size="Size.Small"
                                    Color="Color.Primary"
-                                   OnClick="@(() => SetTheme(false))"
+                                   OnClick="@(() => SetMode(ThemeMode.Light))"
                                    Class="bm-theme-btn">
                             Light
+                        </MudButton>
+                        <MudButton Variant="@(_mode == ThemeMode.System ? Variant.Filled : Variant.Outlined)"
+                                   StartIcon="@Icons.Material.Outlined.SettingsBrightness"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => SetMode(ThemeMode.System))"
+                                   Class="bm-theme-btn">
+                            System
                         </MudButton>
                     </div>
                 </div>
@@ -62,31 +70,37 @@
 </div>
 
 @code {
-    private bool _isDark = true;
+    private ThemeMode _mode;
     private IJSObjectReference? _appModule;
 
     protected override void OnInitialized()
     {
-        _isDark = ThemeService.IsDark;
+        _mode = ThemeService.Mode;
         ThemeService.OnChange += OnThemeExternallyChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=3");
     }
 
-    private void SetTheme(bool dark)
+    private void SetMode(ThemeMode mode)
     {
-        _isDark = dark;
-        ThemeService.IsDark = dark;
-        _ = _appModule?.InvokeVoidAsync("saveTheme", dark ? "dark" : "light");
+        _mode = mode;
+        ThemeService.Mode = mode;
+        var cookie = mode switch
+        {
+            ThemeMode.Light  => "light",
+            ThemeMode.System => "system",
+            _                => "dark",
+        };
+        _ = _appModule?.InvokeVoidAsync("saveTheme", cookie);
     }
 
     private void OnThemeExternallyChanged()
     {
-        _isDark = ThemeService.IsDark;
+        _mode = ThemeService.Mode;
         InvokeAsync(StateHasChanged);
     }
 

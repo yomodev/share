@@ -3,7 +3,7 @@
 @inject TabService TabService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@implements IDisposable
+@implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
 <MudDialogProvider />
@@ -47,6 +47,9 @@
     // Guard flag: prevents tab→URL→tab→URL infinite loops.
     private bool _syncingFromUrl;
 
+    private IJSObjectReference? _appModule;
+    private DotNetObjectReference<MainLayout>? _dotnetRef;
+
     protected override void OnInitialized()
     {
         ThemeService.OnChange += StateHasChanged;
@@ -56,6 +59,19 @@
         // Open the tab that matches the initial URL (e.g. shared link / browser refresh).
         SyncTabFromUrl(Nav.Uri);
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=3");
+        _dotnetRef  = DotNetObjectReference.Create(this);
+        // Always register watcher — SetSystemDark is a no-op when Mode != System
+        var isDark  = await _appModule.InvokeAsync<bool>("watchSystemTheme", _dotnetRef);
+        ThemeService.SetSystemDark(isDark);
+    }
+
+    [JSInvokable]
+    public void OnSystemThemeChanged(bool isDark) => ThemeService.SetSystemDark(isDark);
 
     private void OnDrawerOpenChanged(bool open) => StateHasChanged();
 
@@ -103,10 +119,16 @@
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         ThemeService.OnChange -= StateHasChanged;
         TabService.OnChange   -= OnTabsChanged;
         Nav.LocationChanged   -= OnLocationChanged;
+        _dotnetRef?.Dispose();
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
     }
 }

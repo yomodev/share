@@ -1673,6 +1673,20 @@ html, body {
     margin-top: 2px;
 }
 
+.bm-svc-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 2px;
+    padding-top: 2px;
+    border-top: 1px solid var(--mud-palette-divider);
+    min-height: 28px;
+}
+
+.bm-svc-path-spinner {
+    margin-right: 2px;
+}
+
 .bm-svc-table {
     margin: 0;
 }

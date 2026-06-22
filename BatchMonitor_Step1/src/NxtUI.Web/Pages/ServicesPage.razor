@@ -2,8 +2,10 @@
 @using NxtUI.Services
 @using NxtUI.Filtering
 @inject IHeartbeatService HeartbeatSvc
+@inject ILogPathDiscoveryService DiscoverySvc
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -30,8 +32,8 @@
         }
 
         <MudToggleIconButton @bind-Toggled="_graphView"
-                             Icon="@Icons.Material.Outlined.TableRows"
-                             ToggledIcon="@Icons.Material.Outlined.GridView"
+                             Icon="@Icons.Material.Outlined.GridView"
+                             ToggledIcon="@Icons.Material.Outlined.TableRows"
                              Size="Size.Small" />
 
         <MudTooltip Text="Refresh">
@@ -73,7 +75,10 @@
                         <div class="bm-svc-card-row">
                             @foreach (var s in group)
                             {
-                                <div @key="@($"{s.ServiceName}|{s.HostName}|{s.ProcessId}")"
+                                var cardKey = ServiceKey(s);
+                                var cardPath = DiscoverySvc.GetCachedPath(s);
+                                var cardSearching = DiscoverySvc.IsSearching(s);
+                                <div @key="@cardKey"
                                      class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")}")">
                                     <div class="bm-svc-card-header">
                                         <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -86,6 +91,19 @@
                                     <div class="bm-svc-card-meta">
                                         <span>PID @s.ProcessId</span>
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
+                                    </div>
+                                    <div class="bm-svc-card-actions">
+                                        @if (cardSearching && !_copyingFor.Contains(cardKey))
+                                        {
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-svc-path-spinner" />
+                                        }
+                                        <MudTooltip Text="@(cardPath ?? "Copy log path")">
+                                            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                                                           Size="Size.Small"
+                                                           Color="@(cardPath != null ? Color.Default : Color.Inherit)"
+                                                           Disabled="@_copyingFor.Contains(cardKey)"
+                                                           OnClick="@(() => CopyPathAsync(s))" />
+                                        </MudTooltip>
                                     </div>
                                 </div>
                             }
@@ -123,8 +141,14 @@
                         <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.CreatedDateTime)"
                                            InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
                     </MudTh>
+                    <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
+                    @{
+                        var rowKey      = ServiceKey(context);
+                        var rowPath     = DiscoverySvc.GetCachedPath(context);
+                        var rowSearching = DiscoverySvc.IsSearching(context);
+                    }
                     <MudTd Style="padding-left:12px;">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                  Size="Size.Small"
@@ -135,6 +159,21 @@
                     <MudTd DataLabel="PID"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
                     <MudTd DataLabel="Last Heartbeat"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd Style="text-align:center;">
+                        <div class="bm-row-actions">
+                            @if (rowSearching && !_copyingFor.Contains(rowKey))
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                            }
+                            <MudTooltip Text="@(rowPath ?? "Copy log path")">
+                                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                                               Size="Size.Small"
+                                               Color="@(rowPath != null ? Color.Default : Color.Inherit)"
+                                               Disabled="@_copyingFor.Contains(rowKey)"
+                                               OnClick="@(() => CopyPathAsync(context))" />
+                            </MudTooltip>
+                        </div>
+                    </MudTd>
                 </RowTemplate>
             </MudTable>
         }
@@ -203,10 +242,14 @@
     private List<ServiceStatus> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
 
+    // Keys currently awaiting an immediate path search (shows spinner on button)
+    private readonly HashSet<string> _copyingFor = new();
+
     private PeriodicTimer? _timer;
 
     protected override async Task OnInitializedAsync()
     {
+        DiscoverySvc.OnPathResolved += OnPathResolved;
         await LoadAsync();
         _ = StartPollingAsync();
     }
@@ -220,6 +263,10 @@
             _all         = await HeartbeatSvc.GetServiceStatusesAsync(Env);
             _lastUpdated = DateTime.UtcNow;
             RecomputeFilter();
+
+            // Kick off background path discovery for any service not yet in cache
+            foreach (var svc in _all)
+                DiscoverySvc.EnsureDiscovering(svc, Env);
         }
         catch (Exception ex)
         {
@@ -241,6 +288,49 @@
         while (await _timer.WaitForNextTickAsync())
             await LoadAsync();
     }
+
+    // ── Path discovery ───────────────────────────────────────────────────────
+
+    private void OnPathResolved(string key)
+    {
+        // Fire from background thread — marshal onto circuit context
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CopyPathAsync(ServiceStatus svc)
+    {
+        var key = ServiceKey(svc);
+        if (_copyingFor.Contains(key)) return;
+
+        var path = DiscoverySvc.GetCachedPath(svc);
+
+        if (path is null)
+        {
+            // Either still searching or not yet found — trigger immediate search
+            _copyingFor.Add(key);
+            StateHasChanged();
+            try   { path = await DiscoverySvc.FindNowAsync(svc, Env); }
+            finally
+            {
+                _copyingFor.Remove(key);
+                StateHasChanged();
+            }
+        }
+
+        if (path is null)
+        {
+            Snackbar.Add("Log path not found", Severity.Warning);
+            return;
+        }
+
+        await JS.InvokeVoidAsync("copyText", path);
+        await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
+    }
+
+    private static string ServiceKey(ServiceStatus s) =>
+        LogPathDiscoveryService.CacheKey(s);
+
+    // ── Filter / pagination ──────────────────────────────────────────────────
 
     private void OnFilterChanged(string text)
     {
@@ -302,5 +392,9 @@
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
     }
 
-    public async ValueTask DisposeAsync() => _timer?.Dispose();
+    public async ValueTask DisposeAsync()
+    {
+        DiscoverySvc.OnPathResolved -= OnPathResolved;
+        _timer?.Dispose();
+    }
 }

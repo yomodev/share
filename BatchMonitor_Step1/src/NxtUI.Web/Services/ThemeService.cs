@@ -3,25 +3,55 @@ using MudBlazor;
 
 namespace NxtUI.Services;
 
+public enum ThemeMode { Dark, Light, System }
+
 public class ThemeService
 {
-    private bool _isDark;
+    private ThemeMode _mode;
+    private bool _systemIsDark = true; // server-side default until JS reports
 
     public ThemeService(IHttpContextAccessor http)
     {
         var cookie = http.HttpContext?.Request.Cookies["bm-theme"];
-        _isDark = cookie != "light"; // default: dark
+        _mode = cookie switch
+        {
+            "light"  => ThemeMode.Light,
+            "system" => ThemeMode.System,
+            _        => ThemeMode.Dark,
+        };
+
+        // Seed from last-known OS value to minimise flash when System is active
+        if (_mode == ThemeMode.System)
+        {
+            var sysCookie = http.HttpContext?.Request.Cookies["bm-theme-system"];
+            _systemIsDark = sysCookie != "light";
+        }
     }
 
-    public bool IsDark
+    public ThemeMode Mode
     {
-        get => _isDark;
+        get => _mode;
         set
         {
-            if (_isDark == value) return;
-            _isDark = value;
+            if (_mode == value) return;
+            _mode = value;
             OnChange?.Invoke();
         }
+    }
+
+    public bool IsDark => _mode switch
+    {
+        ThemeMode.Light  => false,
+        ThemeMode.System => _systemIsDark,
+        _                => true,
+    };
+
+    public void SetSystemDark(bool isDark)
+    {
+        if (_systemIsDark == isDark) return;
+        _systemIsDark = isDark;
+        if (_mode == ThemeMode.System)
+            OnChange?.Invoke();
     }
 
     public event Action? OnChange;

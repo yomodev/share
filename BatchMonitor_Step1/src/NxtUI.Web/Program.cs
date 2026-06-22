@@ -23,6 +23,9 @@ public class Program
         builder.Services.Configure<HeartbeatSettings>(
             builder.Configuration.GetSection(HeartbeatSettings.SectionName));
 
+        builder.Services.Configure<LogPathSettings>(
+            builder.Configuration.GetSection(LogPathSettings.SectionName));
+
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
         builder.Services.AddServerSideBlazor();
@@ -48,6 +51,7 @@ public class Program
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+        builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

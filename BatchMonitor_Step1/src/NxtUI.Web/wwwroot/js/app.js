@@ -12,10 +12,29 @@ export function setLocalStorage(key, value) {
     try { localStorage.setItem(key, value); } catch { }
 }
 
-/** @param {string} value — "dark" | "light" */
+/** @param {string} value — "dark" | "light" | "system" */
 export function saveTheme(value) {
     try { localStorage.setItem('bm-theme', value); } catch { }
     document.cookie = `bm-theme=${value};path=/;max-age=31536000`;
+}
+
+/**
+ * Registers a listener for OS dark-mode changes and returns the current OS value.
+ * Saves the current OS preference as a cookie so the server can seed it on next load.
+ * @param {{ invokeMethodAsync: (method: string, ...args: any[]) => Promise<void> }} dotnetRef
+ * @returns {boolean} — true if OS is currently dark
+ */
+export function watchSystemTheme(dotnetRef) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    function persist(isDark) {
+        document.cookie = 'bm-theme-system=' + (isDark ? 'dark' : 'light') + ';path=/;max-age=31536000';
+    }
+    mq.addEventListener('change', function (e) {
+        persist(e.matches);
+        dotnetRef.invokeMethodAsync('OnSystemThemeChanged', e.matches);
+    });
+    persist(mq.matches);
+    return mq.matches;
 }
 
 /** Focuses the first focusable input inside a wrapper element after the next animation frame. @param {HTMLElement} wrapper */
