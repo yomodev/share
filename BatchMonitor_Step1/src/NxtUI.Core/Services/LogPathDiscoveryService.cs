@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
+using NxtUI.Logging;
 using NxtUI.Models;
 
 namespace NxtUI.Services;
@@ -73,17 +74,8 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         return null;
     }
 
-    private static string ExpandTemplate(string template, ServiceStatus svc, string env)
-    {
-        // Replace {date-1} before {date} to avoid partial match
-        return template
-            .Replace("{date-1}", svc.CreatedDateTime.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{date}",   svc.CreatedDateTime.ToString("yyyy-MM-dd"),              StringComparison.OrdinalIgnoreCase)
-            .Replace("{server}", svc.HostName,                StringComparison.OrdinalIgnoreCase)
-            .Replace("{service}", svc.ServiceName,            StringComparison.OrdinalIgnoreCase)
-            .Replace("{pid}",    svc.ProcessId.ToString(),    StringComparison.OrdinalIgnoreCase)
-            .Replace("{env}",    env,                         StringComparison.OrdinalIgnoreCase);
-    }
+    private static string ExpandTemplate(string template, ServiceStatus svc, string env) =>
+        LogPathTemplate.Expand(template, svc, env);
 
     /// <summary>
     /// Resolves a path that may contain * wildcards in one or more segments.

@@ -23,4 +23,7 @@ public class LogPathSettings
     /// per service/PID, so this filename is constant across services.
     /// </summary>
     public string MetricsFileName { get; set; } = string.Empty;
+
+    /// <summary>How often (seconds) to re-read the metrics file for new lines.</summary>
+    public int CheckIntervalSeconds { get; set; } = 90;
 }

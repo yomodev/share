@@ -26,6 +26,9 @@ public class Program
         builder.Services.Configure<LogPathSettings>(
             builder.Configuration.GetSection(LogPathSettings.SectionName));
 
+        builder.Services.Configure<TestLogGeneratorSettings>(
+            builder.Configuration.GetSection(TestLogGeneratorSettings.SectionName));
+
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
         builder.Services.AddServerSideBlazor();
@@ -52,6 +55,9 @@ public class Program
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
+
+        // Test-only: fabricates metrics log files (no-op unless TestLogGenerator:Enabled).
+        builder.Services.AddHostedService<TestLogGenerator>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
