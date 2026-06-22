@@ -60,11 +60,15 @@
         @if (_graphView)
         {
             <!-- Card view — grouping supported (pure Blazor, no JS conflict).
-                 Each group is wrapped in a single @key'd container and each card
-                 is @key'd so Blazor diffs by identity, not position — otherwise
-                 changing the grouping reshuffles siblings and Blazor's patcher
-                 can compute insertBefore against a detached node. -->
-            <div class="bm-svc-cards">
+                 The container is @key'd by the grouping mode: switching grouping
+                 moves cards between *different* parent card-rows, and Blazor's
+                 @key only reconciles within one parent — a cross-parent move makes
+                 it compute insertBefore against a node whose parent is already
+                 detached (null). Re-keying the container forces a full teardown +
+                 rebuild on grouping change, so no card is ever diffed across
+                 parents. Within a grouping mode the key is stable, so polling
+                 updates still diff cards in place by their per-card @key. -->
+            <div class="bm-svc-cards" @key="@($"groupmode:{_groupBy}")">
                 @foreach (var group in GetGroups(_filtered))
                 {
                     <div class="bm-svc-group" @key="@(group.Key ?? "__ungrouped__")">
