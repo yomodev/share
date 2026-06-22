@@ -104,14 +104,13 @@
                                                            Disabled="@_copyingFor.Contains(cardKey)"
                                                            OnClick="@(() => CopyPathAsync(s))" />
                                         </MudTooltip>
-                                        @if (cardPath != null)
-                                        {
-                                            <MudTooltip Text="Open log viewer">
-                                                <MudIconButton Icon="@Icons.Material.Outlined.Article"
-                                                               Size="Size.Small"
-                                                               OnClick="@(() => OpenLogViewer(s, cardPath))" />
-                                            </MudTooltip>
-                                        }
+                                        <MudTooltip Text="Open log viewer">
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Article"
+                                                           Size="Size.Small"
+                                                           Color="@(cardPath != null ? Color.Default : Color.Inherit)"
+                                                           Disabled="@_openingLogFor.Contains(cardKey)"
+                                                           OnClick="@(() => OpenLogViewerAsync(s))" />
+                                        </MudTooltip>
                                     </div>
                                 </div>
                             }
@@ -180,14 +179,13 @@
                                                Disabled="@_copyingFor.Contains(rowKey)"
                                                OnClick="@(() => CopyPathAsync(context))" />
                             </MudTooltip>
-                            @if (rowPath != null)
-                            {
-                                <MudTooltip Text="Open log viewer">
-                                    <MudIconButton Icon="@Icons.Material.Outlined.Article"
-                                                   Size="Size.Small"
-                                                   OnClick="@(() => OpenLogViewer(context, rowPath))" />
-                                </MudTooltip>
-                            }
+                            <MudTooltip Text="Open log viewer">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Article"
+                                               Size="Size.Small"
+                                               Color="@(rowPath != null ? Color.Default : Color.Inherit)"
+                                               Disabled="@_openingLogFor.Contains(rowKey)"
+                                               OnClick="@(() => OpenLogViewerAsync(context))" />
+                            </MudTooltip>
                         </div>
                     </MudTd>
                 </RowTemplate>
@@ -258,8 +256,9 @@
     private List<ServiceStatus> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
 
-    // Keys currently awaiting an immediate path search (shows spinner on button)
-    private readonly HashSet<string> _copyingFor = new();
+    // Keys currently awaiting a path search triggered by the copy/open actions
+    private readonly HashSet<string> _copyingFor    = new();
+    private readonly HashSet<string> _openingLogFor = new();
 
     private PeriodicTimer? _timer;
 
@@ -343,8 +342,33 @@
         await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
     }
 
-    private void OpenLogViewer(ServiceStatus svc, string path) =>
+    private async Task OpenLogViewerAsync(ServiceStatus svc)
+    {
+        var key  = ServiceKey(svc);
+        if (_openingLogFor.Contains(key)) return;
+
+        var path = DiscoverySvc.GetCachedPath(svc);
+
+        if (path is null)
+        {
+            _openingLogFor.Add(key);
+            StateHasChanged();
+            try   { path = await DiscoverySvc.FindNowAsync(svc, Env); }
+            finally
+            {
+                _openingLogFor.Remove(key);
+                StateHasChanged();
+            }
+        }
+
+        if (path is null)
+        {
+            Snackbar.Add("Log path not found", Severity.Warning);
+            return;
+        }
+
         TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
+    }
 
     private static string ServiceKey(ServiceStatus s) =>
         LogPathDiscoveryService.CacheKey(s);
