@@ -1,0 +1,23 @@
+@inject TabService TabService
+
+<div class="bm-page bm-page-fill">
+
+    <div class="bm-batch-toolbar">
+        <MudIcon Icon="@Icons.Material.Outlined.ManageSearch" Size="Size.Small" Class="mr-2 bm-muted" />
+        <MudText Typo="Typo.body2" Style="font-weight:600;">Log Browser</MudText>
+    </div>
+
+    <div class="bm-log-viewer-body">
+        <MudText Typo="Typo.body2" Class="bm-muted">
+            Browse logs across servers and open them in the Log Viewer.
+        </MudText>
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string Env { get; set; } = string.Empty;
+
+    private void OpenLogViewer(string path) =>
+        TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
+}
