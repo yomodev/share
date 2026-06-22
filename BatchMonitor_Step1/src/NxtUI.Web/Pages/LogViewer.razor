@@ -1,0 +1,50 @@
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<div class="bm-page bm-page-fill">
+
+    <div class="bm-batch-toolbar">
+        <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="mr-2 bm-muted" />
+        <MudText Typo="Typo.body2" Style="font-weight:600;">Log Viewer</MudText>
+    </div>
+
+    <div class="bm-log-viewer-body">
+
+        <MudPaper Elevation="0" Class="bm-log-path-section">
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-2">Log path</MudText>
+            <div class="bm-log-path-row">
+                <MudTextField T="string"
+                              @bind-Value="_path"
+                              Label="Path"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Class="bm-monospace"
+                              Adornment="Adornment.End"
+                              AdornmentIcon="@Icons.Material.Outlined.ContentCopy"
+                              AdornmentAriaLabel="Copy path"
+                              OnAdornmentClick="CopyPathAsync" />
+            </div>
+        </MudPaper>
+
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string? Path { get; set; }
+
+    private string _path = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        _path = Path ?? string.Empty;
+    }
+
+    private async Task CopyPathAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_path)) return;
+        await JS.InvokeVoidAsync("copyText", _path);
+        await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
+    }
+}

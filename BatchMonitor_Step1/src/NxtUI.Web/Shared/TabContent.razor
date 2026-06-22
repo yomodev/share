@@ -52,6 +52,10 @@
             Icon="@Icons.Material.Outlined.Article" Environment="@env" />
         break;
 
+    case TabType.LogDetail:
+        <NxtUI.Pages.LogViewer Path="@Tab.EntityId" />
+        break;
+
     case TabType.Settings:
         <NxtUI.Pages.Settings />
         break;

@@ -97,13 +97,21 @@
                                         {
                                             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-svc-path-spinner" />
                                         }
-                                        <MudTooltip Text="@(cardPath ?? "Copy log path")">
+                                        <MudTooltip Text="@(cardPath != null ? $"Copy: {cardPath}" : "Copy log path")">
                                             <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
                                                            Size="Size.Small"
                                                            Color="@(cardPath != null ? Color.Default : Color.Inherit)"
                                                            Disabled="@_copyingFor.Contains(cardKey)"
                                                            OnClick="@(() => CopyPathAsync(s))" />
                                         </MudTooltip>
+                                        @if (cardPath != null)
+                                        {
+                                            <MudTooltip Text="Open log viewer">
+                                                <MudIconButton Icon="@Icons.Material.Outlined.Article"
+                                                               Size="Size.Small"
+                                                               OnClick="@(() => OpenLogViewer(s, cardPath))" />
+                                            </MudTooltip>
+                                        }
                                     </div>
                                 </div>
                             }
@@ -165,13 +173,21 @@
                             {
                                 <MudProgressCircular Size="Size.Small" Indeterminate="true" />
                             }
-                            <MudTooltip Text="@(rowPath ?? "Copy log path")">
+                            <MudTooltip Text="@(rowPath != null ? $"Copy: {rowPath}" : "Copy log path")">
                                 <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
                                                Size="Size.Small"
                                                Color="@(rowPath != null ? Color.Default : Color.Inherit)"
                                                Disabled="@_copyingFor.Contains(rowKey)"
                                                OnClick="@(() => CopyPathAsync(context))" />
                             </MudTooltip>
+                            @if (rowPath != null)
+                            {
+                                <MudTooltip Text="Open log viewer">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Article"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenLogViewer(context, rowPath))" />
+                                </MudTooltip>
+                            }
                         </div>
                     </MudTd>
                 </RowTemplate>
@@ -326,6 +342,9 @@
         await JS.InvokeVoidAsync("copyText", path);
         await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
     }
+
+    private void OpenLogViewer(ServiceStatus svc, string path) =>
+        TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
 
     private static string ServiceKey(ServiceStatus s) =>
         LogPathDiscoveryService.CacheKey(s);

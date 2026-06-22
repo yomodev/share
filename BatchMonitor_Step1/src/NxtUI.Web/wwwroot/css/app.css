@@ -1673,6 +1673,31 @@ html, body {
     margin-top: 2px;
 }
 
+/* ── Log Viewer ──────────────────────────────────────────────────────────── */
+
+.bm-log-viewer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.bm-log-path-section {
+    padding: 16px;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 6px;
+}
+
+.bm-log-path-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+/* ── Services page card actions ─────────────────────────────────────────── */
+
 .bm-svc-card-actions {
     display: flex;
     align-items: center;

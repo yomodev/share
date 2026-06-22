@@ -170,6 +170,16 @@ public class TabModel
         Icon        = MudBlazor.Icons.Material.Outlined.TableChart
     };
 
+    public static TabModel CreateLogViewer(string path, string env) => new()
+    {
+        Id          = $"detail:log:{Uri.EscapeDataString(path)}:{env}",
+        Type        = TabType.LogDetail,
+        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
+        Environment = env,
+        EntityId    = path,
+        Icon        = MudBlazor.Icons.Material.Outlined.Article
+    };
+
     public static TabModel CreateFilterHelp() => new()
     {
         Id   = "help:filter",
@@ -191,6 +201,7 @@ public class TabModel
         TabType.MongoDB     => $"/mongo/{Environment}",
         TabType.Config      => $"/config/{Environment}",
         TabType.Logs        => $"/logs/{Environment}",
+        TabType.LogDetail   => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings    => "/settings",
         TabType.FilterHelp  => "/help/filter",
         TabType.RunDetail => $"/run/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
@@ -255,6 +266,9 @@ public class TabModel
 
             "logs" when parts.Length >= 2
                 => CreateLogsDashboard(parts[1]),
+
+            "log" when parts.Length >= 3
+                => CreateLogViewer(Uri.UnescapeDataString(parts[2]), parts[1]),
 
             "settings"
                 => CreateSettings(),
