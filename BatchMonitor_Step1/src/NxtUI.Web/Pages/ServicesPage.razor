@@ -137,10 +137,10 @@
                                            InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalCurrentBytes(s))">RAM</MudTableSortLabel>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalCurrentBytes(s))">RAM (MB)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalPeakBytes(s))">Peak</MudTableSortLabel>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalPeakBytes(s))">Peak (MB)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
@@ -160,11 +160,11 @@
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
                     <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
-                    <MudTd DataLabel="RAM" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatBytes(rowMetrics?.TotalCurrentBytes)</MudText>
+                    <MudTd DataLabel="RAM (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatMb(rowMetrics?.TotalCurrentBytes)</MudText>
                     </MudTd>
-                    <MudTd DataLabel="Peak" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatBytes(rowMetrics?.TotalPeakBytes)</MudText>
+                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(rowMetrics?.TotalPeakBytes)</MudText>
                     </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
@@ -476,12 +476,9 @@
     private long TotalCurrentBytes(ServiceStatus s) => MetricsMonitor.GetLatest(Env, s)?.TotalCurrentBytes ?? 0;
     private long TotalPeakBytes(ServiceStatus s)    => MetricsMonitor.GetLatest(Env, s)?.TotalPeakBytes    ?? 0;
 
-    private static string FormatBytes(long? bytes)
-    {
-        if (bytes is null or <= 0) return "—";
-        double mb = bytes.Value / (1024d * 1024d);
-        return mb >= 1024 ? $"{mb / 1024:0.00} GB" : $"{mb:0} MB";
-    }
+    // Whole megabytes with a thousands separator; "—" until a sample arrives.
+    private static string FormatMb(long? bytes) =>
+        bytes is null or <= 0 ? "—" : (bytes.Value / (1024d * 1024d)).ToString("N0");
 
     public async ValueTask DisposeAsync()
     {
