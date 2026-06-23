@@ -244,6 +244,14 @@
 
     private PeriodicTimer? _timer;
 
+    // Coalesce path-resolved notifications: discovery can resolve many services in
+    // a burst (e.g. on first load), and one StateHasChanged per resolution renders
+    // the grid several times while the previous batch is still being applied on the
+    // client — that render storm corrupts the DOM diff (insertBefore on null parent).
+    private readonly object _renderGate = new();
+    private bool _renderScheduled;
+    private bool _disposed;
+
     protected override async Task OnInitializedAsync()
     {
         DiscoverySvc.OnPathResolved += OnPathResolved;
@@ -290,8 +298,27 @@
 
     private void OnPathResolved(string key)
     {
-        // Fire from background thread — marshal onto circuit context
-        InvokeAsync(StateHasChanged);
+        // Debounce: collapse a burst of resolutions into a single re-render.
+        lock (_renderGate)
+        {
+            if (_renderScheduled || _disposed) return;
+            _renderScheduled = true;
+        }
+        _ = DebouncedRenderAsync();
+    }
+
+    private async Task DebouncedRenderAsync()
+    {
+        try
+        {
+            await Task.Delay(400);
+            lock (_renderGate) { _renderScheduled = false; }
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException)   { }
+        catch (JSDisconnectedException)   { }
+        catch (OperationCanceledException) { }
     }
 
     private async Task CopyPathAsync(ServiceStatus svc)
@@ -419,7 +446,9 @@
 
     public async ValueTask DisposeAsync()
     {
+        lock (_renderGate) { _disposed = true; }
         DiscoverySvc.OnPathResolved -= OnPathResolved;
         _timer?.Dispose();
+        await Task.CompletedTask;
     }
 }
