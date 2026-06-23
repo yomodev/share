@@ -53,6 +53,10 @@ public sealed class FilterParser
             ["servicename"] = "ServiceName",
             ["host"]      = "HostName",
             ["hostname"]  = "HostName",
+            ["ram"]       = "RamMb",
+            ["mem"]       = "RamMb",
+            ["memory"]    = "RamMb",
+            ["peak"]      = "PeakMb",
         };
 
     public FilterParser(

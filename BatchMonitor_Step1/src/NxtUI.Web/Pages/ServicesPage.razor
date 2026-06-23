@@ -137,18 +137,17 @@
                                            InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalCurrentBytes(s))">RAM (MB)</MudTableSortLabel>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.RamMb ?? 0)">RAM (MB)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalPeakBytes(s))">Peak (MB)</MudTableSortLabel>
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.PeakMb ?? 0)">Peak (MB)</MudTableSortLabel>
                     </MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     @{
-                        var rowKey     = ServiceKey(context);
-                        var rowPath    = DiscoverySvc.GetCachedPath(context, Env);
-                        var rowMetrics = MetricsMonitor.GetLatest(Env, context);
+                        var rowKey  = ServiceKey(context);
+                        var rowPath = DiscoverySvc.GetCachedPath(context, Env);
                     }
                     <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -161,10 +160,10 @@
                     <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd DataLabel="RAM (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatMb(rowMetrics?.TotalCurrentBytes)</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
                     <MudTd DataLabel="Peak (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(rowMetrics?.TotalPeakBytes)</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
                     </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
@@ -245,6 +244,8 @@
         ("svcname / servicename", "service name"),
         ("host / hostname",       "host name"),
         ("pid / processid",       "process ID"),
+        ("ram / mem",             "current RAM in MB (e.g. ram>500)"),
+        ("peak",                  "peak RAM in MB (e.g. peak>1000)"),
     ];
 
     private List<ServiceStatus> _all      = new();
@@ -342,7 +343,13 @@
             await Task.Delay(400);
             lock (_renderGate) { _renderScheduled = false; }
             if (!_disposed)
-                await InvokeAsync(StateHasChanged);
+                await InvokeAsync(() =>
+                {
+                    // Re-stamp + re-filter so RAM/Peak columns and any ram/peak
+                    // filter react to new samples; keep the user's current page.
+                    RecomputeFilter(resetPage: false);
+                    StateHasChanged();
+                });
         }
         catch (ObjectDisposedException)   { }
         catch (JSDisconnectedException)   { }
@@ -421,8 +428,12 @@
 
     // Pure computation, no render — callable from the poll path without forcing
     // an off-context StateHasChanged. LoadAsync renders via InvokeAsync instead.
-    private void RecomputeFilter()
+    // resetPage=false keeps the current page (used by metrics-driven refreshes so
+    // a 90s update doesn't yank the user back to page 1).
+    private void RecomputeFilter(bool resetPage = true)
     {
+        StampMetrics();
+
         _filterParseError = null;
 
         FilterNode? node = null;
@@ -436,8 +447,20 @@
             ? _all
             : _all.Where(s => FilterEvaluator.Evaluate(node, s)).ToList();
 
-        _page = 1;
+        _page = resetPage ? 1 : Math.Clamp(_page, 1, _totalPages);
         RebuildPage();
+    }
+
+    // Stamp the latest metrics (in MB) onto each row so display, sort and filter
+    // all read the same value. Null when no sample has been parsed yet.
+    private void StampMetrics()
+    {
+        foreach (var s in _all)
+        {
+            var m = MetricsMonitor.GetLatest(Env, s);
+            s.RamMb  = m is null ? null : m.TotalCurrentBytes / (1024d * 1024d);
+            s.PeakMb = m is null ? null : m.TotalPeakBytes    / (1024d * 1024d);
+        }
     }
 
     private void RebuildPage() =>
@@ -472,13 +495,9 @@
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
     }
 
-    // Latest memory totals for a service (0 when no sample yet — keeps sorting sane).
-    private long TotalCurrentBytes(ServiceStatus s) => MetricsMonitor.GetLatest(Env, s)?.TotalCurrentBytes ?? 0;
-    private long TotalPeakBytes(ServiceStatus s)    => MetricsMonitor.GetLatest(Env, s)?.TotalPeakBytes    ?? 0;
-
     // Whole megabytes with a thousands separator; "—" until a sample arrives.
-    private static string FormatMb(long? bytes) =>
-        bytes is null or <= 0 ? "—" : (bytes.Value / (1024d * 1024d)).ToString("N0");
+    private static string FormatMb(double? mb) =>
+        mb is null or <= 0 ? "—" : mb.Value.ToString("N0");
 
     public async ValueTask DisposeAsync()
     {
