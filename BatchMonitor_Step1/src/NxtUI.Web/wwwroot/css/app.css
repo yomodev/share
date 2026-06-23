@@ -694,7 +694,11 @@ html, body {
 
 /* Utilities */
 .bm-monospace { font-family: var(--bm-font-mono) !important; font-size: 0.78rem !important; }
-.bm-muted     { color: var(--mud-palette-text-secondary) !important; }
+.bm-muted      { color: var(--mud-palette-text-secondary) !important; }
+.bm-ram-green  { color: #4caf50 !important; }
+.bm-ram-yellow { color: #ffc107 !important; }
+.bm-ram-orange { color: #ff9800 !important; }
+.bm-ram-red    { color: #f44336 !important; }
 
 /* ================================================================
    BLAZOR ERROR UI
@@ -1620,7 +1624,7 @@ html, body {
 }
 
 .bm-svc-card {
-    width: 172px;
+    width: 220px;
     padding: 8px 10px;
     border-radius: var(--bm-radius);
     border-left: 3px solid transparent;
@@ -1662,6 +1666,7 @@ html, body {
     margin-bottom: 4px;
     padding-left: 2px;
 }
+
 
 .bm-svc-card-meta {
     display: flex;

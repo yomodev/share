@@ -97,6 +97,10 @@
                                     <div class="bm-svc-card-host">@s.HostName</div>
                                     <div class="bm-svc-card-meta">
                                         <span>PID @s.ProcessId</span>
+                                        @if (s.RamMb is not null || s.PeakMb is not null)
+                                        {
+                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
+                                        }
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
                                     </div>
                                 </div>
@@ -160,7 +164,7 @@
                     <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd DataLabel="RAM (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatMb(context.RamMb)</MudText>
+                        <MudText Typo="Typo.body2" Class="@($"bm-monospace {RamColorClass(context.RamMb)}")">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
                     <MudTd DataLabel="Peak (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
@@ -246,6 +250,7 @@
         ("pid / processid",       "process ID"),
         ("ram / mem",             "current RAM in MB (e.g. ram>500)"),
         ("peak",                  "peak RAM in MB (e.g. peak>1000)"),
+        ("updated",               "last update time (e.g. updated>-5m, updated>today, updated>2026-06-20)"),
     ];
 
     private List<ServiceStatus> _all      = new();
@@ -495,9 +500,18 @@
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
     }
 
-    // Whole megabytes with a thousands separator; "—" until a sample arrives.
+    // Whole megabytes with thousands separator using the client's locale; "—" until a sample arrives.
     private static string FormatMb(double? mb) =>
         mb is null or <= 0 ? "—" : mb.Value.ToString("N0");
+
+    private static string RamColorClass(double? mb) => mb switch
+    {
+        null or <= 0  => "",
+        < 512         => "bm-ram-green",
+        < 1024        => "bm-ram-yellow",
+        < 4096        => "bm-ram-orange",
+        _             => "bm-ram-red",
+    };
 
     public async ValueTask DisposeAsync()
     {

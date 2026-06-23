@@ -82,6 +82,7 @@ public class Program
             app.UseHsts();
         }
 
+        app.UseRequestLocalization();
         app.UseHttpsRedirection();
         app.UseStaticFiles();
         app.UseRouting();

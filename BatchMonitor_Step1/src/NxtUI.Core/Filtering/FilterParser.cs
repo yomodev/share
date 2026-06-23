@@ -57,6 +57,8 @@ public sealed class FilterParser
             ["mem"]       = "RamMb",
             ["memory"]    = "RamMb",
             ["peak"]      = "PeakMb",
+            ["updated"]   = "UpdatedDateTime",
+            ["update"]    = "UpdatedDateTime",
         };
 
     public FilterParser(
