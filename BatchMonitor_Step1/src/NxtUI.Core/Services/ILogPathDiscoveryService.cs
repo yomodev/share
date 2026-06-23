@@ -6,12 +6,13 @@ public interface ILogPathDiscoveryService
 {
     /// <summary>
     /// Returns the resolved path from cache, or null if discovery hasn't completed
-    /// or the path was not found.
+    /// or the path was not found. Keyed per service AND environment (the path
+    /// template includes {env}, so the same service resolves differently per env).
     /// </summary>
-    string? GetCachedPath(ServiceStatus svc);
+    string? GetCachedPath(ServiceStatus svc, string env);
 
-    /// <summary>True while background discovery is still running for this service.</summary>
-    bool IsSearching(ServiceStatus svc);
+    /// <summary>True while background discovery is still running for this service+env.</summary>
+    bool IsSearching(ServiceStatus svc, string env);
 
     /// <summary>
     /// Kicks off background path discovery for this service if not already started.

@@ -20,28 +20,28 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         _settings = options.Value;
     }
 
-    public static string CacheKey(ServiceStatus svc) =>
-        $"{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
+    public static string CacheKey(ServiceStatus svc, string env) =>
+        $"{env}|{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
 
-    public string? GetCachedPath(ServiceStatus svc)
+    public string? GetCachedPath(ServiceStatus svc, string env)
     {
-        if (_cache.TryGetValue(CacheKey(svc), out var task) && task.IsCompletedSuccessfully)
+        if (_cache.TryGetValue(CacheKey(svc, env), out var task) && task.IsCompletedSuccessfully)
             return task.Result;
         return null;
     }
 
-    public bool IsSearching(ServiceStatus svc) =>
-        _cache.TryGetValue(CacheKey(svc), out var task) && !task.IsCompleted;
+    public bool IsSearching(ServiceStatus svc, string env) =>
+        _cache.TryGetValue(CacheKey(svc, env), out var task) && !task.IsCompleted;
 
     public void EnsureDiscovering(ServiceStatus svc, string env)
     {
-        var key = CacheKey(svc);
+        var key = CacheKey(svc, env);
         _cache.GetOrAdd(key, _ => RunSearchAsync(svc, env, key));
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
     {
-        var key = CacheKey(svc);
+        var key = CacheKey(svc, env);
 
         // Reuse any in-progress search
         if (_cache.TryGetValue(key, out var existing) && !existing.IsCompleted)

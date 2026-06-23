@@ -3,6 +3,7 @@
 @using NxtUI.Filtering
 @inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
+@inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
@@ -80,8 +81,8 @@
                             @foreach (var s in group)
                             {
                                 var cardKey      = ServiceKey(s);
-                                var cardPath     = DiscoverySvc.GetCachedPath(s);
-                                var cardSearching = DiscoverySvc.IsSearching(s);
+                                var cardPath     = DiscoverySvc.GetCachedPath(s, Env);
+                                var cardSearching = DiscoverySvc.IsSearching(s, Env);
                                 <div @key="@cardKey"
                                      class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")} {(cardSearching ? "bm-svc-searching" : "")}")"
                                      @ondblclick="@(() => OpenLogViewerAsync(s))"
@@ -116,7 +117,7 @@
                       Class="bm-batch-table"
                       FixedHeader="true"
                       Height="100%"
-                      RowClassFunc="@((svc, _) => DiscoverySvc.IsSearching(svc) ? "bm-row-searching" : string.Empty)">
+                      RowClassFunc="@((svc, _) => DiscoverySvc.IsSearching(svc, Env) ? "bm-row-searching" : string.Empty)">
                 <HeaderContent>
                     <MudTh Style="width:36px;"></MudTh>
                     <MudTh>
@@ -140,7 +141,7 @@
                 <RowTemplate>
                     @{
                         var rowKey  = ServiceKey(context);
-                        var rowPath = DiscoverySvc.GetCachedPath(context);
+                        var rowPath = DiscoverySvc.GetCachedPath(context, Env);
                     }
                     <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -252,9 +253,15 @@
     private bool _renderScheduled;
     private bool _disposed;
 
+    // Held for the lifetime of this tab; disposing it tells the monitor this env
+    // has one fewer subscriber (monitoring stops when the last tab for env closes).
+    private IDisposable? _metricsSubscription;
+
     protected override async Task OnInitializedAsync()
     {
         DiscoverySvc.OnPathResolved += OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+        _metricsSubscription = MetricsMonitor.Subscribe(Env);
         await LoadAsync();
         _ = StartPollingAsync();
     }
@@ -296,9 +303,17 @@
 
     // ── Path discovery ───────────────────────────────────────────────────────
 
-    private void OnPathResolved(string key)
+    private void OnPathResolved(string key) => ScheduleRender();
+
+    // Only react to updates for this tab's environment.
+    private void OnMetricsUpdated(string env)
     {
-        // Debounce: collapse a burst of resolutions into a single re-render.
+        if (env == Env) ScheduleRender();
+    }
+
+    private void ScheduleRender()
+    {
+        // Debounce: collapse a burst of notifications into a single re-render.
         lock (_renderGate)
         {
             if (_renderScheduled || _disposed) return;
@@ -326,7 +341,7 @@
         var key = ServiceKey(svc);
         if (_copyingFor.Contains(key)) return;
 
-        var path = DiscoverySvc.GetCachedPath(svc);
+        var path = DiscoverySvc.GetCachedPath(svc, Env);
 
         if (path is null)
         {
@@ -356,7 +371,7 @@
         var key  = ServiceKey(svc);
         if (_openingLogFor.Contains(key)) return;
 
-        var path = DiscoverySvc.GetCachedPath(svc);
+        var path = DiscoverySvc.GetCachedPath(svc, Env);
 
         if (path is null)
         {
@@ -379,8 +394,8 @@
         TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
     }
 
-    private static string ServiceKey(ServiceStatus s) =>
-        LogPathDiscoveryService.CacheKey(s);
+    private string ServiceKey(ServiceStatus s) =>
+        LogPathDiscoveryService.CacheKey(s, Env);
 
     // ── Filter / pagination ──────────────────────────────────────────────────
 
@@ -447,7 +462,9 @@
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
-        DiscoverySvc.OnPathResolved -= OnPathResolved;
+        DiscoverySvc.OnPathResolved     -= OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        _metricsSubscription?.Dispose();
         _timer?.Dispose();
         await Task.CompletedTask;
     }
