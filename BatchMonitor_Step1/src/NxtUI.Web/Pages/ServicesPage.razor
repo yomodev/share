@@ -136,12 +136,19 @@
                         <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.CreatedDateTime)"
                                            InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
                     </MudTh>
+                    <MudTh Style="text-align:right;">
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalCurrentBytes(s))">RAM</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="text-align:right;">
+                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => TotalPeakBytes(s))">Peak</MudTableSortLabel>
+                    </MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     @{
-                        var rowKey  = ServiceKey(context);
-                        var rowPath = DiscoverySvc.GetCachedPath(context, Env);
+                        var rowKey     = ServiceKey(context);
+                        var rowPath    = DiscoverySvc.GetCachedPath(context, Env);
+                        var rowMetrics = MetricsMonitor.GetLatest(Env, context);
                     }
                     <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -153,6 +160,12 @@
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
                     <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="RAM" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                        <MudText Typo="Typo.body2" Class="bm-monospace">@FormatBytes(rowMetrics?.TotalCurrentBytes)</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Peak" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatBytes(rowMetrics?.TotalPeakBytes)</MudText>
+                    </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
                             <MudTooltip Text="@(rowPath != null ? $"Copy: {rowPath}" : "Copy log path")">
@@ -457,6 +470,17 @@
         if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
         if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
+    }
+
+    // Latest memory totals for a service (0 when no sample yet — keeps sorting sane).
+    private long TotalCurrentBytes(ServiceStatus s) => MetricsMonitor.GetLatest(Env, s)?.TotalCurrentBytes ?? 0;
+    private long TotalPeakBytes(ServiceStatus s)    => MetricsMonitor.GetLatest(Env, s)?.TotalPeakBytes    ?? 0;
+
+    private static string FormatBytes(long? bytes)
+    {
+        if (bytes is null or <= 0) return "—";
+        double mb = bytes.Value / (1024d * 1024d);
+        return mb >= 1024 ? $"{mb / 1024:0.00} GB" : $"{mb:0} MB";
     }
 
     public async ValueTask DisposeAsync()

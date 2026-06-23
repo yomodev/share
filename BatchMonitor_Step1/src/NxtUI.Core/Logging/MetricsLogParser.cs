@@ -21,13 +21,10 @@ public static class MetricsLogParser
 
     // Order matters only for "peak usage" vs "child peak usage": the negative
     // lookbehind keeps the parent "peak usage" from matching the child one.
-    private static readonly Regex RxCurrent   = new(@"current usage:\s*(\d+)",          RegexOptions.Compiled);
-    private static readonly Regex RxPeak      = new(@"(?<!child )peak usage:\s*(\d+)",  RegexOptions.Compiled);
-    private static readonly Regex RxChild     = new(@"child usage:\s*(\d+)",            RegexOptions.Compiled);
-    private static readonly Regex RxChildPeak = new(@"child peak usage:\s*(\d+)",       RegexOptions.Compiled);
-    private static readonly Regex RxStart     = new(@"Process start time\s*""([^""]+)""", RegexOptions.Compiled);
-    private static readonly Regex RxStream    = new(@"Sending Metrics Tracker message\s+([^,]+)", RegexOptions.Compiled);
-    private static readonly Regex RxMsgId     = new(@"([^\s,]+)\.Memory current usage", RegexOptions.Compiled);
+    private static readonly Regex RxCurrent   = new(@"current usage:\s*(\d+)",         RegexOptions.Compiled);
+    private static readonly Regex RxPeak      = new(@"(?<!child )peak usage:\s*(\d+)", RegexOptions.Compiled);
+    private static readonly Regex RxChild     = new(@"child usage:\s*(\d+)",           RegexOptions.Compiled);
+    private static readonly Regex RxChildPeak = new(@"child peak usage:\s*(\d+)",      RegexOptions.Compiled);
 
     /// <summary>
     /// Returns true and a populated sample if the line is a metrics line.
@@ -52,16 +49,6 @@ public static class MetricsLogParser
 
         DateTime.TryParse(fields[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var ts);
 
-        DateTime? startTime = null;
-        var sm = RxStart.Match(message);
-        if (sm.Success &&
-            DateTime.TryParse(sm.Groups[1].Value, CultureInfo.InvariantCulture,
-                              DateTimeStyles.RoundtripKind, out var st))
-            startTime = st;
-
-        var streamM = RxStream.Match(message);
-        var idM     = RxMsgId.Match(message);
-
         sample = new MetricsSample
         {
             Timestamp           = ts,
@@ -69,9 +56,6 @@ public static class MetricsLogParser
             PeakUsageBytes      = peak,
             ChildUsageBytes     = child,
             ChildPeakUsageBytes = childPeak,
-            ProcessStartTime    = startTime,
-            StreamName          = streamM.Success ? streamM.Groups[1].Value.Trim() : null,
-            MessageId           = idM.Success     ? idM.Groups[1].Value.Trim()     : null,
         };
         return true;
     }

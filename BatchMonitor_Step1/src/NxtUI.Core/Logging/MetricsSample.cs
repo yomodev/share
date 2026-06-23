@@ -11,11 +11,10 @@ public record MetricsSample
     public long     PeakUsageBytes      { get; init; }
     public long     ChildUsageBytes     { get; init; }
     public long     ChildPeakUsageBytes { get; init; }
-    public DateTime? ProcessStartTime   { get; init; }
 
-    /// <summary>Metrics stream name (redundant — folder is already per-service).</summary>
-    public string?  StreamName          { get; init; }
+    /// <summary>Current usage of the process and its children.</summary>
+    public long TotalCurrentBytes => CurrentUsageBytes + ChildUsageBytes;
 
-    /// <summary>Message id preceding ".Memory" (redundant for now).</summary>
-    public string?  MessageId           { get; init; }
+    /// <summary>Peak usage of the process and its children.</summary>
+    public long TotalPeakBytes => PeakUsageBytes + ChildPeakUsageBytes;
 }
