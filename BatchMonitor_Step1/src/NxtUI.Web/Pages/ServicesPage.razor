@@ -83,10 +83,32 @@
                                 var cardKey      = ServiceKey(s);
                                 var cardPath     = DiscoverySvc.GetCachedPath(s, Env);
                                 var cardSearching = DiscoverySvc.IsSearching(s, Env);
+                                var spark = BuildSparkData(s, cardKey);
                                 <div @key="@cardKey"
                                      class="@($"bm-svc-card {(s.IsOnline ? "bm-svc-online" : "bm-svc-offline")} {(cardSearching ? "bm-svc-searching" : "")}")"
                                      @ondblclick="@(() => OpenLogViewerAsync(s))"
                                      @onclick="@(async (MouseEventArgs e) => { if (e.CtrlKey) await CopyPathAsync(s); })">
+                                    @if (spark is not null)
+                                    {
+                                        <svg class="bm-svc-spark" viewBox="0 0 100 40" preserveAspectRatio="none"
+                                             data-spark="@spark.TooltipJson"
+                                             xmlns="http://www.w3.org/2000/svg">
+                                            <defs>
+                                                <linearGradient id="@spark.GradId" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="0%"   stop-color="var(--mud-palette-primary)" stop-opacity="0.18" />
+                                                    <stop offset="100%" stop-color="var(--mud-palette-primary)" stop-opacity="0.01" />
+                                                </linearGradient>
+                                            </defs>
+                                            @foreach (var hx in spark.HourLines)
+                                            {
+                                                <line x1="@hx.ToString("F1")" y1="0"
+                                                      x2="@hx.ToString("F1")" y2="40"
+                                                      stroke="rgba(30,100,200,0.20)"
+                                                      stroke-width="1" vector-effect="non-scaling-stroke" />
+                                            }
+                                            <path d="@spark.Path" fill="url(#@spark.GradId)" />
+                                        </svg>
+                                    }
                                     <div class="bm-svc-card-header">
                                         <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                                  Size="Size.Small"
@@ -498,6 +520,58 @@
         if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
         if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
+    }
+
+    private record SparkData(string GradId, string Path, List<double> HourLines, string TooltipJson);
+
+    private SparkData? BuildSparkData(ServiceStatus s, string cardKey)
+    {
+        var history = MetricsMonitor.GetHistory(Env, s);
+        if (history.Count < 2) return null;
+
+        var cutoff = DateTime.UtcNow.AddHours(-6);
+        var window = history.Where(m => m.Timestamp >= cutoff).ToList();
+        if (window.Count < 2) return null;
+
+        var tMin  = window[0].Timestamp;
+        var tMax  = window[^1].Timestamp;
+        var tSpan = (tMax - tMin).Ticks;
+        if (tSpan == 0) return null;
+
+        var vMax = window.Max(m => m.TotalCurrentBytes);
+        if (vMax == 0) return null;
+
+        const int W = 100, H = 40;
+
+        // Area path
+        var path = new System.Text.StringBuilder("M0,40");
+        foreach (var m in window)
+        {
+            var x = (m.Timestamp - tMin).Ticks / (double)tSpan * W;
+            var y = H - (double)m.TotalCurrentBytes / vMax * H;
+            path.Append($" L{x:F1},{y:F1}");
+        }
+        path.Append(" L100,40 Z");
+
+        // Hour-boundary X positions
+        var hourLines = new List<double>();
+        var firstHour = new DateTime(tMin.Year, tMin.Month, tMin.Day, tMin.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+        for (var h = firstHour; h < tMax; h = h.AddHours(1))
+            hourLines.Add((h - tMin).Ticks / (double)tSpan * W);
+
+        // Tooltip JSON [[unixSec, mb], ...] — no quotes, safe in HTML attribute
+        var json = new System.Text.StringBuilder("[");
+        for (int i = 0; i < window.Count; i++)
+        {
+            if (i > 0) json.Append(',');
+            var sec = new DateTimeOffset(window[i].Timestamp, TimeSpan.Zero).ToUnixTimeSeconds();
+            var mb  = window[i].TotalCurrentBytes / (1024.0 * 1024.0);
+            json.Append($"[{sec},{mb:F1}]");
+        }
+        json.Append(']');
+
+        var gradId = $"sg{(uint)cardKey.GetHashCode():x8}";
+        return new SparkData(gradId, path.ToString(), hourLines, json.ToString());
     }
 
     // Whole megabytes with thousands separator using the client's locale; "—" until a sample arrives.

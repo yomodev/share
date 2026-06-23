@@ -81,8 +81,14 @@ function tokenize(input) {
                 // fall through to word
             default: {
                 let text = '';
-                while (i < len && !WORD_STOPS.has(input[i])) {
-                    if (input[i] === '.' && input[i + 1] === '.') break;
+                while (i < len) {
+                    const ch = input[i];
+                    if (ch === '.' && input[i + 1] === '.') break;
+                    // Allow ':' inside a word only when it looks like a time literal (digit:digit).
+                    if (ch === ':' && text.length > 0 && /\d$/.test(text) && /^\d/.test(input[i + 1] ?? '')) {
+                        text += ch; i++; continue;
+                    }
+                    if (WORD_STOPS.has(ch)) break;
                     text += input[i++];
                 }
                 if (text) tokens.push({ kind: 'word', text });

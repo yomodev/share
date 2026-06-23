@@ -165,6 +165,55 @@ export function initTabDrag(containerEl, dotnetHelper) {
     });
 }
 
+// ── Spark tooltip ─────────────────────────────────────────────────────────
+// Pure JS — mousemove on Blazor Server costs a SignalR round-trip per pixel,
+// so we handle it entirely client-side by reading the data-spark attribute.
+(function () {
+    const tip = document.createElement('div');
+    tip.style.cssText =
+        'position:fixed;display:none;pointer-events:none;z-index:9999;' +
+        'background:rgba(20,20,20,0.82);color:#e8e8e8;padding:2px 8px;' +
+        'border-radius:4px;font-size:11px;white-space:nowrap;' +
+        "font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;";
+    document.body.appendChild(tip);
+
+    document.addEventListener('mousemove', e => {
+        const card = e.target.closest('.bm-svc-card');
+        if (!card) { tip.style.display = 'none'; return; }
+        const svg = card.querySelector('.bm-svc-spark');
+        if (!svg) { tip.style.display = 'none'; return; }
+
+        const raw = svg.dataset.spark;
+        if (!raw) return;
+        let data;
+        try { data = JSON.parse(raw); } catch { return; }
+        if (!data.length) return;
+
+        // SVG is inset:0 on the card, so card bounds == SVG bounds
+        const rect   = card.getBoundingClientRect();
+        const frac   = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const t0     = data[0][0];
+        const t1     = data[data.length - 1][0];
+        const target = t0 + frac * (t1 - t0);
+
+        let best = data[0], bestDist = Math.abs(data[0][0] - target);
+        for (const pt of data) {
+            const d = Math.abs(pt[0] - target);
+            if (d < bestDist) { bestDist = d; best = pt; }
+        }
+
+        const dt = new Date(best[0] * 1000);
+        const hh = dt.getHours().toString().padStart(2, '0');
+        const mm = dt.getMinutes().toString().padStart(2, '0');
+        tip.textContent = `Time: ${hh}:${mm} - Mem: ${Math.round(best[1]).toLocaleString()} MB`;
+        tip.style.display = 'block';
+        tip.style.left    = (e.clientX + 12) + 'px';
+        tip.style.top     = (e.clientY - 28) + 'px';
+    });
+
+    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; }, true);
+})();
+
 /** @param {HTMLElement} containerEl */
 export function scrollTabIntoView(tabId) {
     const el = document.querySelector(`[data-tab-id="${tabId}"]`);

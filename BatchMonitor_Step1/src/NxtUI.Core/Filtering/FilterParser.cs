@@ -169,10 +169,14 @@ public sealed class FilterParser
     private static Token ReadWord(string input, ref int i, int len)
     {
         int start = i;
-        while (i < len && Array.IndexOf(WordTerminators, input[i]) < 0)
+        while (i < len)
         {
             // Stop at '..' but keep a single '.' inside words (e.g. "3.14").
             if (input[i] == '.' && i + 1 < len && input[i + 1] == '.') break;
+            // Allow ':' inside a word when it looks like a time literal (digit:digit).
+            if (input[i] == ':' && i > start && char.IsDigit(input[i - 1]) && i + 1 < len && char.IsDigit(input[i + 1]))
+            { i++; continue; }
+            if (Array.IndexOf(WordTerminators, input[i]) >= 0) break;
             i++;
         }
         return new(TK.Word, input[start..i], '\0');

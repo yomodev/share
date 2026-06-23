@@ -877,6 +877,8 @@ html, body {
     display: flex;
     align-items: center;
     gap: 2px;
+    flex: 1;
+    min-width: 0;
 }
 /* MudTextField fills the remaining space inside the wrapper */
 .bm-filter-box .mud-form-control { flex: 1 1 auto; min-width: 0; }
@@ -1630,12 +1632,23 @@ html, body {
     border-left: 3px solid transparent;
     background: var(--mud-palette-surface);
     box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    position: relative;
+    overflow: hidden;
     transition: box-shadow 0.15s;
     cursor: default;
 }
 
 .bm-svc-card:hover {
     box-shadow: 0 3px 10px rgba(0,0,0,0.18);
+}
+.bm-svc-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 4px solid rgba(255,255,255,0.75);
+    border-radius: var(--bm-radius);
+    pointer-events: none;
+    z-index: 2;
 }
 
 .bm-svc-online  { border-left-color: #3FB950; }
@@ -1658,6 +1671,19 @@ html, body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.bm-svc-spark {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.bm-svc-card > div {
+    position: relative;
+    z-index: 1;
 }
 
 .bm-svc-card-host {
