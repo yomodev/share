@@ -18,7 +18,8 @@ public enum TabType
     KafkaGroups,
     MongoDetail,
     LogViewer,
-    FilterHelp
+    FilterHelp,
+    MemoryGraph
 }
 
 /// <summary>
@@ -109,6 +110,15 @@ public class TabModel
         Label       = "MongoDB",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Storage
+    };
+
+    public static TabModel CreateMemoryGraph(string env) => new()
+    {
+        Id          = $"dashboard:memory:{env}",
+        Type        = TabType.MemoryGraph,
+        Label       = "Memory",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.Memory
     };
 
     public static TabModel CreateBatchesDashboard(string env) => new()

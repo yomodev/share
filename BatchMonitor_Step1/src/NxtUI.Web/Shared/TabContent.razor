@@ -52,6 +52,10 @@
             Icon="@Icons.Material.Outlined.Tune" Environment="@env" />
         break;
 
+    case TabType.MemoryGraph:
+        <NxtUI.Pages.MemoryGraph Env="@env" />
+        break;
+
     case TabType.LogBrowser:
         <NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />
         break;

@@ -15,6 +15,12 @@
     <div class="bm-batch-toolbar">
 
         <div class="bm-svc-toolbar-left">
+            <MudTooltip Text="Memory graph">
+                <MudIconButton Icon="@Icons.Material.Outlined.Memory"
+                               Size="Size.Small"
+                               OnClick="OpenMemoryGraph" />
+            </MudTooltip>
+
             <MudTooltip Text="@(_graphView ? "Table view" : "Card view")">
                 <MudToggleIconButton @bind-Toggled="_graphView"
                                      Icon="@Icons.Material.Outlined.GridView"
@@ -486,6 +492,9 @@
 
     private void OnPageChanged(int page)  { _page = page; RebuildPage(); }
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
+
+    private void OpenMemoryGraph() =>
+        TabService.OpenOrFocus(TabModel.CreateMemoryGraph(Env));
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 

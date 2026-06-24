@@ -1827,3 +1827,100 @@ tr.bm-row-searching td:first-child {
     padding: 32px;
     text-align: center;
 }
+
+/* ================================================================
+   MEMORY GRAPH PAGE
+   ================================================================ */
+
+.bm-mg-toolbar { gap: 8px; }
+.bm-mg-toolbar-sep   { width: 1px; height: 20px; background: var(--mud-palette-divider); flex-shrink: 0; }
+.bm-mg-toolbar-spacer { flex: 1 1 auto; }
+
+.bm-mg-body {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Legend panel */
+.bm-mg-legend {
+    width: 220px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--mud-palette-divider);
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-mg-legend-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 6px;
+}
+
+.bm-mg-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+}
+.bm-mg-legend-item:hover { background: var(--mud-palette-action-hover); }
+.bm-mg-legend-item input[type=checkbox] { accent-color: var(--mud-palette-primary); cursor: pointer; }
+
+.bm-mg-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.bm-mg-legend-label {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bm-mg-legend-value {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Chart area */
+.bm-mg-chart-area {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.bm-mg-d3-container {
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+}
+
+.bm-mg-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--mud-palette-text-secondary);
+    font-size: 14px;
+}
