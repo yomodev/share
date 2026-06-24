@@ -63,7 +63,7 @@
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=2");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
             try
             {
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);

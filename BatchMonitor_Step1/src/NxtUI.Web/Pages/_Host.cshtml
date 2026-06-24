@@ -104,6 +104,7 @@
     <script>
         (function () {
             function cellText(td) {
+                if ('value' in td.dataset && td.dataset.value !== '') return td.dataset.value;
                 var clone = td.cloneNode(true);
                 clone.querySelectorAll('svg, button, .mud-icon-root').forEach(function (el) { el.remove(); });
                 return clone.textContent.replace(/\s+/g, ' ').trim();
@@ -172,7 +173,7 @@
                 });
                 if (e.shiftKey) {
                     var skipCols = new Set(headers.map(function (h, i) {
-                        return /^actions$/i.test(h.trim()) ? i : -1;
+                        return (/^actions$/i.test(h.trim()) || h.trim() === '') ? i : -1;
                     }).filter(function (i) { return i >= 0; }));
                     var exportHeaders = headers.filter(function (_, i) { return !skipCols.has(i); });
                     var lines = [exportHeaders.map(function (h) {
@@ -207,7 +208,7 @@
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
     <link rel="modulepreload" href="js/filter.js?v=2" />
-    <link rel="modulepreload" href="js/app.js?v=3" />
+    <link rel="modulepreload" href="js/app.js?v=4" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
 </html>

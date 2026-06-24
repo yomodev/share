@@ -169,11 +169,18 @@ export function initTabDrag(containerEl, dotnetHelper) {
 // Pure JS — mousemove on Blazor Server costs a SignalR round-trip per pixel,
 // so we handle it entirely client-side by reading the data-spark attribute.
 (function () {
+    // Abort previous registration (hot-reload safe) and remove stale tip divs.
+    window._bmSparkCtrl?.abort();
+    window._bmSparkCtrl = new AbortController();
+    const signal = window._bmSparkCtrl.signal;
+    document.querySelectorAll('#bm-spark-tip').forEach(el => el.remove());
+
     const tip = document.createElement('div');
+    tip.id = 'bm-spark-tip';
     tip.style.cssText =
         'position:fixed;display:none;pointer-events:none;z-index:9999;' +
-        'background:rgba(20,20,20,0.82);color:#e8e8e8;padding:2px 8px;' +
-        'border-radius:4px;font-size:11px;white-space:nowrap;' +
+        'background:rgba(20,20,20,0.82);color:#e8e8e8;padding:4px 8px;' +
+        'border-radius:4px;font-size:11px;white-space:pre;line-height:1.6;' +
         "font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;";
     document.body.appendChild(tip);
 
@@ -205,13 +212,13 @@ export function initTabDrag(containerEl, dotnetHelper) {
         const dt = new Date(best[0] * 1000);
         const hh = dt.getHours().toString().padStart(2, '0');
         const mm = dt.getMinutes().toString().padStart(2, '0');
-        tip.textContent = `Time: ${hh}:${mm} - Mem: ${Math.round(best[1]).toLocaleString()} MB`;
+        tip.textContent = `Time: ${hh}:${mm}\nMem:  ${Math.round(best[1]).toLocaleString()} MB\nPeak: ${Math.round(best[2]).toLocaleString()} MB`;
         tip.style.display = 'block';
         tip.style.left    = (e.clientX + 12) + 'px';
         tip.style.top     = (e.clientY - 28) + 'px';
-    });
+    }, { signal });
 
-    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; }, true);
+    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; }, { capture: true, signal });
 })();
 
 /** @param {HTMLElement} containerEl */

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
@@ -110,6 +111,10 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         string[] matches;
         try { matches = Directory.GetDirectories(basePath, segment); }
         catch { return null; }
+
+        // Pick the most-recently-modified directory first so active log sessions
+        // win over stale folders from previous runs that sort earlier alphabetically.
+        matches = matches.OrderByDescending(Directory.GetLastWriteTimeUtc).ToArray();
 
         foreach (var match in matches)
         {

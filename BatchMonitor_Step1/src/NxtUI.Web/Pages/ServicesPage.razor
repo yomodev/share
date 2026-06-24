@@ -14,40 +14,46 @@
     <!-- ── Toolbar: filter + view toggle + refresh ──────────────────── -->
     <div class="bm-batch-toolbar">
 
-        <FilterBox Value="@_filterText"
-                   OnFilterChanged="OnFilterChanged"
-                   ParseError="@_filterParseError"
-                   Placeholder="Filter services…"
-                   Class="bm-filter-input"
-                   FieldHints="@_fieldHints" />
+        <div class="bm-svc-toolbar-left">
+            <MudTooltip Text="@(_graphView ? "Table view" : "Card view")">
+                <MudToggleIconButton @bind-Toggled="_graphView"
+                                     Icon="@Icons.Material.Outlined.GridView"
+                                     ToggledIcon="@Icons.Material.Outlined.TableRows"
+                                     Size="Size.Small" />
+            </MudTooltip>
 
-        @* Grouping only applies to the card view *@
-        @if (_graphView)
-        {
-            <MudSelect T="string" Value="_groupBy" ValueChanged="OnGroupByChanged"
-                       Label="Group by" Style="max-width:160px" Dense="true" Margin="Margin.Dense">
-                <MudSelectItem Value="@("None")">None</MudSelectItem>
-                <MudSelectItem Value="@("ServiceName")">Service Name</MudSelectItem>
-                <MudSelectItem Value="@("HostName")">Host Name</MudSelectItem>
-            </MudSelect>
-        }
+            @* Grouping only applies to the card view *@
+            @if (_graphView)
+            {
+                <span class="bm-svc-grouping-label">Grouping</span>
+                <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
+                    <MudButton Class="@(_groupBy == "None"        ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick='@(() => OnGroupByChanged("None"))'>None</MudButton>
+                    <MudButton Class="@(_groupBy == "ServiceName" ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick='@(() => OnGroupByChanged("ServiceName"))'>Service</MudButton>
+                    <MudButton Class="@(_groupBy == "HostName"    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick='@(() => OnGroupByChanged("HostName"))'>Host</MudButton>
+                </MudButtonGroup>
+            }
 
-        <MudToggleIconButton @bind-Toggled="_graphView"
-                             Icon="@Icons.Material.Outlined.GridView"
-                             ToggledIcon="@Icons.Material.Outlined.TableRows"
-                             Size="Size.Small" />
+            <FilterBox Value="@_filterText"
+                       OnFilterChanged="OnFilterChanged"
+                       ParseError="@_filterParseError"
+                       Placeholder="Filter services…"
+                       Class="bm-filter-input"
+                       FieldHints="@_fieldHints" />
+        </div>
 
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                           Size="Size.Small"
-                           OnClick="RefreshAsync"
-                           Class="bm-refresh-btn" />
-        </MudTooltip>
+        <div class="bm-svc-toolbar-right">
+            <MudTooltip Text="Refresh">
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                               Size="Size.Small"
+                               OnClick="RefreshAsync"
+                               Class="bm-refresh-btn" />
+            </MudTooltip>
 
-        @if (_lastUpdated.HasValue)
-        {
-            <span class="bm-toolbar-hint">Updated @_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-        }
+            @if (_lastUpdated.HasValue)
+            {
+                <span class="bm-toolbar-hint">Updated @_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
 
     </div>
 
@@ -90,24 +96,7 @@
                                      @onclick="@(async (MouseEventArgs e) => { if (e.CtrlKey) await CopyPathAsync(s); })">
                                     @if (spark is not null)
                                     {
-                                        <svg class="bm-svc-spark" viewBox="0 0 100 40" preserveAspectRatio="none"
-                                             data-spark="@spark.TooltipJson"
-                                             xmlns="http://www.w3.org/2000/svg">
-                                            <defs>
-                                                <linearGradient id="@spark.GradId" x1="0" y1="0" x2="0" y2="1">
-                                                    <stop offset="0%"   stop-color="var(--mud-palette-primary)" stop-opacity="0.18" />
-                                                    <stop offset="100%" stop-color="var(--mud-palette-primary)" stop-opacity="0.01" />
-                                                </linearGradient>
-                                            </defs>
-                                            @foreach (var hx in spark.HourLines)
-                                            {
-                                                <line x1="@hx.ToString("F1")" y1="0"
-                                                      x2="@hx.ToString("F1")" y2="40"
-                                                      stroke="rgba(30,100,200,0.20)"
-                                                      stroke-width="1" vector-effect="non-scaling-stroke" />
-                                            }
-                                            <path d="@spark.Path" fill="url(#@spark.GradId)" />
-                                        </svg>
+                                        @spark.Svg
                                     }
                                     <div class="bm-svc-card-header">
                                         <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
@@ -183,12 +172,12 @@
                     <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
                     <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" data-value="@context.UpdatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
-                    <MudTd DataLabel="RAM (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="RAM (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="@($"bm-monospace {RamColorClass(context.RamMb)}")">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
-                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
                     </MudTd>
                     <MudTd Style="text-align:center;">
@@ -522,7 +511,7 @@
         return updatedUtc.ToLocalTime().ToString("HH:mm:ss");
     }
 
-    private record SparkData(string GradId, string Path, List<double> HourLines, string TooltipJson);
+    private record SparkData(MarkupString Svg);
 
     private SparkData? BuildSparkData(ServiceStatus s, string cardKey)
     {
@@ -549,29 +538,44 @@
         {
             var x = (m.Timestamp - tMin).Ticks / (double)tSpan * W;
             var y = H - (double)m.TotalCurrentBytes / vMax * H;
-            path.Append($" L{x:F1},{y:F1}");
+            path.Append(System.FormattableString.Invariant($" L{x:F1},{y:F1}"));
         }
         path.Append(" L100,40 Z");
 
         // Hour-boundary X positions
-        var hourLines = new List<double>();
         var firstHour = new DateTime(tMin.Year, tMin.Month, tMin.Day, tMin.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+        var lines     = new System.Text.StringBuilder();
         for (var h = firstHour; h < tMax; h = h.AddHours(1))
-            hourLines.Add((h - tMin).Ticks / (double)tSpan * W);
+        {
+            var hx = (h - tMin).Ticks / (double)tSpan * W;
+            lines.Append(System.FormattableString.Invariant(
+                $"<line x1=\"{hx:F1}\" y1=\"0\" x2=\"{hx:F1}\" y2=\"40\" stroke=\"rgba(30,100,200,0.20)\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\"/>"));
+        }
 
-        // Tooltip JSON [[unixSec, mb], ...] — no quotes, safe in HTML attribute
+        // Tooltip JSON [[unixSec, ramMb, peakMb], ...] — no quotes, safe in HTML attribute
         var json = new System.Text.StringBuilder("[");
         for (int i = 0; i < window.Count; i++)
         {
             if (i > 0) json.Append(',');
-            var sec = new DateTimeOffset(window[i].Timestamp, TimeSpan.Zero).ToUnixTimeSeconds();
-            var mb  = window[i].TotalCurrentBytes / (1024.0 * 1024.0);
-            json.Append($"[{sec},{mb:F1}]");
+            var sec    = new DateTimeOffset(window[i].Timestamp, TimeSpan.Zero).ToUnixTimeSeconds();
+            var ramMb  = window[i].TotalCurrentBytes / (1024.0 * 1024.0);
+            var peakMb = window[i].TotalPeakBytes    / (1024.0 * 1024.0);
+            json.Append(System.FormattableString.Invariant($"[{sec},{ramMb:F1},{peakMb:F1}]"));
         }
         json.Append(']');
 
-        var gradId = $"sg{(uint)cardKey.GetHashCode():x8}";
-        return new SparkData(gradId, path.ToString(), hourLines, json.ToString());
+        var gradId  = $"sg{(uint)cardKey.GetHashCode():x8}";
+        var tooltip = System.Web.HttpUtility.HtmlAttributeEncode(json.ToString());
+        var svg = new System.Text.StringBuilder();
+        svg.Append($"<svg class=\"bm-svc-spark\" viewBox=\"0 0 100 40\" preserveAspectRatio=\"none\" data-spark=\"{tooltip}\" xmlns=\"http://www.w3.org/2000/svg\">");
+        svg.Append($"<defs><linearGradient id=\"{gradId}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">");
+        svg.Append("<stop offset=\"0%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.18\"/>");
+        svg.Append("<stop offset=\"100%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.01\"/>");
+        svg.Append("</linearGradient></defs>");
+        svg.Append(lines);
+        svg.Append($"<path d=\"{path}\" fill=\"url(#{gradId})\"/>");
+        svg.Append("</svg>");
+        return new SparkData(new MarkupString(svg.ToString()));
     }
 
     // Whole megabytes with thousands separator using the client's locale; "—" until a sample arrives.
