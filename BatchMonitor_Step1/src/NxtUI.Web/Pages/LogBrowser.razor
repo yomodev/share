@@ -1,6 +1,7 @@
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Configuration
+@using NxtUI.Filtering
 @using Microsoft.Extensions.Options
 @inject ILogBrowserService BrowserSvc
 @inject IHeartbeatService HeartbeatSvc
@@ -11,19 +12,35 @@
 
 <div class="bm-page bm-page-fill bm-lb-page">
 
-    <!-- ── Toolbar row 1 ─────────────────────────────────────────────── -->
-    <div class="bm-batch-toolbar bm-lb-toolbar">
-        <MudIcon Icon="@Icons.Material.Outlined.ManageSearch" Size="Size.Small" Class="mr-2 bm-muted" />
-        <MudText Typo="Typo.body2" Style="font-weight:600;">Log Browser</MudText>
-        <div class="bm-lb-toolbar-spacer"></div>
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
-                           OnClick="RefreshAsync" Class="bm-refresh-btn" />
-        </MudTooltip>
-        @if (_lastScan.HasValue)
-        {
-            <span class="bm-toolbar-hint">Scanned @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-        }
+    <!-- ── Toolbar row 1: filters + search/stop ──────────────────────── -->
+    <div class="bm-lb-filter-toolbar">
+        <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
+                      Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt" />
+
+        <div class="bm-lb-toolbar-right">
+            <FilterBox Value="@_contentFilterStr"
+                       OnFilterChanged="OnContentFilterChanged"
+                       ParseError="@_contentFilterError"
+                       Placeholder="Content filter…"
+                       FieldHints="@ContentFieldHints" />
+
+            <MudTooltip Text="@(_isSearching ? "Stop" : (_isSearchRequested ? "Search" : "Refresh"))">
+                <MudIconButton Icon="@(_isSearching
+                                        ? Icons.Material.Outlined.Stop
+                                        : (_isSearchRequested
+                                            ? Icons.Material.Outlined.ManageSearch
+                                            : Icons.Material.Outlined.Refresh))"
+                               Color="@(_isSearching ? Color.Error : Color.Default)"
+                               Size="Size.Small"
+                               OnClick="OnActionButtonClickAsync" />
+            </MudTooltip>
+
+            @if (_lastScan.HasValue)
+            {
+                <span class="bm-toolbar-hint">@(_isSearchMode ? "Found" : "Scanned") @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
@@ -38,7 +55,12 @@
                 accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
                 var snap = accumulated;
                 <span class="bm-lb-bc-sep bm-muted">/</span>
-                <span class="bm-lb-bc-item" @onclick="@(() => SelectPathAsync(snap))">@part</span>
+                <span class="bm-lb-bc-item" @onclick="@(() => NavigateBreadcrumbAsync(snap))">@part</span>
+            }
+            @if (_isSearchMode)
+            {
+                <span class="bm-lb-bc-sep bm-muted"> — </span>
+                <span class="bm-muted bm-toolbar-hint">search results</span>
             }
         }
         else
@@ -48,10 +70,10 @@
     </div>
 
     <!-- ── Body: tree + table ────────────────────────────────────────── -->
-    <div class="bm-lb-body">
+    <div class="bm-lb-body" @ref="_bodyRef">
 
         <!-- left: folder tree -->
-        <div class="bm-lb-tree-panel">
+        <div class="bm-lb-tree-panel" @ref="_treePanelRef" style="width:@(_treePanelWidth)px">
             @if (_servers.Count == 0)
             {
                 <div class="bm-lb-empty">
@@ -84,7 +106,7 @@
             else
             {
                 <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
-                             SelectedValueChanged="@((LogFolderNode? n) => SelectPathAsync(n?.RelativePath))"
+                             SelectedValueChanged="@((LogFolderNode? n) => OnTreeNodeSelectedAsync(n))"
                              Class="bm-lb-tree">
                     @foreach (var node in _rootNodes)
                     {
@@ -144,6 +166,9 @@
             }
         </div>
 
+        <!-- drag handle -->
+        <div class="bm-lb-resizer" @onmousedown="OnResizerMouseDown"></div>
+
         <!-- right: file table -->
         <div class="bm-lb-files-panel">
             @if (_selectedPath is null)
@@ -162,48 +187,48 @@
                 @if (!_loadingFiles && _files.Count == 0)
                 {
                     <div class="bm-lb-empty">
-                        <MudText Typo="Typo.body2" Class="bm-muted">No files found in this folder on any server.</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">No files found.</MudText>
                     </div>
                 }
                 else if (_files.Count > 0)
                 {
-                <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
-                          Class="bm-lb-file-table" FixedHeader="true" Height="100%"
-                          SortLabel="Sort by">
-                    <HeaderContent>
-                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.Server)">Host</MudTableSortLabel></MudTh>
-                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.FileName)">File</MudTableSortLabel></MudTh>
-                        <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.SizeBytes)">Size</MudTableSortLabel></MudTh>
-                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.CreatedUtc)">Created</MudTableSortLabel></MudTh>
-                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.LastModifiedUtc)" InitialDirection="SortDirection.Descending">Last Updated</MudTableSortLabel></MudTh>
-                        <MudTh></MudTh>
-                    </HeaderContent>
-                    <RowTemplate>
-                        <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                        <MudTd DataLabel="File"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
-                        <MudTd DataLabel="Size" Style="text-align:right">
-                            <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
-                        </MudTd>
-                        <MudTd DataLabel="Created">
-                            <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
-                        </MudTd>
-                        <MudTd DataLabel="Last Updated">
-                            <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
-                        </MudTd>
-                        <MudTd>
-                            <MudTooltip Text="Copy full path">
-                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
-                                               Size="Size.Small"
-                                               OnClick="@(() => CopyPathAsync(context.FullPath))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Open in Log Viewer">
-                                <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                               Size="Size.Small"
-                                               OnClick="@(() => OpenInViewer(context))" />
-                            </MudTooltip>
-                        </MudTd>
-                    </RowTemplate>
-                </MudTable>
+                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
+                              Class="bm-lb-file-table" FixedHeader="true" Height="100%"
+                              SortLabel="Sort by">
+                        <HeaderContent>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.Server)">Host</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.FileName)">File</MudTableSortLabel></MudTh>
+                            <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.SizeBytes)">Size</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.CreatedUtc)">Created</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.LastModifiedUtc)" InitialDirection="SortDirection.Descending">Last Updated</MudTableSortLabel></MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
+                            <MudTd DataLabel="File"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
+                            <MudTd DataLabel="Size" Style="text-align:right">
+                                <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
+                            </MudTd>
+                            <MudTd DataLabel="Created">
+                                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                            </MudTd>
+                            <MudTd DataLabel="Last Updated">
+                                <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudTooltip Text="Copy full path">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => CopyPathAsync(context.FullPath))" />
+                                </MudTooltip>
+                                <MudTooltip Text="Open in Log Viewer">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenInViewer(context))" />
+                                </MudTooltip>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
                 }
             }
         </div>
@@ -214,17 +239,65 @@
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
 
-    // ── state ─────────────────────────────────────────────────────────────
-    private List<string>         _servers   = new();
-    private List<LogFolderNode>  _rootNodes = new();
+    // ── filter grammar for log lines ──────────────────────────────────────
+    private static readonly FilterParser LogLineParser = new(
+        searchableFields: ["Level", "Machine", "Message"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ts"]        = "Timestamp",
+            ["timestamp"] = "Timestamp",
+            ["level"]     = "Level",
+            ["machine"]   = "Machine",
+            ["pid"]       = "Pid",
+            ["thread"]    = "ThreadId",
+            ["tid"]       = "ThreadId",
+            ["msg"]       = "Message",
+            ["message"]   = "Message",
+            ["caller"]    = "Caller",
+        });
 
-    // relativePath → loaded children
+    private static readonly (string Aliases, string Label)[] ContentFieldHints =
+    [
+        ("ts / timestamp", "entry timestamp"),
+        ("level",          "INFO · WARN · ERROR · DEBUG"),
+        ("machine",        "server / machine name"),
+        ("pid",            "process id (integer)"),
+        ("thread / tid",   "thread id (integer)"),
+        ("msg / message",  "log message text"),
+        ("caller",         "calling method"),
+    ];
+
+    // ── panel resize ─────────────────────────────────────────────────────
+    private ElementReference _bodyRef;
+    private ElementReference _treePanelRef;
+    private double            _treePanelWidth = 280;
+    private DotNetObjectReference<LogBrowser>? _selfRef;
+
+    [JSInvokable]
+    public void SetTreeWidth(double width) =>
+        _treePanelWidth = Math.Clamp(width, 160, 600);
+
+    private async Task OnResizerMouseDown(MouseEventArgs e)
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("logBrowserResizer.start", e.ClientX, _selfRef, _bodyRef, _treePanelRef);
+    }
+
+    // ── tree state ────────────────────────────────────────────────────────
+    private List<string>        _servers   = new();
+    private List<LogFolderNode> _rootNodes = new();
+
     private readonly Dictionary<string, IReadOnlyList<LogFolderNode>> _childCache =
         new(StringComparer.OrdinalIgnoreCase);
-
-    // set of currently expanded relative paths
     private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
+
+    // double-click detection
+    private DateTime _lastClickTime = DateTime.MinValue;
+    private string?  _lastClickPath;
+
+    // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
     private List<LogFileEntry> _files        = new();
     private bool               _loadingFiles;
@@ -233,12 +306,21 @@
     private string?            _lastHint;
     private string?            _initError;
 
-    // sentinel node shown while children are loading
-    private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
+    // search
+    private string    _fileGlob           = "*.log";
+    private string    _contentFilterStr   = "";
+    private FilterNode? _contentFilterNode;
+    private string?   _contentFilterError;
+    private bool      _isSearching;
+    private bool      _isSearchMode;      // true = table shows recursive search results
 
-    private CancellationTokenSource _cts            = new();
-    private PeriodicTimer?          _pollTimer;
-    private DateTime                _lastManualPoll = DateTime.MinValue;
+    private bool _isSearchRequested =>
+        _fileGlob != "*.log" || !string.IsNullOrEmpty(_contentFilterStr);
+
+    private CancellationTokenSource _cts        = new();
+    private CancellationTokenSource? _searchCts;
+    private PeriodicTimer?           _pollTimer;
+    private DateTime                 _lastManualPoll = DateTime.MinValue;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -270,11 +352,49 @@
         }
     }
 
-    // ── tree expand/collapse ──────────────────────────────────────────────
+    // ── filter inputs ─────────────────────────────────────────────────────
 
-    // double-click detection: two clicks on the same node within 350 ms
-    private DateTime _lastClickTime = DateTime.MinValue;
-    private string?  _lastClickPath;
+    private void OnGlobChanged(string v) => _fileGlob = string.IsNullOrWhiteSpace(v) ? "*.log" : v;
+
+    private void OnContentFilterChanged(string v)
+    {
+        _contentFilterStr   = v;
+        _contentFilterError = null;
+        if (string.IsNullOrWhiteSpace(v)) { _contentFilterNode = null; return; }
+        try   { _contentFilterNode = LogLineParser.Parse(v); }
+        catch (Exception ex) { _contentFilterError = ex.Message; _contentFilterNode = null; }
+    }
+
+    // ── toolbar button: search / stop / refresh ───────────────────────────
+
+    private async Task OnActionButtonClickAsync()
+    {
+        if (_isSearching)
+        {
+            StopSearch();
+        }
+        else if (_isSearchRequested)
+        {
+            await StartSearchAsync();
+        }
+        else
+        {
+            await RefreshAsync();
+        }
+    }
+
+    // ── tree interaction ──────────────────────────────────────────────────
+
+    private async Task OnTreeNodeSelectedAsync(LogFolderNode? node)
+    {
+        if (node is null || node.RelativePath == "__loading__") return;
+
+        // Clicking the tree always exits search mode.
+        if (_isSearching) StopSearch();
+        _isSearchMode = false;
+
+        await SelectPathAsync(node.RelativePath);
+    }
 
     private async Task OnItemClickAsync(LogFolderNode node)
     {
@@ -311,27 +431,31 @@
         }
     }
 
-    // ── selection ─────────────────────────────────────────────────────────
+    // ── selection (normal mode) ───────────────────────────────────────────
 
-    private async Task SelectPathAsync(string? relativePath)
+    private async Task SelectPathAsync(string relativePath)
     {
-        if (relativePath is null || relativePath == "__loading__") return;
         _selectedPath = relativePath;
-
         var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
         if ((DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
         {
             _lastManualPoll = DateTime.UtcNow;
             await LoadFilesAsync();
         }
-        else
-        {
-            StateHasChanged();
-        }
+        else { StateHasChanged(); }
+    }
+
+    private async Task NavigateBreadcrumbAsync(string relativePath)
+    {
+        if (_isSearching) StopSearch();
+        _isSearchMode = false;
+        await SelectPathAsync(relativePath);
     }
 
     private void ClearSelection()
     {
+        if (_isSearching) StopSearch();
+        _isSearchMode = false;
         _selectedPath = null;
         _files.Clear();
         StateHasChanged();
@@ -363,13 +487,12 @@
         StateHasChanged();
     }
 
-    // ── file loading ──────────────────────────────────────────────────────
+    // ── file loading (normal mode) ────────────────────────────────────────
 
     private async Task LoadFilesAsync()
     {
         if (_selectedPath is null) return;
         _loadingFiles = true;
-        // keep old rows visible — only show the progress bar, no clear yet
         StateHasChanged();
 
         var path    = _selectedPath;
@@ -377,28 +500,20 @@
         var first   = true;
         try
         {
-            // fan out per-server; swap the table on first result, append on subsequent ones
             var serverTasks = _servers.Select(async server =>
             {
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
                 await InvokeAsync(() =>
                 {
                     pending.AddRange(results);
-                    if (first)
-                    {
-                        first  = false;
-                        _files = new List<LogFileEntry>(pending); // atomic first swap
-                    }
-                    else
-                    {
-                        _files.AddRange(results);
-                    }
+                    if (first) { first = false; _files = new List<LogFileEntry>(pending); }
+                    else       { _files.AddRange(results); }
                     StateHasChanged();
                 });
             });
 
             await Task.WhenAll(serverTasks);
-            if (first) _files.Clear(); // no server returned anything
+            if (first) _files.Clear();
             _lastScan = DateTime.UtcNow;
         }
         finally
@@ -406,6 +521,52 @@
             _loadingFiles = false;
             StateHasChanged();
         }
+    }
+
+    // ── search (recursive mode) ───────────────────────────────────────────
+
+    private async Task StartSearchAsync()
+    {
+        if (_selectedPath is null) return;
+        if (_contentFilterError is not null) return;
+
+        StopSearch();
+
+        _searchCts    = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        _isSearching  = true;
+        _isSearchMode = true;
+        _loadingFiles = true;
+        _files.Clear();
+        StateHasChanged();
+
+        var path   = _selectedPath;
+        var glob   = _fileGlob;
+        var filter = _contentFilterNode;
+        var ct     = _searchCts.Token;
+
+        try
+        {
+            await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
+            {
+                await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
+            }
+            _lastScan = DateTime.UtcNow;
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _isSearching  = false;
+            _loadingFiles = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void StopSearch()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts   = null;
+        _isSearching = false;
     }
 
     // ── refresh / polling ─────────────────────────────────────────────────
@@ -417,11 +578,7 @@
 
         if (_selectedPath is not null)
             await LoadFilesAsync();
-        else
-        {
-            _lastScan = DateTime.UtcNow;
-            StateHasChanged();
-        }
+        else { _lastScan = DateTime.UtcNow; StateHasChanged(); }
     }
 
     private void StartPolling()
@@ -436,7 +593,8 @@
         try
         {
             while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
-                if (_selectedPath is not null)
+                // Skip auto-refresh while a search is running.
+                if (_selectedPath is not null && !_isSearching && !_isSearchMode)
                     await InvokeAsync(LoadFilesAsync);
         }
         catch (OperationCanceledException) { }
@@ -459,6 +617,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        StopSearch();
+        _selfRef?.Dispose();
         await _cts.CancelAsync();
         _cts.Dispose();
         _pollTimer?.Dispose();

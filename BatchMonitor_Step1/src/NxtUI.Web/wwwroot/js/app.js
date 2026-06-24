@@ -227,6 +227,39 @@ export function scrollTabIntoView(tabId) {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 }
 
+// ── Log Browser panel resizer ─────────────────────────────────────────────
+window.logBrowserResizer = (function () {
+    let dotnet = null, bodyEl = null, panelEl = null, startX = 0, startW = 0;
+
+    function onMove(e) {
+        const dx  = e.clientX - startX;
+        const w   = Math.max(160, Math.min(600, startW + dx));
+        panelEl.style.width = w + 'px';
+        dotnet.invokeMethodAsync('SetTreeWidth', w);
+    }
+
+    function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+        document.body.style.cursor       = '';
+        document.body.style.userSelect   = '';
+    }
+
+    return {
+        start(clientX, dotnetRef, body, panel) {
+            dotnet  = dotnetRef;
+            bodyEl  = body;
+            panelEl = panel;
+            startX  = clientX;
+            startW  = panel.getBoundingClientRect().width;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+            document.body.style.cursor     = 'col-resize';
+            document.body.style.userSelect = 'none';
+        }
+    };
+})();
+
 // Translate vertical mouse-wheel events into horizontal scroll on the tab
 // strip, so the user can scroll through tabs without needing a trackpad
 // horizontal swipe.
