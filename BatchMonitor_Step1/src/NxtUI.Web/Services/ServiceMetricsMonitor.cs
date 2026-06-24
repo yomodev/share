@@ -129,7 +129,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        var interval = TimeSpan.FromSeconds(Math.Max(5, _paths.CheckIntervalSeconds));
+        var interval = TimeSpan.FromSeconds(Math.Max(5, _paths.MetricsIntervalSeconds));
         using var timer = new PeriodicTimer(interval);
         try
         {

@@ -2,6 +2,7 @@ using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Hubs;
 using NxtUI.Services;
+using NxtUI.Web.Services;
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 
@@ -55,6 +56,7 @@ public class Program
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
+        builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).

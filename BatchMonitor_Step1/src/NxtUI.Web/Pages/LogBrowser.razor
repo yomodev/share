@@ -1,23 +1,466 @@
+@using NxtUI.Models
+@using NxtUI.Services
+@using NxtUI.Configuration
+@using Microsoft.Extensions.Options
+@inject ILogBrowserService BrowserSvc
+@inject IHeartbeatService HeartbeatSvc
 @inject TabService TabService
+@inject IOptions<LogPathSettings> LogSettings
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<div class="bm-page bm-page-fill">
+<div class="bm-page bm-page-fill bm-lb-page">
 
-    <div class="bm-batch-toolbar">
+    <!-- ── Toolbar row 1 ─────────────────────────────────────────────── -->
+    <div class="bm-batch-toolbar bm-lb-toolbar">
         <MudIcon Icon="@Icons.Material.Outlined.ManageSearch" Size="Size.Small" Class="mr-2 bm-muted" />
         <MudText Typo="Typo.body2" Style="font-weight:600;">Log Browser</MudText>
+        <div class="bm-lb-toolbar-spacer"></div>
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
+                           OnClick="RefreshAsync" Class="bm-refresh-btn" />
+        </MudTooltip>
+        @if (_lastScan.HasValue)
+        {
+            <span class="bm-toolbar-hint">Scanned @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+        }
     </div>
 
-    <div class="bm-log-viewer-body">
-        <MudText Typo="Typo.body2" Class="bm-muted">
-            Browse logs across servers and open them in the Log Viewer.
-        </MudText>
+    <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
+    <div class="bm-batch-toolbar bm-lb-toolbar bm-lb-breadcrumb-bar">
+        @if (_selectedPath is not null)
+        {
+            var parts = _selectedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+            var accumulated = "";
+            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">/</span>
+            foreach (var part in parts)
+            {
+                accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
+                var snap = accumulated;
+                <span class="bm-lb-bc-sep bm-muted">/</span>
+                <span class="bm-lb-bc-item" @onclick="@(() => SelectPathAsync(snap))">@part</span>
+            }
+        }
+        else
+        {
+            <span class="bm-muted bm-toolbar-hint">Select a folder in the tree</span>
+        }
     </div>
 
+    <!-- ── Body: tree + table ────────────────────────────────────────── -->
+    <div class="bm-lb-body">
+
+        <!-- left: folder tree -->
+        <div class="bm-lb-tree-panel">
+            @if (_servers.Count == 0)
+            {
+                <div class="bm-lb-empty">
+                    <MudText Typo="Typo.body2" Class="bm-muted">No servers configured.</MudText>
+                    <MudText Typo="Typo.caption" Class="bm-muted">Add servers to Logs:Servers in appsettings.</MudText>
+                </div>
+            }
+            else if (string.IsNullOrEmpty(LogSettings.Value.LogsFolder))
+            {
+                <div class="bm-lb-empty">
+                    <MudText Typo="Typo.body2" Class="bm-muted">Logs:LogsFolder not configured.</MudText>
+                </div>
+            }
+            else if (_initError is not null)
+            {
+                <div class="bm-lb-empty">
+                    <MudText Typo="Typo.body2" Color="Color.Error">@_initError</MudText>
+                </div>
+            }
+            else if (!_initialized)
+            {
+                <div class="bm-lb-empty"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
+            }
+            else if (_rootNodes.Count == 0)
+            {
+                <div class="bm-lb-empty">
+                    <MudText Typo="Typo.body2" Class="bm-muted">No folders found.</MudText>
+                </div>
+            }
+            else
+            {
+                <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
+                             SelectedValueChanged="@((LogFolderNode? n) => SelectPathAsync(n?.RelativePath))"
+                             Class="bm-lb-tree">
+                    @foreach (var node in _rootNodes)
+                    {
+                        <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
+                                         Icon="@Icons.Material.Outlined.Folder"
+                                         Expanded="@_expanded.Contains(node.RelativePath)"
+                                         ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(node, exp))"
+                                         OnClick="@((MouseEventArgs _) => OnItemClickAsync(node))">
+                            @if (_childCache.TryGetValue(node.RelativePath, out var ch1))
+                            {
+                                @foreach (var c1 in ch1)
+                                {
+                                    <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
+                                                     Icon="@Icons.Material.Outlined.Folder"
+                                                     Expanded="@_expanded.Contains(c1.RelativePath)"
+                                                     ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c1, exp))"
+                                                     OnClick="@((MouseEventArgs _) => OnItemClickAsync(c1))">
+                                        @if (_childCache.TryGetValue(c1.RelativePath, out var ch2))
+                                        {
+                                            @foreach (var c2 in ch2)
+                                            {
+                                                <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
+                                                                 Icon="@Icons.Material.Outlined.Folder"
+                                                                 Expanded="@_expanded.Contains(c2.RelativePath)"
+                                                                 ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c2, exp))"
+                                                                 OnClick="@((MouseEventArgs _) => OnItemClickAsync(c2))">
+                                                    @if (_childCache.TryGetValue(c2.RelativePath, out var ch3))
+                                                    {
+                                                        @foreach (var c3 in ch3)
+                                                        {
+                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3" Text="@c3.Name"
+                                                                             Icon="@Icons.Material.Outlined.Folder"
+                                                                             OnClick="@((MouseEventArgs _) => OnItemClickAsync(c3))" />
+                                                        }
+                                                    }
+                                                    else if (c2.HasChildren)
+                                                    {
+                                                        <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
+                                                    }
+                                                </MudTreeViewItem>
+                                            }
+                                        }
+                                        else if (c1.HasChildren)
+                                        {
+                                            <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
+                                        }
+                                    </MudTreeViewItem>
+                                }
+                            }
+                            else if (node.HasChildren)
+                            {
+                                <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
+                            }
+                        </MudTreeViewItem>
+                    }
+                </MudTreeView>
+            }
+        </div>
+
+        <!-- right: file table -->
+        <div class="bm-lb-files-panel">
+            @if (_selectedPath is null)
+            {
+                <div class="bm-lb-empty">
+                    <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Large" Class="bm-muted" Style="opacity:.3" />
+                    <MudText Typo="Typo.body2" Class="bm-muted mt-2">Select a folder to view its files</MudText>
+                </div>
+            }
+            else
+            {
+                @if (_loadingFiles)
+                {
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-lb-files-progress" />
+                }
+                @if (!_loadingFiles && _files.Count == 0)
+                {
+                    <div class="bm-lb-empty">
+                        <MudText Typo="Typo.body2" Class="bm-muted">No files found in this folder on any server.</MudText>
+                    </div>
+                }
+                else if (_files.Count > 0)
+                {
+                <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
+                          Class="bm-lb-file-table" FixedHeader="true" Height="100%"
+                          SortLabel="Sort by">
+                    <HeaderContent>
+                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.Server)">Host</MudTableSortLabel></MudTh>
+                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.FileName)">File</MudTableSortLabel></MudTh>
+                        <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.SizeBytes)">Size</MudTableSortLabel></MudTh>
+                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.CreatedUtc)">Created</MudTableSortLabel></MudTh>
+                        <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.LastModifiedUtc)" InitialDirection="SortDirection.Descending">Last Updated</MudTableSortLabel></MudTh>
+                        <MudTh></MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
+                        <MudTd DataLabel="File"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
+                        <MudTd DataLabel="Size" Style="text-align:right">
+                            <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Created">
+                            <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Last Updated">
+                            <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                        </MudTd>
+                        <MudTd>
+                            <MudTooltip Text="Copy full path">
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                               Size="Size.Small"
+                                               OnClick="@(() => CopyPathAsync(context.FullPath))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Open in Log Viewer">
+                                <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenInViewer(context))" />
+                            </MudTooltip>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+                }
+            }
+        </div>
+    </div>
 </div>
 
 @code {
-    [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public string  Env            { get; set; } = string.Empty;
+    [Parameter] public string? NavigationHint { get; set; }
 
-    private void OpenLogViewer(string path) =>
-        TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
+    // ── state ─────────────────────────────────────────────────────────────
+    private List<string>         _servers   = new();
+    private List<LogFolderNode>  _rootNodes = new();
+
+    // relativePath → loaded children
+    private readonly Dictionary<string, IReadOnlyList<LogFolderNode>> _childCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // set of currently expanded relative paths
+    private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+
+    private string?            _selectedPath;
+    private List<LogFileEntry> _files        = new();
+    private bool               _loadingFiles;
+    private bool               _initialized;
+    private DateTime?          _lastScan;
+    private string?            _lastHint;
+    private string?            _initError;
+
+    // sentinel node shown while children are loading
+    private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
+
+    private CancellationTokenSource _cts            = new();
+    private PeriodicTimer?          _pollTimer;
+    private DateTime                _lastManualPoll = DateTime.MinValue;
+
+    // ── lifecycle ─────────────────────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
+    {
+        var statuses = await HeartbeatSvc.GetServiceStatusesAsync(Env, _cts.Token);
+        var hosts    = statuses.Select(s => s.HostName).Distinct(StringComparer.OrdinalIgnoreCase);
+        _servers     = BrowserSvc.GetServers(hosts).ToList();
+
+        try
+        {
+            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+            _rootNodes = roots.ToList();
+        }
+        catch (Exception ex) { _initError = ex.Message; }
+
+        _initialized = true;
+        _lastScan    = DateTime.UtcNow;
+        StartPolling();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (NavigationHint is not null && NavigationHint != _lastHint)
+        {
+            _lastHint = NavigationHint;
+            if (_initialized)
+                await ApplyHintAsync(NavigationHint);
+        }
+    }
+
+    // ── tree expand/collapse ──────────────────────────────────────────────
+
+    // double-click detection: two clicks on the same node within 350 ms
+    private DateTime _lastClickTime = DateTime.MinValue;
+    private string?  _lastClickPath;
+
+    private async Task OnItemClickAsync(LogFolderNode node)
+    {
+        if (!node.HasChildren) return;
+        var now = DateTime.UtcNow;
+        if (_lastClickPath == node.RelativePath && (now - _lastClickTime).TotalMilliseconds < 350)
+        {
+            _lastClickPath = null;
+            var isExpanded = _expanded.Contains(node.RelativePath);
+            await OnExpandedChangedAsync(node, !isExpanded);
+        }
+        else
+        {
+            _lastClickPath = node.RelativePath;
+            _lastClickTime = now;
+        }
+    }
+
+    private async Task OnExpandedChangedAsync(LogFolderNode node, bool expanded)
+    {
+        if (expanded)
+        {
+            _expanded.Add(node.RelativePath);
+            if (!_childCache.ContainsKey(node.RelativePath))
+            {
+                var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
+                _childCache[node.RelativePath] = children;
+                StateHasChanged();
+            }
+        }
+        else
+        {
+            _expanded.Remove(node.RelativePath);
+        }
+    }
+
+    // ── selection ─────────────────────────────────────────────────────────
+
+    private async Task SelectPathAsync(string? relativePath)
+    {
+        if (relativePath is null || relativePath == "__loading__") return;
+        _selectedPath = relativePath;
+
+        var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
+        if ((DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
+        {
+            _lastManualPoll = DateTime.UtcNow;
+            await LoadFilesAsync();
+        }
+        else
+        {
+            StateHasChanged();
+        }
+    }
+
+    private void ClearSelection()
+    {
+        _selectedPath = null;
+        _files.Clear();
+        StateHasChanged();
+    }
+
+    // ── hint navigation ───────────────────────────────────────────────────
+
+    private async Task ApplyHintAsync(string fullPath)
+    {
+        var parsed = BrowserSvc.ParseHintPath(fullPath, _servers);
+        if (parsed is null) return;
+
+        var segments = parsed.Value.RelativePath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var current  = "";
+        foreach (var seg in segments)
+        {
+            if (!_childCache.ContainsKey(current))
+            {
+                var ch = await BrowserSvc.GetSubfoldersAsync(_servers, current, _cts.Token);
+                _childCache[current] = ch;
+                if (current == "") _rootNodes = ch.ToList();
+            }
+            current = string.IsNullOrEmpty(current) ? seg : current + "\\" + seg;
+            _expanded.Add(current);
+        }
+
+        _selectedPath = parsed.Value.RelativePath;
+        await LoadFilesAsync();
+        StateHasChanged();
+    }
+
+    // ── file loading ──────────────────────────────────────────────────────
+
+    private async Task LoadFilesAsync()
+    {
+        if (_selectedPath is null) return;
+        _loadingFiles = true;
+        // keep old rows visible — only show the progress bar, no clear yet
+        StateHasChanged();
+
+        var path    = _selectedPath;
+        var pending = new List<LogFileEntry>();
+        var first   = true;
+        try
+        {
+            // fan out per-server; swap the table on first result, append on subsequent ones
+            var serverTasks = _servers.Select(async server =>
+            {
+                var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
+                await InvokeAsync(() =>
+                {
+                    pending.AddRange(results);
+                    if (first)
+                    {
+                        first  = false;
+                        _files = new List<LogFileEntry>(pending); // atomic first swap
+                    }
+                    else
+                    {
+                        _files.AddRange(results);
+                    }
+                    StateHasChanged();
+                });
+            });
+
+            await Task.WhenAll(serverTasks);
+            if (first) _files.Clear(); // no server returned anything
+            _lastScan = DateTime.UtcNow;
+        }
+        finally
+        {
+            _loadingFiles = false;
+            StateHasChanged();
+        }
+    }
+
+    // ── refresh / polling ─────────────────────────────────────────────────
+
+    private async Task RefreshAsync()
+    {
+        var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+        _rootNodes = roots.ToList();
+
+        if (_selectedPath is not null)
+            await LoadFilesAsync();
+        else
+        {
+            _lastScan = DateTime.UtcNow;
+            StateHasChanged();
+        }
+    }
+
+    private void StartPolling()
+    {
+        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
+        _pollTimer   = new PeriodicTimer(interval);
+        _ = PollLoopAsync();
+    }
+
+    private async Task PollLoopAsync()
+    {
+        try
+        {
+            while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
+                if (_selectedPath is not null)
+                    await InvokeAsync(LoadFilesAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────
+
+    private void OpenInViewer(LogFileEntry file) =>
+        TabService.OpenOrFocus(TabModel.CreateLogViewer(file.FullPath, Env));
+
+    private async Task CopyPathAsync(string path) =>
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024)      return FormattableString.Invariant($"{bytes} B");
+        if (bytes < 1_048_576) return FormattableString.Invariant($"{bytes / 1024.0:F1} KB");
+        return FormattableString.Invariant($"{bytes / 1_048_576.0:F1} MB");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _cts.CancelAsync();
+        _cts.Dispose();
+        _pollTimer?.Dispose();
+    }
 }

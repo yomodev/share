@@ -16,7 +16,7 @@ namespace NxtUI.Services;
 /// - Deterministically skips ~1/3 of services (by PID) so some have no logs.
 ///
 /// Gated by TestLogGenerator:Enabled — keep it off in production. In Development
-/// appsettings, LogPaths:Templates points at a local writable folder so we don't
+/// appsettings, Logs:ServiceTemplates points at a local writable folder so we don't
 /// hit (and hang on) the real UNC shares.
 /// </summary>
 public sealed class TestLogGenerator : BackgroundService
@@ -65,9 +65,9 @@ public sealed class TestLogGenerator : BackgroundService
             _log.LogInformation("TestLogGenerator disabled.");
             return;
         }
-        if (_paths.Templates.Count == 0)
+        if (_paths.ServiceTemplates.Count == 0)
         {
-            _log.LogWarning("TestLogGenerator: no LogPaths:Templates configured — nothing to generate.");
+            _log.LogWarning("TestLogGenerator: no Logs:ServiceTemplates configured — nothing to generate.");
             return;
         }
 
@@ -86,7 +86,7 @@ public sealed class TestLogGenerator : BackgroundService
 
     private async Task SeedAsync(CancellationToken ct)
     {
-        var template = _paths.Templates[Math.Clamp(_gen.TemplateIndex, 0, _paths.Templates.Count - 1)];
+        var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
         var fileName = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
 
         int generated = 0, skipped = 0;

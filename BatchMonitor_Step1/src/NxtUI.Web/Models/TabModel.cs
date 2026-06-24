@@ -42,6 +42,13 @@ public class TabModel
     /// <summary>Entity identifier (RunId for batch tabs, etc.). Null for L1 tabs.</summary>
     public string? EntityId { get; init; }
 
+    /// <summary>
+    /// Optional mutable navigation hint — updated on an already-open tab without changing
+    /// its identity. Used e.g. by LogBrowser to navigate to a specific folder when opened
+    /// from the Services page.
+    /// </summary>
+    public string? NavigationHint { get; set; }
+
     /// <summary>MudBlazor icon constant string for the tab.</summary>
     public string Icon { get; set; } = MudBlazor.Icons.Material.Outlined.Dashboard;
 
@@ -107,7 +114,7 @@ public class TabModel
     {
         Id          = $"dashboard:logs:{env}",
         Type        = TabType.LogBrowser,
-        Label       = "Logs",
+        Label       = "Log Browser",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Article
     };

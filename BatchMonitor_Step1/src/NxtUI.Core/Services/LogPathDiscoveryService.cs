@@ -66,7 +66,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 
     private string? SearchSync(ServiceStatus svc, string env)
     {
-        foreach (var template in _settings.Templates)
+        foreach (var template in _settings.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
             var resolved = ResolveWildcard(expanded);

@@ -1759,3 +1759,56 @@ tr.bm-row-searching td:first-child {
     background: var(--mud-palette-action-default-hover) !important;
     font-size: 12px !important;
 }
+
+/* ── Log Browser ──────────────────────────────────────────────────── */
+.bm-lb-page { display: flex; flex-direction: column; }
+
+.bm-lb-toolbar { gap: 6px; flex-shrink: 0; }
+.bm-lb-toolbar-spacer { flex: 1 1 auto; }
+
+.bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
+.bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
+.bm-lb-bc-item:hover { text-decoration: underline; }
+.bm-lb-bc-item.bm-lb-bc-root { color: var(--mud-palette-text-secondary); font-weight: 600; }
+.bm-lb-bc-sep   { color: var(--mud-palette-text-secondary); margin: 0 1px; user-select: none; }
+
+.bm-lb-body {
+    flex: 1 1 0;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.bm-lb-tree-panel {
+    width: 280px;
+    min-width: 160px;
+    max-width: 600px;
+    border-right: 1px solid var(--mud-palette-divider);
+    overflow: auto;
+    flex-shrink: 0;
+    resize: horizontal;
+}
+
+.bm-lb-tree { height: 100%; font-size: 12px; user-select: none; min-width: max-content; }
+.bm-lb-tree .mud-treeview-item-label { font-size: 12px; }
+
+.bm-lb-files-panel {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.bm-lb-file-table { flex: 1 1 0; }
+.bm-lb-files-progress { height: 3px; flex-shrink: 0; }
+
+.bm-lb-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 32px;
+    text-align: center;
+}

@@ -427,7 +427,9 @@
             return;
         }
 
-        TabService.OpenOrFocus(TabModel.CreateLogViewer(path, Env));
+        var tab = TabModel.CreateLogsDashboard(Env);
+        tab.NavigationHint = path;
+        TabService.OpenOrFocus(tab);
     }
 
     private string ServiceKey(ServiceStatus s) =>

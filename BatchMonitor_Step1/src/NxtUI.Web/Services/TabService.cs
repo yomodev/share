@@ -33,6 +33,11 @@ public class TabService
             _tabs.Add(tab);
             existing = tab;
         }
+        else if (tab.NavigationHint is not null)
+        {
+            // propagate hint to the already-open tab so it can react in OnParametersSet
+            existing.NavigationHint = tab.NavigationHint;
+        }
         SetActive(existing);
     }
 
