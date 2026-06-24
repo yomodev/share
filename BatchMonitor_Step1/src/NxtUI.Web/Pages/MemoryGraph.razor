@@ -13,7 +13,7 @@
 
         <!-- Grouping -->
         <span class="bm-svc-grouping-label">Group</span>
-        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
             <MudButton Class="@(_groupBy == GroupBy.None    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetGroupBy(GroupBy.None))">None</MudButton>
             <MudButton Class="@(_groupBy == GroupBy.Service ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetGroupBy(GroupBy.Service))">Service</MudButton>
             <MudButton Class="@(_groupBy == GroupBy.Host    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetGroupBy(GroupBy.Host))">Host</MudButton>
@@ -23,7 +23,7 @@
 
         <!-- Chart type -->
         <span class="bm-svc-grouping-label">Chart</span>
-        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
             <MudButton Class="@(_chartType == ChartType.Line     ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Line))">Line</MudButton>
             <MudButton Class="@(_chartType == ChartType.Sunburst ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Sunburst))">Sunburst</MudButton>
         </MudButtonGroup>
@@ -94,7 +94,7 @@
     private List<LegendItem>    _legendItems = [];
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
-    private bool                _chartDirty;
+    private bool                _chartDirty  = true;
 
     private sealed record LineSeriesDto(string Name, string Color, double[] Data, string[] Labels);
 

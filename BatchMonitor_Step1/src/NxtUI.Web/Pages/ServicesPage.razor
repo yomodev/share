@@ -1,4 +1,4 @@
-@using NxtUI.Models
+﻿@using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Filtering
 @inject IHeartbeatService HeartbeatSvc
@@ -15,11 +15,10 @@
     <div class="bm-batch-toolbar">
 
         <div class="bm-svc-toolbar-left">
-            <MudTooltip Text="Memory graph">
-                <MudIconButton Icon="@Icons.Material.Outlined.Memory"
-                               Size="Size.Small"
-                               OnClick="OpenMemoryGraph" />
-            </MudTooltip>
+            <MudIconButton Icon="@Icons.Material.Outlined.Memory"
+                           Size="Size.Small"
+                           title="Memory graph"
+                           OnClick="OpenMemoryGraph" />
 
             <MudTooltip Text="@(_graphView ? "Table view" : "Card view")">
                 <MudToggleIconButton @bind-Toggled="_graphView"

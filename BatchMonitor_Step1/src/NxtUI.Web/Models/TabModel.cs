@@ -227,6 +227,8 @@ public class TabModel
         TabType.KafkaGroups => $"/kafka/{Environment}",
         TabType.MongoDB     => $"/mongo/{Environment}",
         TabType.Config      => $"/config/{Environment}",
+        TabType.Batches     => $"/batches/{Environment}",
+        TabType.MemoryGraph => $"/memory/{Environment}",
         TabType.LogBrowser        => $"/logs/{Environment}",
         TabType.LogViewer   => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings    => "/settings",
@@ -290,6 +292,12 @@ public class TabModel
 
             "config" when parts.Length >= 2
                 => CreateConfigDashboard(parts[1]),
+
+            "batches" when parts.Length >= 2
+                => CreateBatchesDashboard(parts[1]),
+
+            "memory" when parts.Length >= 2
+                => CreateMemoryGraph(parts[1]),
 
             "logs" when parts.Length >= 2
                 => CreateLogsDashboard(parts[1]),
