@@ -8,6 +8,7 @@ public enum TabType
     Kafka,
     MongoDB,
     Config,
+    Batches,
     LogBrowser,
     Settings,
     RunDetail,
@@ -108,6 +109,15 @@ public class TabModel
         Label       = "MongoDB",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Storage
+    };
+
+    public static TabModel CreateBatchesDashboard(string env) => new()
+    {
+        Id          = $"dashboard:batches:{env}",
+        Type        = TabType.Batches,
+        Label       = "Batches",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.ViewList
     };
 
     public static TabModel CreateLogsDashboard(string env) => new()

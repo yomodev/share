@@ -42,6 +42,11 @@
         <NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
         break;
 
+    case TabType.Batches:
+        <NxtUI.Pages.PlaceholderPage Title="Batches"
+            Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />
+        break;
+
     case TabType.Config:
         <NxtUI.Pages.PlaceholderPage Title="Config"
             Icon="@Icons.Material.Outlined.Tune" Environment="@env" />

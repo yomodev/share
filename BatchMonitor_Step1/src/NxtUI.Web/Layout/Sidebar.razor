@@ -37,6 +37,12 @@
                             IsActive="@IsTabActive($"dashboard:runs:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateRunsDashboard(EnvService.SelectedId)))" />
 
+            <SidebarNavItem Icon="@Icons.Material.Outlined.ListAlt"
+                            Label="Batches"
+                            IsOpen="@_drawerOpen"
+                            IsActive="@IsTabActive($"dashboard:batches:{EnvService.SelectedId}")"
+                            OnClick="@(() => Open(TabModel.CreateBatchesDashboard(EnvService.SelectedId)))" />
+
             <SidebarNavItem Icon="@Icons.Material.Outlined.Dns"
                             Label="Services"
                             IsOpen="@_drawerOpen"
