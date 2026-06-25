@@ -142,15 +142,17 @@
             <code>hh:mm</code> always means <em>today + that time</em>, so <code>00:10</code> and <code>10m</code> are identical.
         </div>
 
-        <p style="margin-top:14px;">Age/duration fields (<code>dur</code>, <code>updated</code>) store elapsed time as today + interval, so use positive offsets or <code>hh:mm</code>:</p>
+        <p style="margin-top:14px;">Duration fields (<code>dur</code>) store elapsed time as today + interval, so use positive offsets or <code>hh:mm</code>:</p>
         <div class="bm-help-examples">
             <div class="bm-help-ex"><code>dur:&gt;00:01</code>      <span>— longer than 1 minute</span></div>
             <div class="bm-help-ex"><code>dur:&gt;01:00</code>      <span>— longer than 1 hour</span></div>
             <div class="bm-help-ex"><code>dur:00:30..02:00</code>  <span>— between 30 min and 2 hours</span></div>
             <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>   <span>— under 30 seconds</span></div>
-            <div class="bm-help-ex"><code>updated:&lt;10m</code>    <span>— last heartbeat less than 10 min ago (online)</span></div>
-            <div class="bm-help-ex"><code>updated:&lt;00:10</code>  <span>— same as above using hh:mm form</span></div>
-            <div class="bm-help-ex"><code>updated:&gt;16m</code>    <span>— last heartbeat more than 16 min ago (stale)</span></div>
+        </div>
+        <p style="margin-top:14px;">Real timestamp fields (<code>start</code>, <code>finish</code>, <code>updated</code>) use negative offsets:</p>
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>updated:&gt;-10m</code>   <span>— heartbeat received in the last 10 min (online)</span></div>
+            <div class="bm-help-ex"><code>updated:&lt;-4m</code>    <span>— last heartbeat more than 4 min ago (stale)</span></div>
         </div>
     </section>
 
@@ -202,13 +204,13 @@
                 <tr><td><code>pid / processid</code></td><td><code>ProcessId</code></td><td>Process ID</td></tr>
                 <tr><td><code>ram / mem</code></td><td><code>RamMb</code></td><td>Current RAM usage in MB — use numeric comparisons</td></tr>
                 <tr><td><code>peak</code></td><td><code>PeakMb</code></td><td>Peak RAM usage in MB</td></tr>
-                <tr><td><code>updated</code></td><td><code>UpdatedDateTime</code></td><td>Age since last heartbeat — use positive offsets or <code>hh:mm</code></td></tr>
+                <tr><td><code>updated</code></td><td><code>UpdatedDateTime</code></td><td>Last heartbeat timestamp — use negative offsets (e.g. <code>updated:&gt;-10m</code>)</td></tr>
             </tbody>
         </table>
 
         <div class="bm-help-examples">
-            <div class="bm-help-ex"><code>updated:&lt;10m</code>   <span>— services with heartbeat in the last 10 minutes (online)</span></div>
-            <div class="bm-help-ex"><code>updated:&gt;16m</code>   <span>— services last seen more than 16 minutes ago (stale)</span></div>
+            <div class="bm-help-ex"><code>updated:&gt;-10m</code>  <span>— heartbeat in the last 10 minutes (online)</span></div>
+            <div class="bm-help-ex"><code>updated:&lt;-4m</code>   <span>— last heartbeat more than 4 minutes ago (stale)</span></div>
             <div class="bm-help-ex"><code>ram:&gt;500</code>        <span>— services using more than 500 MB</span></div>
             <div class="bm-help-ex"><code>host:server1</code>    <span>— services running on server1</span></div>
         </div>
