@@ -36,27 +36,12 @@
         </div>
     </div>
 
-    <!-- ── Toolbar row 2: filter ─────────────────────────────────────────── -->
-    <div class="bm-lv-toolbar">
-        <FilterBox Value="@_filterStr"
-                   OnFilterChanged="OnFilterChangedAsync"
-                   ParseError="@_filterError"
-                   Placeholder="Filter…"
-                   FieldHints="@LogFieldHints" />
-        @if (_filterStr.Length > 0)
-        {
-            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap">
-                @_visibleCount / @_totalCount
-            </span>
-        }
-    </div>
-
-    <!-- ── Toolbar row 3: find + bookmarks + display ─────────────────────── -->
+    <!-- ── Toolbar row 2: find + filter + bookmarks + display ───────────── -->
     <div class="bm-lv-toolbar">
         <MudTextField T="string" @bind-Value="_findTerm"
                       Placeholder="Find…"
                       Variant="Variant.Outlined" Margin="Margin.Dense"
-                      Style="max-width:280px;flex-shrink:0"
+                      Style="max-width:240px;flex-shrink:0"
                       Adornment="Adornment.End"
                       AdornmentIcon="@Icons.Material.Outlined.Search"
                       OnAdornmentClick="RunFindAsync"
@@ -85,6 +70,21 @@
                            Disabled="@(_matchCount == 0)" />
         </MudTooltip>
         <span class="bm-lv-match-count">@MatchLabel</span>
+
+        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+        <FilterBox Value="@_filterStr"
+                   OnFilterChanged="OnFilterChangedAsync"
+                   ParseError="@_filterError"
+                   Placeholder="Filter…"
+                   Class="bm-lv-filter"
+                   FieldHints="@LogFieldHints" />
+        @if (_filterStr.Length > 0)
+        {
+            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap">
+                @_visibleCount / @_totalCount
+            </span>
+        }
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
@@ -345,6 +345,7 @@
         }
         catch (JSDisconnectedException) { }
         catch (Exception ex) { _filterError = ex.Message; }
+        StateHasChanged();
     }
 
     // ── Bookmarks ─────────────────────────────────────────────────────────
