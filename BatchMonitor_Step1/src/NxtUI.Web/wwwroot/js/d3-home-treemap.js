@@ -33,11 +33,11 @@ window.homeMemoryTreemap = (function () {
             .tile(d3.treemapSliceDice)(root);
 
         const svg = d3.select(container).append('svg')
-            .attr('width', W).attr('height', H)
+            .attr('width', '100%')
+            .attr('height', H)
             .attr('viewBox', `0 0 ${W} ${H}`)
-            .style('display', 'block')
-            .style('width', '100%')
-            .style('height', H + 'px');
+            .attr('preserveAspectRatio', 'none')
+            .style('display', 'block');
 
         const tip = d3.select(container).append('div')
             .style('position', 'absolute')
