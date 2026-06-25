@@ -99,9 +99,14 @@
     border: 1px solid transparent;
 }
 
+.lv-row:hover .lv-bm-empty {
+    border-color: rgba(128, 128, 128, 0.45);
+    background: rgba(128, 128, 128, 0.15);
+}
+
 .lv-bm-empty:hover {
-    border-color: rgba(128, 128, 128, 0.35);
-    background: rgba(128, 128, 128, 0.12);
+    border-color: rgba(128, 128, 128, 0.7);
+    background: rgba(128, 128, 128, 0.25);
 }
 
 /* Line number */
