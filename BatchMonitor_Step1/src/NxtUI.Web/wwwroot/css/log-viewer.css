@@ -12,9 +12,9 @@
 .bm-lv-toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
     flex-shrink: 0;
-    padding: 4px 8px;
+    padding: 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
 }
 
@@ -28,9 +28,11 @@
 .bm-lv-match-count {
     font-size: 11px;
     color: var(--mud-palette-text-secondary);
-    min-width: 72px;
+    min-width: 56px;
     text-align: right;
     font-family: var(--bm-font-mono, monospace);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* Filter box in the find toolbar — expands to fill remaining space */
