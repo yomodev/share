@@ -142,7 +142,10 @@ function renderRows(state) {
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
         buf.push(`<span class="lv-lineno" title="line ${e.lineIndex + 1}">${lineNo}</span>`);
-        buf.push(`<span class="lv-ts">${escapeHtml(e.timestamp)}</span>`);
+        const tsParts = e.timestamp.split(' ');
+        const tsDate  = escapeHtml(tsParts[0] ?? e.timestamp);
+        const tsTime  = tsParts[1] ? ` <span class="lv-ts-time">${escapeHtml(tsParts[1])}</span>` : '';
+        buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
         buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
         buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
         buf.push(`<span class="lv-pid">${escapeHtml(e.pid)}</span>`);

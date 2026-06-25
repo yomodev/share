@@ -123,7 +123,11 @@
 .lv-ts {
     flex-shrink: 0;
     font-size: 0.8em;
-    color: #5a9e6f;
+    color: #3d7a52;   /* date — darker green */
+}
+
+.lv-ts-time {
+    color: #7ec897;   /* time — lighter green */
 }
 
 /* Level badge */
