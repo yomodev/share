@@ -1459,7 +1459,6 @@ html, body {
     position: relative;
     width: 100%;
     height: 200px;
-    margin-bottom: 20px;
     cursor: pointer;
     border-radius: var(--mud-default-borderradius);
 }

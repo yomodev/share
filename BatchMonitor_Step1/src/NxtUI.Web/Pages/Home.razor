@@ -41,11 +41,13 @@
     </div>
 
     <!-- ── Memory treemap ──────────────────────────────────────────────────── -->
-    <div class="bm-section-header">
-        <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
-        <span class="bm-muted" style="font-size:12px;">online services only · click to open services</span>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+        <div class="bm-section-header">
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+            <span class="bm-muted" style="font-size:12px;">online services only · click to open services</span>
+        </div>
+        <HomeMemoryTreemap Env="@EnvService.SelectedId" />
     </div>
-    <HomeMemoryTreemap Env="@EnvService.SelectedId" />
 
     <!-- ── Infrastructure health ─────────────────────────────────────────── -->
     <div class="bm-section-header">

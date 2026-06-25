@@ -9,13 +9,12 @@ window.homeMemoryTreemap = (function () {
         return '#1D9E75';
     }
 
-    function paint(container, data) {
+    function paint(container, data, forcedW) {
         d3.select(container).selectAll('*').remove();
         if (!data || !data.children || data.children.length === 0) return;
 
-        const rect = container.getBoundingClientRect();
-        const W = rect.width  || container.offsetWidth  || 600;
-        const H = rect.height || container.offsetHeight || 180;
+        const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
+        const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
 
         // Minimum visual weight for null-RAM services so they always get a
         // visible slice even when neighbours have hundreds of MB.
@@ -27,9 +26,9 @@ window.homeMemoryTreemap = (function () {
 
         d3.treemap()
             .size([W, H])
-            .paddingOuter(3)
-            .paddingTop(16)
-            .paddingInner(2)
+            .paddingOuter(1)
+            .paddingTop(14)
+            .paddingInner(1)
             .tile(d3.treemapSliceDice)(root);
 
         const svg = d3.select(container).append('svg')
@@ -122,8 +121,11 @@ window.homeMemoryTreemap = (function () {
             _observers.get(container).disconnect();
         }
 
-        // ResizeObserver repaints whenever the container width changes.
-        const ro = new ResizeObserver(() => paint(container, data));
+        // ResizeObserver repaints with the exact measured width from the entry.
+        const ro = new ResizeObserver(entries => {
+            const w = entries[0]?.contentRect.width;
+            if (w > 0) paint(container, data, w);
+        });
         ro.observe(container);
         _observers.set(container, ro);
 
