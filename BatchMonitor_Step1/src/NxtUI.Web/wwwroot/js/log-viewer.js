@@ -1,6 +1,13 @@
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
+//
+// Architecture: Document / Viewport split
+//   _docs  : Map<docId, Doc>        — one Doc per loaded file (shared entries + bookmarks)
+//   _vp    : WeakMap<container, Vp> — one Vp per DOM container (own scroll/search/layout state)
+// Multiple viewports can share one document (same entries, same bookmarks).
+// appendRaw updates doc.entries and re-renders every attached viewport.
+// destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
 import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js';
 
@@ -20,8 +27,14 @@ const LEVEL_CSS = {
     TRACE: 'trace',
 };
 
-// State keyed by container element so multiple viewers can coexist.
-const _s = new WeakMap();
+// ── State registries ──────────────────────────────────────────────────────────
+
+const _docs = new Map();        // docId -> Doc
+const _vp   = new WeakMap();    // container -> Vp
+
+function _newDocId() {
+    return crypto.randomUUID?.() ?? (Date.now().toString(36) + Math.random().toString(36));
+}
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 
@@ -42,7 +55,7 @@ function buildCumulatives(entries, measuredH) {
 
 /** Binary search: last entry whose cumulative start <= scrollTop. */
 function findFirstVisible(cum, scrollTop) {
-    let lo = 0, hi = cum.length - 2; // hi is last valid entry index
+    let lo = 0, hi = cum.length - 2;
     if (hi < 0) return 0;
     while (lo < hi) {
         const mid = (lo + hi + 1) >> 1;
@@ -86,8 +99,9 @@ function applyWordWrap(scrollEl, wrap) {
 
 // ── Row rendering ─────────────────────────────────────────────────────────────
 
-function renderRows(state) {
-    const { entries, cum, matchSet, matchIndices, matchCursor, bookmarks, searchRe, scrollEl, rowsEl } = state;
+function renderRows(vp) {
+    const { doc, cum, matchSet, matchIndices, matchCursor, searchRe, scrollEl, rowsEl } = vp;
+    const { entries, bookmarks } = doc;
     const total = entries.length;
 
     if (total === 0) {
@@ -136,7 +150,7 @@ function renderRows(state) {
         const bmBorder   = bookmark ? `border-left:3px solid ${bookmark}` : 'border-left:3px solid transparent';
         const bmBg       = bookmark ? `background:${bookmark}2e;` : '';
         // When word-wrap is on, omit the fixed height so the row auto-sizes; heights
-        // are measured after render and stored in state.measuredH for virtual-scroll.
+        // are measured after render and stored in vp.measuredH for virtual-scroll.
         const heightStyle = wordWrap ? '' : `height:${h}px;`;
         buf.push(`<div class="${cls}" style="${heightStyle}${bmBorder};${bmBg}" data-i="${i}">`);
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
@@ -173,146 +187,182 @@ function renderRows(state) {
             const i = parseInt(row.dataset.i);
             if (isNaN(i)) return;
             const h = row.offsetHeight;
-            if (state.measuredH.get(i) !== h) {
-                state.measuredH.set(i, h);
+            if (vp.measuredH.get(i) !== h) {
+                vp.measuredH.set(i, h);
                 changed = true;
             }
         });
         if (changed) {
-            state.cum = buildCumulatives(state.entries, state.measuredH);
-            updateInnerHeight(state);
-            rowsEl.style.top = state.cum[first] + 'px';
+            vp.cum = buildCumulatives(entries, vp.measuredH);
+            updateInnerHeight(vp);
+            rowsEl.style.top = vp.cum[first] + 'px';
         }
     }
 }
 
-function updateInnerHeight(state) {
-    state.innerEl.style.height = state.cum[state.entries.length] + 'px';
+function updateInnerHeight(vp) {
+    vp.innerEl.style.height = vp.cum[vp.doc.entries.length] + 'px';
 }
 
 // ── Event handlers ────────────────────────────────────────────────────────────
 
-function attachHandlers(container, state) {
+function attachHandlers(container, vp) {
     let rafId = null;
-    state._scrollHandler = () => {
+    vp._scrollHandler = () => {
         if (rafId) return;
-        rafId = requestAnimationFrame(() => { rafId = null; renderRows(state); });
+        rafId = requestAnimationFrame(() => { rafId = null; renderRows(vp); });
     };
-    state.scrollEl.addEventListener('scroll', state._scrollHandler, { passive: true });
+    vp.scrollEl.addEventListener('scroll', vp._scrollHandler, { passive: true });
 
-    // Delegated click on bookmark markers
-    state._clickHandler = (e) => {
+    vp._clickHandler = (e) => {
         const bm = e.target.closest('.lv-bm');
         if (!bm) return;
         const row = bm.closest('.lv-row');
         if (!row) return;
-        cycleBookmark(state, parseInt(row.dataset.i, 10));
-        renderRows(state);
+        cycleBookmark(vp, parseInt(row.dataset.i, 10));
+        renderRows(vp);
     };
-    state.rowsEl.addEventListener('click', state._clickHandler);
+    vp.rowsEl.addEventListener('click', vp._clickHandler);
 }
 
-function cycleBookmark(state, i) {
-    const cur = state.bookmarks.get(i);
+function cycleBookmark(vp, i) {
+    const bm  = vp.doc.bookmarks;
+    const cur = bm.get(i);
     if (!cur) {
-        state.bookmarks.set(i, BOOKMARK_COLORS[0]);
+        bm.set(i, BOOKMARK_COLORS[0]);
     } else {
         const next = BOOKMARK_COLORS.indexOf(cur) + 1;
-        if (next >= BOOKMARK_COLORS.length) state.bookmarks.delete(i);
-        else state.bookmarks.set(i, BOOKMARK_COLORS[next]);
+        if (next >= BOOKMARK_COLORS.length) bm.delete(i);
+        else bm.set(i, BOOKMARK_COLORS[next]);
     }
 }
 
 // ── Scroll helpers ────────────────────────────────────────────────────────────
 
-function scrollToEntry(state, idx) {
-    if (idx < 0 || idx >= state.entries.length) return;
-    state.scrollEl.scrollTop = state.cum[idx];
-    renderRows(state);
+function scrollToEntry(vp, idx) {
+    if (idx < 0 || idx >= vp.doc.entries.length) return;
+    vp.scrollEl.scrollTop = vp.cum[idx];
+    renderRows(vp);
 }
 
-function currentTopEntryIdx(state) {
-    return findFirstVisible(state.cum, state.scrollEl.scrollTop);
+function currentTopEntryIdx(vp) {
+    return findFirstVisible(vp.cum, vp.scrollEl.scrollTop);
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Viewport factory ──────────────────────────────────────────────────────────
 
-/**
- * Render a log file into `container`.
- * @param {HTMLElement} container
- * @param {string}      rawText
- * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
- */
-function render(container, rawText, options = {}) {
-    destroy(container);
-
-    const entries = parseLog(rawText ?? '');
-    const cum     = buildCumulatives(entries);
+function _createViewport(container, doc, options) {
     const { scrollEl, innerEl, rowsEl } = createDom(container, options);
-
-    const state = {
-        entries,
-        cum,
+    const vp = {
+        doc,
+        cum:          buildCumulatives(doc.entries),
         measuredH:    new Map(),
         searchRe:     null,
         matchIndices: [],
         matchSet:     new Set(),
         matchCursor:  -1,
-        bookmarks:    new Map(),
         scrollEl, innerEl, rowsEl,
         _scrollHandler: null,
         _clickHandler:  null,
     };
-    _s.set(container, state);
+    doc._viewports.add(vp);
+    _vp.set(container, vp);
+    updateInnerHeight(vp);
+    attachHandlers(container, vp);
+    renderRows(vp);
+    return vp;
+}
 
-    updateInnerHeight(state);
-    attachHandlers(container, state);
-    renderRows(state);
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Render a log file into `container`. Creates a new document and a viewport.
+ * Returns the docId so callers can attach additional viewports later.
+ * @param {HTMLElement} container
+ * @param {string}      rawText
+ * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
+ * @returns {string} docId
+ */
+function render(container, rawText, options = {}) {
+    destroy(container);
+
+    const docId = _newDocId();
+    const doc = {
+        docId,
+        entries:    parseLog(rawText ?? ''),
+        bookmarks:  new Map(),
+        _viewports: new Set(),
+    };
+    _docs.set(docId, doc);
+
+    const vp = _createViewport(container, doc, options);
 
     if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
+
+    return docId;
 }
 
 /**
- * Append new raw text (live-tail delta). Preserves scroll position unless
- * the viewer was already at the bottom, in which case it follows the tail.
+ * Attach an additional viewport to an existing document.
+ * Use the docId returned by render() or getDocId().
+ * @param {HTMLElement} container
+ * @param {string}      docId
+ * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
+ */
+function addViewport(container, docId, options = {}) {
+    destroy(container);
+    const doc = _docs.get(docId);
+    if (!doc) { console.error('[logViewer] addViewport: doc not found:', docId); return; }
+    const vp = _createViewport(container, doc, options);
+    if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
+}
+
+/** Returns the docId for the document currently shown in container. */
+function getDocId(container) {
+    return _vp.get(container)?.doc.docId ?? null;
+}
+
+/**
+ * Append new raw text (live-tail delta). Updates the shared document and
+ * re-renders every viewport showing it.
  */
 function appendRaw(container, newRawText) {
-    const state = _s.get(container);
-    if (!state || !newRawText) return;
+    const vp = _vp.get(container);
+    if (!vp || !newRawText) return;
 
-    const { scrollEl, cum, entries } = state;
-    const atBottom = scrollEl.scrollTop + scrollEl.clientHeight >= cum[entries.length] - 10;
+    const doc     = vp.doc;
+    const entries = doc.entries;
 
     const newEntries = parseLog(newRawText);
     if (newEntries.length === 0) return;
 
-    // Fix lineIndex offsets: new entries' lineIndex values start from 0 of the delta text.
-    // Offset them by the total source lines already loaded.
     const lastSourceLine = entries.length > 0
         ? entries[entries.length - 1].lineIndex + entries[entries.length - 1].displayLineCount
         : 0;
-    for (const e of newEntries) {
-        e.lineIndex += lastSourceLine;
-        for (let i = 0; i < e.continuations.length; i++) {
-            // continuations don't have their own lineIndex but displayLineCount already correct
-        }
+    for (const e of newEntries) e.lineIndex += lastSourceLine;
+
+    // Snapshot atBottom for each viewport BEFORE mutating entries/cum.
+    const atBottom = new Map();
+    for (const v of doc._viewports) {
+        atBottom.set(v, v.scrollEl.scrollTop + v.scrollEl.clientHeight >= v.cum[entries.length] - 10);
     }
 
     entries.push(...newEntries);
-    state.cum = buildCumulatives(entries, state.measuredH);
 
-    if (state.searchRe) {
-        const allMatches = findMatches(entries, state.searchRe);
-        state.matchIndices = allMatches;
-        state.matchSet     = new Set(allMatches);
-        if (state.matchCursor >= allMatches.length) state.matchCursor = allMatches.length - 1;
+    for (const v of doc._viewports) {
+        v.cum = buildCumulatives(entries, v.measuredH);
+
+        if (v.searchRe) {
+            const allMatches   = findMatches(entries, v.searchRe);
+            v.matchIndices     = allMatches;
+            v.matchSet         = new Set(allMatches);
+            if (v.matchCursor >= allMatches.length) v.matchCursor = allMatches.length - 1;
+        }
+
+        updateInnerHeight(v);
+        if (atBottom.get(v)) v.scrollEl.scrollTop = v.cum[entries.length];
+        renderRows(v);
     }
-
-    updateInnerHeight(state);
-
-    if (atBottom) scrollEl.scrollTop = state.cum[entries.length];
-
-    renderRows(state);
 }
 
 /**
@@ -321,110 +371,118 @@ function appendRaw(container, newRawText) {
  * @param {{ isRegex?: boolean, caseSensitive?: boolean }} opts
  */
 function find(container, term, opts = {}) {
-    const state = _s.get(container);
-    if (!state) return { count: 0, current: 0 };
+    const vp = _vp.get(container);
+    if (!vp) return { count: 0, current: 0 };
 
     let re = null;
     try { re = buildRegex(term, opts); } catch { /* invalid regex — leave re null */ }
 
-    state.searchRe    = re;
-    state.matchCursor = -1;
+    vp.searchRe    = re;
+    vp.matchCursor = -1;
 
     if (!re) {
-        state.matchIndices = [];
-        state.matchSet     = new Set();
-        renderRows(state);
+        vp.matchIndices = [];
+        vp.matchSet     = new Set();
+        renderRows(vp);
         return { count: 0, current: 0 };
     }
 
-    const matches      = findMatches(state.entries, re);
-    state.matchIndices = matches;
-    state.matchSet     = new Set(matches);
+    const matches      = findMatches(vp.doc.entries, re);
+    vp.matchIndices    = matches;
+    vp.matchSet        = new Set(matches);
 
     if (matches.length > 0) {
-        state.matchCursor = 0;
-        scrollToEntry(state, matches[0]);
+        vp.matchCursor = 0;
+        scrollToEntry(vp, matches[0]);
     } else {
-        renderRows(state);
+        renderRows(vp);
     }
 
     return { count: matches.length, current: matches.length > 0 ? 1 : 0 };
 }
 
 function nextMatch(container) {
-    const state = _s.get(container);
-    if (!state || state.matchIndices.length === 0) return { count: 0, current: 0 };
-    state.matchCursor = (state.matchCursor + 1) % state.matchIndices.length;
-    scrollToEntry(state, state.matchIndices[state.matchCursor]);
-    return { count: state.matchIndices.length, current: state.matchCursor + 1 };
+    const vp = _vp.get(container);
+    if (!vp || vp.matchIndices.length === 0) return { count: 0, current: 0 };
+    vp.matchCursor = (vp.matchCursor + 1) % vp.matchIndices.length;
+    scrollToEntry(vp, vp.matchIndices[vp.matchCursor]);
+    return { count: vp.matchIndices.length, current: vp.matchCursor + 1 };
 }
 
 function prevMatch(container) {
-    const state = _s.get(container);
-    if (!state || state.matchIndices.length === 0) return { count: 0, current: 0 };
-    state.matchCursor = (state.matchCursor - 1 + state.matchIndices.length) % state.matchIndices.length;
-    scrollToEntry(state, state.matchIndices[state.matchCursor]);
-    return { count: state.matchIndices.length, current: state.matchCursor + 1 };
+    const vp = _vp.get(container);
+    if (!vp || vp.matchIndices.length === 0) return { count: 0, current: 0 };
+    vp.matchCursor = (vp.matchCursor - 1 + vp.matchIndices.length) % vp.matchIndices.length;
+    scrollToEntry(vp, vp.matchIndices[vp.matchCursor]);
+    return { count: vp.matchIndices.length, current: vp.matchCursor + 1 };
 }
 
 function nextBookmark(container) {
-    const state = _s.get(container);
-    if (!state || state.bookmarks.size === 0) return;
-    const sorted = [...state.bookmarks.keys()].sort((a, b) => a - b);
-    const top    = currentTopEntryIdx(state);
-    scrollToEntry(state, sorted.find(i => i > top) ?? sorted[0]);
+    const vp = _vp.get(container);
+    if (!vp || vp.doc.bookmarks.size === 0) return;
+    const sorted = [...vp.doc.bookmarks.keys()].sort((a, b) => a - b);
+    const top    = currentTopEntryIdx(vp);
+    scrollToEntry(vp, sorted.find(i => i > top) ?? sorted[0]);
 }
 
 function prevBookmark(container) {
-    const state = _s.get(container);
-    if (!state || state.bookmarks.size === 0) return;
-    const sorted = [...state.bookmarks.keys()].sort((a, b) => a - b);
-    const top    = currentTopEntryIdx(state);
-    scrollToEntry(state, [...sorted].reverse().find(i => i < top) ?? sorted[sorted.length - 1]);
+    const vp = _vp.get(container);
+    if (!vp || vp.doc.bookmarks.size === 0) return;
+    const sorted = [...vp.doc.bookmarks.keys()].sort((a, b) => a - b);
+    const top    = currentTopEntryIdx(vp);
+    scrollToEntry(vp, [...sorted].reverse().find(i => i < top) ?? sorted[sorted.length - 1]);
 }
 
 /**
- * Scroll so that the entry whose `lineIndex` (source file line number) equals
- * `lineIndex` is at the top. Used for URL anchors (#L42) and log-browser links.
+ * Scroll so that the entry whose `lineIndex` equals `lineIndex` is at the top.
  */
 function scrollToLine(container, lineIndex) {
-    const state = _s.get(container);
-    if (!state) return;
-    const idx = state.entries.findIndex(e => e.lineIndex === lineIndex);
-    if (idx >= 0) scrollToEntry(state, idx);
+    const vp = _vp.get(container);
+    if (!vp) return;
+    const idx = vp.doc.entries.findIndex(e => e.lineIndex === lineIndex);
+    if (idx >= 0) scrollToEntry(vp, idx);
 }
 
-/** Returns the source line number of the top-most visible entry. Used for the share link. */
+/** Returns the source line number of the top-most visible entry. */
 function getCurrentTopLine(container) {
-    const state = _s.get(container);
-    if (!state || state.entries.length === 0) return 0;
-    return state.entries[currentTopEntryIdx(state)]?.lineIndex ?? 0;
+    const vp = _vp.get(container);
+    if (!vp || vp.doc.entries.length === 0) return 0;
+    return vp.doc.entries[currentTopEntryIdx(vp)]?.lineIndex ?? 0;
 }
 
 function setFontSize(container, size) {
-    const state = _s.get(container);
-    if (!state) return;
-    applyFontSize(state.scrollEl, size);
+    const vp = _vp.get(container);
+    if (!vp) return;
+    applyFontSize(vp.scrollEl, size);
 }
 
 function setWordWrap(container, wrap) {
-    const state = _s.get(container);
-    if (!state) return;
-    applyWordWrap(state.scrollEl, wrap);
-    // Clear measured heights — they were for the previous wrap mode.
-    state.measuredH.clear();
-    state.cum = buildCumulatives(state.entries);
-    updateInnerHeight(state);
-    renderRows(state);
+    const vp = _vp.get(container);
+    if (!vp) return;
+    applyWordWrap(vp.scrollEl, wrap);
+    vp.measuredH.clear();
+    vp.cum = buildCumulatives(vp.doc.entries);
+    updateInnerHeight(vp);
+    renderRows(vp);
 }
 
+/**
+ * Remove a viewport. If it was the last viewport for its document,
+ * the document is unloaded from memory.
+ */
 function destroy(container) {
-    const state = _s.get(container);
-    if (!state) return;
-    if (state._scrollHandler) state.scrollEl.removeEventListener('scroll', state._scrollHandler);
-    if (state._clickHandler)  state.rowsEl.removeEventListener('click',  state._clickHandler);
+    const vp = _vp.get(container);
+    if (!vp) return;
+
+    if (vp._scrollHandler) vp.scrollEl.removeEventListener('scroll', vp._scrollHandler);
+    if (vp._clickHandler)  vp.rowsEl.removeEventListener('click',  vp._clickHandler);
     container.innerHTML = '';
-    _s.delete(container);
+
+    const doc = vp.doc;
+    doc._viewports.delete(vp);
+    if (doc._viewports.size === 0) _docs.delete(doc.docId);
+
+    _vp.delete(container);
 }
 
 function renderLocalFile(container, key, opts) {
@@ -435,7 +493,8 @@ function renderLocalFile(container, key, opts) {
 
 // Expose on window so Blazor JS interop (InvokeVoidAsync / InvokeAsync) can reach it.
 window.logViewer = {
-    render, renderLocalFile, appendRaw, find, nextMatch, prevMatch,
+    render, renderLocalFile, addViewport, getDocId,
+    appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,
     setFontSize, setWordWrap,
