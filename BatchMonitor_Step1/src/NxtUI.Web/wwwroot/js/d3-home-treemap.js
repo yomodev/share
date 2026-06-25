@@ -21,7 +21,7 @@ window.homeMemoryTreemap = (function () {
         const minVal = H * 0.5;
 
         const root = d3.hierarchy(data)
-            .sum(d => Math.max(d.ram || 0, minVal))
+            .sum(d => d.children ? 0 : Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
 
         d3.treemap()
