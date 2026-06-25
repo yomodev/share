@@ -19,6 +19,12 @@
                       Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt" />
 
         <div class="bm-lb-toolbar-right">
+            <MudTooltip Text="Open local log file">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small"
+                               OnClick="OpenLocalFileAsync" />
+            </MudTooltip>
+
             <FilterBox Value="@_contentFilterStr"
                        OnFilterChanged="OnContentFilterChanged"
                        ParseError="@_contentFilterError"
@@ -40,12 +46,6 @@
             {
                 <span class="bm-toolbar-hint">@(_isSearchMode ? "Found" : "Scanned") @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
             }
-
-            <MudTooltip Text="Open local log file">
-                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                               Size="Size.Small"
-                               OnClick="OpenLocalFileAsync" />
-            </MudTooltip>
 
         </div>
     </div>
