@@ -1807,13 +1807,17 @@ tr.bm-row-searching td:first-child {
 .bm-lb-page { display: flex; flex-direction: column; }
 
 .bm-lb-filter-toolbar {
-    display: grid;
-    grid-template-columns: 320px 1fr;
-    gap: 8px;
+    display: flex;
     align-items: center;
+    gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
+}
+
+/* Glob filter field — fixed width so the icon button and right toolbar stay in one row */
+.bm-lb-filter-toolbar > .mud-input-control {
+    flex: 0 0 300px;
 }
 .bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .bm-lb-toolbar-right .bm-filter-box { flex: 1 1 0; min-width: 0; }
