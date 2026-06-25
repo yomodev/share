@@ -6,7 +6,17 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
+<div class="bm-home-treemap-wrap">
+    @if (_loading)
+    {
+        <div class="bm-treemap-loading">
+            <div class="bm-treemap-spinner"></div>
+            <span class="bm-treemap-loading-label">Loading memory data…</span>
+        </div>
+    }
+    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"
+         style="@(_loading ? "visibility:hidden" : "")"></div>
+</div>
 
 @code {
     [Parameter] public string Env { get; set; } = string.Empty;
@@ -14,6 +24,7 @@
     private ElementReference _ref;
     private IDisposable?     _sub;
     private bool             _dirty;
+    private bool             _loading = true;
     private TreeRoot?        _treeData;
 
     private sealed record TreeRoot(string Name, List<TreeHost> Children);
@@ -82,6 +93,10 @@
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
+        }
+        finally
+        {
+            if (_loading) { _loading = false; StateHasChanged(); }
         }
     }
 
