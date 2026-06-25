@@ -130,7 +130,7 @@ function renderRows(state) {
         const calHtml = isMatch ? highlightText(e.caller,  searchRe) : escapeHtml(e.caller);
 
         const bmBorder = bookmark ? `border-left:3px solid ${bookmark}` : 'border-left:3px solid transparent';
-        const bmBg     = bookmark ? `background:${bookmark}18;` : '';
+        const bmBg     = bookmark ? `background:${bookmark}2e;` : '';
         buf.push(`<div class="${cls}" style="height:${h}px;${bmBorder};${bmBg}" data-i="${i}">`);
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
