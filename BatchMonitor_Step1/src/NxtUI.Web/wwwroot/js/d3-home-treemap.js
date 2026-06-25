@@ -1,5 +1,7 @@
 window.homeMemoryTreemap = (function () {
 
+    const _observers = new WeakMap(); // container → ResizeObserver
+
     function color(ram) {
         if (ram == null) return 'rgba(128,128,128,0.35)';
         if (ram > 500)   return '#E24B4A';
@@ -7,7 +9,7 @@ window.homeMemoryTreemap = (function () {
         return '#1D9E75';
     }
 
-    function render(container, data) {
+    function paint(container, data) {
         d3.select(container).selectAll('*').remove();
         if (!data || !data.children || data.children.length === 0) return;
 
@@ -15,8 +17,12 @@ window.homeMemoryTreemap = (function () {
         const W = rect.width  || container.offsetWidth  || 600;
         const H = rect.height || container.offsetHeight || 180;
 
+        // Minimum visual weight for null-RAM services so they always get a
+        // visible slice even when neighbours have hundreds of MB.
+        const minVal = H * 0.5;
+
         const root = d3.hierarchy(data)
-            .sum(d => Math.max(d.ram || 0, 1))
+            .sum(d => Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
 
         d3.treemap()
@@ -24,7 +30,7 @@ window.homeMemoryTreemap = (function () {
             .paddingOuter(3)
             .paddingTop(16)
             .paddingInner(2)
-            .tile(d3.treemapSquarify)(root);
+            .tile(d3.treemapSliceDice)(root);
 
         const svg = d3.select(container).append('svg')
             .attr('width', W).attr('height', H)
@@ -110,7 +116,26 @@ window.homeMemoryTreemap = (function () {
         });
     }
 
+    function render(container, data) {
+        // Disconnect previous observer for this container (e.g. on Blazor re-render).
+        if (_observers.has(container)) {
+            _observers.get(container).disconnect();
+        }
+
+        // ResizeObserver repaints whenever the container width changes.
+        const ro = new ResizeObserver(() => paint(container, data));
+        ro.observe(container);
+        _observers.set(container, ro);
+
+        // Paint immediately (don't wait for the first observer callback).
+        paint(container, data);
+    }
+
     function destroy(container) {
+        if (_observers.has(container)) {
+            _observers.get(container).disconnect();
+            _observers.delete(container);
+        }
         d3.select(container).selectAll('*').remove();
     }
 
