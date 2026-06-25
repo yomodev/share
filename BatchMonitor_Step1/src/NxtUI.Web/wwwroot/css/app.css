@@ -1455,6 +1455,16 @@ html, body {
     margin-bottom: 20px;
 }
 
+.bm-home-treemap {
+    position: relative;
+    width: 100%;
+    height: 200px;
+    margin-bottom: 20px;
+    cursor: pointer;
+    border-radius: var(--mud-default-borderradius);
+    overflow: hidden;
+}
+
 /* ── Card shell ──────────────────────────────────────────────────── */
 .bm-health-card {
     border: 1px solid var(--mud-palette-divider);

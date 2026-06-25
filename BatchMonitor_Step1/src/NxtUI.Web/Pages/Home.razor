@@ -222,6 +222,13 @@
 
     </div>
 
+    <!-- ── Memory treemap ──────────────────────────────────────────────────── -->
+    <div class="bm-section-header">
+        <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+        <span class="bm-muted" style="font-size:12px;">online services only · click to open services</span>
+    </div>
+    <HomeMemoryTreemap Env="@EnvService.SelectedId" />
+
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <div class="bm-mini-summary-header">

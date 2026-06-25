@@ -1,0 +1,95 @@
+@using NxtUI.Core.Services
+@using NxtUI.Core.Models
+@inject IHeartbeatService HeartbeatSvc
+@inject IServiceMetricsMonitor MetricsMonitor
+@inject TabService TabService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
+
+@code {
+    [Parameter] public string Env { get; set; } = string.Empty;
+
+    private ElementReference _ref;
+    private IDisposable?     _sub;
+    private bool             _dirty = true;
+
+    protected override void OnInitialized()
+    {
+        _sub = MetricsMonitor.Subscribe(Env);
+        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+    }
+
+    protected override async Task OnInitializedAsync() =>
+        await LoadAndRebuildAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_dirty) return;
+        _dirty = false;
+        await RenderChartAsync();
+    }
+
+    private void OnMetricsUpdated(string env)
+    {
+        if (env != Env) return;
+        _ = InvokeAsync(async () =>
+        {
+            await LoadAndRebuildAsync();
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private List<object>? _treeData;
+
+    private async Task LoadAndRebuildAsync()
+    {
+        try
+        {
+            var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+
+            _treeData = services
+                .Where(s => s.IsOnline)
+                .GroupBy(s => s.HostName)
+                .Select(g => (object)new
+                {
+                    name     = g.Key,
+                    children = g.Select(s =>
+                    {
+                        var m = MetricsMonitor.GetLatest(Env, s);
+                        return new
+                        {
+                            name = s.ServiceName,
+                            pid  = s.ProcessId,
+                            ram  = m != null ? (double?)(m.CurrentUsageBytes / 1_048_576.0) : null,
+                        };
+                    }).ToList<object>()
+                }).ToList();
+        }
+        catch { _treeData = null; }
+
+        _dirty = true;
+    }
+
+    private async Task RenderChartAsync()
+    {
+        if (_treeData is null || _treeData.Count == 0) return;
+        try
+        {
+            await JS.InvokeVoidAsync("homeMemoryTreemap.render", _ref,
+                new { name = "root", children = _treeData });
+        }
+        catch { }
+    }
+
+    private void OpenServices() =>
+        TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));
+
+    public async ValueTask DisposeAsync()
+    {
+        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        _sub?.Dispose();
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.destroy", _ref); } catch { }
+    }
+}
