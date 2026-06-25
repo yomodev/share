@@ -143,20 +143,24 @@
 .lv-lv-debug { color: #61afef; background: rgba(97, 175, 239, 0.10); }
 .lv-lv-trace { color: var(--mud-palette-text-disabled); }
 
-/* Host / PID / ThreadID */
+/* Host / PID / ThreadID — each a distinct muted tone */
 .lv-host, .lv-pid, .lv-tid {
     flex-shrink: 0;
-    color: var(--mud-palette-text-secondary);
     font-size: 0.88em;
 }
 
+.lv-host {
+    color: #b294bb;   /* muted purple */
+}
+
 .lv-pid {
+    color: #d19a66;   /* muted amber */
     min-width: 36px;
 }
 
 .lv-tid {
+    color: #56b6c2;   /* muted teal */
     min-width: 28px;
-    opacity: 0.75;
 }
 
 /* Message — takes the remaining width */
