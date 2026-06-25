@@ -171,6 +171,16 @@
     text-overflow: ellipsis;
 }
 
+/* When word-wrap is on, let message text wrap naturally without clipping */
+.lv-scroll[data-wrap="1"] .lv-msg {
+    overflow: visible;
+    text-overflow: initial;
+}
+
+.lv-scroll[data-wrap="1"] .lv-caller {
+    align-self: flex-start;
+}
+
 /* Caller */
 .lv-caller {
     flex-shrink: 0;

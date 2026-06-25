@@ -29,10 +29,14 @@ function entryH(entry) {
     return entry.displayLineCount * LINE_H + ENTRY_PAD;
 }
 
-/** Pre-compute cumulative Y positions. cum[i] = top of entry i. cum[n] = total height. */
-function buildCumulatives(entries) {
+/** Pre-compute cumulative Y positions. cum[i] = top of entry i. cum[n] = total height.
+ *  measuredH (optional Map<entryIndex, px>) overrides the estimated height for entries
+ *  that have been rendered and measured (used when word-wrap is on). */
+function buildCumulatives(entries, measuredH) {
     const cum = new Float64Array(entries.length + 1);
-    for (let i = 0; i < entries.length; i++) cum[i + 1] = cum[i] + entryH(entries[i]);
+    for (let i = 0; i < entries.length; i++) {
+        cum[i + 1] = cum[i] + (measuredH?.get(i) ?? entryH(entries[i]));
+    }
     return cum;
 }
 
@@ -129,9 +133,12 @@ function renderRows(state) {
         const msgHtml = isMatch ? highlightText(e.message, searchRe) : escapeHtml(e.message);
         const calHtml = isMatch ? highlightText(e.caller,  searchRe) : escapeHtml(e.caller);
 
-        const bmBorder = bookmark ? `border-left:3px solid ${bookmark}` : 'border-left:3px solid transparent';
-        const bmBg     = bookmark ? `background:${bookmark}2e;` : '';
-        buf.push(`<div class="${cls}" style="height:${h}px;${bmBorder};${bmBg}" data-i="${i}">`);
+        const bmBorder   = bookmark ? `border-left:3px solid ${bookmark}` : 'border-left:3px solid transparent';
+        const bmBg       = bookmark ? `background:${bookmark}2e;` : '';
+        // When word-wrap is on, omit the fixed height so the row auto-sizes; heights
+        // are measured after render and stored in state.measuredH for virtual-scroll.
+        const heightStyle = wordWrap ? '' : `height:${h}px;`;
+        buf.push(`<div class="${cls}" style="${heightStyle}${bmBorder};${bmBg}" data-i="${i}">`);
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
         buf.push(`<span class="lv-lineno" title="line ${e.lineIndex + 1}">${lineNo}</span>`);
@@ -153,6 +160,27 @@ function renderRows(state) {
     }
 
     rowsEl.innerHTML = buf.join('');
+
+    // After DOM is updated, measure actual row heights when word-wrap is on.
+    // Virtual-scroll heights are estimated from displayLineCount and don't account
+    // for text wrapping. Measuring and rebuilding cum fixes the overlap.
+    if (wordWrap) {
+        let changed = false;
+        rowsEl.querySelectorAll('.lv-row[data-i]').forEach(row => {
+            const i = parseInt(row.dataset.i);
+            if (isNaN(i)) return;
+            const h = row.offsetHeight;
+            if (state.measuredH.get(i) !== h) {
+                state.measuredH.set(i, h);
+                changed = true;
+            }
+        });
+        if (changed) {
+            state.cum = buildCumulatives(state.entries, state.measuredH);
+            updateInnerHeight(state);
+            rowsEl.style.top = state.cum[first] + 'px';
+        }
+    }
 }
 
 function updateInnerHeight(state) {
@@ -222,6 +250,7 @@ function render(container, rawText, options = {}) {
     const state = {
         entries,
         cum,
+        measuredH:    new Map(),
         searchRe:     null,
         matchIndices: [],
         matchSet:     new Set(),
@@ -267,7 +296,7 @@ function appendRaw(container, newRawText) {
     }
 
     entries.push(...newEntries);
-    state.cum = buildCumulatives(entries);
+    state.cum = buildCumulatives(entries, state.measuredH);
 
     if (state.searchRe) {
         const allMatches = findMatches(entries, state.searchRe);
@@ -379,6 +408,10 @@ function setWordWrap(container, wrap) {
     const state = _s.get(container);
     if (!state) return;
     applyWordWrap(state.scrollEl, wrap);
+    // Clear measured heights — they were for the previous wrap mode.
+    state.measuredH.clear();
+    state.cum = buildCumulatives(state.entries);
+    updateInnerHeight(state);
     renderRows(state);
 }
 
