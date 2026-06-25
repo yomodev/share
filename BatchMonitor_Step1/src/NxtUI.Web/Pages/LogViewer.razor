@@ -1,50 +1,406 @@
-@inject ISnackbar Snackbar
+@using NxtUI.Services
+@inject ILogViewerService LogViewerSvc
+@inject NavigationManager Nav
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<div class="bm-page bm-page-fill">
+<div class="bm-page bm-page-fill bm-lv-page">
 
-    <div class="bm-batch-toolbar">
-        <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="mr-2 bm-muted" />
-        <MudText Typo="Typo.body2" Style="font-weight:600;">Log Viewer</MudText>
+    <!-- ── Toolbar row 1: file info ──────────────────────────────────────── -->
+    <div class="bm-lv-toolbar">
+        <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="bm-muted" Style="flex-shrink:0" />
+        <MudText Typo="Typo.body2" Style="font-weight:600;flex-shrink:0">@_fileName</MudText>
+        <span class="bm-muted bm-toolbar-hint"
+              style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:11px">
+            @Path
+        </span>
+
+        <div class="bm-lv-toolbar-right">
+            @if (_isTailing)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                         Style="font-size:10px;height:20px;padding:0 6px">LIVE</MudChip>
+            }
+            <MudTooltip Text="Refresh now">
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                               Size="Size.Small" OnClick="RefreshAsync"
+                               Disabled="@_isLoading" />
+            </MudTooltip>
+            <MudTooltip Text="Copy share link with current line">
+                <MudIconButton Icon="@Icons.Material.Outlined.Link"
+                               Size="Size.Small" OnClick="ShareAsync" />
+            </MudTooltip>
+        </div>
     </div>
 
-    <div class="bm-log-viewer-body">
+    <!-- ── Toolbar row 2: find + bookmarks + display ─────────────────────── -->
+    <div class="bm-lv-toolbar">
+        <MudTextField T="string" @bind-Value="_findTerm"
+                      Placeholder="Find…"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="max-width:280px;flex-shrink:0"
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      OnAdornmentClick="RunFindAsync"
+                      @onkeydown="OnFindKeyDown" />
 
-        <MudPaper Elevation="0" Class="bm-log-path-section">
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-2">Log path</MudText>
-            <div class="bm-log-path-row">
-                <MudTextField T="string"
-                              @bind-Value="_path"
-                              Label="Path"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              FullWidth="true"
-                              Class="bm-monospace"
-                              Adornment="Adornment.End"
-                              AdornmentIcon="@Icons.Material.Outlined.ContentCopy"
-                              AdornmentAriaLabel="Copy path"
-                              OnAdornmentClick="CopyPathAsync" />
-            </div>
-        </MudPaper>
+        <MudTooltip Text="Regular expression">
+            <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
+                                 Icon="@Icons.Material.Outlined.Code"
+                                 ToggledIcon="@Icons.Material.Outlined.Code"
+                                 ToggledColor="Color.Primary" Size="Size.Small" />
+        </MudTooltip>
+        <MudTooltip Text="Case sensitive">
+            <MudToggleIconButton Toggled="@_caseSensitive" ToggledChanged="OnCaseToggled"
+                                 Icon="@Icons.Material.Outlined.TextFields"
+                                 ToggledIcon="@Icons.Material.Outlined.TextFields"
+                                 ToggledColor="Color.Primary" Size="Size.Small" />
+        </MudTooltip>
+        <MudTooltip Text="Previous match (Shift+Enter)">
+            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                           Size="Size.Small" OnClick="PrevMatchAsync"
+                           Disabled="@(_matchCount == 0)" />
+        </MudTooltip>
+        <MudTooltip Text="Next match (Enter)">
+            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                           Size="Size.Small" OnClick="NextMatchAsync"
+                           Disabled="@(_matchCount == 0)" />
+        </MudTooltip>
+        <span class="bm-lv-match-count">@MatchLabel</span>
 
+        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+        <MudTooltip Text="Previous bookmark">
+            <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
+                           Size="Size.Small" OnClick="PrevBookmarkAsync" />
+        </MudTooltip>
+        <MudTooltip Text="Next bookmark">
+            <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
+                           Size="Size.Small" OnClick="NextBookmarkAsync" />
+        </MudTooltip>
+
+        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+        <MudTooltip Text="Decrease font">
+            <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
+                           Size="Size.Small" OnClick="DecreaseFontAsync"
+                           Disabled="@(_fontSize <= _fontSizes[0])" />
+        </MudTooltip>
+        <MudTooltip Text="Increase font">
+            <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
+                           Size="Size.Small" OnClick="IncreaseFontAsync"
+                           Disabled="@(_fontSize >= _fontSizes[^1])" />
+        </MudTooltip>
+        <MudTooltip Text="Word wrap">
+            <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWrapToggled"
+                                 Icon="@Icons.Material.Outlined.WrapText"
+                                 ToggledIcon="@Icons.Material.Outlined.WrapText"
+                                 ToggledColor="Color.Primary" Size="Size.Small" />
+        </MudTooltip>
     </div>
+
+    <!-- ── Body ──────────────────────────────────────────────────────────── -->
+    @if (_isLoading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="flex-shrink:0" />
+    }
+    @if (_error is not null)
+    {
+        <div class="bm-lb-empty">
+            <MudText Typo="Typo.body2" Color="Color.Error">@_error</MudText>
+        </div>
+    }
+    <div class="bm-lv-body" @ref="_bodyRef"></div>
 
 </div>
 
 @code {
     [Parameter] public string? Path { get; set; }
+    [Parameter] public string  Env  { get; set; } = string.Empty;
 
-    private string _path = string.Empty;
+    private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 
-    protected override void OnParametersSet()
+    // DOM / JS interop
+    private ElementReference _bodyRef;
+    private bool             _rendered;
+    private bool             _dirty;
+
+    // Loading state
+    private string? _loadedPath;
+    private bool    _isLoading;
+    private string? _error;
+    private string? _rawContent;
+    private int?    _anchorLine;
+    private long    _fileOffset;
+
+    // Find
+    private string _findTerm      = "";
+    private bool   _isRegex;
+    private bool   _caseSensitive;
+    private int    _matchCount;
+    private int    _matchCurrent;
+
+    // Display
+    private int  _fontSize = 13;
+    private bool _wordWrap;
+
+    // Live tail
+    private bool           _isTailing;
+    private PeriodicTimer? _tailTimer;
+    private CancellationTokenSource _cts = new();
+
+    private string _fileName =>
+        System.IO.Path.GetFileName((Path ?? "").TrimEnd('\\', '/')) is { Length: > 0 } n ? n : "Log";
+
+    private string MatchLabel =>
+        _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
+
+    protected override async Task OnParametersSetAsync()
     {
-        _path = Path ?? string.Empty;
+        if (Path == _loadedPath) return;
+        _loadedPath = Path;
+        _anchorLine = ParseAnchorLine(new Uri(Nav.Uri).Fragment);
+        await LoadAsync();
     }
 
-    private async Task CopyPathAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (string.IsNullOrWhiteSpace(_path)) return;
-        await JS.InvokeVoidAsync("copyText", _path);
-        await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
+        _rendered = true;
+        if (!_dirty) return;
+        _dirty = false;
+        await RenderViewerAsync();
+    }
+
+    // ── File loading ──────────────────────────────────────────────────────
+
+    private async Task LoadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Path)) return;
+        _isLoading = true;
+        _error     = null;
+        StopTail();
+        StateHasChanged();
+
+        try
+        {
+            if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+            {
+                var key = Path["local:".Length..];
+                _rawContent = await JS.InvokeAsync<string?>("bmGetLocalFile", key) ?? "";
+                _fileOffset = 0; // no live tail for browser-local files
+            }
+            else
+            {
+                (_rawContent, _fileOffset) = await LogViewerSvc.ReadAllAsync(Path!, _cts.Token);
+            }
+            _dirty = true;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _error = ex.Message; }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RenderViewerAsync()
+    {
+        if (_rawContent is null || !_rendered) return;
+        try
+        {
+            await JS.InvokeVoidAsync("logViewer.render", _bodyRef, _rawContent, new
+            {
+                anchorLine = _anchorLine,
+                fontSize   = _fontSize,
+                wordWrap   = _wordWrap,
+            });
+            _rawContent = null;
+            if (!Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                StartTail();
+        }
+        catch (JSDisconnectedException) { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LogViewer] JS render error: {ex.Message}");
+        }
+    }
+
+    // ── Refresh ───────────────────────────────────────────────────────────
+
+    private async Task RefreshAsync()
+    {
+        _loadedPath = null; // force reload
+        await LoadAsync();
+    }
+
+    // ── Find ──────────────────────────────────────────────────────────────
+
+    private async Task OnFindKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            if (e.ShiftKey) await PrevMatchAsync();
+            else            await RunFindAsync();
+        }
+    }
+
+    private async Task RunFindAsync()
+    {
+        try
+        {
+            var result = await JS.InvokeAsync<MatchResult>(
+                "logViewer.find", _bodyRef, _findTerm,
+                new { isRegex = _isRegex, caseSensitive = _caseSensitive });
+            _matchCount   = result.Count;
+            _matchCurrent = result.Current;
+        }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task NextMatchAsync()
+    {
+        try
+        {
+            var result = await JS.InvokeAsync<MatchResult>("logViewer.nextMatch", _bodyRef);
+            _matchCount   = result.Count;
+            _matchCurrent = result.Current;
+        }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task PrevMatchAsync()
+    {
+        try
+        {
+            var result = await JS.InvokeAsync<MatchResult>("logViewer.prevMatch", _bodyRef);
+            _matchCount   = result.Count;
+            _matchCurrent = result.Current;
+        }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task OnRegexToggled(bool val)  { _isRegex       = val; await RunFindAsync(); }
+    private async Task OnCaseToggled(bool val)   { _caseSensitive = val; await RunFindAsync(); }
+
+    // ── Bookmarks ─────────────────────────────────────────────────────────
+
+    private async Task PrevBookmarkAsync()
+    {
+        try { await JS.InvokeVoidAsync("logViewer.prevBookmark", _bodyRef); }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task NextBookmarkAsync()
+    {
+        try { await JS.InvokeVoidAsync("logViewer.nextBookmark", _bodyRef); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Display controls ──────────────────────────────────────────────────
+
+    private async Task DecreaseFontAsync()
+    {
+        var idx = Array.IndexOf(_fontSizes, _fontSize);
+        if (idx > 0) { _fontSize = _fontSizes[idx - 1]; await ApplyFontAsync(); }
+    }
+
+    private async Task IncreaseFontAsync()
+    {
+        var idx = Array.IndexOf(_fontSizes, _fontSize);
+        if (idx < _fontSizes.Length - 1) { _fontSize = _fontSizes[idx + 1]; await ApplyFontAsync(); }
+    }
+
+    private async Task OnWrapToggled(bool val)
+    {
+        _wordWrap = val;
+        try { await JS.InvokeVoidAsync("logViewer.setWordWrap", _bodyRef, _wordWrap); }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task ApplyFontAsync()
+    {
+        try { await JS.InvokeVoidAsync("logViewer.setFontSize", _bodyRef, _fontSize); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Share link ────────────────────────────────────────────────────────
+
+    private async Task ShareAsync()
+    {
+        try
+        {
+            var lineIdx = await JS.InvokeAsync<int>("logViewer.getCurrentTopLine", _bodyRef);
+            var baseUrl  = Nav.Uri.Split('#')[0];
+            var shareUrl = $"{baseUrl}#L{lineIdx + 1}"; // display as 1-based
+            await JS.InvokeVoidAsync("copyText", shareUrl);
+            await JS.InvokeVoidAsync("showCopyToast", "Share link copied");
+        }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Live tail ─────────────────────────────────────────────────────────
+
+    private void StartTail()
+    {
+        _isTailing = true;
+        _tailTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+        _ = TailLoopAsync();
+    }
+
+    private void StopTail()
+    {
+        _isTailing = false;
+        _tailTimer?.Dispose();
+        _tailTimer = null;
+    }
+
+    private async Task TailLoopAsync()
+    {
+        try
+        {
+            while (_tailTimer is not null && await _tailTimer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(TailTickAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task TailTickAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Path)) return;
+        try
+        {
+            var (text, newOffset) = LogViewerSvc.ReadDelta(Path!, _fileOffset);
+            if (string.IsNullOrEmpty(text)) return;
+            _fileOffset = newOffset;
+            await JS.InvokeVoidAsync("logViewer.appendRaw", _bodyRef, text);
+        }
+        catch (JSDisconnectedException) { }
+        catch { /* non-critical — will retry on next tick */ }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static int? ParseAnchorLine(string fragment)
+    {
+        if (string.IsNullOrEmpty(fragment)) return null;
+        var frag = fragment.TrimStart('#');
+        if (frag.StartsWith("L", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(frag[1..], out var line) && line > 0)
+            return line - 1; // 1-based display → 0-based lineIndex
+        return null;
+    }
+
+    private sealed record MatchResult(int Count, int Current);
+
+    public async ValueTask DisposeAsync()
+    {
+        StopTail();
+        await _cts.CancelAsync();
+        _cts.Dispose();
+        try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
+        catch { }
     }
 }

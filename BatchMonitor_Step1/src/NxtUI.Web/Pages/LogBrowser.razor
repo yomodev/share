@@ -40,6 +40,17 @@
             {
                 <span class="bm-toolbar-hint">@(_isSearchMode ? "Found" : "Scanned") @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
             }
+
+            <MudTooltip Text="Open local log file">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small"
+                               OnClick="OpenLocalFileAsync" />
+            </MudTooltip>
+            <MudTooltip Text="Download test log (~6000 lines)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Download"
+                               Size="Size.Small"
+                               OnClick="GenerateTestLogAsync" />
+            </MudTooltip>
         </div>
     </div>
 
@@ -194,6 +205,7 @@
                 {
                     <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
                               Class="bm-lb-file-table" FixedHeader="true" Height="100%"
+                              RowClass="bm-lb-file-row"
                               SortLabel="Sort by">
                         <HeaderContent>
                             <MudTh><MudTableSortLabel SortBy="new Func<LogFileEntry,object>(x => x.Server)">Host</MudTableSortLabel></MudTh>
@@ -204,15 +216,15 @@
                             <MudTh></MudTh>
                         </HeaderContent>
                         <RowTemplate>
-                            <MudTd DataLabel="Host"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                            <MudTd DataLabel="File"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
-                            <MudTd DataLabel="Size" Style="text-align:right">
+                            <MudTd DataLabel="Host" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
+                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
+                            <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="@(() => OpenInViewer(context))">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Created">
+                            <MudTd DataLabel="Created" @ondblclick="@(() => OpenInViewer(context))">
                                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Last Updated">
+                            <MudTd DataLabel="Last Updated" @ondblclick="@(() => OpenInViewer(context))">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd>
@@ -604,6 +616,26 @@
 
     private void OpenInViewer(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogViewer(file.FullPath, Env));
+
+    private async Task OpenLocalFileAsync()
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmOpenLocalLogFile", _selfRef);
+    }
+
+    [JSInvokable]
+    public void OnLocalFileOpened(string key, string filename)
+    {
+        InvokeAsync(() =>
+        {
+            var tab = TabModel.CreateLogViewer("local:" + key, Env);
+            tab.Label = System.IO.Path.GetFileName(filename) is { Length: > 0 } n ? n : filename;
+            TabService.OpenOrFocus(tab);
+        });
+    }
+
+    private async Task GenerateTestLogAsync() =>
+        await JS.InvokeVoidAsync("bmGenerateTestLog");
 
     private async Task CopyPathAsync(string path) =>
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);

@@ -57,6 +57,7 @@ public class Program
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
+        builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).

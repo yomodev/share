@@ -80,6 +80,9 @@
     private void OnTabsChanged()
     {
         StateHasChanged();
+        var label = TabService.ActiveTab?.Label;
+        var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
+        _ = JS.InvokeVoidAsync("bmSetTitle", title);
         if (_syncingFromUrl) return;
 
         var targetUrl = TabService.ActiveTab?.GetUrl() ?? "/";

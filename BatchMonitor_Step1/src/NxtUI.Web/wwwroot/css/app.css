@@ -1824,6 +1824,7 @@ tr.bm-row-searching td:first-child {
 }
 
 .bm-lb-file-table { flex: 1 1 0; }
+.bm-lb-file-table tr.bm-lb-file-row { cursor: pointer; }
 .bm-lb-files-progress { height: 3px; flex-shrink: 0; }
 
 .bm-lb-empty {

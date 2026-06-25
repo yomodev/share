@@ -1,0 +1,194 @@
+/* ── Log Viewer ─────────────────────────────────────────────────────────────── */
+
+/* Outer page layout */
+.bm-lv-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Toolbar shared styles */
+.bm-lv-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+.bm-lv-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.bm-lv-match-count {
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    min-width: 72px;
+    text-align: right;
+    font-family: var(--bm-font-mono, monospace);
+}
+
+/* The container div that Blazor holds a @ref to */
+.bm-lv-body {
+    flex: 1 1 0;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ── Virtual scroll internals (set by JS) ────────────────────────────────────── */
+
+/* scroll wrapper created by JS */
+.lv-scroll {
+    font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+    color: var(--mud-palette-text-primary);
+}
+
+/* One log entry */
+.lv-row {
+    border-bottom: 1px solid var(--mud-palette-divider);
+    box-sizing: border-box;
+}
+
+.lv-row:hover {
+    background: var(--mud-palette-action-default-hover);
+}
+
+/* Highlighted match row */
+.lv-match {
+    background: rgba(246, 201, 14, 0.06);
+}
+
+/* Currently focused match row */
+.lv-match-current {
+    background: rgba(246, 201, 14, 0.18) !important;
+    outline: 1px solid rgba(246, 201, 14, 0.45);
+    outline-offset: -1px;
+}
+
+/* Fields row */
+.lv-fields {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 6px;
+    overflow: hidden;
+}
+
+/* Bookmark gutter icon */
+.lv-bm {
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    font-size: 9px;
+    line-height: 12px;
+    text-align: center;
+    cursor: pointer;
+    display: inline-block;
+    color: #1a1a1a;
+    user-select: none;
+}
+
+.lv-bm-empty {
+    background: transparent;
+    border: 1px solid transparent;
+}
+
+.lv-bm-empty:hover {
+    border-color: rgba(128, 128, 128, 0.35);
+    background: rgba(128, 128, 128, 0.12);
+}
+
+/* Line number */
+.lv-lineno {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-disabled);
+    font-size: 0.82em;
+    min-width: 40px;
+    text-align: right;
+    user-select: none;
+}
+
+/* Timestamp */
+.lv-ts {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary);
+}
+
+/* Level badge */
+.lv-lv {
+    flex-shrink: 0;
+    font-weight: 600;
+    font-size: 0.8em;
+    padding: 0 4px;
+    border-radius: 3px;
+    min-width: 44px;
+    text-align: center;
+}
+
+.lv-lv-error { color: #ff7070; background: rgba(255, 112, 112, 0.13); }
+.lv-lv-warn  { color: #f6c90e; background: rgba(246, 201,  14, 0.13); }
+.lv-lv-info  { color: #7ec897; background: rgba(126, 200, 151, 0.13); }
+.lv-lv-debug { color: var(--mud-palette-text-secondary); }
+.lv-lv-trace { color: var(--mud-palette-text-disabled); }
+
+/* Host / PID */
+.lv-host, .lv-pid {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary);
+    font-size: 0.88em;
+}
+
+.lv-pid {
+    min-width: 36px;
+}
+
+/* Message — takes the remaining width */
+.lv-msg {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Caller */
+.lv-caller {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary);
+    font-size: 0.8em;
+    opacity: 0.7;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Continuation lines (stack trace etc.) */
+.lv-cont {
+    padding: 0 6px 0 72px; /* align with message column */
+    color: var(--mud-palette-text-secondary);
+    font-size: 0.9em;
+    line-height: 20px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Empty state */
+.lv-empty {
+    padding: 32px 16px;
+    color: var(--mud-palette-text-secondary);
+    text-align: center;
+    font-size: 13px;
+}
+
+/* Search highlight mark */
+mark.lv-hl {
+    background: #f6c90e;
+    color: #1a1a1a;
+    border-radius: 2px;
+    padding: 0 1px;
+}

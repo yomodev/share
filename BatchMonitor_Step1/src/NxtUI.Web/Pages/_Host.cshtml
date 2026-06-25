@@ -24,6 +24,7 @@
     <link href="css/app.css" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
+    <link href="css/log-viewer.css" rel="stylesheet" />
 </head>
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
@@ -67,6 +68,123 @@
             // Insert Mud script synchronously into head so it begins loading immediately
             document.head.appendChild(mud);
         })();
+    </script>
+
+    <!-- Browser title helper -->
+    <script>window.bmSetTitle = function(t) { document.title = t; };</script>
+
+    <!-- Local log file picker + test log generator -->
+    <script>
+        window._localFiles = new Map();
+
+        window.bmOpenLocalLogFile = function (dotnetRef) {
+            var input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.log,.txt,.csv';
+            input.style.display = 'none';
+            document.body.appendChild(input);
+            input.onchange = function (e) {
+                var file = e.target.files[0];
+                document.body.removeChild(input);
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function (ev) {
+                    var key = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36));
+                    window._localFiles.set(key, ev.target.result);
+                    dotnetRef.invokeMethodAsync('OnLocalFileOpened', key, file.name);
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        };
+
+        window.bmGetLocalFile = function (key) {
+            return window._localFiles.get(key) ?? null;
+        };
+
+        window.bmGenerateTestLog = function () {
+            var services  = ['OrderService', 'PaymentService', 'NotificationSvc', 'InventoryService', 'AuthService'];
+            var hosts     = ['srv-01', 'srv-02', 'srv-03', 'srv-04'];
+            var levels    = ['INFO','INFO','INFO','INFO','DEBUG','DEBUG','WARN','WARN','ERROR'];
+            var callers   = ['Service.Execute','Worker.ProcessAsync','Handler.Handle','Repository.SaveAsync','Pipeline.Run'];
+            var msgs_info = [
+                'Request processed successfully in {n}ms',
+                'Batch {b} completed: {n} items processed',
+                'Connection established to {host}:{port}',
+                'Cache hit for key={k} (ttl={n}s remaining)',
+                'Scheduled job started: interval={n}s',
+                'Health check passed for component={c}',
+            ];
+            var msgs_warn = [
+                'Slow query detected: {n}ms for table={t}',
+                'Retry attempt {n}/3 for operation={op}',
+                'Queue depth high: {n} pending messages|partition={p}',
+                'Rate limit approaching: {n}/100 requests used',
+                'Memory usage at {n}% of configured limit',
+            ];
+            var msgs_debug = [
+                'Processing item id={n} batch={b}',
+                'Deserializing payload size={n} bytes',
+                'Acquiring lock on resource={r}',
+                'Evaluating rule {n} of {m}',
+            ];
+
+            function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+            function tmpl(s, n) {
+                return s.replace('{n}', n || Math.floor(Math.random()*1000))
+                        .replace('{b}', Math.floor(Math.random()*50))
+                        .replace('{k}', 'key-' + Math.floor(Math.random()*999))
+                        .replace('{t}', 'orders')
+                        .replace('{op}', 'db-write')
+                        .replace('{p}', Math.floor(Math.random()*4))
+                        .replace('{r}', 'resource-' + Math.floor(Math.random()*10))
+                        .replace('{m}', '12')
+                        .replace('{c}', 'kafka')
+                        .replace('{host}', pick(hosts))
+                        .replace('{port}', 9092);
+            }
+
+            var lines = [];
+            var start = new Date(Date.now() - 3 * 60 * 60 * 1000);
+            var errors = ['System.InvalidOperationException','System.TimeoutException','System.IO.IOException','System.NullReferenceException'];
+            var i = 0;
+
+            while (i < 6000) {
+                var ts  = new Date(start.getTime() + i * 1800);
+                var iso = ts.toISOString().replace('T', ' ').slice(0, 23);
+                var lvl = pick(levels);
+                var svc = pick(services);
+                var host = pick(hosts);
+                var pid = 1000 + Math.floor(Math.random() * 8999);
+                var caller = svc + '.' + pick(callers);
+                var msg;
+
+                if (lvl === 'ERROR') {
+                    var errType = pick(errors);
+                    var lineNo  = 40 + Math.floor(Math.random() * 200);
+                    msg = 'Unhandled exception in ' + caller + ': ' + errType.split('.').pop() + ' at step ' + (i % 20);
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    lines.push('   ' + errType + ': Operation failed after ' + (i % 5 + 1) + ' retries');
+                    lines.push('   at ' + caller + '() in ' + svc + '.cs:line ' + lineNo);
+                    lines.push('   at System.Threading.Tasks.Task.Run(Action action)');
+                    i += 4;
+                } else if (lvl === 'WARN') {
+                    msg = tmpl(pick(msgs_warn));
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    i++;
+                } else if (lvl === 'DEBUG') {
+                    msg = tmpl(pick(msgs_debug));
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    i++;
+                } else {
+                    msg = tmpl(pick(msgs_info));
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    i++;
+                }
+            }
+
+            bmSaveFile('test-app.log', lines.join('\n'), 'text/plain');
+        };
     </script>
 
     <!-- File download helper — global so any Blazor component can call it via IJSRuntime -->
@@ -213,6 +331,8 @@
 
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
+    <script type="module" src="js/log-viewer.js?v=1"></script>
+    <link rel="modulepreload" href="js/log-viewer-parser.js?v=1" />
     <link rel="modulepreload" href="js/filter.js?v=2" />
     <link rel="modulepreload" href="js/app.js?v=4" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
