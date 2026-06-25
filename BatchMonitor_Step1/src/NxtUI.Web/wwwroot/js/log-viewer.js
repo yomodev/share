@@ -130,7 +130,8 @@ function renderRows(state) {
         const calHtml = isMatch ? highlightText(e.caller,  searchRe) : escapeHtml(e.caller);
 
         const bmBorder = bookmark ? `border-left:3px solid ${bookmark}` : 'border-left:3px solid transparent';
-        buf.push(`<div class="${cls}" style="height:${h}px;${bmBorder}" data-i="${i}">`);
+        const bmBg     = bookmark ? `background:${bookmark}18;` : '';
+        buf.push(`<div class="${cls}" style="height:${h}px;${bmBorder};${bmBg}" data-i="${i}">`);
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
         buf.push(`<span class="lv-lineno" title="line ${e.lineIndex + 1}">${lineNo}</span>`);
