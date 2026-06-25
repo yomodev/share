@@ -75,7 +75,7 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    padding: 2px 6px;
+    padding: 2px 2px;
     overflow: hidden;
 }
 
@@ -117,7 +117,8 @@
 /* Timestamp */
 .lv-ts {
     flex-shrink: 0;
-    color: var(--mud-palette-text-secondary);
+    font-size: 0.8em;
+    color: #5a9e6f;
 }
 
 /* Level badge */
@@ -134,7 +135,7 @@
 .lv-lv-error { color: #ff7070; background: rgba(255, 112, 112, 0.13); }
 .lv-lv-warn  { color: #f6c90e; background: rgba(246, 201,  14, 0.13); }
 .lv-lv-info  { color: #7ec897; background: rgba(126, 200, 151, 0.13); }
-.lv-lv-debug { color: var(--mud-palette-text-secondary); }
+.lv-lv-debug { color: #61afef; background: rgba(97, 175, 239, 0.10); }
 .lv-lv-trace { color: var(--mud-palette-text-disabled); }
 
 /* Host / PID */
