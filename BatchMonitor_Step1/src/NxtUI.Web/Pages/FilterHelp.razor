@@ -120,29 +120,37 @@
             <thead><tr><th>Form</th><th>Example</th><th>Meaning</th></tr></thead>
             <tbody>
                 <tr><td>Named</td><td><code>today</code>, <code>yesterday</code>, <code>now</code></td><td>Start of today / yesterday / current instant (UTC)</td></tr>
-                <tr><td>Relative offset</td><td><code>-7d</code>, <code>-2h</code>, <code>-30m</code>, <code>-1w</code></td><td>N days / hours / minutes / weeks ago from now</td></tr>
+                <tr><td>Negative offset</td><td><code>-7d</code>, <code>-2h</code>, <code>-30m</code>, <code>-1w</code></td><td><strong>now − N</strong> — a real point in the past (e.g. for timestamps)</td></tr>
+                <tr><td>Positive offset</td><td><code>7d</code>, <code>2h</code>, <code>30m</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
                 <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
                 <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
-                <tr><td>Time of day</td><td><code>09:30</code>, <code>14:00:00</code></td><td>That time on today's UTC date</td></tr>
+                <tr><td>Time / duration</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>today + hh:mm:ss</strong> — works as a clock time or as a duration depending on the field</td></tr>
             </tbody>
         </table>
 
         <p>Combine with comparison operators or <code>..</code> ranges:</p>
         <div class="bm-help-examples">
-            <div class="bm-help-ex"><code>start:&gt;-7d</code> <span>— started in the last 7 days</span></div>
+            <div class="bm-help-ex"><code>start:&gt;-7d</code> <span>— started in the last 7 days (now − 7d)</span></div>
             <div class="bm-help-ex"><code>start:2024-01-01..2024-12-31</code> <span>— started in 2024</span></div>
             <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code> <span>— started during business hours today</span></div>
         </div>
 
-        <p style="margin-top:14px;">
-            The <code>dur</code> field uses the same <code>hh:mm</code> / <code>hh:mm:ss</code> notation
-            but measures <strong>elapsed time from midnight</strong>, so the numbers mean duration, not a clock time.
-        </p>
+        <div class="bm-help-callout" style="margin-top:14px;">
+            <strong>Negative vs positive offsets:</strong> <code>-10m</code> means <em>now minus 10 minutes</em> — useful for real
+            timestamps like <code>start</code> or <code>finish</code>.  <code>10m</code> (no minus) means <em>today at 00:10:00</em> —
+            useful for age/duration fields stored as elapsed time from midnight, like <code>dur</code> or <code>updated</code>.
+            <code>hh:mm</code> always means <em>today + that time</em>, so <code>00:10</code> and <code>10m</code> are identical.
+        </div>
+
+        <p style="margin-top:14px;">Age/duration fields (<code>dur</code>, <code>updated</code>) store elapsed time as today + interval, so use positive offsets or <code>hh:mm</code>:</p>
         <div class="bm-help-examples">
-            <div class="bm-help-ex"><code>dur:&gt;00:01</code>     <span>— longer than 1 minute</span></div>
-            <div class="bm-help-ex"><code>dur:&gt;01:00</code>     <span>— longer than 1 hour</span></div>
-            <div class="bm-help-ex"><code>dur:00:30..02:00</code> <span>— between 30 min and 2 hours</span></div>
-            <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>  <span>— under 30 seconds</span></div>
+            <div class="bm-help-ex"><code>dur:&gt;00:01</code>      <span>— longer than 1 minute</span></div>
+            <div class="bm-help-ex"><code>dur:&gt;01:00</code>      <span>— longer than 1 hour</span></div>
+            <div class="bm-help-ex"><code>dur:00:30..02:00</code>  <span>— between 30 min and 2 hours</span></div>
+            <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>   <span>— under 30 seconds</span></div>
+            <div class="bm-help-ex"><code>updated:&lt;10m</code>    <span>— last heartbeat less than 10 min ago (online)</span></div>
+            <div class="bm-help-ex"><code>updated:&lt;00:10</code>  <span>— same as above using hh:mm form</span></div>
+            <div class="bm-help-ex"><code>updated:&gt;16m</code>    <span>— last heartbeat more than 16 min ago (stale)</span></div>
         </div>
     </section>
 
@@ -180,6 +188,30 @@
                 <tr><td><code>status</code></td><td><code>Status</code></td><td>Running / Completed / Failed / …</td></tr>
             </tbody>
         </table>
+    </section>
+
+    <!-- ── Services fields ───────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Services fields</h2>
+
+        <table class="bm-help-table bm-help-table--fields">
+            <thead><tr><th>Alias</th><th>Full name</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>svcname / servicename</code></td><td><code>ServiceName</code></td><td>Service name</td></tr>
+                <tr><td><code>host / hostname</code></td><td><code>HostName</code></td><td>Host name</td></tr>
+                <tr><td><code>pid / processid</code></td><td><code>ProcessId</code></td><td>Process ID</td></tr>
+                <tr><td><code>ram / mem</code></td><td><code>RamMb</code></td><td>Current RAM usage in MB — use numeric comparisons</td></tr>
+                <tr><td><code>peak</code></td><td><code>PeakMb</code></td><td>Peak RAM usage in MB</td></tr>
+                <tr><td><code>updated</code></td><td><code>UpdatedDateTime</code></td><td>Age since last heartbeat — use positive offsets or <code>hh:mm</code></td></tr>
+            </tbody>
+        </table>
+
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>updated:&lt;10m</code>   <span>— services with heartbeat in the last 10 minutes (online)</span></div>
+            <div class="bm-help-ex"><code>updated:&gt;16m</code>   <span>— services last seen more than 16 minutes ago (stale)</span></div>
+            <div class="bm-help-ex"><code>ram:&gt;500</code>        <span>— services using more than 500 MB</span></div>
+            <div class="bm-help-ex"><code>host:server1</code>    <span>— services running on server1</span></div>
+        </div>
     </section>
 
     <!-- ── Examples ───────────────────────────────────────────────────── -->
