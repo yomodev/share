@@ -217,4 +217,6 @@ describe('escapeHtml', () => {
     it('escapes <',  () => expect(escapeHtml('<tag>')).toBe('&lt;tag&gt;'))
     it('escapes "',  () => expect(escapeHtml('"val"')).toBe('&quot;val&quot;'))
     it('leaves plain text unchanged', () => expect(escapeHtml('hello')).toBe('hello'))
+    it('accepts a number (pid/threadId are integers)', () => expect(escapeHtml(1234)).toBe('1234'))
+    it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
