@@ -213,7 +213,7 @@ describe('evaluate — numeric comparisons', () => {
 describe('evaluate — log viewer scenario (string pid/threadId with LOG_ALIASES)', () => {
     const LOG_SEARCH_FIELDS = ['level', 'host', 'pid', 'threadId', 'message', 'caller'];
     const LOG_ALIASES = { lvl: 'level', msg: 'message', tid: 'threadId', ts: 'timestamp' };
-    const entry = { pid: '1254', threadId: '97', level: 'INFO', host: 'srv-02', message: 'test', caller: 'Svc.Method' };
+    const entry = { pid: 1254, threadId: 97, level: 'INFO', host: 'srv-02', message: 'test', caller: 'Svc.Method' };
 
     function evalLog(filter) {
         return evaluate(parse(filter, LOG_SEARCH_FIELDS, LOG_ALIASES), entry);

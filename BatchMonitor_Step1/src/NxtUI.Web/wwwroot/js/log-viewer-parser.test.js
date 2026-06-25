@@ -29,8 +29,8 @@ describe('parseLog — single entry, no pipes in message', () => {
     it('parses timestamp',            () => expect(entries[0].timestamp).toBe('2024-01-15 12:00:00'))
     it('parses level',                () => expect(entries[0].level).toBe('INFO'))
     it('parses host',                 () => expect(entries[0].host).toBe('srv-01'))
-    it('parses pid',                  () => expect(entries[0].pid).toBe('1234'))
-    it('parses threadId',             () => expect(entries[0].threadId).toBe('42'))
+    it('parses pid',                  () => expect(entries[0].pid).toBe(1234))
+    it('parses threadId',             () => expect(entries[0].threadId).toBe(42))
     it('parses message',              () => expect(entries[0].message).toBe('Application started'))
     it('parses caller',               () => expect(entries[0].caller).toBe('MyApp.Startup'))
     it('has no continuations',        () => expect(entries[0].continuations).toEqual([]))
@@ -47,7 +47,7 @@ describe('parseLog — pipe character inside message', () => {
     it('produces one entry',          () => expect(entries).toHaveLength(1))
     it('reconstructs full message',   () => expect(entries[0].message).toBe('Value is a|b|c here'))
     it('caller is the last segment',  () => expect(entries[0].caller).toBe('MyApp.Check'))
-    it('threadId is correct',         () => expect(entries[0].threadId).toBe('17'))
+    it('threadId is correct',         () => expect(entries[0].threadId).toBe(17))
 })
 
 // ── parseLog — multi-line entry (stack trace) ─────────────────────────────────
@@ -89,9 +89,9 @@ describe('parseLog — multiple entries in sequence', () => {
     it('lineIndex of second entry is 1', () => expect(entries[1].lineIndex).toBe(1))
     it('lineIndex of third entry is 2',  () => expect(entries[2].lineIndex).toBe(2))
     it('threadIds are independent',      () => {
-        expect(entries[0].threadId).toBe('10')
-        expect(entries[1].threadId).toBe('11')
-        expect(entries[2].threadId).toBe('12')
+        expect(entries[0].threadId).toBe(10)
+        expect(entries[1].threadId).toBe(11)
+        expect(entries[2].threadId).toBe(12)
     })
 })
 
@@ -108,7 +108,7 @@ describe('parseLog — lines before first timestamp', () => {
     const raw = 'garbage line\nanother garbage\n2024-01-15 12:00:00|INFO|srv-01|1234|7|Hello|Caller'
     it('discards pre-header noise',  () => expect(parseLog(raw)).toHaveLength(1))
     it('entry has correct message',  () => expect(parseLog(raw)[0].message).toBe('Hello'))
-    it('entry has correct threadId', () => expect(parseLog(raw)[0].threadId).toBe('7'))
+    it('entry has correct threadId', () => expect(parseLog(raw)[0].threadId).toBe(7))
 })
 
 // ── parseLog — undersized entry (fewer than 7 fields) ────────────────────────
@@ -120,7 +120,7 @@ describe('parseLog — fewer than 7 pipe-separated fields', () => {
     it('still produces one entry',   () => expect(entries).toHaveLength(1))
     it('message is the 5th field',   () => expect(entries[0].message).toBe('JustMessage'))
     it('caller is empty string',     () => expect(entries[0].caller).toBe(''))
-    it('threadId is empty string',   () => expect(entries[0].threadId).toBe(''))
+    it('threadId is 0 when missing',  () => expect(entries[0].threadId).toBe(0))
 })
 
 // ── buildRegex ────────────────────────────────────────────────────────────────

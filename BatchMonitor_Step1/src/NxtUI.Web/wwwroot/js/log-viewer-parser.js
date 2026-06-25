@@ -6,7 +6,7 @@
 //   • Lines that do NOT start with a timestamp are continuations of the previous entry
 //     (stack traces, exception detail lines, etc.)
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:string, threadId:string, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -53,8 +53,8 @@ function parseLine(line, lineIndex) {
     const timestamp = parts[0] ?? '';
     const level     = parts[1] ?? '';
     const host      = parts[2] ?? '';
-    const pid       = parts[3] ?? '';
-    const threadId  = parts.length > 6 ? (parts[4] ?? '') : '';
+    const pid       = parseInt(parts[3], 10) || 0;
+    const threadId  = parts.length > 6 ? (parseInt(parts[4], 10) || 0) : 0;
     const caller    = parts.length > 6 ? (parts[parts.length - 1] ?? '') : '';
     const message   = parts.length > 6
         ? parts.slice(5, parts.length - 1).join('|')

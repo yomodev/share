@@ -9,7 +9,7 @@
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=2';
+import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=3';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
