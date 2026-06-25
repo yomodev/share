@@ -98,9 +98,6 @@
             input.click();
         };
 
-        window.bmGetLocalFile = function (key) {
-            return window._localFiles.get(key) ?? null;
-        };
 
         window.bmGenerateTestLog = function () {
             var services  = ['OrderService', 'PaymentService', 'NotificationSvc', 'InventoryService', 'AuthService'];

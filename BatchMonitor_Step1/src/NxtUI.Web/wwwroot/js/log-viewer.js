@@ -389,9 +389,15 @@ function destroy(container) {
     _s.delete(container);
 }
 
+function renderLocalFile(container, key, opts) {
+    const raw = window._localFiles?.get(key);
+    if (raw == null) { console.error('[logViewer] local file key not found:', key); return; }
+    render(container, raw, opts);
+}
+
 // Expose on window so Blazor JS interop (InvokeVoidAsync / InvokeAsync) can reach it.
 window.logViewer = {
-    render, appendRaw, find, nextMatch, prevMatch,
+    render, renderLocalFile, appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,
     setFontSize, setWordWrap,

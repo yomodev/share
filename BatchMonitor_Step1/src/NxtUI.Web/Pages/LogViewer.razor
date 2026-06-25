@@ -134,6 +134,7 @@
     private bool    _isLoading;
     private string? _error;
     private string? _rawContent;
+    private string? _localKey;   // set instead of _rawContent for browser-local files
     private int?    _anchorLine;
     private long    _fileOffset;
 
@@ -194,12 +195,14 @@
         {
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
             {
-                var key = Path["local:".Length..];
-                _rawContent = await JS.InvokeAsync<string?>("bmGetLocalFile", key) ?? "";
-                _fileOffset = 0; // no live tail for browser-local files
+                // Content stays in browser JS memory — never transfer over SignalR.
+                _localKey   = Path["local:".Length..];
+                _rawContent = null;
+                _fileOffset = 0;
             }
             else
             {
+                _localKey = null;
                 (_rawContent, _fileOffset) = await LogViewerSvc.ReadAllAsync(Path!, _cts.Token);
             }
             _dirty = true;
@@ -215,18 +218,22 @@
 
     private async Task RenderViewerAsync()
     {
-        if (_rawContent is null || !_rendered) return;
+        if (_rawContent is null && _localKey is null) return;
+        if (!_rendered) return;
         try
         {
-            await JS.InvokeVoidAsync("logViewer.render", _bodyRef, _rawContent, new
+            var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap };
+            if (_localKey is not null)
             {
-                anchorLine = _anchorLine,
-                fontSize   = _fontSize,
-                wordWrap   = _wordWrap,
-            });
-            _rawContent = null;
-            if (!Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                await JS.InvokeVoidAsync("logViewer.renderLocalFile", _bodyRef, _localKey, opts);
+                _localKey = null;
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("logViewer.render", _bodyRef, _rawContent, opts);
+                _rawContent = null;
                 StartTail();
+            }
         }
         catch (JSDisconnectedException) { }
         catch (Exception ex)
