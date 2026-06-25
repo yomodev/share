@@ -217,6 +217,22 @@
     font-size: 13px;
 }
 
+/* ── Light-theme color overrides ─────────────────────────────────────────────
+   The default palette above is tuned for dark backgrounds. When the app is in
+   light mode, html[data-theme="light"] is set by bmSetTheme() so we can provide
+   darker, more readable variants of every soft color. */
+
+html[data-theme="light"] .lv-ts            { color: #1e6b3a; }
+html[data-theme="light"] .lv-ts-time       { color: #0d7a3e; }
+html[data-theme="light"] .lv-lv-error      { color: #c0392b; background: rgba(192, 57,  43, 0.12); }
+html[data-theme="light"] .lv-lv-warn       { color: #b7770d; background: rgba(183,119,  13, 0.12); }
+html[data-theme="light"] .lv-lv-info       { color: #1a7a3c; background: rgba( 26,122,  60, 0.12); }
+html[data-theme="light"] .lv-lv-debug      { color: #1565c0; background: rgba( 21,101, 192, 0.10); }
+html[data-theme="light"] .lv-host          { color: #6a1b9a; }
+html[data-theme="light"] .lv-pid           { color: #a04000; }
+html[data-theme="light"] .lv-tid           { color: #00695c; }
+html[data-theme="light"] .lv-caller        { color: var(--mud-palette-text-secondary); opacity: 1; }
+
 /* Search highlight mark */
 mark.lv-hl {
     background: #f6c90e;

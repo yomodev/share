@@ -70,8 +70,13 @@
         })();
     </script>
 
-    <!-- Browser title helper -->
-    <script>window.bmSetTitle = function(t) { document.title = t; };</script>
+    <!-- Browser title + theme helpers -->
+    <script>
+        window.bmSetTitle = function(t) { document.title = t; };
+        window.bmSetTheme = function(isDark) {
+            document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+        };
+    </script>
 
     <!-- Local log file picker + test log generator -->
     <script>

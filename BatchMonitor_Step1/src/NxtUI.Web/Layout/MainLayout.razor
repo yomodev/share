@@ -62,6 +62,8 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await JS.InvokeVoidAsync("bmSetTheme", ThemeService.IsDark);
+
         if (!firstRender) return;
         _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
         _dotnetRef  = DotNetObjectReference.Create(this);
