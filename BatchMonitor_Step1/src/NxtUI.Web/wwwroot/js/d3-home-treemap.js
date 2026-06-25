@@ -28,7 +28,10 @@ window.homeMemoryTreemap = (function () {
 
         const svg = d3.select(container).append('svg')
             .attr('width', W).attr('height', H)
-            .style('display', 'block');
+            .attr('viewBox', `0 0 ${W} ${H}`)
+            .style('display', 'block')
+            .style('width', '100%')
+            .style('height', H + 'px');
 
         const tip = d3.select(container).append('div')
             .style('position', 'absolute')
@@ -73,7 +76,7 @@ window.homeMemoryTreemap = (function () {
             const h = leaf.y1 - leaf.y0 - 2;
             if (w <= 0 || h <= 0) return;
 
-            const rect = svg.append('rect')
+            svg.append('rect')
                 .attr('x', leaf.x0 + 1).attr('y', leaf.y0 + 1)
                 .attr('width', w).attr('height', h)
                 .attr('fill', color(leaf.data.ram))
@@ -94,7 +97,6 @@ window.homeMemoryTreemap = (function () {
                 })
                 .on('mouseleave', () => tip.style('display', 'none'));
 
-            // RAM label — only if rectangle is wide enough
             if (w >= 34 && h >= 14 && leaf.data.ram != null) {
                 svg.append('text')
                     .attr('x', leaf.x0 + 1 + w / 2)

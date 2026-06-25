@@ -1462,7 +1462,6 @@ html, body {
     margin-bottom: 20px;
     cursor: pointer;
     border-radius: var(--mud-default-borderradius);
-    overflow: hidden;
 }
 
 /* ── Card shell ──────────────────────────────────────────────────── */

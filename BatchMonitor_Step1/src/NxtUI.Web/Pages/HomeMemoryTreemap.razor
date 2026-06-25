@@ -16,7 +16,6 @@
     private bool             _dirty;
     private TreeRoot?        _treeData;
 
-    // ── DTOs — typed records ensure correct camelCase JSON serialization ──
     private sealed record TreeRoot(string Name, List<TreeHost> Children);
     private sealed record TreeHost(string Name, List<TreeSvc>  Children);
     private sealed record TreeSvc (string Name, int Pid, double? Ram);
