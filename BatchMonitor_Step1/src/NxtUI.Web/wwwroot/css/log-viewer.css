@@ -159,12 +159,12 @@
 
 .lv-pid {
     color: #d19a66;   /* muted amber */
-    min-width: 36px;
+    min-width: 28px;
 }
 
 .lv-tid {
     color: #56b6c2;   /* muted teal */
-    min-width: 28px;
+    min-width: 16px;
 }
 
 /* Message — takes the remaining width */
