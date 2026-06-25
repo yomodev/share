@@ -9,7 +9,7 @@
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=3';
+import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=4';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ function renderRows(vp) {
         buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
         buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
         buf.push(`<span class="lv-pid">${escapeHtml(e.pid)}</span>`);
-        if (e.threadId) buf.push(`<span class="lv-tid">${escapeHtml(e.threadId)}</span>`);
+        if (e.threadId !== 0) buf.push(`<span class="lv-tid">${escapeHtml(e.threadId)}</span>`);
         buf.push(`<span class="lv-msg">${msgHtml}</span>`);
         if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
         buf.push(`</div>`); // .lv-fields

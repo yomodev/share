@@ -133,7 +133,7 @@ export function highlightText(text, re) {
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 export function escapeHtml(text) {
-    return text
+    return String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
