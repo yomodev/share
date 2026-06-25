@@ -46,11 +46,7 @@
                                Size="Size.Small"
                                OnClick="OpenLocalFileAsync" />
             </MudTooltip>
-            <MudTooltip Text="Download test log (~6000 lines)">
-                <MudIconButton Icon="@Icons.Material.Outlined.Download"
-                               Size="Size.Small"
-                               OnClick="GenerateTestLogAsync" />
-            </MudTooltip>
+
         </div>
     </div>
 
@@ -634,8 +630,6 @@
         });
     }
 
-    private async Task GenerateTestLogAsync() =>
-        await JS.InvokeVoidAsync("bmGenerateTestLog");
 
     private async Task CopyPathAsync(string path) =>
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
