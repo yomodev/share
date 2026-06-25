@@ -156,26 +156,27 @@
                 var caller = svc + '.' + pick(callers);
                 var msg;
 
+                var tid = 10 + Math.floor(Math.random() * 90);
                 if (lvl === 'ERROR') {
                     var errType = pick(errors);
                     var lineNo  = 40 + Math.floor(Math.random() * 200);
                     msg = 'Unhandled exception in ' + caller + ': ' + errType.split('.').pop() + ' at step ' + (i % 20);
-                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + tid + '|' + msg + '|' + caller);
                     lines.push('   ' + errType + ': Operation failed after ' + (i % 5 + 1) + ' retries');
                     lines.push('   at ' + caller + '() in ' + svc + '.cs:line ' + lineNo);
                     lines.push('   at System.Threading.Tasks.Task.Run(Action action)');
                     i += 4;
                 } else if (lvl === 'WARN') {
                     msg = tmpl(pick(msgs_warn));
-                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + tid + '|' + msg + '|' + caller);
                     i++;
                 } else if (lvl === 'DEBUG') {
                     msg = tmpl(pick(msgs_debug));
-                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + tid + '|' + msg + '|' + caller);
                     i++;
                 } else {
                     msg = tmpl(pick(msgs_info));
-                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + msg + '|' + caller);
+                    lines.push(iso + '|' + lvl + '|' + host + '|' + pid + '|' + tid + '|' + msg + '|' + caller);
                     i++;
                 }
             }

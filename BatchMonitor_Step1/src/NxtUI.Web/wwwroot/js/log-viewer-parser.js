@@ -1,12 +1,12 @@
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
-// Log format:  timestamp|level|host|pid|message|caller
-//   • "message" may contain "|" — everything between the 4th and last "|" is the message
+// Log format:  timestamp|level|host|pid|threadId|message|caller
+//   • "message" may contain "|" — everything between the 5th and last "|" is the message
 //   • Lines that do NOT start with a timestamp are continuations of the previous entry
 //     (stack traces, exception detail lines, etc.)
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:string, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:string, threadId:string, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -48,18 +48,19 @@ export function parseLog(rawText) {
 function parseLine(line, lineIndex) {
     const parts = line.split('|');
 
-    // timestamp=0, level=1, host=2, pid=3, message=4..n-2, caller=n-1
-    // If fewer than 6 parts, be lenient and fill what we can.
+    // timestamp=0, level=1, host=2, pid=3, threadId=4, message=5..n-2, caller=n-1
+    // If fewer than 7 parts, be lenient and fill what we can.
     const timestamp = parts[0] ?? '';
     const level     = parts[1] ?? '';
     const host      = parts[2] ?? '';
     const pid       = parts[3] ?? '';
-    const caller    = parts.length > 5 ? (parts[parts.length - 1] ?? '') : '';
-    const message   = parts.length > 5
-        ? parts.slice(4, parts.length - 1).join('|')
-        : (parts[4] ?? '');
+    const threadId  = parts.length > 6 ? (parts[4] ?? '') : '';
+    const caller    = parts.length > 6 ? (parts[parts.length - 1] ?? '') : '';
+    const message   = parts.length > 6
+        ? parts.slice(5, parts.length - 1).join('|')
+        : (parts[5] ?? parts[4] ?? '');
 
-    return { lineIndex, timestamp, level: level.trim(), host, pid, message, caller, continuations: [], displayLineCount: 1 };
+    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, continuations: [], displayLineCount: 1 };
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -95,7 +96,7 @@ export function findMatches(entries, re) {
 }
 
 function entrySearchText(entry) {
-    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.message}|${entry.caller}`;
+    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`;
     return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
 }
 

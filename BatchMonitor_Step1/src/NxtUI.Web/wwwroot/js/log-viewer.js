@@ -139,6 +139,7 @@ function renderRows(state) {
         buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
         buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
         buf.push(`<span class="lv-pid">${escapeHtml(e.pid)}</span>`);
+        if (e.threadId) buf.push(`<span class="lv-tid">${escapeHtml(e.threadId)}</span>`);
         buf.push(`<span class="lv-msg">${msgHtml}</span>`);
         if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
         buf.push(`</div>`); // .lv-fields
