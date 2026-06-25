@@ -84,6 +84,7 @@
         var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
         _ = JS.InvokeVoidAsync("bmSetTitle", title);
         if (_syncingFromUrl) return;
+        if (TabService.ActiveTab?.NoNavigate == true) return;
 
         var targetUrl = TabService.ActiveTab?.GetUrl() ?? "/";
         var currentPath = new Uri(Nav.Uri).AbsolutePath;

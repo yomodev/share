@@ -56,6 +56,9 @@ public class TabModel
 
     public bool IsActive { get; set; }
 
+    /// <summary>When true, opening this tab does not trigger URL navigation (e.g. browser-local files).</summary>
+    public bool NoNavigate { get; set; }
+
     // ── Factory helpers ──────────────────────────────────────────────────
 
     public static TabModel CreateRunsDashboard(string env) => new()

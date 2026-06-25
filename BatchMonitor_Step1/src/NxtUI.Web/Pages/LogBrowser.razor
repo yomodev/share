@@ -624,8 +624,10 @@
     {
         InvokeAsync(() =>
         {
+            var label = System.IO.Path.GetFileName(filename) is { Length: > 0 } n ? n : filename;
             var tab = TabModel.CreateLogViewer("local:" + key, Env);
-            tab.Label = System.IO.Path.GetFileName(filename) is { Length: > 0 } n ? n : filename;
+            tab.Label      = label;
+            tab.NoNavigate = true;
             TabService.OpenOrFocus(tab);
         });
     }

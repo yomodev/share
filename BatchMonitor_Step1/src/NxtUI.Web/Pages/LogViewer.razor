@@ -12,7 +12,7 @@
         <MudText Typo="Typo.body2" Style="font-weight:600;flex-shrink:0">@_fileName</MudText>
         <span class="bm-muted bm-toolbar-hint"
               style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:11px">
-            @Path
+            @_pathDisplay
         </span>
 
         <div class="bm-lv-toolbar-right">
@@ -26,10 +26,13 @@
                                Size="Size.Small" OnClick="RefreshAsync"
                                Disabled="@_isLoading" />
             </MudTooltip>
-            <MudTooltip Text="Copy share link with current line">
-                <MudIconButton Icon="@Icons.Material.Outlined.Link"
-                               Size="Size.Small" OnClick="ShareAsync" />
-            </MudTooltip>
+            @if (_pathDisplay != "local file")
+            {
+                <MudTooltip Text="Copy share link with current line">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Link"
+                                   Size="Size.Small" OnClick="ShareAsync" />
+                </MudTooltip>
+            }
         </div>
     </div>
 
@@ -115,8 +118,9 @@
 </div>
 
 @code {
-    [Parameter] public string? Path { get; set; }
-    [Parameter] public string  Env  { get; set; } = string.Empty;
+    [Parameter] public string? Path     { get; set; }
+    [Parameter] public string  Env      { get; set; } = string.Empty;
+    [Parameter] public string? FileName { get; set; }
 
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 
@@ -149,8 +153,11 @@
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
 
-    private string _fileName =>
+    private string _fileName => FileName is { Length: > 0 } fn ? fn :
         System.IO.Path.GetFileName((Path ?? "").TrimEnd('\\', '/')) is { Length: > 0 } n ? n : "Log";
+
+    private string _pathDisplay => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
+        ? "local file" : (Path ?? "");
 
     private string MatchLabel =>
         _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
