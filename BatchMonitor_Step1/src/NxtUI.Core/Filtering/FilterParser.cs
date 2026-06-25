@@ -442,7 +442,7 @@ public sealed class FilterParser
     // ── Date parsing ───────────────────────────────────────────────────────
 
     private static readonly Regex RelativeDate =
-        new(@"^-(\d+)([mhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"^(-?)(\d+)([mhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex TimeOnly =
         new(@"^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -470,19 +470,35 @@ public sealed class FilterParser
                 return true;
         }
 
-        // Relative offset: -7d, -2h, -30m, -1w
+        // Relative offset: -7d / -2h / -30m / -1w  → now − N  (real past timestamp)
+        //                   7d /  2h /  30m /  1w  → today + N (age-based comparison)
         var relMatch = RelativeDate.Match(text);
         if (relMatch.Success)
         {
-            int amount = int.Parse(relMatch.Groups[1].Value);
-            result = relMatch.Groups[2].Value.ToLower() switch
+            bool negative = relMatch.Groups[1].Value == "-";
+            int  amount   = int.Parse(relMatch.Groups[2].Value);
+            if (negative)
             {
-                "m" => DateTime.UtcNow.AddMinutes(-amount),
-                "h" => DateTime.UtcNow.AddHours(-amount),
-                "d" => DateTime.UtcNow.AddDays(-amount),
-                "w" => DateTime.UtcNow.AddDays(-amount * 7),
-                _   => DateTime.UtcNow,
-            };
+                result = relMatch.Groups[3].Value.ToLower() switch
+                {
+                    "m" => DateTime.UtcNow.AddMinutes(-amount),
+                    "h" => DateTime.UtcNow.AddHours(-amount),
+                    "d" => DateTime.UtcNow.AddDays(-amount),
+                    "w" => DateTime.UtcNow.AddDays(-amount * 7),
+                    _   => DateTime.UtcNow,
+                };
+            }
+            else
+            {
+                result = relMatch.Groups[3].Value.ToLower() switch
+                {
+                    "m" => DateTime.UtcNow.Date.AddMinutes(amount),
+                    "h" => DateTime.UtcNow.Date.AddHours(amount),
+                    "d" => DateTime.UtcNow.Date.AddDays(amount),
+                    "w" => DateTime.UtcNow.Date.AddDays(amount * 7),
+                    _   => DateTime.UtcNow.Date,
+                };
+            }
             return true;
         }
 

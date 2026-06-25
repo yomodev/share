@@ -257,16 +257,31 @@
     private DateTime? _lastUpdated;
 
     private static readonly string[] SearchableFields = ["ServiceName", "HostName", "ProcessId"];
-    private static readonly FilterParser SvcFilterParser = new(SearchableFields);
+    private static readonly FilterParser SvcFilterParser = new(
+        searchableFields: SearchableFields,
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["svcname"]     = "ServiceName",
+            ["servicename"] = "ServiceName",
+            ["host"]        = "HostName",
+            ["hostname"]    = "HostName",
+            ["pid"]         = "ProcessId",
+            ["processid"]   = "ProcessId",
+            ["ram"]         = "RamMb",
+            ["mem"]         = "RamMb",
+            ["peak"]        = "PeakMb",
+            ["updated"]     = "UpdatedDateTime",
+            ["update"]      = "UpdatedDateTime",
+        });
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
         ("svcname / servicename", "service name"),
         ("host / hostname",       "host name"),
         ("pid / processid",       "process ID"),
-        ("ram / mem",             "current RAM in MB (e.g. ram>500)"),
-        ("peak",                  "peak RAM in MB (e.g. peak>1000)"),
-        ("updated",               "last update time (e.g. updated>-5m, updated>today, updated>2026-06-20)"),
+        ("ram / mem",             "current RAM in MB (e.g. ram:>500)"),
+        ("peak",                  "peak RAM in MB (e.g. peak:>1000)"),
+        ("updated",               "last heartbeat (e.g. updated:>-10m  →  online in last 10 min)"),
     ];
 
     private List<ServiceStatus> _all      = new();

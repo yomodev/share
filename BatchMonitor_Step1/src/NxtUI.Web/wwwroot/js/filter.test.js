@@ -226,3 +226,63 @@ describe('evaluate — boolean operators', () => {
         expect(eval_('!Service:svcA', { Service: 'svcA' })).toBe(false)
     })
 })
+
+// ── Date parsing ───────────────────────────────────────────────────────────
+
+const DATE_FIELDS = ['UpdatedDateTime']
+
+function parsedDate(expr) {
+    const node = leaves(parse(expr, DATE_FIELDS))[0]
+    return node?.value?.type === 'date' ? new Date(node.value.value) : null
+}
+
+describe('parse — negative relative offset (now − N)', () => {
+    it('-10m resolves to ~10 minutes before now', () => {
+        const before = Date.now()
+        const d = parsedDate('UpdatedDateTime:>-10m')
+        const after  = Date.now()
+        expect(d).not.toBeNull()
+        expect(d.getTime()).toBeGreaterThanOrEqual(before - 10 * 60 * 1000 - 1000)
+        expect(d.getTime()).toBeLessThanOrEqual(after)
+    })
+
+    it('-2h resolves to ~2 hours before now', () => {
+        const approx = Date.now() - 2 * 60 * 60 * 1000
+        const d = parsedDate('UpdatedDateTime:>-2h')
+        expect(Math.abs(d.getTime() - approx)).toBeLessThan(5000)
+    })
+})
+
+describe('parse — positive relative offset (today + N)', () => {
+    it('10m resolves to today at 00:10:00 UTC', () => {
+        const d = parsedDate('UpdatedDateTime:<10m')
+        expect(d).not.toBeNull()
+        const today = new Date()
+        today.setUTCHours(0, 0, 0, 0)
+        expect(d.getTime()).toBe(today.getTime() + 10 * 60 * 1000)
+    })
+
+    it('2h resolves to today at 02:00:00 UTC', () => {
+        const d = parsedDate('UpdatedDateTime:<2h')
+        const today = new Date()
+        today.setUTCHours(0, 0, 0, 0)
+        expect(d.getTime()).toBe(today.getTime() + 2 * 60 * 60 * 1000)
+    })
+})
+
+describe('parse — time-only hh:mm resolves to today + time', () => {
+    it('00:10 resolves to today at 00:10:00 UTC', () => {
+        const d = parsedDate('UpdatedDateTime:<00:10')
+        const today = new Date()
+        today.setUTCHours(0, 10, 0, 0)
+        expect(d.getTime()).toBe(today.getTime())
+    })
+})
+
+describe('parse — 10m and 00:10 resolve to the same value', () => {
+    it('positive 10m equals time-only 00:10', () => {
+        const d1 = parsedDate('UpdatedDateTime:<10m')
+        const d2 = parsedDate('UpdatedDateTime:<00:10')
+        expect(d1.getTime()).toBe(d2.getTime())
+    })
+})

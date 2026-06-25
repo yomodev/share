@@ -185,6 +185,76 @@ public class FilterParserTests
         return result;
     }
 
+    // ── Date parsing ──────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("-10m")]
+    [InlineData("-2h")]
+    [InlineData("-7d")]
+    [InlineData("-1w")]
+    public void Negative_relative_offset_parses_as_now_minus_N(string input)
+    {
+        var before = DateTime.UtcNow;
+        var node   = Parse($"updated:>{input}") as FieldTermNode;
+        var after  = DateTime.UtcNow;
+
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().BeOnOrAfter(before.AddDays(-8)).And.BeOnOrBefore(after);
+    }
+
+    [Fact]
+    public void Positive_minutes_offset_parses_as_today_plus_minutes()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<10m") as FieldTermNode;
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddMinutes(10));
+    }
+
+    [Fact]
+    public void Positive_hours_offset_parses_as_today_plus_hours()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<2h") as FieldTermNode;
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddHours(2));
+    }
+
+    [Fact]
+    public void Positive_days_offset_parses_as_today_plus_days()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<1d") as FieldTermNode;
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddDays(1));
+    }
+
+    [Fact]
+    public void Time_only_parses_as_today_plus_time()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<00:10") as FieldTermNode;
+
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddMinutes(10));
+    }
+
+    [Fact]
+    public void Positive_10m_and_time_00_10_resolve_to_same_value()
+    {
+        var n1 = (Parse("updated:<10m")   as FieldTermNode)!.Value as DateValue;
+        var n2 = (Parse("updated:<00:10") as FieldTermNode)!.Value as DateValue;
+
+        n1.Should().NotBeNull();
+        n2.Should().NotBeNull();
+        n1!.Value.Should().BeCloseTo(n2!.Value, TimeSpan.FromSeconds(1));
+    }
+
     private static void Collect(FilterNode node, List<FieldTermNode> acc)
     {
         switch (node)

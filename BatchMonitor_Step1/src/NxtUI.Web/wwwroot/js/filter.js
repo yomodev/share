@@ -312,7 +312,7 @@ function interpretWord(text) {
 
 // ── Date parsing ───────────────────────────────────────────────────────────
 
-const RE_RELATIVE = /^-(\d+)([mhdw])$/i;
+const RE_RELATIVE = /^(-?)(\d+)([mhdw])$/i;
 const RE_TIME     = /^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$/i;
 const RE_ISO      = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?z?$/i;
 
@@ -332,15 +332,29 @@ function tryParseDate(text) {
 
     const rel = RE_RELATIVE.exec(text);
     if (rel) {
-        const n   = parseInt(rel[1], 10);
-        const now = new Date();
-        switch (rel[2].toLowerCase()) {
-            case 'm': now.setMinutes(now.getMinutes()       - n); break;
-            case 'h': now.setHours(now.getHours()           - n); break;
-            case 'd': now.setDate(now.getDate()             - n); break;
-            case 'w': now.setDate(now.getDate()             - n * 7); break;
+        const negative = rel[1] === '-';
+        const n        = parseInt(rel[2], 10);
+        const unit     = rel[3].toLowerCase();
+        if (negative) {
+            const now = new Date();
+            switch (unit) {
+                case 'm': now.setMinutes(now.getMinutes() - n); break;
+                case 'h': now.setHours(now.getHours()     - n); break;
+                case 'd': now.setDate(now.getDate()       - n); break;
+                case 'w': now.setDate(now.getDate()       - n * 7); break;
+            }
+            return now.toISOString();
+        } else {
+            const d = new Date();
+            d.setUTCHours(0, 0, 0, 0);
+            switch (unit) {
+                case 'm': d.setUTCMinutes(d.getUTCMinutes() + n); break;
+                case 'h': d.setUTCHours(d.getUTCHours()     + n); break;
+                case 'd': d.setUTCDate(d.getUTCDate()       + n); break;
+                case 'w': d.setUTCDate(d.getUTCDate()       + n * 7); break;
+            }
+            return d.toISOString();
         }
-        return now.toISOString();
     }
 
     // Time-only: 9:30 or 09:30:00
