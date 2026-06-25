@@ -11,8 +11,9 @@ window.homeMemoryTreemap = (function () {
         d3.select(container).selectAll('*').remove();
         if (!data || !data.children || data.children.length === 0) return;
 
-        const W = container.clientWidth  || 600;
-        const H = container.clientHeight || 180;
+        const rect = container.getBoundingClientRect();
+        const W = rect.width  || container.offsetWidth  || 600;
+        const H = rect.height || container.offsetHeight || 180;
 
         const root = d3.hierarchy(data)
             .sum(d => Math.max(d.ram || 0, 1))
