@@ -210,6 +210,24 @@ describe('evaluate — numeric comparisons', () => {
     })
 })
 
+describe('evaluate — log viewer scenario (string pid/threadId with LOG_ALIASES)', () => {
+    const LOG_SEARCH_FIELDS = ['level', 'host', 'pid', 'threadId', 'message', 'caller'];
+    const LOG_ALIASES = { lvl: 'level', msg: 'message', tid: 'threadId', ts: 'timestamp' };
+    const entry = { pid: '1254', threadId: '97', level: 'INFO', host: 'srv-02', message: 'test', caller: 'Svc.Method' };
+
+    function evalLog(filter) {
+        return evaluate(parse(filter, LOG_SEARCH_FIELDS, LOG_ALIASES), entry);
+    }
+
+    it('pid:>50 matches string pid "1254"', () => expect(evalLog('pid:>50')).toBe(true))
+    it('pid:>1300 does not match string pid "1254"', () => expect(evalLog('pid:>1300')).toBe(false))
+    it('pid:<2000 matches string pid "1254"', () => expect(evalLog('pid:<2000')).toBe(true))
+    it('pid:1000..9999 matches string pid "1254"', () => expect(evalLog('pid:1000..9999')).toBe(true))
+    it('tid alias resolves to threadId', () => expect(evalLog('tid:97')).toBe(true))
+    it('lvl alias resolves to level', () => expect(evalLog('lvl:INFO')).toBe(true))
+    it('bare term matches message', () => expect(evalLog('test')).toBe(true))
+})
+
 describe('evaluate — boolean operators', () => {
     it('AND requires both conditions (space = AND)', () => {
         expect(eval_('Service:svcA Pipeline:pipe1', { Service: 'svcA', Pipeline: 'pipe1' })).toBe(true)
