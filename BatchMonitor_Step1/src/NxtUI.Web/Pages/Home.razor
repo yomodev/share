@@ -181,54 +181,6 @@
 
     </div>
 
-    <!-- ── KPI cards ─────────────────────────────────────────────────────── -->
-    <MudGrid Spacing="3" Class="bm-stat-grid">
-        <MudItem xs="12" sm="6" md="3">
-            <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background:rgba(63,185,80,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Style="color:#3FB950;" />
-                </div>
-                <div class="bm-stat-body">
-                    <MudText Class="bm-stat-value">@_runningCount</MudText>
-                    <MudText Class="bm-stat-label">Running</MudText>
-                </div>
-            </div>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background:rgba(47,129,244,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="color:#2F81F4;" />
-                </div>
-                <div class="bm-stat-body">
-                    <MudText Class="bm-stat-value">@_completedCount</MudText>
-                    <MudText Class="bm-stat-label">Completed Today</MudText>
-                </div>
-            </div>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background:rgba(248,81,73,0.12);">
-                    <MudIcon Icon="@Icons.Material.Filled.Error" Style="color:#F85149;" />
-                </div>
-                <div class="bm-stat-body">
-                    <MudText Class="bm-stat-value">@_failedCount</MudText>
-                    <MudText Class="bm-stat-label">Failed</MudText>
-                </div>
-            </div>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <div class="bm-stat-card">
-                <div class="bm-stat-icon" style="background:rgba(210,153,34,0.12);">
-                    <MudIcon Icon="@Icons.Material.Outlined.Speed" Style="color:#D29922;" />
-                </div>
-                <div class="bm-stat-body">
-                    <MudText Class="bm-stat-value">@_avgDuration</MudText>
-                    <MudText Class="bm-stat-label">Avg Duration</MudText>
-                </div>
-            </div>
-        </MudItem>
-    </MudGrid>
-
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <div class="bm-mini-summary-header">
@@ -288,10 +240,6 @@
 
 @code {
     // Batch state
-    private int    _runningCount   = 0;
-    private int    _completedCount = 0;
-    private int    _failedCount    = 0;
-    private string _avgDuration    = "--:--";
     private List<RunSummary> _recent = new();
 
     // Health state
@@ -315,17 +263,8 @@
     {
         try
         {
-            var batches = await RunService.GetRunsAsync(EnvService.SelectedId, DateTime.UtcNow, 25);
-            _recent         = batches.Take(5).ToList();
-            _runningCount   = batches.Count(b => b.Status == RunStatus.Running);
-            _failedCount    = batches.Count(b => b.Status == RunStatus.Failed);
-            _completedCount = batches.Count(b => b.Status == RunStatus.Completed);
-            var completed = batches.Where(b => b.End.HasValue).ToList();
-            if (completed.Any())
-            {
-                var avg = TimeSpan.FromSeconds(completed.Average(b => b.Duration.TotalSeconds));
-                _avgDuration = FormatDuration(avg);
-            }
+            var batches = await RunService.GetRunsAsync(EnvService.SelectedId, DateTime.UtcNow, 5);
+            _recent = batches.Take(5).ToList();
         }
         catch { /* non-critical */ }
     }

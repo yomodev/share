@@ -13,7 +13,13 @@
 
     private ElementReference _ref;
     private IDisposable?     _sub;
-    private bool             _dirty = true;
+    private bool             _dirty;
+    private TreeRoot?        _treeData;
+
+    // ── DTOs — typed records ensure correct camelCase JSON serialization ──
+    private sealed record TreeRoot(string Name, List<TreeHost> Children);
+    private sealed record TreeHost(string Name, List<TreeSvc>  Children);
+    private sealed record TreeSvc (string Name, int Pid, double? Ram);
 
     protected override void OnInitialized()
     {
@@ -23,7 +29,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAndRebuildAsync();
+        await LoadAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -31,59 +37,53 @@
     {
         if (!_dirty) return;
         _dirty = false;
-        await RenderChartAsync();
+        await RenderAsync();
     }
 
     private void OnMetricsUpdated(string env)
     {
         if (env != Env) return;
-        _ = InvokeAsync(async () =>
-        {
-            await LoadAndRebuildAsync();
-            await InvokeAsync(StateHasChanged);
-        });
+        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
     }
 
-    private List<object>? _treeData;
-
-    private async Task LoadAndRebuildAsync()
+    private async Task LoadAsync()
     {
         try
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
-            _treeData = services
+            var hosts = services
                 .Where(s => s.IsOnline)
                 .GroupBy(s => s.HostName)
-                .Select(g => (object)new
+                .Select(g =>
                 {
-                    name     = g.Key,
-                    children = g.Select(s =>
+                    var svcs = g.Select(s =>
                     {
-                        var m = MetricsMonitor.GetLatest(Env, s);
-                        return new
-                        {
-                            name = s.ServiceName,
-                            pid  = s.ProcessId,
-                            ram  = m != null ? (double?)(m.CurrentUsageBytes / 1_048_576.0) : null,
-                        };
-                    }).ToList<object>()
+                        var m   = MetricsMonitor.GetLatest(Env, s);
+                        double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
+                        return new TreeSvc(s.ServiceName, s.ProcessId, ram);
+                    }).ToList();
+                    return new TreeHost(g.Key, svcs);
                 }).ToList();
+
+            _treeData = hosts.Count > 0 ? new TreeRoot("root", hosts) : null;
         }
         catch { _treeData = null; }
 
         _dirty = true;
     }
 
-    private async Task RenderChartAsync()
+    private async Task RenderAsync()
     {
-        if (_treeData is null || _treeData.Count == 0) return;
+        if (_treeData is null) return;
         try
         {
-            await JS.InvokeVoidAsync("homeMemoryTreemap.render", _ref,
-                new { name = "root", children = _treeData });
+            await JS.InvokeVoidAsync("homeMemoryTreemap.render", _ref, _treeData);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
+        }
     }
 
     private void OpenServices() =>
