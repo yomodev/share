@@ -1819,7 +1819,7 @@ tr.bm-row-searching td:first-child {
 .bm-lb-filter-toolbar > .mud-input-control {
     flex: 0 0 300px;
 }
-.bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .bm-lb-toolbar-right .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
 .bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
