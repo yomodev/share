@@ -529,7 +529,10 @@ function setFilter(container, filterStr) {
 
     let node = null;
     try { node = filterStr ? parseFilter(filterStr, LOG_SEARCH_FIELDS, LOG_ALIASES) : null; }
-    catch { /* invalid expression — treat as no filter */ }
+    catch (e) { console.error('[filter] parse error:', e); }
+
+    if (filterStr) console.debug('[filter]', filterStr, '→ node:', JSON.stringify(node),
+        '| sample pid:', vp.doc.entries[0]?.pid);
 
     vp.filterNode = node;
     rebuildVisible(vp);

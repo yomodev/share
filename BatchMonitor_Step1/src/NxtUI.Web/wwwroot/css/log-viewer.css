@@ -35,11 +35,14 @@
     flex-shrink: 0;
 }
 
-/* Filter box in the find toolbar — expands to fill remaining space */
+/* Find and Filter boxes share remaining space equally */
+.bm-lv-find,
 .bm-lv-filter {
     flex: 1 1 0;
     min-width: 0;
 }
+
+.bm-lv-find { display: flex; }
 
 /* The container div that Blazor holds a @ref to */
 .bm-lv-body {

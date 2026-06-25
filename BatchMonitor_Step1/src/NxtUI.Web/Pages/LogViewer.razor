@@ -38,14 +38,16 @@
 
     <!-- ── Toolbar row 2: find + filter + bookmarks + display ───────────── -->
     <div class="bm-lv-toolbar">
-        <MudTextField T="string" @bind-Value="_findTerm"
-                      Placeholder="Find…"
-                      Variant="Variant.Outlined" Margin="Margin.Dense"
-                      Style="flex:1 1 0;min-width:0"
-                      Adornment="Adornment.End"
-                      AdornmentIcon="@Icons.Material.Outlined.Search"
-                      OnAdornmentClick="RunFindAsync"
-                      @onkeydown="OnFindKeyDown" />
+        <div class="bm-lv-find">
+            <MudTextField T="string" @bind-Value="_findTerm"
+                          Placeholder="Find…"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="width:100%"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Outlined.Search"
+                          OnAdornmentClick="RunFindAsync"
+                          @onkeydown="OnFindKeyDown" />
+        </div>
 
         <MudTooltip Text="Regular expression">
             <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
@@ -69,7 +71,10 @@
                            Size="Size.Small" OnClick="NextMatchAsync"
                            Disabled="@(_matchCount == 0)" />
         </MudTooltip>
-        <span class="bm-lv-match-count">@MatchLabel</span>
+        @if (!string.IsNullOrEmpty(_findTerm))
+        {
+            <span class="bm-lv-match-count">@MatchLabel</span>
+        }
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
