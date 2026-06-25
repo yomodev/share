@@ -10,6 +10,7 @@
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
 import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js';
+import { parse as parseFilter, evaluate as evalFilter } from './filter.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,12 @@ const ENTRY_PAD =  4;  // px total vertical padding per entry
 const OVERSCAN  =  5;  // extra entries rendered above and below the visible window
 
 const BOOKMARK_COLORS = ['#f6c90e', '#e06c75', '#61afef', '#98c379'];
+
+// Fields exposed to the filter engine. Bare terms (no field prefix) are matched
+// against LOG_SEARCH_FIELDS. LOG_ALIASES resolve short names at parse time so the
+// evaluated node always uses the canonical field name that exists on the entry object.
+const LOG_SEARCH_FIELDS = ['level', 'host', 'pid', 'threadId', 'message', 'caller'];
+const LOG_ALIASES = { lvl: 'level', msg: 'message', tid: 'threadId', ts: 'timestamp' };
 
 const LEVEL_CSS = {
     ERROR: 'error', FATAL: 'error',
@@ -51,6 +58,36 @@ function buildCumulatives(entries, measuredH) {
         cum[i + 1] = cum[i] + (measuredH?.get(i) ?? entryH(entries[i]));
     }
     return cum;
+}
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Rebuild vp.visibleEntries and vp.visibleDocIndices from doc.entries + vp.filterNode.
+ * When no filter is active visibleEntries is the same array reference as doc.entries
+ * (no copy) and visibleDocIndices is null (identity mapping).
+ * Clears measuredH because visible indices are invalidated.
+ */
+function rebuildVisible(vp) {
+    const { entries } = vp.doc;
+    const node = vp.filterNode;
+    if (node === null) {
+        vp.visibleEntries    = entries;
+        vp.visibleDocIndices = null;
+    } else {
+        const vis = [], idx = [];
+        for (let i = 0; i < entries.length; i++) {
+            if (evalFilter(node, entries[i])) { vis.push(entries[i]); idx.push(i); }
+        }
+        vp.visibleEntries    = vis;
+        vp.visibleDocIndices = idx;
+    }
+    vp.measuredH.clear();
+}
+
+/** Map a visible-list index to the corresponding doc.entries index. */
+function toDocIdx(vp, visIdx) {
+    return vp.visibleDocIndices ? vp.visibleDocIndices[visIdx] : visIdx;
 }
 
 /** Binary search: last entry whose cumulative start <= scrollTop. */
@@ -100,9 +137,9 @@ function applyWordWrap(scrollEl, wrap) {
 // ── Row rendering ─────────────────────────────────────────────────────────────
 
 function renderRows(vp) {
-    const { doc, cum, matchSet, matchIndices, matchCursor, searchRe, scrollEl, rowsEl } = vp;
-    const { entries, bookmarks } = doc;
-    const total = entries.length;
+    const { doc, cum, matchSet, matchIndices, matchCursor, searchRe, scrollEl, rowsEl, visibleEntries } = vp;
+    const { bookmarks } = doc;
+    const total = visibleEntries.length;
 
     if (total === 0) {
         rowsEl.innerHTML = '<div class="lv-empty">No log entries.</div>';
@@ -126,11 +163,11 @@ function renderRows(vp) {
     const buf = [];
 
     for (let i = first; i <= last; i++) {
-        const e = entries[i];
+        const e = visibleEntries[i];
         const h = entryH(e);
         const isMatch   = matchSet.has(i);
         const isCurrent = i === currentMatchIdx;
-        const bookmark  = bookmarks.get(i);
+        const bookmark  = bookmarks.get(toDocIdx(vp, i));
         const levelKey  = e.level.toUpperCase();
         const levelCss  = LEVEL_CSS[levelKey] || 'info';
 
@@ -201,7 +238,7 @@ function renderRows(vp) {
 }
 
 function updateInnerHeight(vp) {
-    vp.innerEl.style.height = vp.cum[vp.doc.entries.length] + 'px';
+    vp.innerEl.style.height = vp.cum[vp.visibleEntries.length] + 'px';
 }
 
 // ── Event handlers ────────────────────────────────────────────────────────────
@@ -225,8 +262,9 @@ function attachHandlers(container, vp) {
     vp.rowsEl.addEventListener('click', vp._clickHandler);
 }
 
-function cycleBookmark(vp, i) {
+function cycleBookmark(vp, visIdx) {
     const bm  = vp.doc.bookmarks;
+    const i   = toDocIdx(vp, visIdx);
     const cur = bm.get(i);
     if (!cur) {
         bm.set(i, BOOKMARK_COLORS[0]);
@@ -240,7 +278,7 @@ function cycleBookmark(vp, i) {
 // ── Scroll helpers ────────────────────────────────────────────────────────────
 
 function scrollToEntry(vp, idx) {
-    if (idx < 0 || idx >= vp.doc.entries.length) return;
+    if (idx < 0 || idx >= vp.visibleEntries.length) return;
     vp.scrollEl.scrollTop = vp.cum[idx];
     renderRows(vp);
 }
@@ -255,6 +293,9 @@ function _createViewport(container, doc, options) {
     const { scrollEl, innerEl, rowsEl } = createDom(container, options);
     const vp = {
         doc,
+        filterNode:       null,
+        visibleEntries:   doc.entries,   // same reference when no filter active
+        visibleDocIndices: null,         // null = identity mapping (no filter)
         cum:          buildCumulatives(doc.entries),
         measuredH:    new Map(),
         searchRe:     null,
@@ -350,17 +391,18 @@ function appendRaw(container, newRawText) {
     entries.push(...newEntries);
 
     for (const v of doc._viewports) {
-        v.cum = buildCumulatives(entries, v.measuredH);
+        rebuildVisible(v);
+        v.cum = buildCumulatives(v.visibleEntries, v.measuredH);
 
         if (v.searchRe) {
-            const allMatches   = findMatches(entries, v.searchRe);
+            const allMatches   = findMatches(v.visibleEntries, v.searchRe);
             v.matchIndices     = allMatches;
             v.matchSet         = new Set(allMatches);
             if (v.matchCursor >= allMatches.length) v.matchCursor = allMatches.length - 1;
         }
 
         updateInnerHeight(v);
-        if (atBottom.get(v)) v.scrollEl.scrollTop = v.cum[entries.length];
+        if (atBottom.get(v)) v.scrollEl.scrollTop = v.cum[v.visibleEntries.length];
         renderRows(v);
     }
 }
@@ -387,7 +429,7 @@ function find(container, term, opts = {}) {
         return { count: 0, current: 0 };
     }
 
-    const matches      = findMatches(vp.doc.entries, re);
+    const matches      = findMatches(vp.visibleEntries, re);
     vp.matchIndices    = matches;
     vp.matchSet        = new Set(matches);
 
@@ -420,17 +462,26 @@ function prevMatch(container) {
 function nextBookmark(container) {
     const vp = _vp.get(container);
     if (!vp || vp.doc.bookmarks.size === 0) return;
-    const sorted = [...vp.doc.bookmarks.keys()].sort((a, b) => a - b);
-    const top    = currentTopEntryIdx(vp);
-    scrollToEntry(vp, sorted.find(i => i > top) ?? sorted[0]);
+    // Collect visible indices that have bookmarks, in order.
+    const visMarked = [];
+    for (let i = 0; i < vp.visibleEntries.length; i++) {
+        if (vp.doc.bookmarks.has(toDocIdx(vp, i))) visMarked.push(i);
+    }
+    if (visMarked.length === 0) return;
+    const top = currentTopEntryIdx(vp);
+    scrollToEntry(vp, visMarked.find(i => i > top) ?? visMarked[0]);
 }
 
 function prevBookmark(container) {
     const vp = _vp.get(container);
     if (!vp || vp.doc.bookmarks.size === 0) return;
-    const sorted = [...vp.doc.bookmarks.keys()].sort((a, b) => a - b);
-    const top    = currentTopEntryIdx(vp);
-    scrollToEntry(vp, [...sorted].reverse().find(i => i < top) ?? sorted[sorted.length - 1]);
+    const visMarked = [];
+    for (let i = 0; i < vp.visibleEntries.length; i++) {
+        if (vp.doc.bookmarks.has(toDocIdx(vp, i))) visMarked.push(i);
+    }
+    if (visMarked.length === 0) return;
+    const top = currentTopEntryIdx(vp);
+    scrollToEntry(vp, [...visMarked].reverse().find(i => i < top) ?? visMarked[visMarked.length - 1]);
 }
 
 /**
@@ -439,15 +490,15 @@ function prevBookmark(container) {
 function scrollToLine(container, lineIndex) {
     const vp = _vp.get(container);
     if (!vp) return;
-    const idx = vp.doc.entries.findIndex(e => e.lineIndex === lineIndex);
+    const idx = vp.visibleEntries.findIndex(e => e.lineIndex === lineIndex);
     if (idx >= 0) scrollToEntry(vp, idx);
 }
 
 /** Returns the source line number of the top-most visible entry. */
 function getCurrentTopLine(container) {
     const vp = _vp.get(container);
-    if (!vp || vp.doc.entries.length === 0) return 0;
-    return vp.doc.entries[currentTopEntryIdx(vp)]?.lineIndex ?? 0;
+    if (!vp || vp.visibleEntries.length === 0) return 0;
+    return vp.visibleEntries[currentTopEntryIdx(vp)]?.lineIndex ?? 0;
 }
 
 function setFontSize(container, size) {
@@ -461,9 +512,41 @@ function setWordWrap(container, wrap) {
     if (!vp) return;
     applyWordWrap(vp.scrollEl, wrap);
     vp.measuredH.clear();
-    vp.cum = buildCumulatives(vp.doc.entries);
+    vp.cum = buildCumulatives(vp.visibleEntries);
     updateInnerHeight(vp);
     renderRows(vp);
+}
+
+/**
+ * Apply a filter expression to the viewport. Only entries matching the filter
+ * are shown; search operates on the filtered set.
+ * Pass an empty string or null to clear the filter and show all entries.
+ * Returns { total, visible } so Blazor can update a counter in the toolbar.
+ */
+function setFilter(container, filterStr) {
+    const vp = _vp.get(container);
+    if (!vp) return { total: 0, visible: 0 };
+
+    let node = null;
+    try { node = filterStr ? parseFilter(filterStr, LOG_SEARCH_FIELDS, LOG_ALIASES) : null; }
+    catch { /* invalid expression — treat as no filter */ }
+
+    vp.filterNode = node;
+    rebuildVisible(vp);
+    vp.cum = buildCumulatives(vp.visibleEntries, vp.measuredH);
+
+    // Re-run search over the new visible set.
+    if (vp.searchRe) {
+        const matches      = findMatches(vp.visibleEntries, vp.searchRe);
+        vp.matchIndices    = matches;
+        vp.matchSet        = new Set(matches);
+        vp.matchCursor     = matches.length > 0 ? 0 : -1;
+    }
+
+    updateInnerHeight(vp);
+    renderRows(vp);
+
+    return { total: vp.doc.entries.length, visible: vp.visibleEntries.length };
 }
 
 /**
@@ -497,6 +580,6 @@ window.logViewer = {
     appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,
-    setFontSize, setWordWrap,
+    setFontSize, setWordWrap, setFilter,
     destroy,
 };

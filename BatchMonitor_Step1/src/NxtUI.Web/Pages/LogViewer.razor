@@ -36,7 +36,22 @@
         </div>
     </div>
 
-    <!-- ── Toolbar row 2: find + bookmarks + display ─────────────────────── -->
+    <!-- ── Toolbar row 2: filter ─────────────────────────────────────────── -->
+    <div class="bm-lv-toolbar">
+        <FilterBox Value="@_filterStr"
+                   OnFilterChanged="OnFilterChangedAsync"
+                   ParseError="@_filterError"
+                   Placeholder="Filter…"
+                   FieldHints="@LogFieldHints" />
+        @if (_filterStr.Length > 0)
+        {
+            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap">
+                @_visibleCount / @_totalCount
+            </span>
+        }
+    </div>
+
+    <!-- ── Toolbar row 3: find + bookmarks + display ─────────────────────── -->
     <div class="bm-lv-toolbar">
         <MudTextField T="string" @bind-Value="_findTerm"
                       Placeholder="Find…"
@@ -124,6 +139,17 @@
 
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 
+    private static readonly (string Aliases, string Label)[] LogFieldHints =
+    [
+        ("level, lvl",       "Log level (INFO, WARN, ERROR, DEBUG)"),
+        ("host",             "Server host name"),
+        ("pid",              "Process ID"),
+        ("threadId, tid",    "Thread ID"),
+        ("message, msg",     "Log message text"),
+        ("caller",           "Caller method"),
+        ("timestamp, ts",    "Timestamp"),
+    ];
+
     // DOM / JS interop
     private ElementReference _bodyRef;
     private bool             _rendered;
@@ -137,6 +163,12 @@
     private string? _localKey;   // set instead of _rawContent for browser-local files
     private int?    _anchorLine;
     private long    _fileOffset;
+
+    // Filter
+    private string  _filterStr   = "";
+    private string? _filterError;
+    private int     _totalCount;
+    private int     _visibleCount;
 
     // Find
     private string _findTerm      = "";
@@ -299,6 +331,22 @@
     private async Task OnRegexToggled(bool val)  { _isRegex       = val; await RunFindAsync(); }
     private async Task OnCaseToggled(bool val)   { _caseSensitive = val; await RunFindAsync(); }
 
+    // ── Filter ────────────────────────────────────────────────────────────
+
+    private async Task OnFilterChangedAsync(string expr)
+    {
+        _filterStr   = expr;
+        _filterError = null;
+        try
+        {
+            var result = await JS.InvokeAsync<FilterResult>("logViewer.setFilter", _bodyRef, expr);
+            _totalCount   = result.Total;
+            _visibleCount = result.Visible;
+        }
+        catch (JSDisconnectedException) { }
+        catch (Exception ex) { _filterError = ex.Message; }
+    }
+
     // ── Bookmarks ─────────────────────────────────────────────────────────
 
     private async Task PrevBookmarkAsync()
@@ -408,6 +456,7 @@
     }
 
     private sealed record MatchResult(int Count, int Current);
+    private sealed record FilterResult(int Total, int Visible);
 
     public async ValueTask DisposeAsync()
     {
