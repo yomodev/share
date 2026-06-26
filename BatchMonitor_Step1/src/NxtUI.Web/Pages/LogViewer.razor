@@ -340,6 +340,7 @@
 
     private async Task OnFilterChangedAsync(string expr)
     {
+        Console.WriteLine($"[filter] OnFilterChangedAsync: '{expr}'");
         _filterStr   = expr;
         _filterError = null;
         try
