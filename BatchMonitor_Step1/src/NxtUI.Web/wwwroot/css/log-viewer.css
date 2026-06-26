@@ -66,6 +66,7 @@
     display: block;
     background: #1a1a1a;
 }
+html[data-theme="light"] .lv-scrollmap { background: #e4e4e4; }
 
 /* One log entry */
 .lv-row {

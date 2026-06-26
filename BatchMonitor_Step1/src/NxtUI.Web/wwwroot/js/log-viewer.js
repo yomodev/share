@@ -144,15 +144,23 @@ function applyWordWrap(scrollEl, wrap) {
 
 // ── Scrollmap ─────────────────────────────────────────────────────────────────
 
-const SCROLLMAP_LEVEL_COLOR = {
-    error: '#6b2c2c', fatal: '#6b2c2c',
-    warn:  '#5c4a1a',
-    info:  '#1e3d2a',
-    debug: '#1a2e4a',
-    trace: '#2a2a2a',
+const SCROLLMAP_COLORS_DARK = {
+    level: { error: '#6b2c2c', fatal: '#6b2c2c', warn: '#5c4a1a', info: '#1e3d2a', debug: '#1a2e4a', trace: '#2a2a2a' },
+    bg:       '#1a1a1a',
+    viewport: 'rgba(255,255,255,0.18)',
+    edge:     'rgba(255,255,255,0.45)',
 };
-const SCROLLMAP_BG       = '#1a1a1a';
-const SCROLLMAP_VIEWPORT = 'rgba(255,255,255,0.18)';
+const SCROLLMAP_COLORS_LIGHT = {
+    level: { error: '#c97070', fatal: '#c97070', warn: '#b89040', info: '#4a9e6a', debug: '#5a8ec0', trace: '#aaa' },
+    bg:       '#e4e4e4',
+    viewport: 'rgba(0,0,0,0.12)',
+    edge:     'rgba(0,0,0,0.35)',
+};
+
+function scrollmapColors() {
+    return document.documentElement.getAttribute('data-theme') === 'light'
+        ? SCROLLMAP_COLORS_LIGHT : SCROLLMAP_COLORS_DARK;
+}
 
 function drawScrollmap(vp) {
     const { mapEl, visibleEntries, cum, scrollEl } = vp;
@@ -168,11 +176,12 @@ function drawScrollmap(vp) {
 
     if (mapEl.height !== physH) { mapEl.height = physH; }
 
+    const colors = scrollmapColors();
     const ctx = mapEl.getContext('2d');
     ctx.clearRect(0, 0, physW, physH);
 
     // Background
-    ctx.fillStyle = SCROLLMAP_BG;
+    ctx.fillStyle = colors.bg;
     ctx.fillRect(0, 0, physW, physH);
 
     const scale = physH / totalH;  // canvas px per content px
@@ -184,7 +193,7 @@ function drawScrollmap(vp) {
         const y1     = Math.ceil (cum[i + 1] * scale);
         const h      = Math.max(1, y1 - y0);
         const lvlKey = e.level.toLowerCase();
-        ctx.fillStyle = SCROLLMAP_LEVEL_COLOR[lvlKey] ?? SCROLLMAP_LEVEL_COLOR.info;
+        ctx.fillStyle = colors.level[lvlKey] ?? colors.level.info;
         ctx.fillRect(0, y0, physW, h);
     }
 
@@ -203,11 +212,11 @@ function drawScrollmap(vp) {
     const vy0   = Math.floor(vpTop * scale);
     const vy1   = Math.ceil (vpBot * scale);
     const vh    = Math.max(4, vy1 - vy0);
-    ctx.fillStyle = SCROLLMAP_VIEWPORT;
+    ctx.fillStyle = colors.viewport;
     ctx.fillRect(0, vy0, physW, vh);
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.fillRect(0, vy0,      physW, 1);
-    ctx.fillRect(0, vy0 + vh - 1, physW, 1);
+    ctx.fillStyle = colors.edge;
+    ctx.fillRect(0, vy0,           physW, 1);
+    ctx.fillRect(0, vy0 + vh - 1,  physW, 1);
 }
 
 // ── Row rendering ─────────────────────────────────────────────────────────────
