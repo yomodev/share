@@ -376,7 +376,7 @@ function currentTopEntryIdx(vp) {
 // ── Viewport factory ──────────────────────────────────────────────────────────
 
 function _createViewport(container, doc, options) {
-    const { scrollEl, innerEl, rowsEl } = createDom(container, options);
+    const { scrollEl, innerEl, rowsEl, mapEl } = createDom(container, options);
     const vp = {
         doc,
         filterNode:       null,
