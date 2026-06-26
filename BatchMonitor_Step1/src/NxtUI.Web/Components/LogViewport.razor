@@ -1,0 +1,134 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="bm-lv-body" @ref="_bodyRef"></div>
+
+@code {
+    [Parameter] public EventCallback<string> OnWordDoubleClicked { get; set; }
+
+    private ElementReference                   _bodyRef;
+    private DotNetObjectReference<LogViewport>? _dotNetRef;
+
+    // ── Public records used by callers ────────────────────────────────────
+
+    public sealed record MatchResult(int Count, int Current);
+    public sealed record FilterResult(int Total, int Visible);
+
+    // ── JS render calls ───────────────────────────────────────────────────
+
+    public async Task<bool> RenderAsync(string rawText, object opts)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("logViewer.render", _bodyRef, rawText, opts);
+            await RegisterRefAsync();
+            return true;
+        }
+        catch (JSDisconnectedException) { return false; }
+        catch (Exception ex) { Console.Error.WriteLine($"[LogViewport] render: {ex.Message}"); return false; }
+    }
+
+    public async Task<bool> RenderLocalFileAsync(string key, object opts)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("logViewer.renderLocalFile", _bodyRef, key, opts);
+            await RegisterRefAsync();
+            return true;
+        }
+        catch (JSDisconnectedException) { return false; }
+        catch (Exception ex) { Console.Error.WriteLine($"[LogViewport] renderLocalFile: {ex.Message}"); return false; }
+    }
+
+    public async Task AppendRawAsync(string text)
+    {
+        try { await JS.InvokeVoidAsync("logViewer.appendRaw", _bodyRef, text); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Find ──────────────────────────────────────────────────────────────
+
+    public async Task<MatchResult> FindAsync(string term, object opts)
+    {
+        try { return await JS.InvokeAsync<MatchResult>("logViewer.find", _bodyRef, term, opts); }
+        catch (JSDisconnectedException) { return new(0, 0); }
+    }
+
+    public async Task<MatchResult> NextMatchAsync()
+    {
+        try { return await JS.InvokeAsync<MatchResult>("logViewer.nextMatch", _bodyRef); }
+        catch (JSDisconnectedException) { return new(0, 0); }
+    }
+
+    public async Task<MatchResult> PrevMatchAsync()
+    {
+        try { return await JS.InvokeAsync<MatchResult>("logViewer.prevMatch", _bodyRef); }
+        catch (JSDisconnectedException) { return new(0, 0); }
+    }
+
+    // ── Filter ────────────────────────────────────────────────────────────
+
+    public async Task<FilterResult> SetFilterAsync(string expr)
+    {
+        try { return await JS.InvokeAsync<FilterResult>("logViewer.setFilter", _bodyRef, expr); }
+        catch (JSDisconnectedException) { return new(0, 0); }
+        catch (Exception ex) { throw new InvalidOperationException(ex.Message, ex); }
+    }
+
+    // ── Bookmarks ─────────────────────────────────────────────────────────
+
+    public async Task PrevBookmarkAsync()
+    {
+        try { await JS.InvokeVoidAsync("logViewer.prevBookmark", _bodyRef); }
+        catch (JSDisconnectedException) { }
+    }
+
+    public async Task NextBookmarkAsync()
+    {
+        try { await JS.InvokeVoidAsync("logViewer.nextBookmark", _bodyRef); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Display ───────────────────────────────────────────────────────────
+
+    public async Task SetFontSizeAsync(int size)
+    {
+        try { await JS.InvokeVoidAsync("logViewer.setFontSize", _bodyRef, size); }
+        catch (JSDisconnectedException) { }
+    }
+
+    public async Task SetWordWrapAsync(bool wrap)
+    {
+        try { await JS.InvokeVoidAsync("logViewer.setWordWrap", _bodyRef, wrap); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Misc ──────────────────────────────────────────────────────────────
+
+    public async Task<int> GetCurrentTopLineAsync()
+    {
+        try { return await JS.InvokeAsync<int>("logViewer.getCurrentTopLine", _bodyRef); }
+        catch (JSDisconnectedException) { return 0; }
+    }
+
+    // ── Double-click word callback ────────────────────────────────────────
+
+    [JSInvokable]
+    public Task OnWordSelected(string word) => OnWordDoubleClicked.InvokeAsync(word);
+
+    // ── Internals ─────────────────────────────────────────────────────────
+
+    private async Task RegisterRefAsync()
+    {
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        try { await JS.InvokeVoidAsync("logViewer.registerDotNetRef", _bodyRef, _dotNetRef); }
+        catch (JSDisconnectedException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _dotNetRef?.Dispose();
+        try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
+        catch { }
+    }
+}

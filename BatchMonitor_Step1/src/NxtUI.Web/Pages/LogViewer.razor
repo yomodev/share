@@ -133,7 +133,7 @@
             <MudText Typo="Typo.body2" Color="Color.Error">@_error</MudText>
         </div>
     }
-    <div class="bm-lv-body" @ref="_bodyRef"></div>
+    <LogViewport @ref="_viewport" OnWordDoubleClicked="OnWordDoubleClickedAsync" />
 
 </div>
 
@@ -155,18 +155,19 @@
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    // DOM / JS interop
-    private ElementReference          _bodyRef;
-    private bool                      _rendered;
-    private bool                      _dirty;
-    private DotNetObjectReference<LogViewer>? _dotNetRef;
+    // Viewport component ref
+    private LogViewport? _viewport;
+
+    // Lifecycle flags
+    private string? _loadedPath;
+    private bool    _rendered;
+    private bool    _dirty;
 
     // Loading state
-    private string? _loadedPath;
     private bool    _isLoading;
     private string? _error;
     private string? _rawContent;
-    private string? _localKey;   // set instead of _rawContent for browser-local files
+    private string? _localKey;
     private int?    _anchorLine;
     private long    _fileOffset;
 
@@ -218,14 +219,12 @@
         {
             _dirty = false;
             await RenderViewerAsync();
-            _dotNetRef ??= DotNetObjectReference.Create(this);
-            try { await JS.InvokeVoidAsync("logViewer.registerDotNetRef", _bodyRef, _dotNetRef); }
-            catch (JSDisconnectedException) { }
         }
     }
 
-    [JSInvokable]
-    public async Task OnWordSelected(string word)
+    // ── Word double-click (from LogViewport) ──────────────────────────────
+
+    private async Task OnWordDoubleClickedAsync(string word)
     {
         _findTerm = word;
         await RunFindAsync();
@@ -246,7 +245,6 @@
         {
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
             {
-                // Content stays in browser JS memory — never transfer over SignalR.
                 _localKey   = Path["local:".Length..];
                 _rawContent = null;
                 _fileOffset = 0;
@@ -269,27 +267,21 @@
 
     private async Task RenderViewerAsync()
     {
+        if (_viewport is null) return;
         if (_rawContent is null && _localKey is null) return;
         if (!_rendered) return;
-        try
+
+        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap };
+        if (_localKey is not null)
         {
-            var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap };
-            if (_localKey is not null)
-            {
-                await JS.InvokeVoidAsync("logViewer.renderLocalFile", _bodyRef, _localKey, opts);
-                _localKey = null;
-            }
-            else
-            {
-                await JS.InvokeVoidAsync("logViewer.render", _bodyRef, _rawContent, opts);
-                _rawContent = null;
-                StartTail();
-            }
+            await _viewport.RenderLocalFileAsync(_localKey, opts);
+            _localKey = null;
         }
-        catch (JSDisconnectedException) { }
-        catch (Exception ex)
+        else
         {
-            Console.Error.WriteLine($"[LogViewer] JS render error: {ex.Message}");
+            await _viewport.RenderAsync(_rawContent!, opts);
+            _rawContent = null;
+            StartTail();
         }
     }
 
@@ -297,7 +289,7 @@
 
     private async Task RefreshAsync()
     {
-        _loadedPath = null; // force reload
+        _loadedPath = null;
         await LoadAsync();
     }
 
@@ -314,37 +306,27 @@
 
     private async Task RunFindAsync()
     {
-        try
-        {
-            var result = await JS.InvokeAsync<MatchResult>(
-                "logViewer.find", _bodyRef, _findTerm,
-                new { isRegex = _isRegex, caseSensitive = _caseSensitive });
-            _matchCount   = result.Count;
-            _matchCurrent = result.Current;
-        }
-        catch (JSDisconnectedException) { }
+        if (_viewport is null) return;
+        var result = await _viewport.FindAsync(_findTerm,
+            new { isRegex = _isRegex, caseSensitive = _caseSensitive });
+        _matchCount   = result.Count;
+        _matchCurrent = result.Current;
     }
 
     private async Task NextMatchAsync()
     {
-        try
-        {
-            var result = await JS.InvokeAsync<MatchResult>("logViewer.nextMatch", _bodyRef);
-            _matchCount   = result.Count;
-            _matchCurrent = result.Current;
-        }
-        catch (JSDisconnectedException) { }
+        if (_viewport is null) return;
+        var result = await _viewport.NextMatchAsync();
+        _matchCount   = result.Count;
+        _matchCurrent = result.Current;
     }
 
     private async Task PrevMatchAsync()
     {
-        try
-        {
-            var result = await JS.InvokeAsync<MatchResult>("logViewer.prevMatch", _bodyRef);
-            _matchCount   = result.Count;
-            _matchCurrent = result.Current;
-        }
-        catch (JSDisconnectedException) { }
+        if (_viewport is null) return;
+        var result = await _viewport.PrevMatchAsync();
+        _matchCount   = result.Count;
+        _matchCurrent = result.Current;
     }
 
     private async Task OnRegexToggled(bool val)  { _isRegex       = val; await RunFindAsync(); }
@@ -354,69 +336,54 @@
 
     private async Task OnFilterChangedAsync(string expr)
     {
-_filterStr   = expr;
+        _filterStr   = expr;
         _filterError = null;
+        if (_viewport is null) return;
         try
         {
-            var result = await JS.InvokeAsync<FilterResult>("logViewer.setFilter", _bodyRef, expr);
+            var result    = await _viewport.SetFilterAsync(expr);
             _totalCount   = result.Total;
             _visibleCount = result.Visible;
         }
-        catch (JSDisconnectedException) { }
         catch (Exception ex) { _filterError = ex.Message; }
         StateHasChanged();
     }
 
     // ── Bookmarks ─────────────────────────────────────────────────────────
 
-    private async Task PrevBookmarkAsync()
-    {
-        try { await JS.InvokeVoidAsync("logViewer.prevBookmark", _bodyRef); }
-        catch (JSDisconnectedException) { }
-    }
-
-    private async Task NextBookmarkAsync()
-    {
-        try { await JS.InvokeVoidAsync("logViewer.nextBookmark", _bodyRef); }
-        catch (JSDisconnectedException) { }
-    }
+    private async Task PrevBookmarkAsync() { if (_viewport is not null) await _viewport.PrevBookmarkAsync(); }
+    private async Task NextBookmarkAsync() { if (_viewport is not null) await _viewport.NextBookmarkAsync(); }
 
     // ── Display controls ──────────────────────────────────────────────────
 
     private async Task DecreaseFontAsync()
     {
         var idx = Array.IndexOf(_fontSizes, _fontSize);
-        if (idx > 0) { _fontSize = _fontSizes[idx - 1]; await ApplyFontAsync(); }
+        if (idx > 0) { _fontSize = _fontSizes[idx - 1]; await _viewport!.SetFontSizeAsync(_fontSize); }
     }
 
     private async Task IncreaseFontAsync()
     {
         var idx = Array.IndexOf(_fontSizes, _fontSize);
-        if (idx < _fontSizes.Length - 1) { _fontSize = _fontSizes[idx + 1]; await ApplyFontAsync(); }
+        if (idx < _fontSizes.Length - 1) { _fontSize = _fontSizes[idx + 1]; await _viewport!.SetFontSizeAsync(_fontSize); }
     }
 
     private async Task OnWrapToggled(bool val)
     {
         _wordWrap = val;
-        try { await JS.InvokeVoidAsync("logViewer.setWordWrap", _bodyRef, _wordWrap); }
-        catch (JSDisconnectedException) { }
-    }
-
-    private async Task ApplyFontAsync()
-    {
-        try { await JS.InvokeVoidAsync("logViewer.setFontSize", _bodyRef, _fontSize); }
-        catch (JSDisconnectedException) { }
+        if (_viewport is not null) await _viewport.SetWordWrapAsync(val);
     }
 
     // ── Share link ────────────────────────────────────────────────────────
 
     private async Task ShareAsync()
     {
+        if (_viewport is null) return;
         try
         {
-            var lineIdx = await JS.InvokeAsync<int>("logViewer.getCurrentTopLine", _bodyRef);
+            var lineIdx  = await _viewport.GetCurrentTopLineAsync();
             var baseUrl  = Nav.Uri.Split('#')[0];
-            var shareUrl = $"{baseUrl}#L{lineIdx + 1}"; // display as 1-based
+            var shareUrl = $"{baseUrl}#L{lineIdx + 1}";
             await JS.InvokeVoidAsync("copyText", shareUrl);
             await JS.InvokeVoidAsync("showCopyToast", "Share link copied");
         }
@@ -451,16 +418,16 @@ _filterStr   = expr;
 
     private async Task TailTickAsync()
     {
-        if (string.IsNullOrWhiteSpace(Path)) return;
+        if (string.IsNullOrWhiteSpace(Path) || _viewport is null) return;
         try
         {
             var (text, newOffset) = LogViewerSvc.ReadDelta(Path!, _fileOffset);
             if (string.IsNullOrEmpty(text)) return;
             _fileOffset = newOffset;
-            await JS.InvokeVoidAsync("logViewer.appendRaw", _bodyRef, text);
+            await _viewport.AppendRawAsync(text);
         }
         catch (JSDisconnectedException) { }
-        catch { /* non-critical — will retry on next tick */ }
+        catch { }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -471,20 +438,15 @@ _filterStr   = expr;
         var frag = fragment.TrimStart('#');
         if (frag.StartsWith("L", StringComparison.OrdinalIgnoreCase)
             && int.TryParse(frag[1..], out var line) && line > 0)
-            return line - 1; // 1-based display → 0-based lineIndex
+            return line - 1;
         return null;
     }
-
-    private sealed record MatchResult(int Count, int Current);
-    private sealed record FilterResult(int Total, int Visible);
 
     public async ValueTask DisposeAsync()
     {
         StopTail();
         await _cts.CancelAsync();
         _cts.Dispose();
-        _dotNetRef?.Dispose();
-        try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
-        catch { }
+        if (_viewport is not null) await _viewport.DisposeAsync();
     }
 }
