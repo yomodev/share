@@ -151,10 +151,10 @@ const SCROLLMAP_COLORS_DARK = {
     edge:     'rgba(255,255,255,0.45)',
 };
 const SCROLLMAP_COLORS_LIGHT = {
-    level: { error: '#f08080', fatal: '#f08080', warn: '#f0c040', info: '#70c88a', debug: '#80aaee', trace: '#cccccc' },
+    level: { error: '#f5b0b0', fatal: '#f5b0b0', warn: '#f5dc80', info: '#a8e0b8', debug: '#aac8f8', trace: '#e0e0e0' },
     bg:       '#f0f0f0',
-    viewport: 'rgba(0,0,0,0.12)',
-    edge:     'rgba(0,0,0,0.30)',
+    viewport: 'rgba(0,0,0,0.18)',
+    edge:     'rgba(0,0,0,0.45)',
 };
 
 function scrollmapColors() {
