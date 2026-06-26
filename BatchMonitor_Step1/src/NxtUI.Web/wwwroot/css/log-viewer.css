@@ -216,6 +216,7 @@
     max-width: 260px;
     overflow: hidden;
     text-overflow: ellipsis;
+    padding-right: 3px;
 }
 
 /* Continuation lines (stack trace etc.) */

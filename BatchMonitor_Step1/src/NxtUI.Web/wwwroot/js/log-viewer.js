@@ -145,14 +145,14 @@ function applyWordWrap(scrollEl, wrap) {
 // ── Scrollmap ─────────────────────────────────────────────────────────────────
 
 const SCROLLMAP_LEVEL_COLOR = {
-    error: '#c0392b', fatal: '#c0392b',
-    warn:  '#b7770d',
-    info:  '#2a6e43',
-    debug: '#1565c0',
-    trace: '#444',
+    error: '#6b2c2c', fatal: '#6b2c2c',
+    warn:  '#5c4a1a',
+    info:  '#1e3d2a',
+    debug: '#1a2e4a',
+    trace: '#2a2a2a',
 };
 const SCROLLMAP_BG       = '#1a1a1a';
-const SCROLLMAP_VIEWPORT = 'rgba(255,255,255,0.10)';
+const SCROLLMAP_VIEWPORT = 'rgba(255,255,255,0.18)';
 
 function drawScrollmap(vp) {
     const { mapEl, visibleEntries, cum, scrollEl } = vp;
@@ -197,13 +197,17 @@ function drawScrollmap(vp) {
         ctx.fillRect(0, Math.max(0, y - 1), physW, 3);
     }
 
-    // Viewport indicator
+    // Viewport indicator — fill + top/bottom edge lines
     const vpTop = scrollEl.scrollTop;
     const vpBot = vpTop + scrollEl.clientHeight;
     const vy0   = Math.floor(vpTop * scale);
     const vy1   = Math.ceil (vpBot * scale);
+    const vh    = Math.max(4, vy1 - vy0);
     ctx.fillStyle = SCROLLMAP_VIEWPORT;
-    ctx.fillRect(0, vy0, physW, Math.max(4, vy1 - vy0));
+    ctx.fillRect(0, vy0, physW, vh);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillRect(0, vy0,      physW, 1);
+    ctx.fillRect(0, vy0 + vh - 1, physW, 1);
 }
 
 // ── Row rendering ─────────────────────────────────────────────────────────────
