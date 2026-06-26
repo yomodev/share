@@ -524,8 +524,9 @@ function setWordWrap(container, wrap) {
  * Returns { total, visible } so Blazor can update a counter in the toolbar.
  */
 function setFilter(container, filterStr) {
+    console.debug('[filter] setFilter called, expr:', filterStr, '| container:', container);
     const vp = _vp.get(container);
-    if (!vp) { console.error('[filter] no viewport for container'); return { total: 0, visible: 0 }; }
+    if (!vp) { console.error('[filter] no viewport found for container'); return { total: 0, visible: 0 }; }
 
     let node = null;
     try { node = filterStr ? parseFilter(filterStr, LOG_SEARCH_FIELDS, LOG_ALIASES) : null; }
