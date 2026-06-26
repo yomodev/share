@@ -230,7 +230,7 @@ function renderRows(vp) {
             }
         });
         if (changed) {
-            vp.cum = buildCumulatives(entries, vp.measuredH);
+            vp.cum = buildCumulatives(visibleEntries, vp.measuredH);
             updateInnerHeight(vp);
             rowsEl.style.top = vp.cum[first] + 'px';
         }
