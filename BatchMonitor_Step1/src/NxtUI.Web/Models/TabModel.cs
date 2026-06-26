@@ -244,7 +244,8 @@ public class TabModel
         TabType.Batches     => $"/batches/{Environment}",
         TabType.MemoryGraph => $"/memory/{Environment}",
         TabType.LogBrowser        => $"/logs/{Environment}",
-        TabType.LogViewer   => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
+        TabType.LogViewer    => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
+        TabType.LogWorkspace => $"/workspace/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings    => "/settings",
         TabType.FilterHelp  => "/help/filter",
         TabType.RunDetail => $"/run/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
@@ -318,6 +319,9 @@ public class TabModel
 
             "log" when parts.Length >= 3
                 => CreateLogViewer(Uri.UnescapeDataString(parts[2]), parts[1]),
+
+            "workspace" when parts.Length >= 3
+                => CreateLogWorkspace(Uri.UnescapeDataString(parts[2]), parts[1]),
 
             "settings"
                 => CreateSettings(),
