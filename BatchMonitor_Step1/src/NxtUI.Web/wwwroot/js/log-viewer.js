@@ -525,18 +525,26 @@ function setWordWrap(container, wrap) {
  */
 function setFilter(container, filterStr) {
     const vp = _vp.get(container);
-    if (!vp) return { total: 0, visible: 0 };
+    if (!vp) { console.error('[filter] no viewport for container'); return { total: 0, visible: 0 }; }
 
     let node = null;
     try { node = filterStr ? parseFilter(filterStr, LOG_SEARCH_FIELDS, LOG_ALIASES) : null; }
     catch (e) { console.error('[filter] parse error:', e); }
 
-    if (filterStr) console.debug('[filter]', filterStr, '→ node:', JSON.stringify(node),
-        '| sample pid:', vp.doc.entries[0]?.pid);
+    if (filterStr) {
+        const sample = vp.doc.entries[0];
+        console.debug('[filter] expr:', filterStr,
+            '\n  node:', JSON.stringify(node),
+            '\n  total entries:', vp.doc.entries.length,
+            '\n  sample pid:', sample?.pid, '(type:', typeof sample?.pid + ')',
+            '\n  sample threadId:', sample?.threadId, '(type:', typeof sample?.threadId + ')');
+    }
 
     vp.filterNode = node;
     rebuildVisible(vp);
     vp.cum = buildCumulatives(vp.visibleEntries, vp.measuredH);
+
+    console.debug('[filter] result: visible', vp.visibleEntries.length, '/', vp.doc.entries.length);
 
     // Re-run search over the new visible set.
     if (vp.searchRe) {

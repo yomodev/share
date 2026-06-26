@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parse, evaluate } from './filter.js'
+import { parseLog } from './log-viewer-parser.js'
 
 const FIELDS = ['ChunkId', 'Service', 'Pipeline']
 
@@ -210,22 +211,51 @@ describe('evaluate — numeric comparisons', () => {
     })
 })
 
-describe('evaluate — log viewer scenario (string pid/threadId with LOG_ALIASES)', () => {
+describe('log viewer — full pipeline (parseLog → filter with integer pid/threadId)', () => {
     const LOG_SEARCH_FIELDS = ['level', 'host', 'pid', 'threadId', 'message', 'caller'];
     const LOG_ALIASES = { lvl: 'level', msg: 'message', tid: 'threadId', ts: 'timestamp' };
-    const entry = { pid: 1254, threadId: 97, level: 'INFO', host: 'srv-02', message: 'test', caller: 'Svc.Method' };
 
-    function evalLog(filter) {
-        return evaluate(parse(filter, LOG_SEARCH_FIELDS, LOG_ALIASES), entry);
+    const raw = [
+        '2024-01-15 12:00:00|INFO|srv-01|30|10|msg A|Caller',
+        '2024-01-15 12:00:01|WARN|srv-02|80|20|msg B|Caller',
+        '2024-01-15 12:00:02|ERROR|srv-01|200|5|msg C|Caller',
+        '2024-01-15 12:00:03|DEBUG|srv-02|500|99|msg D|Caller',
+    ].join('\n')
+
+    const entries = parseLog(raw)
+
+    function filter(expr) {
+        const node = parse(expr, LOG_SEARCH_FIELDS, LOG_ALIASES)
+        return entries.filter(e => evaluate(node, e))
     }
 
-    it('pid:>50 matches string pid "1254"', () => expect(evalLog('pid:>50')).toBe(true))
-    it('pid:>1300 does not match string pid "1254"', () => expect(evalLog('pid:>1300')).toBe(false))
-    it('pid:<2000 matches string pid "1254"', () => expect(evalLog('pid:<2000')).toBe(true))
-    it('pid:1000..9999 matches string pid "1254"', () => expect(evalLog('pid:1000..9999')).toBe(true))
-    it('tid alias resolves to threadId', () => expect(evalLog('tid:97')).toBe(true))
-    it('lvl alias resolves to level', () => expect(evalLog('lvl:INFO')).toBe(true))
-    it('bare term matches message', () => expect(evalLog('test')).toBe(true))
+    it('pid values are integers', () => {
+        expect(typeof entries[0].pid).toBe('number')
+        expect(entries[0].pid).toBe(30)
+    })
+    it('threadId values are integers', () => {
+        expect(typeof entries[0].threadId).toBe('number')
+        expect(entries[0].threadId).toBe(10)
+    })
+    it('pid:>50 returns entries with pid > 50', () => {
+        const r = filter('pid:>50')
+        expect(r.map(e => e.pid)).toEqual([80, 200, 500])
+    })
+    it('pid:<100 returns entries with pid < 100', () => {
+        const r = filter('pid:<100')
+        expect(r.map(e => e.pid)).toEqual([30, 80])
+    })
+    it('pid:50..300 returns entries in range', () => {
+        const r = filter('pid:50..300')
+        expect(r.map(e => e.pid)).toEqual([80, 200])
+    })
+    it('tid:>15 returns entries with threadId > 15', () => {
+        const r = filter('tid:>15')
+        expect(r.map(e => e.threadId)).toEqual([20, 99])
+    })
+    it('lvl:ERROR returns only error entries', () => {
+        expect(filter('lvl:ERROR').map(e => e.level)).toEqual(['ERROR'])
+    })
 })
 
 describe('evaluate — boolean operators', () => {
