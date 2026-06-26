@@ -57,6 +57,14 @@
 .lv-scroll {
     font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
     color: var(--mud-palette-text-primary);
+    scrollbar-width: none; /* Firefox */
+}
+.lv-scroll::-webkit-scrollbar { display: none; } /* Chrome/Edge/Safari */
+
+/* Scrollmap canvas strip */
+.lv-scrollmap {
+    display: block;
+    background: #1a1a1a;
 }
 
 /* One log entry */

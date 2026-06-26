@@ -103,13 +103,15 @@ function findFirstVisible(cum, scrollTop) {
 
 // ── DOM construction ──────────────────────────────────────────────────────────
 
+const SCROLLMAP_W = 12; // px width of the scrollmap canvas strip
+
 function createDom(container, opts) {
     container.innerHTML = '';
     container.style.cssText = 'position:relative;overflow:hidden;';
 
     const scrollEl = document.createElement('div');
     scrollEl.className = 'lv-scroll';
-    scrollEl.style.cssText = 'position:absolute;inset:0;overflow-y:auto;overflow-x:auto;';
+    scrollEl.style.cssText = `position:absolute;top:0;left:0;bottom:0;right:${SCROLLMAP_W}px;overflow-y:scroll;overflow-x:auto;`;
     container.appendChild(scrollEl);
 
     const innerEl = document.createElement('div');
@@ -120,10 +122,16 @@ function createDom(container, opts) {
     rowsEl.style.cssText = 'position:absolute;top:0;left:0;right:0;';
     innerEl.appendChild(rowsEl);
 
+    const mapEl = document.createElement('canvas');
+    mapEl.className = 'lv-scrollmap';
+    mapEl.style.cssText = `position:absolute;top:0;right:0;width:${SCROLLMAP_W}px;height:100%;cursor:pointer;`;
+    mapEl.width  = SCROLLMAP_W;
+    container.appendChild(mapEl);
+
     applyFontSize(scrollEl, opts.fontSize ?? 13);
     applyWordWrap(scrollEl, opts.wordWrap ?? false);
 
-    return { scrollEl, innerEl, rowsEl };
+    return { scrollEl, innerEl, rowsEl, mapEl };
 }
 
 function applyFontSize(scrollEl, size) {
@@ -132,6 +140,70 @@ function applyFontSize(scrollEl, size) {
 
 function applyWordWrap(scrollEl, wrap) {
     scrollEl.dataset.wrap = wrap ? '1' : '0';
+}
+
+// ── Scrollmap ─────────────────────────────────────────────────────────────────
+
+const SCROLLMAP_LEVEL_COLOR = {
+    error: '#c0392b', fatal: '#c0392b',
+    warn:  '#b7770d',
+    info:  '#2a6e43',
+    debug: '#1565c0',
+    trace: '#444',
+};
+const SCROLLMAP_BG       = '#1a1a1a';
+const SCROLLMAP_VIEWPORT = 'rgba(255,255,255,0.10)';
+
+function drawScrollmap(vp) {
+    const { mapEl, visibleEntries, cum, scrollEl } = vp;
+    if (!mapEl) return;
+
+    const totalH = cum[visibleEntries.length];
+    if (totalH === 0) return;
+
+    const dpr    = window.devicePixelRatio || 1;
+    const dispH  = mapEl.clientHeight || scrollEl.clientHeight || 400;
+    const physH  = Math.round(dispH * dpr);
+    const physW  = Math.round(SCROLLMAP_W * dpr);
+
+    if (mapEl.height !== physH) { mapEl.height = physH; }
+
+    const ctx = mapEl.getContext('2d');
+    ctx.clearRect(0, 0, physW, physH);
+
+    // Background
+    ctx.fillStyle = SCROLLMAP_BG;
+    ctx.fillRect(0, 0, physW, physH);
+
+    const scale = physH / totalH;  // canvas px per content px
+
+    // Draw one pixel band per entry, coloured by level
+    for (let i = 0; i < visibleEntries.length; i++) {
+        const e      = visibleEntries[i];
+        const y0     = Math.floor(cum[i]     * scale);
+        const y1     = Math.ceil (cum[i + 1] * scale);
+        const h      = Math.max(1, y1 - y0);
+        const lvlKey = e.level.toLowerCase();
+        ctx.fillStyle = SCROLLMAP_LEVEL_COLOR[lvlKey] ?? SCROLLMAP_LEVEL_COLOR.info;
+        ctx.fillRect(0, y0, physW, h);
+    }
+
+    // Bookmarks — brighter 3px band
+    for (const [docIdx, color] of vp.doc.bookmarks) {
+        const visIdx = vp.visibleDocIndices ? vp.visibleDocIndices.indexOf(docIdx) : docIdx;
+        if (visIdx < 0 || visIdx >= visibleEntries.length) continue;
+        const y = Math.floor(cum[visIdx] * scale);
+        ctx.fillStyle = color;
+        ctx.fillRect(0, Math.max(0, y - 1), physW, 3);
+    }
+
+    // Viewport indicator
+    const vpTop = scrollEl.scrollTop;
+    const vpBot = vpTop + scrollEl.clientHeight;
+    const vy0   = Math.floor(vpTop * scale);
+    const vy1   = Math.ceil (vpBot * scale);
+    ctx.fillStyle = SCROLLMAP_VIEWPORT;
+    ctx.fillRect(0, vy0, physW, Math.max(4, vy1 - vy0));
 }
 
 // ── Row rendering ─────────────────────────────────────────────────────────────
@@ -214,6 +286,7 @@ function renderRows(vp) {
     }
 
     rowsEl.innerHTML = buf.join('');
+    drawScrollmap(vp);
 
     // After DOM is updated, measure actual row heights when word-wrap is on.
     // Virtual-scroll heights are estimated from displayLineCount and don't account
@@ -260,6 +333,19 @@ function attachHandlers(container, vp) {
         renderRows(vp);
     };
     vp.rowsEl.addEventListener('click', vp._clickHandler);
+
+    vp._mapClickHandler = (e) => {
+        const rect   = vp.mapEl.getBoundingClientRect();
+        const ratio  = (e.clientY - rect.top) / rect.height;
+        const totalH = vp.cum[vp.visibleEntries.length];
+        const target = ratio * totalH;
+        const idx    = findFirstVisible(vp.cum, target);
+        scrollToEntry(vp, idx);
+    };
+    vp.mapEl.addEventListener('click', vp._mapClickHandler);
+
+    vp._resizeObs = new ResizeObserver(() => drawScrollmap(vp));
+    vp._resizeObs.observe(vp.mapEl);
 }
 
 function cycleBookmark(vp, visIdx) {
@@ -302,9 +388,11 @@ function _createViewport(container, doc, options) {
         matchIndices: [],
         matchSet:     new Set(),
         matchCursor:  -1,
-        scrollEl, innerEl, rowsEl,
-        _scrollHandler: null,
-        _clickHandler:  null,
+        scrollEl, innerEl, rowsEl, mapEl,
+        _scrollHandler:    null,
+        _clickHandler:     null,
+        _mapClickHandler:  null,
+        _resizeObs:        null,
     };
     doc._viewports.add(vp);
     _vp.set(container, vp);
@@ -557,8 +645,10 @@ function destroy(container) {
     const vp = _vp.get(container);
     if (!vp) return;
 
-    if (vp._scrollHandler) vp.scrollEl.removeEventListener('scroll', vp._scrollHandler);
-    if (vp._clickHandler)  vp.rowsEl.removeEventListener('click',  vp._clickHandler);
+    if (vp._scrollHandler)   vp.scrollEl.removeEventListener('scroll', vp._scrollHandler);
+    if (vp._clickHandler)    vp.rowsEl.removeEventListener('click',   vp._clickHandler);
+    if (vp._mapClickHandler) vp.mapEl?.removeEventListener('click',   vp._mapClickHandler);
+    if (vp._resizeObs)       vp._resizeObs.disconnect();
     container.innerHTML = '';
 
     const doc = vp.doc;
