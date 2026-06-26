@@ -151,9 +151,9 @@ const SCROLLMAP_COLORS_DARK = {
     edge:     'rgba(255,255,255,0.45)',
 };
 const SCROLLMAP_COLORS_LIGHT = {
-    level: { error: '#a03535', fatal: '#a03535', warn: '#8a6510', info: '#2e6e44', debug: '#2e5488', trace: '#b0b0b0' },
-    bg:       '#d8d8d8',
-    viewport: 'rgba(0,0,0,0.10)',
+    level: { error: '#f08080', fatal: '#f08080', warn: '#f0c040', info: '#70c88a', debug: '#80aaee', trace: '#cccccc' },
+    bg:       '#f0f0f0',
+    viewport: 'rgba(0,0,0,0.12)',
     edge:     'rgba(0,0,0,0.30)',
 };
 
