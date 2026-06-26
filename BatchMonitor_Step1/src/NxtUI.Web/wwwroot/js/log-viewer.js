@@ -359,6 +359,18 @@ function attachHandlers(container, vp) {
 
     vp._resizeObs = new ResizeObserver(() => drawScrollmap(vp));
     vp._resizeObs.observe(vp.mapEl);
+
+    vp._dblClickHandler = (e) => {
+        if (!vp.dotNetRef) return;
+        const sel  = window.getSelection();
+        const word = sel?.toString().trim() ?? '';
+        if (!word) return;
+        // Collapse to just the clicked word (strip leading/trailing punctuation)
+        const clean = word.replace(/^[\s\W]+|[\s\W]+$/g, '');
+        if (!clean) return;
+        vp.dotNetRef.invokeMethodAsync('OnWordSelected', clean);
+    };
+    vp.rowsEl.addEventListener('dblclick', vp._dblClickHandler);
 }
 
 function cycleBookmark(vp, visIdx) {
@@ -402,9 +414,11 @@ function _createViewport(container, doc, options) {
         matchSet:     new Set(),
         matchCursor:  -1,
         scrollEl, innerEl, rowsEl, mapEl,
+        dotNetRef:         null,
         _scrollHandler:    null,
         _clickHandler:     null,
         _mapClickHandler:  null,
+        _dblClickHandler:  null,
         _resizeObs:        null,
     };
     doc._viewports.add(vp);
@@ -658,9 +672,10 @@ function destroy(container) {
     const vp = _vp.get(container);
     if (!vp) return;
 
-    if (vp._scrollHandler)   vp.scrollEl.removeEventListener('scroll', vp._scrollHandler);
-    if (vp._clickHandler)    vp.rowsEl.removeEventListener('click',   vp._clickHandler);
-    if (vp._mapClickHandler) vp.mapEl?.removeEventListener('click',   vp._mapClickHandler);
+    if (vp._scrollHandler)   vp.scrollEl.removeEventListener('scroll',    vp._scrollHandler);
+    if (vp._clickHandler)    vp.rowsEl.removeEventListener('click',      vp._clickHandler);
+    if (vp._dblClickHandler) vp.rowsEl.removeEventListener('dblclick',   vp._dblClickHandler);
+    if (vp._mapClickHandler) vp.mapEl?.removeEventListener('click',      vp._mapClickHandler);
     if (vp._resizeObs)       vp._resizeObs.disconnect();
     container.innerHTML = '';
 
@@ -678,11 +693,17 @@ function renderLocalFile(container, key, opts) {
 }
 
 // Expose on window so Blazor JS interop (InvokeVoidAsync / InvokeAsync) can reach it.
+function registerDotNetRef(container, dotNetRef) {
+    const vp = _vp.get(container);
+    if (vp) vp.dotNetRef = dotNetRef;
+}
+
 window.logViewer = {
     render, renderLocalFile, addViewport, getDocId,
     appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,
     setFontSize, setWordWrap, setFilter,
+    registerDotNetRef,
     destroy,
 };

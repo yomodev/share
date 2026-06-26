@@ -156,9 +156,10 @@
     ];
 
     // DOM / JS interop
-    private ElementReference _bodyRef;
-    private bool             _rendered;
-    private bool             _dirty;
+    private ElementReference          _bodyRef;
+    private bool                      _rendered;
+    private bool                      _dirty;
+    private DotNetObjectReference<LogViewer>? _dotNetRef;
 
     // Loading state
     private string? _loadedPath;
@@ -213,9 +214,22 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         _rendered = true;
-        if (!_dirty) return;
-        _dirty = false;
-        await RenderViewerAsync();
+        if (_dirty)
+        {
+            _dirty = false;
+            await RenderViewerAsync();
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("logViewer.registerDotNetRef", _bodyRef, _dotNetRef); }
+            catch (JSDisconnectedException) { }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnWordSelected(string word)
+    {
+        _findTerm = word;
+        await RunFindAsync();
+        StateHasChanged();
     }
 
     // ── File loading ──────────────────────────────────────────────────────
@@ -469,6 +483,7 @@ _filterStr   = expr;
         StopTail();
         await _cts.CancelAsync();
         _cts.Dispose();
+        _dotNetRef?.Dispose();
         try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
         catch { }
     }
