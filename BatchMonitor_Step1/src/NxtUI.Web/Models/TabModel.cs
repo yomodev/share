@@ -18,6 +18,7 @@ public enum TabType
     KafkaGroups,
     MongoDetail,
     LogViewer,
+    LogWorkspace,
     FilterHelp,
     MemoryGraph
 }
@@ -208,6 +209,16 @@ public class TabModel
         Environment = env,
         EntityId    = path,
         Icon        = MudBlazor.Icons.Material.Outlined.Article
+    };
+
+    public static TabModel CreateLogWorkspace(string path, string env) => new()
+    {
+        Id          = $"detail:workspace:{Uri.EscapeDataString(path)}:{env}",
+        Type        = TabType.LogWorkspace,
+        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Workspace",
+        Environment = env,
+        EntityId    = path,
+        Icon        = MudBlazor.Icons.Material.Outlined.GridView
     };
 
     public static TabModel CreateFilterHelp() => new()

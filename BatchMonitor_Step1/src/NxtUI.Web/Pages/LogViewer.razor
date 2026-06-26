@@ -33,6 +33,22 @@
                                    Size="Size.Small" OnClick="ShareAsync" />
                 </MudTooltip>
             }
+            @if (OnSplitH.HasDelegate)
+            {
+                <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+                <MudTooltip Text="Split right">
+                    <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
+                                   Size="Size.Small" OnClick="@(() => OnSplitH.InvokeAsync())" />
+                </MudTooltip>
+                <MudTooltip Text="Split down">
+                    <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
+                                   Size="Size.Small" OnClick="@(() => OnSplitV.InvokeAsync())" />
+                </MudTooltip>
+                <MudTooltip Text="Close panel">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                   Size="Size.Small" OnClick="@(() => OnClose.InvokeAsync())" />
+                </MudTooltip>
+            }
         </div>
     </div>
 
@@ -141,6 +157,11 @@
     [Parameter] public string? Path     { get; set; }
     [Parameter] public string  Env      { get; set; } = string.Empty;
     [Parameter] public string? FileName { get; set; }
+
+    // Workspace split/close — only rendered when set by WorkspacePanel
+    [Parameter] public EventCallback OnSplitH { get; set; }
+    [Parameter] public EventCallback OnSplitV { get; set; }
+    [Parameter] public EventCallback OnClose  { get; set; }
 
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 

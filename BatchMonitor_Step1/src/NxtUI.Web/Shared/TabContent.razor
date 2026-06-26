@@ -64,6 +64,10 @@
         <NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
         break;
 
+    case TabType.LogWorkspace:
+        <NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
+        break;
+
     case TabType.Settings:
         <NxtUI.Pages.Settings />
         break;

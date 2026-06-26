@@ -1,0 +1,65 @@
+@using NxtUI.Models
+@using NxtUI.Pages
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (Node is WsLeaf leaf)
+{
+    <div class="ws-leaf" style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;">
+        <LogViewer Path="@leaf.Path"
+                   Env="@leaf.Env"
+                   FileName="@leaf.FileName"
+                   OnSplitH="@(() => OnSplit.InvokeAsync((leaf, WsDir.H)))"
+                   OnSplitV="@(() => OnSplit.InvokeAsync((leaf, WsDir.V)))"
+                   OnClose="@(() => OnClose.InvokeAsync(leaf))" />
+    </div>
+}
+else if (Node is WsSplit split)
+{
+    var flexDir   = split.Dir == WsDir.H ? "row" : "column";
+    var ratioPct  = (split.Ratio * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+    var invPct    = ((1 - split.Ratio) * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+
+    <div class="ws-split" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:@flexDir;overflow:hidden;"
+         @ref="_containerRef">
+        <div class="ws-pane" style="flex:0 0 @(ratioPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
+            <WorkspacePanel Node="@split.A" OnSplit="OnSplit" OnClose="OnClose" OnRatioChanged="OnRatioChanged" />
+        </div>
+
+        <div class="@(split.Dir == WsDir.H ? "ws-handle-h" : "ws-handle-v")"
+             @onmousedown="@(e => OnHandleMouseDown(e, split))"></div>
+
+        <div class="ws-pane" style="flex:0 0 @(invPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
+            <WorkspacePanel Node="@split.B" OnSplit="OnSplit" OnClose="OnClose" OnRatioChanged="OnRatioChanged" />
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WsNode Node { get; set; } = null!;
+    [Parameter] public EventCallback<(WsLeaf, WsDir)> OnSplit        { get; set; }
+    [Parameter] public EventCallback<WsLeaf>           OnClose        { get; set; }
+    [Parameter] public EventCallback<(WsSplit, double)> OnRatioChanged { get; set; }
+
+    private ElementReference _containerRef;
+    private DotNetObjectReference<WorkspacePanel>? _selfRef;
+
+    [JSInvokable]
+    public async Task SetRatio(double ratio)
+    {
+        if (Node is WsSplit split)
+            await OnRatioChanged.InvokeAsync((split, Math.Clamp(ratio, 0.05, 0.95)));
+    }
+
+    private async Task OnHandleMouseDown(MouseEventArgs e, WsSplit split)
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("wsResizer.start",
+            e.ClientX, e.ClientY,
+            split.Dir == WsDir.H,
+            _selfRef,
+            _containerRef);
+    }
+
+    public void Dispose() => _selfRef?.Dispose();
+}

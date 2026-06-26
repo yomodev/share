@@ -234,6 +234,11 @@
                                                    Size="Size.Small"
                                                    OnClick="@(() => OpenInViewer(context))" />
                                 </MudTooltip>
+                                <MudTooltip Text="Open in Workspace">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.GridView"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenInWorkspace(context))" />
+                                </MudTooltip>
                             </MudTd>
                         </RowTemplate>
                     </MudTable>
@@ -612,6 +617,9 @@
 
     private void OpenInViewer(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogViewer(file.FullPath, Env));
+
+    private void OpenInWorkspace(LogFileEntry file) =>
+        TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
 
     private async Task OpenLocalFileAsync()
     {

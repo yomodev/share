@@ -1,0 +1,45 @@
+@using NxtUI.Models
+@implements IDisposable
+
+<div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;">
+    <WorkspacePanel Node="@_root"
+                    OnSplit="OnSplit"
+                    OnClose="OnClose"
+                    OnRatioChanged="OnRatioChanged" />
+</div>
+
+@code {
+    [Parameter] public string? Path     { get; set; }
+    [Parameter] public string  Env      { get; set; } = string.Empty;
+    [Parameter] public string? FileName { get; set; }
+
+    private WsNode _root = null!;
+
+    protected override void OnInitialized()
+    {
+        _root = new WsLeaf(Path, Env, FileName);
+    }
+
+    private void OnSplit((WsLeaf leaf, WsDir dir) args)
+    {
+        var sibling = new WsLeaf(null, args.leaf.Env);
+        _root = _root.Replace(args.leaf, new WsSplit(args.dir, 0.5, args.leaf, sibling));
+        StateHasChanged();
+    }
+
+    private void OnClose(WsLeaf leaf)
+    {
+        var next = _root.Remove(leaf);
+        if (next is null) return; // can't close the last panel
+        _root = next;
+        StateHasChanged();
+    }
+
+    private void OnRatioChanged((WsSplit split, double ratio) args)
+    {
+        args.split.Ratio = args.ratio;
+        StateHasChanged();
+    }
+
+    public void Dispose() { }
+}

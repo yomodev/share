@@ -1972,3 +1972,22 @@ tr.bm-row-searching td:first-child {
     color: var(--mud-palette-text-secondary);
     font-size: 14px;
 }
+
+/* ── Workspace split panels ──────────────────────────────────────────────── */
+.ws-handle-h {
+    flex: 0 0 4px;
+    cursor: col-resize;
+    background: var(--mud-palette-divider);
+    transition: background 0.15s;
+    z-index: 1;
+}
+.ws-handle-h:hover { background: var(--mud-palette-primary); }
+
+.ws-handle-v {
+    flex: 0 0 4px;
+    cursor: row-resize;
+    background: var(--mud-palette-divider);
+    transition: background 0.15s;
+    z-index: 1;
+}
+.ws-handle-v:hover { background: var(--mud-palette-primary); }
