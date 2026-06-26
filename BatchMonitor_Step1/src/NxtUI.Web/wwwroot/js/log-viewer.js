@@ -524,27 +524,16 @@ function setWordWrap(container, wrap) {
  * Returns { total, visible } so Blazor can update a counter in the toolbar.
  */
 function setFilter(container, filterStr) {
-    console.log('[filter] setFilter called, expr:', filterStr);
     const vp = _vp.get(container);
-    if (!vp) { console.error('[filter] no viewport found for container'); return { total: 0, visible: 0 }; }
+    if (!vp) return { total: 0, visible: 0 };
 
     let node = null;
     try { node = filterStr ? parseFilter(filterStr, LOG_SEARCH_FIELDS, LOG_ALIASES) : null; }
     catch (e) { console.error('[filter] parse error:', e); }
 
-    if (filterStr) {
-        const sample = vp.doc.entries[0];
-        console.log('[filter] expr:', filterStr,
-            '| node:', JSON.stringify(node),
-            '| sample pid:', sample?.pid, '(type:', typeof sample?.pid + ')',
-            '| sample threadId:', sample?.threadId, '(type:', typeof sample?.threadId + ')');
-    }
-
     vp.filterNode = node;
     rebuildVisible(vp);
     vp.cum = buildCumulatives(vp.visibleEntries, vp.measuredH);
-
-    console.log('[filter] result: visible', vp.visibleEntries.length, '/', vp.doc.entries.length);
 
     // Re-run search over the new visible set.
     if (vp.searchRe) {

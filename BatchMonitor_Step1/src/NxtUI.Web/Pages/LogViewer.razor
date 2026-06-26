@@ -340,8 +340,7 @@
 
     private async Task OnFilterChangedAsync(string expr)
     {
-        Console.WriteLine($"[filter] OnFilterChangedAsync: '{expr}'");
-        _filterStr   = expr;
+_filterStr   = expr;
         _filterError = null;
         try
         {
@@ -350,7 +349,7 @@
             _visibleCount = result.Visible;
         }
         catch (JSDisconnectedException) { }
-        catch (Exception ex) { _filterError = ex.Message; Console.Error.WriteLine($"[filter] JS error: {ex}"); }
+        catch (Exception ex) { _filterError = ex.Message; }
         StateHasChanged();
     }
 
