@@ -199,8 +199,8 @@ function renderRows(vp) {
         buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
         buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
         buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
-        buf.push(`<span class="lv-pid">${escapeHtml(e.pid)}</span>`);
-        if (e.threadId !== 0) buf.push(`<span class="lv-tid">${escapeHtml(e.threadId)}</span>`);
+        buf.push(`<span class="lv-pid" title="pid">${escapeHtml(e.pid)}</span>`);
+        if (e.threadId !== 0) buf.push(`<span class="lv-tid" title="tid">${escapeHtml(e.threadId)}</span>`);
         buf.push(`<span class="lv-msg">${msgHtml}</span>`);
         if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
         buf.push(`</div>`); // .lv-fields
@@ -524,7 +524,7 @@ function setWordWrap(container, wrap) {
  * Returns { total, visible } so Blazor can update a counter in the toolbar.
  */
 function setFilter(container, filterStr) {
-    console.debug('[filter] setFilter called, expr:', filterStr, '| container:', container);
+    console.log('[filter] setFilter called, expr:', filterStr);
     const vp = _vp.get(container);
     if (!vp) { console.error('[filter] no viewport found for container'); return { total: 0, visible: 0 }; }
 
@@ -534,18 +534,17 @@ function setFilter(container, filterStr) {
 
     if (filterStr) {
         const sample = vp.doc.entries[0];
-        console.debug('[filter] expr:', filterStr,
-            '\n  node:', JSON.stringify(node),
-            '\n  total entries:', vp.doc.entries.length,
-            '\n  sample pid:', sample?.pid, '(type:', typeof sample?.pid + ')',
-            '\n  sample threadId:', sample?.threadId, '(type:', typeof sample?.threadId + ')');
+        console.log('[filter] expr:', filterStr,
+            '| node:', JSON.stringify(node),
+            '| sample pid:', sample?.pid, '(type:', typeof sample?.pid + ')',
+            '| sample threadId:', sample?.threadId, '(type:', typeof sample?.threadId + ')');
     }
 
     vp.filterNode = node;
     rebuildVisible(vp);
     vp.cum = buildCumulatives(vp.visibleEntries, vp.measuredH);
 
-    console.debug('[filter] result: visible', vp.visibleEntries.length, '/', vp.doc.entries.length);
+    console.log('[filter] result: visible', vp.visibleEntries.length, '/', vp.doc.entries.length);
 
     // Re-run search over the new visible set.
     if (vp.searchRe) {
