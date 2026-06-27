@@ -16,20 +16,26 @@ window.homeMemoryTreemap = (function () {
         const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
         const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
 
-        // Minimum visual weight for null-RAM services so they always get a
-        // visible slice even when neighbours have hundreds of MB.
-        const minVal = H * 0.5;
+        // Small fixed floor so no-data services get a visible pixel without
+        // dominating the layout when many processes lack a RAM sample.
+        const minVal = 4;
 
         const root = d3.hierarchy(data)
             .sum(d => d.children ? 0 : Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
 
+        // Two-level tiling: hosts are diced into vertical columns (side-by-side),
+        // services within each host are squarified — this handles hundreds of
+        // small processes per host without collapsing them into sub-pixel rows.
         d3.treemap()
             .size([W, H])
             .paddingOuter(1)
-            .paddingTop(14)
-            .paddingInner(1)
-            .tile(d3.treemapSliceDice)(root);
+            .paddingTop(12)
+            .paddingInner(0.5)
+            .tile((node, x0, y0, x1, y1) => {
+                if (node.depth === 0) d3.treemapDice(node, x0, y0, x1, y1);
+                else                  d3.treemapSquarify(node, x0, y0, x1, y1);
+            })(root);
 
         const svg = d3.select(container).append('svg')
             .attr('width', '100%')

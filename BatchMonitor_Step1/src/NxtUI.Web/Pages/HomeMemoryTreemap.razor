@@ -79,7 +79,7 @@
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
-            var cutoff = DateTime.UtcNow.AddHours(-1);
+            var cutoff = DateTime.UtcNow.AddMinutes(-10);
 
             var hosts = services
                 .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
@@ -94,7 +94,6 @@
                             return new TreeSvc(s.ServiceName, s.ProcessId, ram);
                         })
                         .OrderByDescending(s => s.Ram ?? 0)
-                        .Take(10)
                         .ToList();
                     return new TreeHost(g.Key, svcs);
                 }).ToList();
