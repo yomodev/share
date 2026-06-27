@@ -304,6 +304,7 @@
     private string?            _initError;
     // tracks which tree nodes are currently fetching their children
     private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
+    private string?  _lastManualPollPath;
 
     // search
     private string    _fileGlob           = "*.log";
@@ -452,14 +453,16 @@
         await Task.Yield();
 
         var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
-        if ((DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
+        var sameFolder  = relativePath == _lastManualPollPath;
+        if (!sameFolder || (DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
         {
-            _lastManualPoll = DateTime.UtcNow;
+            _lastManualPoll     = DateTime.UtcNow;
+            _lastManualPollPath = relativePath;
             await LoadFilesAsync();
         }
         else
         {
-            _loadingFiles = false;
+            _loadingFiles = _loadingNodes.Count > 0;
             StateHasChanged();
         }
     }

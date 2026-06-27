@@ -213,32 +213,60 @@ public sealed class TestLogGenerator : BackgroundService
                 _metricsTargets.Add(mt);
                 metricsGenerated++;
 
-                // ── 2. App.log under LogsFolder path ─────────────────────────
+                // ── 2. App logs under LogsFolder path (today + past days) ───
                 var logsRoot = _paths.LogsFolder;
                 if (!string.IsNullOrWhiteSpace(logsRoot))
                 {
-                    var appFolder = Path.Combine(
-                        logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase),
-                        DateTime.Today.ToString("yyyy-MM-dd"),
-                        svc.ServiceName);
-                    Directory.CreateDirectory(appFolder);
-
-                    var at = new AppLogTarget
-                    {
-                        FilePath = Path.Combine(appFolder, "App.log"),
-                        Server   = svc.HostName,
-                        Pid      = svc.ProcessId,
-                        Service  = svc.ServiceName,
-                    };
-
-                    // Dense backfill: ~1 line every 30 s from midnight to now.
+                    var serverRoot = logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase);
                     const int appIntervalSec = 30;
-                    var appSteps = totalSec / appIntervalSec;
-                    for (var k = appSteps; k >= 1; k--)
-                        WriteAppLine(at, now.AddSeconds(-(long)k * appIntervalSec));
 
-                    _appLogTargets.Add(at);
-                    appGenerated++;
+                    // Today — full backfill from midnight to now, keep as live target
+                    {
+                        var appFolder = Path.Combine(serverRoot, DateTime.Today.ToString("yyyy-MM-dd"), svc.ServiceName);
+                        Directory.CreateDirectory(appFolder);
+                        // Errors subfolder (empty on some services, populated on others)
+                        if (svc.ProcessId % 2 == 0)
+                            Directory.CreateDirectory(Path.Combine(appFolder, "Errors"));
+
+                        var at = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                        var appSteps = totalSec / appIntervalSec;
+                        for (var k = appSteps; k >= 1; k--)
+                            WriteAppLine(at, now.AddSeconds(-(long)k * appIntervalSec));
+                        _appLogTargets.Add(at);
+                        appGenerated++;
+                    }
+
+                    // Past days — seed 1–5 days back with full-day logs (86400s / 30s = 2880 lines/day)
+                    var pastDays = new[] { 1, 2, 3, 5 };
+                    foreach (var daysBack in pastDays)
+                    {
+                        // Some services randomly skipped on past days to simulate services not running every day
+                        if (_rng.Next(3) == 0) continue;
+
+                        var date      = DateTime.Today.AddDays(-daysBack);
+                        var appFolder = Path.Combine(serverRoot, date.ToString("yyyy-MM-dd"), svc.ServiceName);
+                        Directory.CreateDirectory(appFolder);
+                        if (svc.ProcessId % 2 == 0)
+                            Directory.CreateDirectory(Path.Combine(appFolder, "Errors"));
+
+                        var at    = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                        var start = date; // midnight
+                        for (var k = 86400 / appIntervalSec; k >= 1; k--)
+                            WriteAppLine(at, start.AddSeconds((long)(86400 / appIntervalSec - k) * appIntervalSec));
+
+                        // Some days also have a Debug.log with verbose output
+                        if (daysBack <= 2 && _rng.Next(2) == 0)
+                        {
+                            var dbg = new AppLogTarget { FilePath = Path.Combine(appFolder, "Debug.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                            for (var k = 86400 / 10; k >= 1; k--)
+                                WriteAppLine(dbg, start.AddSeconds((long)(86400 / 10 - k) * 10));
+                        }
+
+                        appGenerated++;
+                    }
+
+                    // Archive subfolder — empty, just to test browsing empty dirs
+                    Directory.CreateDirectory(Path.Combine(serverRoot, "Archive", svc.ServiceName));
                 }
             }
         }
