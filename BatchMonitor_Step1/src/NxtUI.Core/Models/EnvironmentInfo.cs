@@ -1,29 +1,16 @@
 namespace NxtUI.Models;
 
 /// <summary>
-/// Runtime representation of an environment with resolved badge colour.
-/// Derived from <see cref="Configuration.EnvironmentDefinition"/>.
+/// Runtime representation of an environment.
+/// Badge colours are assigned by <see cref="NxtUI.Core.Services.EnvironmentRegistry"/>
+/// based on the environment id — not on the tier — so every environment
+/// automatically gets a stable, distinct colour.
 /// </summary>
 public class EnvironmentInfo
 {
-    public string Id { get; init; } = string.Empty;
-    public string Label { get; init; } = string.Empty;
-    public string Tier { get; init; } = string.Empty;
-
-    /// <summary>MudBlazor colour name for the environment badge.</summary>
-    public string BadgeColor => Tier switch
-    {
-        "Development" => "#00BCD4",   // Teal/Cyan
-        "UAT"         => "#FFB300",   // Amber
-        "Staging"     => "#7B1FA2",   // Purple
-        "Production"  => "#E64A19",   // Deep Orange
-        _             => "#546E7A"    // Blue Grey
-    };
-
-    /// <summary>Text colour to use on top of the badge background.</summary>
-    public string BadgeTextColor => Tier switch
-    {
-        "UAT" => "#1a1a1a",
-        _     => "#ffffff"
-    };
+    public string Id           { get; init; } = string.Empty;
+    public string Label        { get; init; } = string.Empty;
+    public string Tier         { get; init; } = string.Empty;
+    public string BadgeColor   { get; init; } = "#546E7A";
+    public string BadgeTextColor { get; init; } = "#ffffff";
 }
