@@ -351,6 +351,16 @@
         _initialized = true;
         _lastScan    = DateTime.UtcNow;
         StartPolling();
+
+        // Auto-navigate to today's date folder if one exists at the root.
+        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+        var todayNode = _rootNodes.FirstOrDefault(n =>
+            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+        if (todayNode is not null)
+        {
+            _expanded.Add(todayNode.RelativePath);
+            await SelectPathAsync(todayNode.RelativePath);
+        }
     }
 
     protected override async Task OnParametersSetAsync()
