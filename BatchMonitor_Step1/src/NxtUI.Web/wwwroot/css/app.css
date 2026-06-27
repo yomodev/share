@@ -1718,6 +1718,15 @@ html, body {
     letter-spacing: 0;
     text-transform: none;
 }
+.bm-svc-group-ram {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--mud-palette-text-secondary);
+    font-family: var(--bm-font-mono);
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 0.75;
+}
 
 .bm-svc-card-row {
     display: flex;

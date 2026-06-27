@@ -184,11 +184,51 @@ export function initTabDrag(containerEl, dotnetHelper) {
         "font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;";
     document.body.appendChild(tip);
 
+    function closestPt(data, target) {
+        let best = data[0], bestDist = Math.abs(data[0][0] - target);
+        for (const pt of data) {
+            const d = Math.abs(pt[0] - target);
+            if (d < bestDist) { bestDist = d; best = pt; }
+        }
+        return best;
+    }
+
+    function broadcastTimestamp(sourceCard, target) {
+        document.querySelectorAll('.bm-svc-card').forEach(card => {
+            if (card === sourceCard) return;
+            const lbl = card.querySelector('.bm-svc-peak-label');
+            if (!lbl) return;
+            const svg = card.querySelector('.bm-svc-spark');
+            if (!svg) return;
+            let data;
+            try { data = JSON.parse(svg.dataset.spark); } catch { return; }
+            if (!data.length) return;
+            if (!lbl.dataset.orig) lbl.dataset.orig = lbl.textContent;
+            const pt = closestPt(data, target);
+            lbl.textContent = Math.round(pt[1]).toLocaleString();
+            lbl.style.opacity = '0.65';
+            lbl.style.fontStyle = 'italic';
+        });
+    }
+
+    function clearBroadcast(sourceCard) {
+        document.querySelectorAll('.bm-svc-card').forEach(card => {
+            if (card === sourceCard) return;
+            const lbl = card.querySelector('.bm-svc-peak-label');
+            if (lbl && lbl.dataset.orig !== undefined) {
+                lbl.textContent = lbl.dataset.orig;
+                lbl.style.opacity = '';
+                lbl.style.fontStyle = '';
+                delete lbl.dataset.orig;
+            }
+        });
+    }
+
     document.addEventListener('mousemove', e => {
         const card = e.target.closest('.bm-svc-card');
-        if (!card) { tip.style.display = 'none'; return; }
+        if (!card) { tip.style.display = 'none'; clearBroadcast(null); return; }
         const svg = card.querySelector('.bm-svc-spark');
-        if (!svg) { tip.style.display = 'none'; return; }
+        if (!svg) { tip.style.display = 'none'; clearBroadcast(card); return; }
 
         const raw = svg.dataset.spark;
         if (!raw) return;
@@ -203,11 +243,7 @@ export function initTabDrag(containerEl, dotnetHelper) {
         const t1     = data[data.length - 1][0];
         const target = t0 + frac * (t1 - t0);
 
-        let best = data[0], bestDist = Math.abs(data[0][0] - target);
-        for (const pt of data) {
-            const d = Math.abs(pt[0] - target);
-            if (d < bestDist) { bestDist = d; best = pt; }
-        }
+        const best = closestPt(data, target);
 
         const dt = new Date(best[0] * 1000);
         const hh = dt.getHours().toString().padStart(2, '0');
@@ -216,9 +252,11 @@ export function initTabDrag(containerEl, dotnetHelper) {
         tip.style.display = 'block';
         tip.style.left    = (e.clientX + 12) + 'px';
         tip.style.top     = (e.clientY - 28) + 'px';
+
+        broadcastTimestamp(card, target);
     }, { signal });
 
-    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; }, { capture: true, signal });
+    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; clearBroadcast(null); }, { capture: true, signal });
 })();
 
 /** @param {HTMLElement} containerEl */

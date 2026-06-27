@@ -88,6 +88,11 @@
                         {
                             <div class="bm-svc-group-header">
                                 @group.Key
+                                @{ var groupRam = group.Sum(s => s.RamMb ?? 0); }
+                                @if (groupRam > 0)
+                                {
+                                    <span class="bm-svc-group-ram">@FormatMb(groupRam) MB</span>
+                                }
                                 <span class="bm-svc-group-count">@group.Count()</span>
                             </div>
                         }
@@ -114,7 +119,7 @@
                                         <span>PID @s.ProcessId</span>
                                         @if (s.RamMb is not null || s.PeakMb is not null)
                                         {
-                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
+                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
                                         }
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
                                     </div>
