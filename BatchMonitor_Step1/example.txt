@@ -13417,7 +13417,7 @@ LENGTH 3267
     };
 }
 FILE src/NxtUI.Web/Components/KafkaTopicInfoDialog.razor
-LENGTH 2871
+LENGTH 2155
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IKafkaService KafkaSvc
@@ -13472,6 +13472,13 @@ LENGTH 2871
         finally { _loading = false; }
     }
 
+}
+FILE src/NxtUI.Web/Components/KafkaTopicInfoDialog.razor.cs
+LENGTH 794
+namespace NxtUI.Components;
+
+public partial class KafkaTopicInfoDialog
+{
     private static string FormatRetention(long ms) => ms switch
     {
         < 0                => "∞",
@@ -13485,10 +13492,10 @@ LENGTH 2871
 
     private static string FormatBytes(long b) => b switch
     {
-        < 1024               => $"{b} B",
-        < 1024 * 1024        => $"{b / 1024} KB",
+        < 1024                => $"{b} B",
+        < 1024 * 1024         => $"{b / 1024} KB",
         < 1024L * 1024 * 1024 => $"{b / (1024 * 1024)} MB",
-        _                    => $"{b / (1024L * 1024 * 1024)} GB",
+        _                     => $"{b / (1024L * 1024 * 1024)} GB",
     };
 }
 FILE src/NxtUI.Web/Components/LogViewport.razor
@@ -18282,7 +18289,7 @@ LENGTH 18107
     }
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor
-LENGTH 4395
+LENGTH 4102
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IMongoService MongoSvc
@@ -18381,6 +18388,13 @@ LENGTH 4395
         _loading = false;
     }
 
+}
+FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor.cs
+LENGTH 368
+namespace NxtUI.Pages;
+
+public partial class MongoCollectionInfoDialog
+{
     private static string FormatBytes(long b) => b switch
     {
         < 1024                => $"{b} B",
@@ -18626,7 +18640,7 @@ LENGTH 9098
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11973
+LENGTH 11682
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -18903,15 +18917,21 @@ LENGTH 11973
         await LoadCollectionsAsync();
     }
 
+    public void Dispose() => _cts.Cancel();
+}
+FILE src/NxtUI.Web/Pages/MongoDashboard.razor.cs
+LENGTH 357
+namespace NxtUI.Pages;
+
+public partial class MongoDashboard
+{
     private static string FormatBytes(long b) => b switch
     {
-        < 1024               => $"{b} B",
-        < 1024 * 1024        => $"{b / 1024} KB",
+        < 1024                => $"{b} B",
+        < 1024 * 1024         => $"{b / 1024} KB",
         < 1024L * 1024 * 1024 => $"{b / (1024 * 1024)} MB",
-        _                    => $"{b / (1024L * 1024 * 1024)} GB",
+        _                     => $"{b / (1024L * 1024 * 1024)} GB",
     };
-
-    public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/PlaceholderPage.razor
 LENGTH 830
@@ -19619,7 +19639,7 @@ LENGTH 11083
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28939
+LENGTH 28667
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Filtering
@@ -20229,15 +20249,6 @@ LENGTH 28939
     private static string FormatMb(double? mb) =>
         mb is null or <= 0 ? "—" : mb.Value.ToString("N0");
 
-    private static string RamColorClass(double? mb) => mb switch
-    {
-        null or <= 0  => "",
-        < 512         => "bm-ram-green",
-        < 1024        => "bm-ram-yellow",
-        < 4096        => "bm-ram-orange",
-        _             => "bm-ram-red",
-    };
-
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
@@ -20247,6 +20258,21 @@ LENGTH 28939
         _timer?.Dispose();
         await Task.CompletedTask;
     }
+}
+FILE src/NxtUI.Web/Pages/ServicesPage.razor.cs
+LENGTH 328
+namespace NxtUI.Pages;
+
+public partial class ServicesPage
+{
+    private static string RamColorClass(double? mb) => mb switch
+    {
+        null or <= 0 => "",
+        < 512        => "bm-ram-green",
+        < 1024       => "bm-ram-yellow",
+        < 4096       => "bm-ram-orange",
+        _            => "bm-ram-red",
+    };
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
 LENGTH 4627
@@ -24071,105 +24097,82 @@ LENGTH 716
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2767
+LENGTH 2769
 @* Routes the active tab to its correct page component *@
 
-@if (Tab is null) { return; }
-
-@{
-    var env = Tab.Environment ?? string.Empty;
-    var label = Tab.Label ?? string.Empty;
-}
-
-@switch (Tab.Type)
+@if (Tab is not null)
 {
-    case TabType.Runs:
-        <NxtUI.Pages.Runs Environment="@env" />
-        break;
-
-    case TabType.RunDetail:
-        <NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />
-        break;
-
-    case TabType.Services:
-        <NxtUI.Pages.ServicesPage Env="@env" />
-        break;
-
-    case TabType.Pipelines:
-        <NxtUI.Pages.PlaceholderPage Title="Pipelines"
-            Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />
-        break;
-
-    case TabType.Kafka:
-        <NxtUI.Pages.KafkaDashboard Environment="@env" />
-        break;
-
-    case TabType.KafkaGroups:
-        <NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />
-        break;
-
-    case TabType.MongoDB:
-        <NxtUI.Pages.MongoDashboard Environment="@env" />
-        break;
-
-    case TabType.MongoDetail:
-        <NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
-        break;
-
-    case TabType.Batches:
-        <NxtUI.Pages.PlaceholderPage Title="Batches"
-            Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />
-        break;
-
-    case TabType.Config:
-        <NxtUI.Pages.PlaceholderPage Title="Config"
-            Icon="@Icons.Material.Outlined.Tune" Environment="@env" />
-        break;
-
-    case TabType.MemoryGraph:
-        <NxtUI.Pages.MemoryGraph Env="@env" />
-        break;
-
-    case TabType.LogBrowser:
-        <NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />
-        break;
-
-    case TabType.LogViewer:
-        <NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
-        break;
-
-    case TabType.LogWorkspace:
-        <NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
-        break;
-
-    case TabType.Settings:
-        <NxtUI.Pages.Settings />
-        break;
-
-    case TabType.Timeline:
-        <NxtUI.Pages.TimelineTab
-            Tab="@Tab"
-            Environment="@env"
-            InitialRunId="@Tab.EntityId"
-            IsFocused="@Tab.IsActive" />
-        break;
-
-    case TabType.KafkaMessages:
-        <NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
-        break;
-
-    case TabType.FilterHelp:
-        <NxtUI.Pages.FilterHelp />
-        break;
-
-    default:
-        <NxtUI.Pages.PlaceholderPage Title="@label"
-            Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />
-        break;
+    @RenderTab()
 }
 
 @code {
     [Parameter, EditorRequired] public TabModel? Tab { get; set; }
+
+    private RenderFragment RenderTab()
+    {
+        var env   = Tab!.Environment ?? string.Empty;
+        var label = Tab.Label ?? string.Empty;
+
+        return Tab.Type switch
+        {
+            TabType.Runs =>
+                @<NxtUI.Pages.Runs Environment="@env" />,
+
+            TabType.RunDetail =>
+                @<NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
+
+            TabType.Services =>
+                @<NxtUI.Pages.ServicesPage Env="@env" />,
+
+            TabType.Pipelines =>
+                @<NxtUI.Pages.PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
+
+            TabType.Kafka =>
+                @<NxtUI.Pages.KafkaDashboard Environment="@env" />,
+
+            TabType.KafkaGroups =>
+                @<NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />,
+
+            TabType.MongoDB =>
+                @<NxtUI.Pages.MongoDashboard Environment="@env" />,
+
+            TabType.MongoDetail =>
+                @<NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+
+            TabType.Batches =>
+                @<NxtUI.Pages.PlaceholderPage Title="Batches" Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />,
+
+            TabType.Config =>
+                @<NxtUI.Pages.PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
+
+            TabType.MemoryGraph =>
+                @<NxtUI.Pages.MemoryGraph Env="@env" />,
+
+            TabType.LogBrowser =>
+                @<NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+
+            TabType.LogViewer =>
+                @<NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+
+            TabType.LogWorkspace =>
+                @<NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+
+            TabType.Settings =>
+                @<NxtUI.Pages.Settings />,
+
+            TabType.Timeline =>
+                @<NxtUI.Pages.TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
+
+            TabType.KafkaMessages =>
+                @<NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+
+            TabType.FilterHelp =>
+                @<NxtUI.Pages.FilterHelp />,
+
+            _ =>
+                @<NxtUI.Pages.PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
+        };
+    }
 }
 FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29

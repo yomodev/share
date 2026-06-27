@@ -607,15 +607,6 @@
     private static string FormatMb(double? mb) =>
         mb is null or <= 0 ? "—" : mb.Value.ToString("N0");
 
-    private static string RamColorClass(double? mb) => mb switch
-    {
-        null or <= 0  => "",
-        < 512         => "bm-ram-green",
-        < 1024        => "bm-ram-yellow",
-        < 4096        => "bm-ram-orange",
-        _             => "bm-ram-red",
-    };
-
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
