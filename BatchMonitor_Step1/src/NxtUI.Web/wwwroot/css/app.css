@@ -1696,6 +1696,20 @@ html, body {
     padding: 10px 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
     margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bm-svc-group-count {
+    font-size: 10px;
+    font-weight: 500;
+    background: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-secondary);
+    border-radius: 8px;
+    padding: 1px 6px;
+    letter-spacing: 0;
+    text-transform: none;
 }
 
 .bm-svc-card-row {
@@ -1739,7 +1753,7 @@ html, body {
 }
 
 .bm-svc-card-name {
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;

@@ -79,7 +79,7 @@
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
-            var cutoff = DateTime.UtcNow.AddHours(-24);
+            var cutoff = DateTime.UtcNow.AddHours(-1);
 
             var hosts = services
                 .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
