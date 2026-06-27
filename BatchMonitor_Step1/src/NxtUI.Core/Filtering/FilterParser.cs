@@ -423,12 +423,28 @@ public sealed class FilterParser
         if (TryParseNumber(text, out var num))
             return new NumberValue(num);
 
-        // Date / time
+        // Time-only (hh:mm or hh:mm:ss) → time-of-day comparison, date-agnostic.
+        if (TryParseTimeOfDay(text, out var tod))
+            return tod;
+
+        // Absolute date / relative offset
         if (TryParseDate(text, out var dt))
             return new DateValue(dt);
 
         // String (glob or plain)
         return new StringValue(text);
+    }
+
+    private static bool TryParseTimeOfDay(string text, out TimeOfDayValue result)
+    {
+        result = default!;
+        var m = TimeOnly.Match(text);
+        if (!m.Success || text.StartsWith('-')) return false;
+        int h = int.Parse(m.Groups[1].Value);
+        int min = int.Parse(m.Groups[2].Value);
+        int s = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+        result = new TimeOfDayValue(h * 3600 + min * 60 + s);
+        return true;
     }
 
     private static bool TryParseNumber(string text, out double result)
@@ -499,17 +515,6 @@ public sealed class FilterParser
                     _   => DateTime.UtcNow.Date,
                 };
             }
-            return true;
-        }
-
-        // Time-only: 9:30 or 09:30:00 (or with z)
-        var timeMatch = TimeOnly.Match(text);
-        if (timeMatch.Success && !text.StartsWith('-'))
-        {
-            int h = int.Parse(timeMatch.Groups[1].Value);
-            int m = int.Parse(timeMatch.Groups[2].Value);
-            int s = timeMatch.Groups[3].Success ? int.Parse(timeMatch.Groups[3].Value) : 0;
-            result = DateTime.UtcNow.Date.AddHours(h).AddMinutes(m).AddSeconds(s);
             return true;
         }
 

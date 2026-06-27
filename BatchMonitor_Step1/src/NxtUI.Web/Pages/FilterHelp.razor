@@ -124,7 +124,7 @@
                 <tr><td>Positive offset</td><td><code>7d</code>, <code>2h</code>, <code>30m</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
                 <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
                 <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
-                <tr><td>Time / duration</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>today + hh:mm:ss</strong> — works as a clock time or as a duration depending on the field</td></tr>
+                <tr><td>Time of day</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>hh:mm:ss</strong> — compares only the time portion of a timestamp, ignoring the date</td></tr>
             </tbody>
         </table>
 
@@ -136,23 +136,17 @@
         </div>
 
         <div class="bm-help-callout" style="margin-top:14px;">
-            <strong>Negative vs positive offsets:</strong> <code>-10m</code> means <em>now minus 10 minutes</em> — useful for real
-            timestamps like <code>start</code> or <code>finish</code>.  <code>10m</code> (no minus) means <em>today at 00:10:00</em> —
-            useful for age/duration fields stored as elapsed time from midnight, like <code>dur</code> or <code>updated</code>.
-            <code>hh:mm</code> always means <em>today + that time</em>, so <code>00:10</code> and <code>10m</code> are identical.
+            <strong>Negative vs positive offsets:</strong> <code>-10m</code> means <em>now minus 10 minutes</em> — a real point in
+            the past, useful for timestamp fields like <code>start</code> or <code>updated</code>.  <code>10m</code> (no minus) means
+            <em>today at 00:10:00</em>.  <code>hh:mm</code> compares only the time-of-day portion of the field, ignoring the date —
+            useful for log timestamps (<code>ts</code>) or filtering events by time of day regardless of when they occurred.
         </div>
 
-        <p style="margin-top:14px;">Duration fields (<code>dur</code>) store elapsed time as today + interval, so use positive offsets or <code>hh:mm</code>:</p>
-        <div class="bm-help-examples">
-            <div class="bm-help-ex"><code>dur:&gt;00:01</code>      <span>— longer than 1 minute</span></div>
-            <div class="bm-help-ex"><code>dur:&gt;01:00</code>      <span>— longer than 1 hour</span></div>
-            <div class="bm-help-ex"><code>dur:00:30..02:00</code>  <span>— between 30 min and 2 hours</span></div>
-            <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>   <span>— under 30 seconds</span></div>
-        </div>
-        <p style="margin-top:14px;">Real timestamp fields (<code>start</code>, <code>finish</code>, <code>updated</code>) use negative offsets:</p>
+        <p style="margin-top:14px;">Timestamp fields (<code>start</code>, <code>finish</code>, <code>updated</code>) support negative offsets and date ranges:</p>
         <div class="bm-help-examples">
             <div class="bm-help-ex"><code>updated:&gt;-10m</code>   <span>— heartbeat received in the last 10 min (online)</span></div>
             <div class="bm-help-ex"><code>updated:&lt;-4m</code>    <span>— last heartbeat more than 4 min ago (stale)</span></div>
+            <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code> <span>— events that started between 09:00 and 17:00 (any day)</span></div>
         </div>
     </section>
 
@@ -170,7 +164,6 @@
                 <tr><td><code>chunk</code></td><td><code>chunkId</code></td><td>Chunk ID</td></tr>
                 <tr><td><code>srv</code></td><td><code>server</code></td><td>Server / host name</td></tr>
                 <tr><td><code>pid</code></td><td><code>processId</code></td><td>Process ID</td></tr>
-                <tr><td><code>dur</code></td><td><code>duration</code></td><td>Event duration — use <code>hh:mm</code> or <code>hh:mm:ss</code></td></tr>
                 <tr><td><code>start</code></td><td><code>startUtc</code></td><td>Event start time (UTC)</td></tr>
                 <tr><td><code>finish</code></td><td><code>finishUtc</code></td><td>Event finish time (UTC)</td></tr>
             </tbody>
@@ -216,6 +209,34 @@
         </div>
     </section>
 
+    <!-- ── Log viewer fields ────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Log viewer fields</h2>
+        <p>Use either the alias or the full field name — they are interchangeable.</p>
+
+        <table class="bm-help-table bm-help-table--fields">
+            <thead><tr><th>Alias</th><th>Full name</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>ts</code></td><td><code>timestamp</code></td><td>Log timestamp — supports absolute dates, negative offsets, and <code>hh:mm:ss</code> time-of-day</td></tr>
+                <tr><td><code>lvl</code></td><td><code>level</code></td><td>Log level (INFO, WARN, ERROR, DEBUG)</td></tr>
+                <tr><td><code>msg</code></td><td><code>message</code></td><td>Log message text</td></tr>
+                <tr><td><code>tid</code></td><td><code>threadId</code></td><td>Thread ID — numeric comparisons supported</td></tr>
+                <tr><td><code>pid</code></td><td><code>pid</code></td><td>Process ID — numeric comparisons supported</td></tr>
+                <tr><td>—</td><td><code>host</code></td><td>Host / server name</td></tr>
+                <tr><td>—</td><td><code>caller</code></td><td>Caller (class.method)</td></tr>
+            </tbody>
+        </table>
+
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>lvl:ERROR</code>              <span>— only error entries</span></div>
+            <div class="bm-help-ex"><code>ts:&gt;19:00</code>             <span>— entries after 19:00 (time-of-day, any date)</span></div>
+            <div class="bm-help-ex"><code>ts:09:00..17:00</code>        <span>— entries between 09:00 and 17:00 (any date)</span></div>
+            <div class="bm-help-ex"><code>ts:&gt;2024-06-01</code>        <span>— entries after 1 June 2024</span></div>
+            <div class="bm-help-ex"><code>lvl:ERROR msg:timeout</code>  <span>— error entries mentioning "timeout"</span></div>
+            <div class="bm-help-ex"><code>tid:&gt;10 tid:&lt;50</code>     <span>— entries from threads 11–49</span></div>
+        </div>
+    </section>
+
     <!-- ── Examples ───────────────────────────────────────────────────── -->
     <section class="bm-help-section">
         <h2>Examples</h2>
@@ -235,18 +256,14 @@
                 <span>— service contains "Loader" AND no field contains "error"</span></div>
             <div class="bm-help-ex"><code>svc:(Loader , Parser)</code>
                 <span>— service is "Loader" or "Parser"</span></div>
-            <div class="bm-help-ex"><code>dur:&gt;00:01</code>
-                <span>— events that took more than 1 minute</span></div>
-            <div class="bm-help-ex"><code>dur:00:30..02:00</code>
-                <span>— events between 30 min and 2 hours</span></div>
             <div class="bm-help-ex"><code>pipe:null</code>
                 <span>— events with no pipeline assigned</span></div>
             <div class="bm-help-ex"><code>start:&gt;-1h</code>
                 <span>— events that started in the last hour</span></div>
             <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code>
                 <span>— events that started during business hours today (UTC)</span></div>
-            <div class="bm-help-ex"><code>svc:Loader start:&gt;-1h dur:&gt;00:01</code>
-                <span>— Loader events from the last hour that took more than 1 minute</span></div>
+            <div class="bm-help-ex"><code>svc:Loader start:&gt;-1h</code>
+                <span>— Loader events that started in the last hour</span></div>
         </div>
     </section>
 

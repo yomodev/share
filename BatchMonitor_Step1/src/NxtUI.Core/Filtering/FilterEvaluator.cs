@@ -58,6 +58,11 @@ public static class FilterEvaluator
             (MatchType.LessThan,           DateValue dv) => ToDateTime(raw) <  dv.Value,
             (MatchType.LessThanOrEqual,    DateValue dv) => ToDateTime(raw) <= dv.Value,
 
+            (MatchType.GreaterThan,        TimeOfDayValue tv) => ToTimeSeconds(raw) >  tv.Seconds,
+            (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => ToTimeSeconds(raw) >= tv.Seconds,
+            (MatchType.LessThan,           TimeOfDayValue tv) => ToTimeSeconds(raw) <  tv.Seconds,
+            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => ToTimeSeconds(raw) <= tv.Seconds,
+
             (MatchType.Between, RangeValue rv) => EvalBetween(raw, rv),
 
             _ => false,
@@ -66,8 +71,9 @@ public static class FilterEvaluator
 
     private static bool EvalBetween(object raw, RangeValue rv) => (rv.Low, rv.High) switch
     {
-        (NumberValue ln, NumberValue hn) => ToDouble(raw)   >= ln.Value && ToDouble(raw)   <= hn.Value,
-        (DateValue   ld, DateValue   hd) => ToDateTime(raw) >= ld.Value && ToDateTime(raw) <= hd.Value,
+        (NumberValue    ln, NumberValue    hn) => ToDouble(raw)      >= ln.Value   && ToDouble(raw)      <= hn.Value,
+        (DateValue      ld, DateValue      hd) => ToDateTime(raw)    >= ld.Value   && ToDateTime(raw)    <= hd.Value,
+        (TimeOfDayValue lt, TimeOfDayValue ht) => ToTimeSeconds(raw) >= lt.Seconds && ToTimeSeconds(raw) <= ht.Seconds,
         _ => false,
     };
 
@@ -102,4 +108,20 @@ public static class FilterEvaluator
         DateTimeOffset  dto => dto.UtcDateTime,
         _                   => DateTime.TryParse(v?.ToString(), out var r) ? r : default,
     };
+
+    private static int ToTimeSeconds(object? v)
+    {
+        var dt = ToDateTime(v);
+        if (dt == default)
+        {
+            // Try to extract hh:mm:ss from a string like "2024-01-15 19:06:24"
+            var s = v?.ToString() ?? "";
+            var m = Regex.Match(s, @"(\d{1,2}):(\d{2})(?::(\d{2}))?");
+            if (!m.Success) return -1;
+            return int.Parse(m.Groups[1].Value) * 3600
+                 + int.Parse(m.Groups[2].Value) * 60
+                 + (m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0);
+        }
+        return (int)dt.TimeOfDay.TotalSeconds;
+    }
 }

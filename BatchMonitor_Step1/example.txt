@@ -10630,7 +10630,7 @@ public class TestLogGeneratorSettings
     public int TemplateIndex { get; set; } = 0;
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
-LENGTH 3429
+LENGTH 3750
 using System.Text.Json.Serialization;
 
 namespace NxtUI.Filtering;
@@ -10668,11 +10668,12 @@ public record FieldTermNode(
 // ── Value hierarchy ────────────────────────────────────────────────────────────
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
-[JsonDerivedType(typeof(StringValue), "string")]
-[JsonDerivedType(typeof(NumberValue), "number")]
-[JsonDerivedType(typeof(DateValue),   "date")]
-[JsonDerivedType(typeof(NullValue),   "null")]
-[JsonDerivedType(typeof(RangeValue),  "range")]
+[JsonDerivedType(typeof(StringValue),     "string")]
+[JsonDerivedType(typeof(NumberValue),     "number")]
+[JsonDerivedType(typeof(DateValue),       "date")]
+[JsonDerivedType(typeof(TimeOfDayValue),  "time")]
+[JsonDerivedType(typeof(NullValue),       "null")]
+[JsonDerivedType(typeof(RangeValue),      "range")]
 public abstract record FilterValue;
 
 public record StringValue(string Value) : FilterValue;
@@ -10681,6 +10682,10 @@ public record NumberValue(double Value) : FilterValue;
 /// <summary>UTC instant. Both the JS and C# parsers convert local literals to UTC before
 /// storing them here so the MongoDB builder never has to think about time zones.</summary>
 public record DateValue(DateTime Value) : FilterValue;
+
+/// <summary>Time-of-day comparison (hh:mm or hh:mm:ss). Compares only the time portion
+/// of a DateTime field, ignoring the date — mirrors JS filter.js { type:'time', seconds }.</summary>
+public record TimeOfDayValue(int Seconds) : FilterValue;
 
 public record NullValue : FilterValue;
 
@@ -10713,7 +10718,7 @@ public enum MatchType
     Between,
 }
 FILE src/NxtUI.Core/Filtering/FilterEvaluator.cs
-LENGTH 4289
+LENGTH 5437
 using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -10774,6 +10779,11 @@ public static class FilterEvaluator
             (MatchType.LessThan,           DateValue dv) => ToDateTime(raw) <  dv.Value,
             (MatchType.LessThanOrEqual,    DateValue dv) => ToDateTime(raw) <= dv.Value,
 
+            (MatchType.GreaterThan,        TimeOfDayValue tv) => ToTimeSeconds(raw) >  tv.Seconds,
+            (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => ToTimeSeconds(raw) >= tv.Seconds,
+            (MatchType.LessThan,           TimeOfDayValue tv) => ToTimeSeconds(raw) <  tv.Seconds,
+            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => ToTimeSeconds(raw) <= tv.Seconds,
+
             (MatchType.Between, RangeValue rv) => EvalBetween(raw, rv),
 
             _ => false,
@@ -10782,8 +10792,9 @@ public static class FilterEvaluator
 
     private static bool EvalBetween(object raw, RangeValue rv) => (rv.Low, rv.High) switch
     {
-        (NumberValue ln, NumberValue hn) => ToDouble(raw)   >= ln.Value && ToDouble(raw)   <= hn.Value,
-        (DateValue   ld, DateValue   hd) => ToDateTime(raw) >= ld.Value && ToDateTime(raw) <= hd.Value,
+        (NumberValue    ln, NumberValue    hn) => ToDouble(raw)      >= ln.Value   && ToDouble(raw)      <= hn.Value,
+        (DateValue      ld, DateValue      hd) => ToDateTime(raw)    >= ld.Value   && ToDateTime(raw)    <= hd.Value,
+        (TimeOfDayValue lt, TimeOfDayValue ht) => ToTimeSeconds(raw) >= lt.Seconds && ToTimeSeconds(raw) <= ht.Seconds,
         _ => false,
     };
 
@@ -10818,9 +10829,25 @@ public static class FilterEvaluator
         DateTimeOffset  dto => dto.UtcDateTime,
         _                   => DateTime.TryParse(v?.ToString(), out var r) ? r : default,
     };
+
+    private static int ToTimeSeconds(object? v)
+    {
+        var dt = ToDateTime(v);
+        if (dt == default)
+        {
+            // Try to extract hh:mm:ss from a string like "2024-01-15 19:06:24"
+            var s = v?.ToString() ?? "";
+            var m = Regex.Match(s, @"(\d{1,2}):(\d{2})(?::(\d{2}))?");
+            if (!m.Success) return -1;
+            return int.Parse(m.Groups[1].Value) * 3600
+                 + int.Parse(m.Groups[2].Value) * 60
+                 + (m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0);
+        }
+        return (int)dt.TimeOfDay.TotalSeconds;
+    }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 20600
+LENGTH 20760
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -11246,12 +11273,28 @@ public sealed class FilterParser
         if (TryParseNumber(text, out var num))
             return new NumberValue(num);
 
-        // Date / time
+        // Time-only (hh:mm or hh:mm:ss) → time-of-day comparison, date-agnostic.
+        if (TryParseTimeOfDay(text, out var tod))
+            return tod;
+
+        // Absolute date / relative offset
         if (TryParseDate(text, out var dt))
             return new DateValue(dt);
 
         // String (glob or plain)
         return new StringValue(text);
+    }
+
+    private static bool TryParseTimeOfDay(string text, out TimeOfDayValue result)
+    {
+        result = default!;
+        var m = TimeOnly.Match(text);
+        if (!m.Success || text.StartsWith('-')) return false;
+        int h = int.Parse(m.Groups[1].Value);
+        int min = int.Parse(m.Groups[2].Value);
+        int s = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+        result = new TimeOfDayValue(h * 3600 + min * 60 + s);
+        return true;
     }
 
     private static bool TryParseNumber(string text, out double result)
@@ -11325,17 +11368,6 @@ public sealed class FilterParser
             return true;
         }
 
-        // Time-only: 9:30 or 09:30:00 (or with z)
-        var timeMatch = TimeOnly.Match(text);
-        if (timeMatch.Success && !text.StartsWith('-'))
-        {
-            int h = int.Parse(timeMatch.Groups[1].Value);
-            int m = int.Parse(timeMatch.Groups[2].Value);
-            int s = timeMatch.Groups[3].Success ? int.Parse(timeMatch.Groups[3].Value) : 0;
-            result = DateTime.UtcNow.Date.AddHours(h).AddMinutes(m).AddSeconds(s);
-            return true;
-        }
-
         // ISO date (with or without time, with or without z)
         var isoMatch = IsoDate.Match(text);
         if (isoMatch.Success)
@@ -11361,7 +11393,7 @@ public sealed class FilterParser
 /// <summary>Thrown by <see cref="FilterParser"/> when the input is syntactically invalid.</summary>
 public sealed class FilterParseException(string message) : Exception(message);
 FILE src/NxtUI.Core/Filtering/MongoFilterBuilder.cs
-LENGTH 6482
+LENGTH 7945
 using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -11427,6 +11459,12 @@ public static class MongoFilterBuilder
             (MatchType.LessThan,           DateValue dv) => B.Lt(t.Field,  dv.Value),
             (MatchType.LessThanOrEqual,    DateValue dv) => B.Lte(t.Field, dv.Value),
 
+            // ── Time-of-day comparisons ($expr + $mod on epoch ms) ─────────
+            (MatchType.GreaterThan,        TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gt",  tv.Seconds),
+            (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gte", tv.Seconds),
+            (MatchType.LessThan,           TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lt",  tv.Seconds),
+            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lte", tv.Seconds),
+
             // ── Range (..) ─────────────────────────────────────────────────
             (MatchType.Between, RangeValue rv) => BuildRange(t.Field, rv),
 
@@ -11441,14 +11479,16 @@ public static class MongoFilterBuilder
 
         switch (range.Low)
         {
-            case NumberValue ln: filters.Add(B.Gte(field, ln.Value)); break;
-            case DateValue   ld: filters.Add(B.Gte(field, ld.Value)); break;
+            case NumberValue    ln: filters.Add(B.Gte(field, ln.Value)); break;
+            case DateValue      ld: filters.Add(B.Gte(field, ld.Value)); break;
+            case TimeOfDayValue lt: filters.Add(TimeOfDayExpr(field, "$gte", lt.Seconds)); break;
         }
 
         switch (range.High)
         {
-            case NumberValue hn: filters.Add(B.Lte(field, hn.Value)); break;
-            case DateValue   hd: filters.Add(B.Lte(field, hd.Value)); break;
+            case NumberValue    hn: filters.Add(B.Lte(field, hn.Value)); break;
+            case DateValue      hd: filters.Add(B.Lte(field, hd.Value)); break;
+            case TimeOfDayValue ht: filters.Add(TimeOfDayExpr(field, "$lte", ht.Seconds)); break;
         }
 
         return filters.Count switch
@@ -11457,6 +11497,24 @@ public static class MongoFilterBuilder
             1 => filters[0],
             _ => B.And(filters),
         };
+    }
+
+    // Compares the time-of-day portion of a BSON date field.
+    // Uses $expr: { $op: [{ $mod: [{ $toLong: "$field" }, 86400000] }, secondsMs] }
+    // where secondsMs is the filter time in milliseconds.
+    private static FilterDefinition<BsonDocument> TimeOfDayExpr(string field, string op, int seconds)
+    {
+        long ms = (long)seconds * 1000;
+        var expr = new BsonDocument("$expr", new BsonDocument(op, new BsonArray
+        {
+            new BsonDocument("$mod", new BsonArray
+            {
+                new BsonDocument("$toLong", $"${field}"),
+                86_400_000L,
+            }),
+            ms,
+        }));
+        return new BsonDocumentFilterDefinition<BsonDocument>(expr);
     }
 
     // ── Regex helpers ──────────────────────────────────────────────────────
@@ -14827,7 +14885,7 @@ LENGTH 128
 @page "/"
 @page "/{**path}"
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
-LENGTH 16179
+LENGTH 17458
 <div class="bm-help-page bm-help-page--tab">
 
     <div class="bm-help-header">
@@ -14954,7 +15012,7 @@ LENGTH 16179
                 <tr><td>Positive offset</td><td><code>7d</code>, <code>2h</code>, <code>30m</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
                 <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
                 <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
-                <tr><td>Time / duration</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>today + hh:mm:ss</strong> — works as a clock time or as a duration depending on the field</td></tr>
+                <tr><td>Time of day</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>hh:mm:ss</strong> — compares only the time portion of a timestamp, ignoring the date</td></tr>
             </tbody>
         </table>
 
@@ -14966,23 +15024,17 @@ LENGTH 16179
         </div>
 
         <div class="bm-help-callout" style="margin-top:14px;">
-            <strong>Negative vs positive offsets:</strong> <code>-10m</code> means <em>now minus 10 minutes</em> — useful for real
-            timestamps like <code>start</code> or <code>finish</code>.  <code>10m</code> (no minus) means <em>today at 00:10:00</em> —
-            useful for age/duration fields stored as elapsed time from midnight, like <code>dur</code> or <code>updated</code>.
-            <code>hh:mm</code> always means <em>today + that time</em>, so <code>00:10</code> and <code>10m</code> are identical.
+            <strong>Negative vs positive offsets:</strong> <code>-10m</code> means <em>now minus 10 minutes</em> — a real point in
+            the past, useful for timestamp fields like <code>start</code> or <code>updated</code>.  <code>10m</code> (no minus) means
+            <em>today at 00:10:00</em>.  <code>hh:mm</code> compares only the time-of-day portion of the field, ignoring the date —
+            useful for log timestamps (<code>ts</code>) or filtering events by time of day regardless of when they occurred.
         </div>
 
-        <p style="margin-top:14px;">Duration fields (<code>dur</code>) store elapsed time as today + interval, so use positive offsets or <code>hh:mm</code>:</p>
-        <div class="bm-help-examples">
-            <div class="bm-help-ex"><code>dur:&gt;00:01</code>      <span>— longer than 1 minute</span></div>
-            <div class="bm-help-ex"><code>dur:&gt;01:00</code>      <span>— longer than 1 hour</span></div>
-            <div class="bm-help-ex"><code>dur:00:30..02:00</code>  <span>— between 30 min and 2 hours</span></div>
-            <div class="bm-help-ex"><code>dur:&lt;00:00:30</code>   <span>— under 30 seconds</span></div>
-        </div>
-        <p style="margin-top:14px;">Real timestamp fields (<code>start</code>, <code>finish</code>, <code>updated</code>) use negative offsets:</p>
+        <p style="margin-top:14px;">Timestamp fields (<code>start</code>, <code>finish</code>, <code>updated</code>) support negative offsets and date ranges:</p>
         <div class="bm-help-examples">
             <div class="bm-help-ex"><code>updated:&gt;-10m</code>   <span>— heartbeat received in the last 10 min (online)</span></div>
             <div class="bm-help-ex"><code>updated:&lt;-4m</code>    <span>— last heartbeat more than 4 min ago (stale)</span></div>
+            <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code> <span>— events that started between 09:00 and 17:00 (any day)</span></div>
         </div>
     </section>
 
@@ -15000,7 +15052,6 @@ LENGTH 16179
                 <tr><td><code>chunk</code></td><td><code>chunkId</code></td><td>Chunk ID</td></tr>
                 <tr><td><code>srv</code></td><td><code>server</code></td><td>Server / host name</td></tr>
                 <tr><td><code>pid</code></td><td><code>processId</code></td><td>Process ID</td></tr>
-                <tr><td><code>dur</code></td><td><code>duration</code></td><td>Event duration — use <code>hh:mm</code> or <code>hh:mm:ss</code></td></tr>
                 <tr><td><code>start</code></td><td><code>startUtc</code></td><td>Event start time (UTC)</td></tr>
                 <tr><td><code>finish</code></td><td><code>finishUtc</code></td><td>Event finish time (UTC)</td></tr>
             </tbody>
@@ -15046,6 +15097,34 @@ LENGTH 16179
         </div>
     </section>
 
+    <!-- ── Log viewer fields ────────────────────────────────────────── -->
+    <section class="bm-help-section">
+        <h2>Log viewer fields</h2>
+        <p>Use either the alias or the full field name — they are interchangeable.</p>
+
+        <table class="bm-help-table bm-help-table--fields">
+            <thead><tr><th>Alias</th><th>Full name</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>ts</code></td><td><code>timestamp</code></td><td>Log timestamp — supports absolute dates, negative offsets, and <code>hh:mm:ss</code> time-of-day</td></tr>
+                <tr><td><code>lvl</code></td><td><code>level</code></td><td>Log level (INFO, WARN, ERROR, DEBUG)</td></tr>
+                <tr><td><code>msg</code></td><td><code>message</code></td><td>Log message text</td></tr>
+                <tr><td><code>tid</code></td><td><code>threadId</code></td><td>Thread ID — numeric comparisons supported</td></tr>
+                <tr><td><code>pid</code></td><td><code>pid</code></td><td>Process ID — numeric comparisons supported</td></tr>
+                <tr><td>—</td><td><code>host</code></td><td>Host / server name</td></tr>
+                <tr><td>—</td><td><code>caller</code></td><td>Caller (class.method)</td></tr>
+            </tbody>
+        </table>
+
+        <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>lvl:ERROR</code>              <span>— only error entries</span></div>
+            <div class="bm-help-ex"><code>ts:&gt;19:00</code>             <span>— entries after 19:00 (time-of-day, any date)</span></div>
+            <div class="bm-help-ex"><code>ts:09:00..17:00</code>        <span>— entries between 09:00 and 17:00 (any date)</span></div>
+            <div class="bm-help-ex"><code>ts:&gt;2024-06-01</code>        <span>— entries after 1 June 2024</span></div>
+            <div class="bm-help-ex"><code>lvl:ERROR msg:timeout</code>  <span>— error entries mentioning "timeout"</span></div>
+            <div class="bm-help-ex"><code>tid:&gt;10 tid:&lt;50</code>     <span>— entries from threads 11–49</span></div>
+        </div>
+    </section>
+
     <!-- ── Examples ───────────────────────────────────────────────────── -->
     <section class="bm-help-section">
         <h2>Examples</h2>
@@ -15065,18 +15144,14 @@ LENGTH 16179
                 <span>— service contains "Loader" AND no field contains "error"</span></div>
             <div class="bm-help-ex"><code>svc:(Loader , Parser)</code>
                 <span>— service is "Loader" or "Parser"</span></div>
-            <div class="bm-help-ex"><code>dur:&gt;00:01</code>
-                <span>— events that took more than 1 minute</span></div>
-            <div class="bm-help-ex"><code>dur:00:30..02:00</code>
-                <span>— events between 30 min and 2 hours</span></div>
             <div class="bm-help-ex"><code>pipe:null</code>
                 <span>— events with no pipeline assigned</span></div>
             <div class="bm-help-ex"><code>start:&gt;-1h</code>
                 <span>— events that started in the last hour</span></div>
             <div class="bm-help-ex"><code>start:&gt;=09:00 start:&lt;17:00</code>
                 <span>— events that started during business hours today (UTC)</span></div>
-            <div class="bm-help-ex"><code>svc:Loader start:&gt;-1h dur:&gt;00:01</code>
-                <span>— Loader events from the last hour that took more than 1 minute</span></div>
+            <div class="bm-help-ex"><code>svc:Loader start:&gt;-1h</code>
+                <span>— Loader events that started in the last hour</span></div>
         </div>
     </section>
 
@@ -21500,10 +21575,10 @@ LENGTH 16550
 
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
-    <script type="module" src="js/log-viewer.js?v=22"></script>
+    <script type="module" src="js/log-viewer.js?v=23"></script>
     <script src="js/workspace.js"></script>
-    <link rel="modulepreload" href="js/log-viewer-parser.js?v=4" />
-    <link rel="modulepreload" href="js/filter.js?v=2" />
+    <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
+    <link rel="modulepreload" href="js/filter.js?v=3" />
     <link rel="modulepreload" href="js/app.js?v=4" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
@@ -30003,7 +30078,7 @@ const TIMELINE_ALIASES = {
 
 export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
 FILE src/NxtUI.Web/wwwroot/js/filter.js
-LENGTH 20289
+LENGTH 21258
 // Batch Monitor — Filter engine (ES module)
 //
 // Exports:
@@ -30310,8 +30385,8 @@ function interpretWord(text) {
     if (!isNaN(num) && text.trim() !== '' && !/^0\d/.test(text))
         return { type: 'number', value: num };
 
-    const dt = tryParseDate(text);
-    if (dt !== null) return { type: 'date', value: dt };
+    const result = tryParseDate(text);
+    if (result !== null) return result;
 
     return { type: 'string', value: text };
 }
@@ -30322,17 +30397,24 @@ const RE_RELATIVE = /^(-?)(\d+)([mhdw])$/i;
 const RE_TIME     = /^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$/i;
 const RE_ISO      = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?z?$/i;
 
-/** @returns {string|null} UTC ISO string */
+/**
+ * Returns a FilterValue or null.
+ * Time-only inputs (HH:MM or HH:MM:SS) return { type: 'time', seconds }
+ * so comparison ignores the date and matches only the time-of-day portion.
+ * Everything else returns { type: 'date', value: isoString }.
+ */
 function tryParseDate(text) {
     const lower = text.toLowerCase();
 
     switch (lower) {
-        case 'now':  case 'nowz':        return new Date().toISOString();
+        case 'now':  case 'nowz':        return { type: 'date', value: new Date().toISOString() };
         case 'today': case 'todayz': {
-            const d = new Date(); d.setUTCHours(0,0,0,0); return d.toISOString();
+            const d = new Date(); d.setUTCHours(0,0,0,0);
+            return { type: 'date', value: d.toISOString() };
         }
         case 'yesterday': case 'yesterdayz': {
-            const d = new Date(); d.setUTCHours(0,0,0,0); d.setUTCDate(d.getUTCDate()-1); return d.toISOString();
+            const d = new Date(); d.setUTCHours(0,0,0,0); d.setUTCDate(d.getUTCDate()-1);
+            return { type: 'date', value: d.toISOString() };
         }
     }
 
@@ -30349,7 +30431,7 @@ function tryParseDate(text) {
                 case 'd': now.setDate(now.getDate()       - n); break;
                 case 'w': now.setDate(now.getDate()       - n * 7); break;
             }
-            return now.toISOString();
+            return { type: 'date', value: now.toISOString() };
         } else {
             const d = new Date();
             d.setUTCHours(0, 0, 0, 0);
@@ -30359,23 +30441,24 @@ function tryParseDate(text) {
                 case 'd': d.setUTCDate(d.getUTCDate()       + n); break;
                 case 'w': d.setUTCDate(d.getUTCDate()       + n * 7); break;
             }
-            return d.toISOString();
+            return { type: 'date', value: d.toISOString() };
         }
     }
 
-    // Time-only: 9:30 or 09:30:00
+    // Time-only: 9:30 or 09:30:00 — compare only time-of-day, date-agnostic
     const tm = RE_TIME.exec(text);
     if (tm && !text.startsWith('-')) {
-        const d = new Date();
-        d.setUTCHours(parseInt(tm[1], 10), parseInt(tm[2], 10), tm[3] ? parseInt(tm[3], 10) : 0, 0);
-        return d.toISOString();
+        const h = parseInt(tm[1], 10);
+        const m = parseInt(tm[2], 10);
+        const s = tm[3] ? parseInt(tm[3], 10) : 0;
+        return { type: 'time', seconds: h * 3600 + m * 60 + s };
     }
 
-    // ISO date
+    // ISO date / datetime
     if (RE_ISO.test(text)) {
         const normalised = text.replace(/z$/i, '') + 'Z';
         const d = new Date(normalised);
-        if (!isNaN(d.getTime())) return d.toISOString();
+        if (!isNaN(d.getTime())) return { type: 'date', value: d.toISOString() };
     }
 
     return null;
@@ -30463,9 +30546,18 @@ function compareValues(rawFieldValue, filterValue) {
         return Number(rawFieldValue) - filterValue.value;
     }
     if (filterValue.type === 'date') {
-        const a = rawFieldValue instanceof Date ? rawFieldValue : new Date(rawFieldValue);
+        const a = rawFieldValue instanceof Date ? rawFieldValue : new Date(String(rawFieldValue).replace(' ', 'T'));
         const b = new Date(filterValue.value);
         return a.getTime() - b.getTime();
+    }
+    if (filterValue.type === 'time') {
+        // Compare only the time-of-day portion — ignores the date entirely.
+        const raw = String(rawFieldValue);
+        // Extract HH:MM:SS from "YYYY-MM-DD HH:MM:SS" or ISO strings.
+        const m = raw.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (!m) return -1;
+        const aSeconds = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0);
+        return aSeconds - filterValue.seconds;
     }
     return String(rawFieldValue).localeCompare(String(filterValue.value));
 }
@@ -30510,7 +30602,7 @@ export function serialize(node) {
     return JSON.stringify(node);
 }
 FILE src/NxtUI.Web/wwwroot/js/filter.test.js
-LENGTH 12452
+LENGTH 13276
 import { describe, it, expect } from 'vitest'
 import { parse, evaluate } from './filter.js'
 import { parseLog } from './log-viewer-parser.js'
@@ -30769,6 +30861,22 @@ describe('log viewer — full pipeline (parseLog → filter with integer pid/thr
     it('lvl:ERROR returns only error entries', () => {
         expect(filter('lvl:ERROR').map(e => e.level)).toEqual(['ERROR'])
     })
+    it('ts:>12:00:00 returns entries after noon (time-only, date-agnostic)', () => {
+        // entries: 12:00:00, 12:00:01, 12:00:02, 12:00:03
+        const r = filter('ts:>12:00:00')
+        expect(r.map(e => e.timestamp)).toEqual([
+            '2024-01-15 12:00:01',
+            '2024-01-15 12:00:02',
+            '2024-01-15 12:00:03',
+        ])
+    })
+    it('ts:12:00:01..12:00:02 returns entries in time range', () => {
+        const r = filter('ts:12:00:01..12:00:02')
+        expect(r.map(e => e.timestamp)).toEqual([
+            '2024-01-15 12:00:01',
+            '2024-01-15 12:00:02',
+        ])
+    })
 })
 
 describe('evaluate — boolean operators', () => {
@@ -30831,33 +30939,35 @@ describe('parse — positive relative offset (today + N)', () => {
     })
 })
 
-describe('parse — time-only hh:mm resolves to today + time', () => {
-    it('00:10 resolves to today at 00:10:00 UTC', () => {
-        const d = parsedDate('UpdatedDateTime:<00:10')
-        const today = new Date()
-        today.setUTCHours(0, 10, 0, 0)
-        expect(d.getTime()).toBe(today.getTime())
+describe('parse — time-only hh:mm produces time type (date-agnostic)', () => {
+    it('00:10 produces { type: time, seconds: 600 }', () => {
+        const node = leaves(parse('UpdatedDateTime:<00:10', ['UpdatedDateTime']))[0]
+        expect(node?.value).toEqual({ type: 'time', seconds: 600 })
+    })
+    it('19:06:24 produces correct seconds', () => {
+        const node = leaves(parse('UpdatedDateTime:>19:06:24', ['UpdatedDateTime']))[0]
+        expect(node?.value).toEqual({ type: 'time', seconds: 19 * 3600 + 6 * 60 + 24 })
     })
 })
 
-describe('parse — 10m and 00:10 resolve to the same value', () => {
-    it('positive 10m equals time-only 00:10', () => {
-        const d1 = parsedDate('UpdatedDateTime:<10m')
-        const d2 = parsedDate('UpdatedDateTime:<00:10')
-        expect(d1.getTime()).toBe(d2.getTime())
+describe('parse — positive relative offset still produces date type', () => {
+    it('10m produces a date value (not time)', () => {
+        const node = leaves(parse('UpdatedDateTime:<10m', ['UpdatedDateTime']))[0]
+        expect(node?.value?.type).toBe('date')
     })
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.js
-LENGTH 5537
+LENGTH 5733
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
-// Log format:  timestamp|level|host|pid|threadId|message|caller
-//   • "message" may contain "|" — everything between the 5th and last "|" is the message
+// Log format:  timestamp|level|host|pid|threadId|message|caller[|extra1|extra2|...]
+//   • Fields 0-6 are fixed-position; caller is always at index 6.
+//   • Any pipe-delimited fields beyond index 6 are captured as `extras: string[]`.
 //   • Lines that do NOT start with a timestamp are continuations of the previous entry
 //     (stack traces, exception detail lines, etc.)
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -30899,19 +31009,19 @@ export function parseLog(rawText) {
 function parseLine(line, lineIndex) {
     const parts = line.split('|');
 
-    // timestamp=0, level=1, host=2, pid=3, threadId=4, message=5..n-2, caller=n-1
-    // If fewer than 7 parts, be lenient and fill what we can.
+    // Fixed positions: 0=timestamp, 1=level, 2=host, 3=pid, 4=threadId, 5=message, 6=caller
+    // Parts beyond index 6 are unknown extra fields, captured as extras[].
+    // Fewer than 7 parts: be lenient and fill what we can.
     const timestamp = parts[0] ?? '';
     const level     = parts[1] ?? '';
     const host      = parts[2] ?? '';
     const pid       = parseInt(parts[3], 10) || 0;
-    const threadId  = parts.length > 6 ? (parseInt(parts[4], 10) || 0) : 0;
-    const caller    = parts.length > 6 ? (parts[parts.length - 1] ?? '') : '';
-    const message   = parts.length > 6
-        ? parts.slice(5, parts.length - 1).join('|')
-        : (parts[5] ?? parts[4] ?? '');
+    const threadId  = parts.length > 5 ? (parseInt(parts[4], 10) || 0) : 0;
+    const message   = parts[5] ?? parts[4] ?? '';
+    const caller    = parts[6] ?? '';
+    const extras    = parts.length > 7 ? parts.slice(7) : [];
 
-    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, continuations: [], displayLineCount: 1 };
+    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, extras, continuations: [], displayLineCount: 1 };
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -30947,7 +31057,8 @@ export function findMatches(entries, re) {
 }
 
 function entrySearchText(entry) {
-    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`;
+    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`
+        + (entry.extras.length ? '|' + entry.extras.join('|') : '');
     return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
 }
 
@@ -30995,7 +31106,7 @@ function escapeRegex(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.test.js
-LENGTH 12918
+LENGTH 13262
 import { describe, it, expect } from 'vitest'
 import { parseLog, isTimestampLine, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js'
 
@@ -31036,16 +31147,22 @@ describe('parseLog — single entry, no pipes in message', () => {
     it('lineIndex is 0',              () => expect(entries[0].lineIndex).toBe(0))
 })
 
-// ── parseLog — pipe inside message ───────────────────────────────────────────
+// ── parseLog — extra fields after caller ─────────────────────────────────────
 
-describe('parseLog — pipe character inside message', () => {
-    const raw = '2024-01-15 12:00:01|WARN|srv-01|1234|17|Value is a|b|c here|MyApp.Check'
+describe('parseLog — extra fields after caller', () => {
+    // Format: ts|level|host|pid|tid|message|caller|extra1|extra2|...
+    const raw = '2024-01-15 12:00:01|WARN|srv-01|1234|17|Something happened|MyApp.Check|extra-a|extra-b'
     const entries = parseLog(raw)
 
-    it('produces one entry',          () => expect(entries).toHaveLength(1))
-    it('reconstructs full message',   () => expect(entries[0].message).toBe('Value is a|b|c here'))
-    it('caller is the last segment',  () => expect(entries[0].caller).toBe('MyApp.Check'))
-    it('threadId is correct',         () => expect(entries[0].threadId).toBe(17))
+    it('produces one entry',           () => expect(entries).toHaveLength(1))
+    it('message is at fixed index 5',  () => expect(entries[0].message).toBe('Something happened'))
+    it('caller is at fixed index 6',   () => expect(entries[0].caller).toBe('MyApp.Check'))
+    it('threadId is correct',          () => expect(entries[0].threadId).toBe(17))
+    it('extras captures fields 7+',    () => expect(entries[0].extras).toEqual(['extra-a', 'extra-b']))
+    it('no extras when none present',  () => {
+        const e = parseLog('2024-01-15 12:00:01|INFO|srv|1|2|msg|caller')[0]
+        expect(e.extras).toEqual([])
+    })
 })
 
 // ── parseLog — multi-line entry (stack trace) ─────────────────────────────────
@@ -31219,7 +31336,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 27538
+LENGTH 32191
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -31321,6 +31438,43 @@ function findFirstVisible(cum, scrollTop) {
         if (cum[mid] <= scrollTop) lo = mid; else hi = mid - 1;
     }
     return lo;
+}
+
+// ── Scrollmap tooltip ─────────────────────────────────────────────────────────
+
+let _tooltipEl = null;
+
+function _getTooltip() {
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement('div');
+        _tooltipEl.style.cssText =
+            'position:fixed;z-index:9999;background:rgba(0,0,0,0.78);color:#fff;' +
+            'font:11px/1.5 monospace;padding:2px 8px;border-radius:3px;' +
+            'pointer-events:none;white-space:nowrap;display:none;';
+        document.body.appendChild(_tooltipEl);
+    }
+    return _tooltipEl;
+}
+
+function _showMapTooltip(vp, clientY, rect) {
+    const totalH = vp.cum[vp.visibleEntries.length];
+    if (totalH === 0) return;
+    const ratio   = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const idx     = findFirstVisible(vp.cum, ratio * totalH);
+    const entry   = vp.visibleEntries[Math.min(idx, vp.visibleEntries.length - 1)];
+    if (!entry) return;
+    const tip = _getTooltip();
+    tip.textContent = entry.timestamp;
+    tip.style.display = 'block';
+    // Position to the left of the map strip
+    const tipW = tip.offsetWidth;
+    const tipH = tip.offsetHeight;
+    tip.style.left = (rect.left - tipW - 6) + 'px';
+    tip.style.top  = Math.max(4, Math.min(clientY - Math.floor(tipH / 2), window.innerHeight - tipH - 4)) + 'px';
+}
+
+function _hideMapTooltip() {
+    if (_tooltipEl) _tooltipEl.style.display = 'none';
 }
 
 // ── DOM construction ──────────────────────────────────────────────────────────
@@ -31569,15 +31723,72 @@ function attachHandlers(container, vp) {
     };
     vp.rowsEl.addEventListener('click', vp._clickHandler);
 
-    vp._mapClickHandler = (e) => {
-        const rect   = vp.mapEl.getBoundingClientRect();
-        const ratio  = (e.clientY - rect.top) / rect.height;
-        const totalH = vp.cum[vp.visibleEntries.length];
-        const target = ratio * totalH;
-        const idx    = findFirstVisible(vp.cum, target);
-        scrollToEntry(vp, idx);
+    // ── Scrollmap: wheel forwarding ──────────────────────────────────────────
+    vp._mapWheelHandler = (e) => {
+        e.preventDefault();
+        vp.scrollEl.scrollTop += e.deltaY;
     };
-    vp.mapEl.addEventListener('click', vp._mapClickHandler);
+    vp.mapEl.addEventListener('wheel', vp._mapWheelHandler, { passive: false });
+
+    // ── Scrollmap: tooltip on hover ──────────────────────────────────────────
+    vp._mapMoveHandler = (e) => {
+        const rect   = vp.mapEl.getBoundingClientRect();
+        const totalH = vp.cum[vp.visibleEntries.length];
+        if (totalH > 0) {
+            const ratio  = (e.clientY - rect.top) / rect.height;
+            const contentY = ratio * totalH;
+            const vpTop  = vp.scrollEl.scrollTop;
+            const vpBot  = vpTop + vp.scrollEl.clientHeight;
+            vp.mapEl.style.cursor = (contentY >= vpTop && contentY <= vpBot) ? 'ns-resize' : 'pointer';
+        }
+        _showMapTooltip(vp, e.clientY, vp.mapEl.getBoundingClientRect());
+    };
+    vp._mapLeaveHandler = () => {
+        _hideMapTooltip();
+        vp.mapEl.style.cursor = 'pointer';
+    };
+    vp.mapEl.addEventListener('mousemove', vp._mapMoveHandler);
+    vp.mapEl.addEventListener('mouseleave', vp._mapLeaveHandler);
+
+    // ── Scrollmap: click-to-jump or drag viewport indicator ──────────────────
+    vp._mapMouseDownHandler = (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const rect   = vp.mapEl.getBoundingClientRect();
+        const totalH = vp.cum[vp.visibleEntries.length];
+        if (totalH === 0) return;
+        const ratio    = (e.clientY - rect.top) / rect.height;
+        const contentY = ratio * totalH;
+        const vpTop    = vp.scrollEl.scrollTop;
+        const vpBot    = vpTop + vp.scrollEl.clientHeight;
+
+        if (contentY >= vpTop && contentY <= vpBot) {
+            // Drag the viewport indicator
+            const startClientY   = e.clientY;
+            const startScrollTop = vpTop;
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor     = 'ns-resize';
+
+            const onMove = (me) => {
+                const dy = me.clientY - startClientY;
+                vp.scrollEl.scrollTop = Math.max(0, startScrollTop + dy / rect.height * totalH);
+                _showMapTooltip(vp, me.clientY, rect);
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+                document.body.style.userSelect = '';
+                document.body.style.cursor     = '';
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+        } else {
+            // Click-to-jump
+            const idx = findFirstVisible(vp.cum, contentY);
+            scrollToEntry(vp, idx);
+        }
+    };
+    vp.mapEl.addEventListener('mousedown', vp._mapMouseDownHandler);
 
     vp._resizeObs = new ResizeObserver(() => drawScrollmap(vp));
     vp._resizeObs.observe(vp.mapEl);
@@ -31587,7 +31798,6 @@ function attachHandlers(container, vp) {
         const sel  = window.getSelection();
         const word = sel?.toString().trim() ?? '';
         if (!word) return;
-        // Collapse to just the clicked word (strip leading/trailing punctuation)
         const clean = word.replace(/^[\s\W]+|[\s\W]+$/g, '');
         if (!clean) return;
         vp.dotNetRef.invokeMethodAsync('OnWordSelected', clean);
@@ -31636,12 +31846,15 @@ function _createViewport(container, doc, options) {
         matchSet:     new Set(),
         matchCursor:  -1,
         scrollEl, innerEl, rowsEl, mapEl,
-        dotNetRef:         null,
-        _scrollHandler:    null,
-        _clickHandler:     null,
-        _mapClickHandler:  null,
-        _dblClickHandler:  null,
-        _resizeObs:        null,
+        dotNetRef:             null,
+        _scrollHandler:        null,
+        _clickHandler:         null,
+        _mapMouseDownHandler:  null,
+        _mapWheelHandler:      null,
+        _mapMoveHandler:       null,
+        _mapLeaveHandler:      null,
+        _dblClickHandler:      null,
+        _resizeObs:            null,
     };
     doc._viewports.add(vp);
     _vp.set(container, vp);
@@ -31894,11 +32107,15 @@ function destroy(container) {
     const vp = _vp.get(container);
     if (!vp) return;
 
-    if (vp._scrollHandler)   vp.scrollEl.removeEventListener('scroll',    vp._scrollHandler);
-    if (vp._clickHandler)    vp.rowsEl.removeEventListener('click',      vp._clickHandler);
-    if (vp._dblClickHandler) vp.rowsEl.removeEventListener('dblclick',   vp._dblClickHandler);
-    if (vp._mapClickHandler) vp.mapEl?.removeEventListener('click',      vp._mapClickHandler);
-    if (vp._resizeObs)       vp._resizeObs.disconnect();
+    if (vp._scrollHandler)       vp.scrollEl.removeEventListener('scroll',     vp._scrollHandler);
+    if (vp._clickHandler)        vp.rowsEl.removeEventListener('click',       vp._clickHandler);
+    if (vp._dblClickHandler)     vp.rowsEl.removeEventListener('dblclick',    vp._dblClickHandler);
+    if (vp._mapMouseDownHandler) vp.mapEl?.removeEventListener('mousedown',   vp._mapMouseDownHandler);
+    if (vp._mapWheelHandler)     vp.mapEl?.removeEventListener('wheel',       vp._mapWheelHandler);
+    if (vp._mapMoveHandler)      vp.mapEl?.removeEventListener('mousemove',   vp._mapMoveHandler);
+    if (vp._mapLeaveHandler)     vp.mapEl?.removeEventListener('mouseleave',  vp._mapLeaveHandler);
+    if (vp._resizeObs)           vp._resizeObs.disconnect();
+    _hideMapTooltip();
     container.innerHTML = '';
 
     const doc = vp.doc;

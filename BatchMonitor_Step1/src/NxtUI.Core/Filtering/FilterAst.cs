@@ -35,11 +35,12 @@ public record FieldTermNode(
 // ── Value hierarchy ────────────────────────────────────────────────────────────
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
-[JsonDerivedType(typeof(StringValue), "string")]
-[JsonDerivedType(typeof(NumberValue), "number")]
-[JsonDerivedType(typeof(DateValue),   "date")]
-[JsonDerivedType(typeof(NullValue),   "null")]
-[JsonDerivedType(typeof(RangeValue),  "range")]
+[JsonDerivedType(typeof(StringValue),     "string")]
+[JsonDerivedType(typeof(NumberValue),     "number")]
+[JsonDerivedType(typeof(DateValue),       "date")]
+[JsonDerivedType(typeof(TimeOfDayValue),  "time")]
+[JsonDerivedType(typeof(NullValue),       "null")]
+[JsonDerivedType(typeof(RangeValue),      "range")]
 public abstract record FilterValue;
 
 public record StringValue(string Value) : FilterValue;
@@ -48,6 +49,10 @@ public record NumberValue(double Value) : FilterValue;
 /// <summary>UTC instant. Both the JS and C# parsers convert local literals to UTC before
 /// storing them here so the MongoDB builder never has to think about time zones.</summary>
 public record DateValue(DateTime Value) : FilterValue;
+
+/// <summary>Time-of-day comparison (hh:mm or hh:mm:ss). Compares only the time portion
+/// of a DateTime field, ignoring the date — mirrors JS filter.js { type:'time', seconds }.</summary>
+public record TimeOfDayValue(int Seconds) : FilterValue;
 
 public record NullValue : FilterValue;
 

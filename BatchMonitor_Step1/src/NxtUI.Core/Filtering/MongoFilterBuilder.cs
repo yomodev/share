@@ -63,6 +63,12 @@ public static class MongoFilterBuilder
             (MatchType.LessThan,           DateValue dv) => B.Lt(t.Field,  dv.Value),
             (MatchType.LessThanOrEqual,    DateValue dv) => B.Lte(t.Field, dv.Value),
 
+            // ── Time-of-day comparisons ($expr + $mod on epoch ms) ─────────
+            (MatchType.GreaterThan,        TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gt",  tv.Seconds),
+            (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gte", tv.Seconds),
+            (MatchType.LessThan,           TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lt",  tv.Seconds),
+            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lte", tv.Seconds),
+
             // ── Range (..) ─────────────────────────────────────────────────
             (MatchType.Between, RangeValue rv) => BuildRange(t.Field, rv),
 
@@ -77,14 +83,16 @@ public static class MongoFilterBuilder
 
         switch (range.Low)
         {
-            case NumberValue ln: filters.Add(B.Gte(field, ln.Value)); break;
-            case DateValue   ld: filters.Add(B.Gte(field, ld.Value)); break;
+            case NumberValue    ln: filters.Add(B.Gte(field, ln.Value)); break;
+            case DateValue      ld: filters.Add(B.Gte(field, ld.Value)); break;
+            case TimeOfDayValue lt: filters.Add(TimeOfDayExpr(field, "$gte", lt.Seconds)); break;
         }
 
         switch (range.High)
         {
-            case NumberValue hn: filters.Add(B.Lte(field, hn.Value)); break;
-            case DateValue   hd: filters.Add(B.Lte(field, hd.Value)); break;
+            case NumberValue    hn: filters.Add(B.Lte(field, hn.Value)); break;
+            case DateValue      hd: filters.Add(B.Lte(field, hd.Value)); break;
+            case TimeOfDayValue ht: filters.Add(TimeOfDayExpr(field, "$lte", ht.Seconds)); break;
         }
 
         return filters.Count switch
@@ -93,6 +101,24 @@ public static class MongoFilterBuilder
             1 => filters[0],
             _ => B.And(filters),
         };
+    }
+
+    // Compares the time-of-day portion of a BSON date field.
+    // Uses $expr: { $op: [{ $mod: [{ $toLong: "$field" }, 86400000] }, secondsMs] }
+    // where secondsMs is the filter time in milliseconds.
+    private static FilterDefinition<BsonDocument> TimeOfDayExpr(string field, string op, int seconds)
+    {
+        long ms = (long)seconds * 1000;
+        var expr = new BsonDocument("$expr", new BsonDocument(op, new BsonArray
+        {
+            new BsonDocument("$mod", new BsonArray
+            {
+                new BsonDocument("$toLong", $"${field}"),
+                86_400_000L,
+            }),
+            ms,
+        }));
+        return new BsonDocumentFilterDefinition<BsonDocument>(expr);
     }
 
     // ── Regex helpers ──────────────────────────────────────────────────────
