@@ -650,8 +650,22 @@ html, body {
     display: flex; align-items: center;
     justify-content: space-between; gap: 16px;
 }
-.bm-theme-switcher { display: flex; gap: 6px; flex-shrink: 0; }
-.bm-theme-btn      { min-width: 86px !important; }
+.bm-theme-switcher { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* ── MudToggleIconButton — soften the outlined border to match divider colour ── */
+.mud-icon-button.mud-icon-button-outlined {
+    border-color: var(--mud-palette-divider) !important;
+}
+.mud-icon-button.mud-icon-button-outlined:hover {
+    border-color: var(--mud-palette-text-secondary) !important;
+}
+
+/* Theme toggle buttons — active state gets primary colour fill */
+.bm-theme-btn-active .mud-icon-button.mud-icon-button-outlined {
+    border-color: var(--mud-palette-primary) !important;
+    color: var(--mud-palette-primary) !important;
+    background-color: var(--mud-palette-primary-hover) !important;
+}
 .bm-about-grid {
     display: grid;
     grid-template-columns: auto 1fr;

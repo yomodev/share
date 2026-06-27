@@ -23,30 +23,33 @@
                         </MudText>
                     </div>
                     <div class="bm-theme-switcher">
-                        <MudButton Variant="@(_mode == ThemeMode.Dark ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.DarkMode"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.Dark))"
-                                   Class="bm-theme-btn">
-                            Dark
-                        </MudButton>
-                        <MudButton Variant="@(_mode == ThemeMode.Light ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.LightMode"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.Light))"
-                                   Class="bm-theme-btn">
-                            Light
-                        </MudButton>
-                        <MudButton Variant="@(_mode == ThemeMode.System ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.SettingsBrightness"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.System))"
-                                   Class="bm-theme-btn">
-                            System
-                        </MudButton>
+                        <span class="@(_mode == ThemeMode.Dark ? "bm-theme-btn-active" : "")">
+                            <MudToggleIconButton Toggled="@(_mode == ThemeMode.Dark)"
+                                                 Icon="@Icons.Material.Outlined.DarkMode"
+                                                 ToggledIcon="@Icons.Material.Filled.DarkMode"
+                                                 ToggledColor="Color.Primary"
+                                                 Size="Size.Medium"
+                                                 Title="Dark"
+                                                 ToggledChanged="@(v => { if (v) SetMode(ThemeMode.Dark); })" />
+                        </span>
+                        <span class="@(_mode == ThemeMode.Light ? "bm-theme-btn-active" : "")">
+                            <MudToggleIconButton Toggled="@(_mode == ThemeMode.Light)"
+                                                 Icon="@Icons.Material.Outlined.LightMode"
+                                                 ToggledIcon="@Icons.Material.Filled.LightMode"
+                                                 ToggledColor="Color.Primary"
+                                                 Size="Size.Medium"
+                                                 Title="Light"
+                                                 ToggledChanged="@(v => { if (v) SetMode(ThemeMode.Light); })" />
+                        </span>
+                        <span class="@(_mode == ThemeMode.System ? "bm-theme-btn-active" : "")">
+                            <MudToggleIconButton Toggled="@(_mode == ThemeMode.System)"
+                                                 Icon="@Icons.Material.Outlined.SettingsBrightness"
+                                                 ToggledIcon="@Icons.Material.Filled.SettingsBrightness"
+                                                 ToggledColor="Color.Primary"
+                                                 Size="Size.Medium"
+                                                 Title="System"
+                                                 ToggledChanged="@(v => { if (v) SetMode(ThemeMode.System); })" />
+                        </span>
                     </div>
                 </div>
             </MudPaper>
