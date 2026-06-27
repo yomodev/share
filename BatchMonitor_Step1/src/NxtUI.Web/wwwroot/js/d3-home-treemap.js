@@ -99,7 +99,7 @@ window.homeMemoryTreemap = (function () {
                         ? Math.round(leaf.data.ram) + ' MB'
                         : 'no data';
                     tip.style('display', 'block')
-                       .html(`<strong>${leaf.data.name}</strong> &nbsp;PID ${leaf.data.pid}<br>${ram}`);
+                       .html(`<strong>${leaf.data.name}</strong><br>PID ${leaf.data.pid} &nbsp;·&nbsp; ${ram}`);
                     const cr = container.getBoundingClientRect();
                     let lx = event.clientX - cr.left + 12;
                     let ly = event.clientY - cr.top  - 40;
