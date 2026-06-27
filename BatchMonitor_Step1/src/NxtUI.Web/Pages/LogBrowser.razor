@@ -437,13 +437,23 @@
     private async Task SelectPathAsync(string relativePath)
     {
         _selectedPath = relativePath;
+
+        // Show the progress bar immediately — before any async work or throttle check.
+        _loadingFiles = true;
+        StateHasChanged();
+        await Task.Yield(); // flush the render so the bar is visible before IO starts
+
         var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
         if ((DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
         {
             _lastManualPoll = DateTime.UtcNow;
             await LoadFilesAsync();
         }
-        else { StateHasChanged(); }
+        else
+        {
+            _loadingFiles = false;
+            StateHasChanged();
+        }
     }
 
     private async Task NavigateBreadcrumbAsync(string relativePath)
