@@ -1,9 +1,11 @@
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Configuration
+@using NxtUI.Core.Services
 @using NxtUI.Filtering
 @using Microsoft.Extensions.Options
 @inject ILogBrowserService BrowserSvc
+@inject IServerRegistry ServerRegistry
 @inject IHeartbeatService HeartbeatSvc
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
@@ -327,8 +329,9 @@
     protected override async Task OnInitializedAsync()
     {
         var statuses = await HeartbeatSvc.GetServiceStatusesAsync(Env, _cts.Token);
-        var hosts    = statuses.Select(s => s.HostName).Distinct(StringComparer.OrdinalIgnoreCase);
-        _servers     = BrowserSvc.GetServers(hosts).ToList();
+        var hosts    = statuses.Select(s => s.HostName);
+        var envInfo  = new EnvironmentInfo { Id = Env };
+        _servers     = ServerRegistry.GetServers(envInfo, hosts).ToList();
 
         try
         {

@@ -16,8 +16,6 @@ public interface ILogBrowserService
 {
     string? ResolveRoot(string server);
 
-    IReadOnlyList<string> GetServers(IEnumerable<string> heartbeatHosts);
-
     Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default);
 

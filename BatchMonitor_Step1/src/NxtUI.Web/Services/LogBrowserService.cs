@@ -41,12 +41,6 @@ public class LogBrowserService : ILogBrowserService
         return _settings.LogsFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyList<string> GetServers(IEnumerable<string> heartbeatHosts)
-    {
-        if (_settings.Servers.Count > 0) return _settings.Servers;
-        return heartbeatHosts.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
-    }
-
     public async Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default)
     {
