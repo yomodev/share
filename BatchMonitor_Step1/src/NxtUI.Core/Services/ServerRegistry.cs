@@ -1,29 +1,33 @@
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Models;
+using NxtUI.Services;
 
 namespace NxtUI.Core.Services;
 
 /// <summary>
-/// Default <see cref="IServerRegistry"/> — returns the static <c>Logs:Servers</c> list
-/// from configuration when it is non-empty, otherwise falls back to the distinct set of
-/// hosts currently visible in live heartbeat data.
+/// Default <see cref="IServerRegistry"/> — returns <c>Logs:Servers</c> from config when
+/// non-empty; otherwise queries the heartbeat service to discover hosts for the environment.
 /// </summary>
 public sealed class ServerRegistry : IServerRegistry
 {
-    private readonly LogPathSettings _settings;
+    private readonly LogPathSettings  _settings;
+    private readonly IHeartbeatService _heartbeat;
 
-    public ServerRegistry(IOptions<LogPathSettings> settings)
+    public ServerRegistry(IOptions<LogPathSettings> settings, IHeartbeatService heartbeat)
     {
-        _settings = settings.Value;
+        _settings  = settings.Value;
+        _heartbeat = heartbeat;
     }
 
-    public IReadOnlyList<string> GetServers(EnvironmentInfo environment, IEnumerable<string> heartbeatHosts)
+    public async Task<IReadOnlyList<string>> GetServersAsync(EnvironmentInfo environment, CancellationToken ct = default)
     {
         if (_settings.Servers.Count > 0)
             return _settings.Servers;
 
-        return heartbeatHosts
+        var statuses = await _heartbeat.GetServiceStatusesAsync(environment.Id, ct);
+        return statuses
+            .Select(s => s.HostName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToList();
