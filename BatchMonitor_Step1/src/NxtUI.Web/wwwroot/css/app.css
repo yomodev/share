@@ -1494,6 +1494,35 @@ html, body {
     color: var(--mud-palette-text-secondary);
 }
 
+.bm-treemap-error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    z-index: 1;
+}
+
+.bm-treemap-error-icon {
+    color: var(--mud-palette-error);
+    flex-shrink: 0;
+}
+
+.bm-treemap-error-msg {
+    font-size: 12px;
+    color: var(--mud-palette-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bm-treemap-error-btn {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary) !important;
+}
+
 @keyframes bm-spin {
     to { transform: rotate(360deg); }
 }
