@@ -1,99 +1,76 @@
 @* Routes the active tab to its correct page component *@
 
-@if (Tab is null) { return; }
-
-@{
-    var env = Tab.Environment ?? string.Empty;
-    var label = Tab.Label ?? string.Empty;
-}
-
-@switch (Tab.Type)
+@if (Tab is not null)
 {
-    case TabType.Runs:
-        <NxtUI.Pages.Runs Environment="@env" />
-        break;
-
-    case TabType.RunDetail:
-        <NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />
-        break;
-
-    case TabType.Services:
-        <NxtUI.Pages.ServicesPage Env="@env" />
-        break;
-
-    case TabType.Pipelines:
-        <NxtUI.Pages.PlaceholderPage Title="Pipelines"
-            Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />
-        break;
-
-    case TabType.Kafka:
-        <NxtUI.Pages.KafkaDashboard Environment="@env" />
-        break;
-
-    case TabType.KafkaGroups:
-        <NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />
-        break;
-
-    case TabType.MongoDB:
-        <NxtUI.Pages.MongoDashboard Environment="@env" />
-        break;
-
-    case TabType.MongoDetail:
-        <NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
-        break;
-
-    case TabType.Batches:
-        <NxtUI.Pages.PlaceholderPage Title="Batches"
-            Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />
-        break;
-
-    case TabType.Config:
-        <NxtUI.Pages.PlaceholderPage Title="Config"
-            Icon="@Icons.Material.Outlined.Tune" Environment="@env" />
-        break;
-
-    case TabType.MemoryGraph:
-        <NxtUI.Pages.MemoryGraph Env="@env" />
-        break;
-
-    case TabType.LogBrowser:
-        <NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />
-        break;
-
-    case TabType.LogViewer:
-        <NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
-        break;
-
-    case TabType.LogWorkspace:
-        <NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />
-        break;
-
-    case TabType.Settings:
-        <NxtUI.Pages.Settings />
-        break;
-
-    case TabType.Timeline:
-        <NxtUI.Pages.TimelineTab
-            Tab="@Tab"
-            Environment="@env"
-            InitialRunId="@Tab.EntityId"
-            IsFocused="@Tab.IsActive" />
-        break;
-
-    case TabType.KafkaMessages:
-        <NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />
-        break;
-
-    case TabType.FilterHelp:
-        <NxtUI.Pages.FilterHelp />
-        break;
-
-    default:
-        <NxtUI.Pages.PlaceholderPage Title="@label"
-            Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />
-        break;
+    @RenderTab()
 }
 
 @code {
     [Parameter, EditorRequired] public TabModel? Tab { get; set; }
+
+    private RenderFragment RenderTab()
+    {
+        var env   = Tab!.Environment ?? string.Empty;
+        var label = Tab.Label ?? string.Empty;
+
+        return Tab.Type switch
+        {
+            TabType.Runs =>
+                @<NxtUI.Pages.Runs Environment="@env" />,
+
+            TabType.RunDetail =>
+                @<NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
+
+            TabType.Services =>
+                @<NxtUI.Pages.ServicesPage Env="@env" />,
+
+            TabType.Pipelines =>
+                @<NxtUI.Pages.PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
+
+            TabType.Kafka =>
+                @<NxtUI.Pages.KafkaDashboard Environment="@env" />,
+
+            TabType.KafkaGroups =>
+                @<NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />,
+
+            TabType.MongoDB =>
+                @<NxtUI.Pages.MongoDashboard Environment="@env" />,
+
+            TabType.MongoDetail =>
+                @<NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+
+            TabType.Batches =>
+                @<NxtUI.Pages.PlaceholderPage Title="Batches" Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />,
+
+            TabType.Config =>
+                @<NxtUI.Pages.PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
+
+            TabType.MemoryGraph =>
+                @<NxtUI.Pages.MemoryGraph Env="@env" />,
+
+            TabType.LogBrowser =>
+                @<NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+
+            TabType.LogViewer =>
+                @<NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+
+            TabType.LogWorkspace =>
+                @<NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+
+            TabType.Settings =>
+                @<NxtUI.Pages.Settings />,
+
+            TabType.Timeline =>
+                @<NxtUI.Pages.TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
+
+            TabType.KafkaMessages =>
+                @<NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+
+            TabType.FilterHelp =>
+                @<NxtUI.Pages.FilterHelp />,
+
+            _ =>
+                @<NxtUI.Pages.PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
+        };
+    }
 }
