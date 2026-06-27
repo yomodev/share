@@ -89,10 +89,21 @@ public sealed class TestLogGenerator : BackgroundService
         var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
         var fileName = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
 
+        // Honour the Environments allowlist — default (empty) means all.
+        var envs = _gen.Environments.Count > 0
+            ? _app.Environments.Where(e => _gen.Environments.Contains(e.Id, StringComparer.OrdinalIgnoreCase)).ToList()
+            : _app.Environments;
+
         int generated = 0, skipped = 0;
-        foreach (var env in _app.Environments)
+        foreach (var env in envs)
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct);
+            List<ServiceStatus> services;
+            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct); }
+            catch (Exception ex)
+            {
+                _log.LogWarning("TestLogGenerator: skipping env {Env} — {Error}", env.Id, ex.Message);
+                continue;
+            }
             foreach (var svc in services)
             {
                 // Skip ~1/3 of services (deterministic per PID) so some have no logs.

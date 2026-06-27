@@ -19,4 +19,12 @@ public class TestLogGeneratorSettings
 
     /// <summary>Which LogPaths template to materialise folders from.</summary>
     public int TemplateIndex { get; set; } = 0;
+
+    /// <summary>
+    /// Restrict seeding to these environment IDs. When empty (the default) all
+    /// configured environments are seeded. Set this to only the environments whose
+    /// MongoDB database the development credentials can access, to avoid connection
+    /// errors for UAT/Staging/Production databases at startup.
+    /// </summary>
+    public List<string> Environments { get; set; } = [];
 }
