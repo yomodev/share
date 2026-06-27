@@ -107,10 +107,6 @@
                                         @spark.Svg
                                     }
                                     <div class="bm-svc-card-header">
-                                        <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
-                                                 Size="Size.Small"
-                                                 Color="@(s.IsOnline ? Color.Success : Color.Error)"
-                                                 Class="bm-svc-dot" />
                                         <span class="bm-svc-card-name" title="@s.ServiceName">@s.ServiceName</span>
                                     </div>
                                     <div class="bm-svc-card-host">@s.HostName</div>
