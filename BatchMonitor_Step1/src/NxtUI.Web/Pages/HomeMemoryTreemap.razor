@@ -62,17 +62,23 @@
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+
             var hosts = services
-                .Where(s => s.IsOnline)
+                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
                 .GroupBy(s => s.HostName)
                 .Select(g =>
                 {
-                    var svcs = g.Select(s =>
-                    {
-                        var m   = MetricsMonitor.GetLatest(Env, s);
-                        double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
-                        return new TreeSvc(s.ServiceName, s.ProcessId, ram);
-                    }).ToList();
+                    var svcs = g
+                        .Select(s =>
+                        {
+                            var m   = MetricsMonitor.GetLatest(Env, s);
+                            double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
+                            return new TreeSvc(s.ServiceName, s.ProcessId, ram);
+                        })
+                        .OrderByDescending(s => s.Ram ?? 0)
+                        .Take(10)
+                        .ToList();
                     return new TreeHost(g.Key, svcs);
                 }).ToList();
 
