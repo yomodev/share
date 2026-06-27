@@ -1,12 +1,13 @@
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
-// Log format:  timestamp|level|host|pid|threadId|message|caller
-//   • "message" may contain "|" — everything between the 5th and last "|" is the message
+// Log format:  timestamp|level|host|pid|threadId|message|caller[|extra1|extra2|...]
+//   • Fields 0-6 are fixed-position; caller is always at index 6.
+//   • Any pipe-delimited fields beyond index 6 are captured as `extras: string[]`.
 //   • Lines that do NOT start with a timestamp are continuations of the previous entry
 //     (stack traces, exception detail lines, etc.)
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -48,19 +49,19 @@ export function parseLog(rawText) {
 function parseLine(line, lineIndex) {
     const parts = line.split('|');
 
-    // timestamp=0, level=1, host=2, pid=3, threadId=4, message=5..n-2, caller=n-1
-    // If fewer than 7 parts, be lenient and fill what we can.
+    // Fixed positions: 0=timestamp, 1=level, 2=host, 3=pid, 4=threadId, 5=message, 6=caller
+    // Parts beyond index 6 are unknown extra fields, captured as extras[].
+    // Fewer than 7 parts: be lenient and fill what we can.
     const timestamp = parts[0] ?? '';
     const level     = parts[1] ?? '';
     const host      = parts[2] ?? '';
     const pid       = parseInt(parts[3], 10) || 0;
-    const threadId  = parts.length > 6 ? (parseInt(parts[4], 10) || 0) : 0;
-    const caller    = parts.length > 6 ? (parts[parts.length - 1] ?? '') : '';
-    const message   = parts.length > 6
-        ? parts.slice(5, parts.length - 1).join('|')
-        : (parts[5] ?? parts[4] ?? '');
+    const threadId  = parts.length > 5 ? (parseInt(parts[4], 10) || 0) : 0;
+    const message   = parts[5] ?? parts[4] ?? '';
+    const caller    = parts[6] ?? '';
+    const extras    = parts.length > 7 ? parts.slice(7) : [];
 
-    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, continuations: [], displayLineCount: 1 };
+    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, extras, continuations: [], displayLineCount: 1 };
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -96,7 +97,8 @@ export function findMatches(entries, re) {
 }
 
 function entrySearchText(entry) {
-    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`;
+    const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`
+        + (entry.extras.length ? '|' + entry.extras.join('|') : '');
     return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
 }
 

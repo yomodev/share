@@ -38,16 +38,22 @@ describe('parseLog — single entry, no pipes in message', () => {
     it('lineIndex is 0',              () => expect(entries[0].lineIndex).toBe(0))
 })
 
-// ── parseLog — pipe inside message ───────────────────────────────────────────
+// ── parseLog — extra fields after caller ─────────────────────────────────────
 
-describe('parseLog — pipe character inside message', () => {
-    const raw = '2024-01-15 12:00:01|WARN|srv-01|1234|17|Value is a|b|c here|MyApp.Check'
+describe('parseLog — extra fields after caller', () => {
+    // Format: ts|level|host|pid|tid|message|caller|extra1|extra2|...
+    const raw = '2024-01-15 12:00:01|WARN|srv-01|1234|17|Something happened|MyApp.Check|extra-a|extra-b'
     const entries = parseLog(raw)
 
-    it('produces one entry',          () => expect(entries).toHaveLength(1))
-    it('reconstructs full message',   () => expect(entries[0].message).toBe('Value is a|b|c here'))
-    it('caller is the last segment',  () => expect(entries[0].caller).toBe('MyApp.Check'))
-    it('threadId is correct',         () => expect(entries[0].threadId).toBe(17))
+    it('produces one entry',           () => expect(entries).toHaveLength(1))
+    it('message is at fixed index 5',  () => expect(entries[0].message).toBe('Something happened'))
+    it('caller is at fixed index 6',   () => expect(entries[0].caller).toBe('MyApp.Check'))
+    it('threadId is correct',          () => expect(entries[0].threadId).toBe(17))
+    it('extras captures fields 7+',    () => expect(entries[0].extras).toEqual(['extra-a', 'extra-b']))
+    it('no extras when none present',  () => {
+        const e = parseLog('2024-01-15 12:00:01|INFO|srv|1|2|msg|caller')[0]
+        expect(e.extras).toEqual([])
+    })
 })
 
 // ── parseLog — multi-line entry (stack trace) ─────────────────────────────────
