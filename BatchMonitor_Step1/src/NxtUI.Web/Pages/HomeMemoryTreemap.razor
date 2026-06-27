@@ -31,14 +31,21 @@
     private sealed record TreeHost(string Name, List<TreeSvc>  Children);
     private sealed record TreeSvc (string Name, int Pid, double? Ram);
 
+    private string _subscribedEnv = string.Empty;
+
     protected override void OnInitialized()
     {
-        _sub = MetricsMonitor.Subscribe(Env);
         MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (Env == _subscribedEnv) return;
+
+        _sub?.Dispose();
+        _sub = MetricsMonitor.Subscribe(Env);
+        _subscribedEnv = Env;
+
         await LoadAsync();
         await InvokeAsync(StateHasChanged);
     }
