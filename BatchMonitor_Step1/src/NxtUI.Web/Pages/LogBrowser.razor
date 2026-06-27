@@ -307,8 +307,6 @@
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
     // double-click detection
-    private DateTime _lastClickTime = DateTime.MinValue;
-    private string?  _lastClickPath;
 
     // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
@@ -412,18 +410,8 @@
     private async Task OnItemClickAsync(LogFolderNode node)
     {
         if (!node.HasChildren) return;
-        var now = DateTime.UtcNow;
-        if (_lastClickPath == node.RelativePath && (now - _lastClickTime).TotalMilliseconds < 350)
-        {
-            _lastClickPath = null;
-            var isExpanded = _expanded.Contains(node.RelativePath);
-            await OnExpandedChangedAsync(node, !isExpanded);
-        }
-        else
-        {
-            _lastClickPath = node.RelativePath;
-            _lastClickTime = now;
-        }
+        var isExpanded = _expanded.Contains(node.RelativePath);
+        await OnExpandedChangedAsync(node, !isExpanded);
     }
 
     private async Task OnExpandedChangedAsync(LogFolderNode node, bool expanded)

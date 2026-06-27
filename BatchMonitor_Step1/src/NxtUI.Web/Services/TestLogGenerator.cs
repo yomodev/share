@@ -109,7 +109,8 @@ public sealed class TestLogGenerator : BackgroundService
                 // Skip ~1/3 of services (deterministic per PID) so some have no logs.
                 if (svc.ProcessId % 3 == 0) { skipped++; continue; }
 
-                var folder = LogPathTemplate.Expand(template, svc, env.Id)
+                // Always use today so the folder matches what the log browser shows.
+                var folder = LogPathTemplate.Expand(template, svc, env.Id, DateTime.Today)
                                             .Replace("*", "Run" + RandomHex(8));
                 Directory.CreateDirectory(folder);
 
@@ -120,7 +121,7 @@ public sealed class TestLogGenerator : BackgroundService
                     Pid        = svc.ProcessId,
                     StreamName = $"{svc.ServiceName}Stream-{env.Id}",
                     MsgId      = RandomHex(24),
-                    ProcStart  = svc.CreatedDateTime.ToUniversalTime(),
+                    ProcStart  = DateTime.UtcNow.AddHours(-_rng.Next(1, 8)),
                     Thread     = 200 + _rng.Next(0, 50),
                     Current    = Mb(200 + _rng.Next(0, 120)),
                     Child      = 0,
@@ -128,12 +129,15 @@ public sealed class TestLogGenerator : BackgroundService
                 };
                 target.Peak = target.Current;
 
-                // Backfill a few lines spaced in the past so a freshly opened file has history.
-                var now = DateTime.Now;
-                for (var k = _gen.InitialLineCount; k >= 1; k--)
+                // Backfill lines from midnight (or process start) up to now at the write interval.
+                var now      = DateTime.Now;
+                var dayStart = now.Date;
+                var totalSec = (int)(now - dayStart).TotalSeconds;
+                var steps    = Math.Max(_gen.InitialLineCount, totalSec / Math.Max(1, _gen.WriteIntervalSeconds));
+                for (var k = steps; k >= 1; k--)
                 {
                     Advance(target);
-                    WriteLine(target, now.AddSeconds(-k * _gen.WriteIntervalSeconds));
+                    WriteLine(target, now.AddSeconds(-(long)k * _gen.WriteIntervalSeconds));
                 }
 
                 _targets.Add(target);
