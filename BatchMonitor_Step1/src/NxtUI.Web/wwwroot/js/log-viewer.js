@@ -101,6 +101,43 @@ function findFirstVisible(cum, scrollTop) {
     return lo;
 }
 
+// ── Scrollmap tooltip ─────────────────────────────────────────────────────────
+
+let _tooltipEl = null;
+
+function _getTooltip() {
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement('div');
+        _tooltipEl.style.cssText =
+            'position:fixed;z-index:9999;background:rgba(0,0,0,0.78);color:#fff;' +
+            'font:11px/1.5 monospace;padding:2px 8px;border-radius:3px;' +
+            'pointer-events:none;white-space:nowrap;display:none;';
+        document.body.appendChild(_tooltipEl);
+    }
+    return _tooltipEl;
+}
+
+function _showMapTooltip(vp, clientY, rect) {
+    const totalH = vp.cum[vp.visibleEntries.length];
+    if (totalH === 0) return;
+    const ratio   = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const idx     = findFirstVisible(vp.cum, ratio * totalH);
+    const entry   = vp.visibleEntries[Math.min(idx, vp.visibleEntries.length - 1)];
+    if (!entry) return;
+    const tip = _getTooltip();
+    tip.textContent = entry.timestamp;
+    tip.style.display = 'block';
+    // Position to the left of the map strip
+    const tipW = tip.offsetWidth;
+    const tipH = tip.offsetHeight;
+    tip.style.left = (rect.left - tipW - 6) + 'px';
+    tip.style.top  = Math.max(4, Math.min(clientY - Math.floor(tipH / 2), window.innerHeight - tipH - 4)) + 'px';
+}
+
+function _hideMapTooltip() {
+    if (_tooltipEl) _tooltipEl.style.display = 'none';
+}
+
 // ── DOM construction ──────────────────────────────────────────────────────────
 
 const SCROLLMAP_W = 12; // px width of the scrollmap canvas strip
@@ -347,15 +384,72 @@ function attachHandlers(container, vp) {
     };
     vp.rowsEl.addEventListener('click', vp._clickHandler);
 
-    vp._mapClickHandler = (e) => {
-        const rect   = vp.mapEl.getBoundingClientRect();
-        const ratio  = (e.clientY - rect.top) / rect.height;
-        const totalH = vp.cum[vp.visibleEntries.length];
-        const target = ratio * totalH;
-        const idx    = findFirstVisible(vp.cum, target);
-        scrollToEntry(vp, idx);
+    // ── Scrollmap: wheel forwarding ──────────────────────────────────────────
+    vp._mapWheelHandler = (e) => {
+        e.preventDefault();
+        vp.scrollEl.scrollTop += e.deltaY;
     };
-    vp.mapEl.addEventListener('click', vp._mapClickHandler);
+    vp.mapEl.addEventListener('wheel', vp._mapWheelHandler, { passive: false });
+
+    // ── Scrollmap: tooltip on hover ──────────────────────────────────────────
+    vp._mapMoveHandler = (e) => {
+        const rect   = vp.mapEl.getBoundingClientRect();
+        const totalH = vp.cum[vp.visibleEntries.length];
+        if (totalH > 0) {
+            const ratio  = (e.clientY - rect.top) / rect.height;
+            const contentY = ratio * totalH;
+            const vpTop  = vp.scrollEl.scrollTop;
+            const vpBot  = vpTop + vp.scrollEl.clientHeight;
+            vp.mapEl.style.cursor = (contentY >= vpTop && contentY <= vpBot) ? 'ns-resize' : 'pointer';
+        }
+        _showMapTooltip(vp, e.clientY, vp.mapEl.getBoundingClientRect());
+    };
+    vp._mapLeaveHandler = () => {
+        _hideMapTooltip();
+        vp.mapEl.style.cursor = 'pointer';
+    };
+    vp.mapEl.addEventListener('mousemove', vp._mapMoveHandler);
+    vp.mapEl.addEventListener('mouseleave', vp._mapLeaveHandler);
+
+    // ── Scrollmap: click-to-jump or drag viewport indicator ──────────────────
+    vp._mapMouseDownHandler = (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const rect   = vp.mapEl.getBoundingClientRect();
+        const totalH = vp.cum[vp.visibleEntries.length];
+        if (totalH === 0) return;
+        const ratio    = (e.clientY - rect.top) / rect.height;
+        const contentY = ratio * totalH;
+        const vpTop    = vp.scrollEl.scrollTop;
+        const vpBot    = vpTop + vp.scrollEl.clientHeight;
+
+        if (contentY >= vpTop && contentY <= vpBot) {
+            // Drag the viewport indicator
+            const startClientY   = e.clientY;
+            const startScrollTop = vpTop;
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor     = 'ns-resize';
+
+            const onMove = (me) => {
+                const dy = me.clientY - startClientY;
+                vp.scrollEl.scrollTop = Math.max(0, startScrollTop + dy / rect.height * totalH);
+                _showMapTooltip(vp, me.clientY, rect);
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+                document.body.style.userSelect = '';
+                document.body.style.cursor     = '';
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+        } else {
+            // Click-to-jump
+            const idx = findFirstVisible(vp.cum, contentY);
+            scrollToEntry(vp, idx);
+        }
+    };
+    vp.mapEl.addEventListener('mousedown', vp._mapMouseDownHandler);
 
     vp._resizeObs = new ResizeObserver(() => drawScrollmap(vp));
     vp._resizeObs.observe(vp.mapEl);
@@ -365,7 +459,6 @@ function attachHandlers(container, vp) {
         const sel  = window.getSelection();
         const word = sel?.toString().trim() ?? '';
         if (!word) return;
-        // Collapse to just the clicked word (strip leading/trailing punctuation)
         const clean = word.replace(/^[\s\W]+|[\s\W]+$/g, '');
         if (!clean) return;
         vp.dotNetRef.invokeMethodAsync('OnWordSelected', clean);
@@ -414,12 +507,15 @@ function _createViewport(container, doc, options) {
         matchSet:     new Set(),
         matchCursor:  -1,
         scrollEl, innerEl, rowsEl, mapEl,
-        dotNetRef:         null,
-        _scrollHandler:    null,
-        _clickHandler:     null,
-        _mapClickHandler:  null,
-        _dblClickHandler:  null,
-        _resizeObs:        null,
+        dotNetRef:             null,
+        _scrollHandler:        null,
+        _clickHandler:         null,
+        _mapMouseDownHandler:  null,
+        _mapWheelHandler:      null,
+        _mapMoveHandler:       null,
+        _mapLeaveHandler:      null,
+        _dblClickHandler:      null,
+        _resizeObs:            null,
     };
     doc._viewports.add(vp);
     _vp.set(container, vp);
@@ -672,11 +768,15 @@ function destroy(container) {
     const vp = _vp.get(container);
     if (!vp) return;
 
-    if (vp._scrollHandler)   vp.scrollEl.removeEventListener('scroll',    vp._scrollHandler);
-    if (vp._clickHandler)    vp.rowsEl.removeEventListener('click',      vp._clickHandler);
-    if (vp._dblClickHandler) vp.rowsEl.removeEventListener('dblclick',   vp._dblClickHandler);
-    if (vp._mapClickHandler) vp.mapEl?.removeEventListener('click',      vp._mapClickHandler);
-    if (vp._resizeObs)       vp._resizeObs.disconnect();
+    if (vp._scrollHandler)       vp.scrollEl.removeEventListener('scroll',     vp._scrollHandler);
+    if (vp._clickHandler)        vp.rowsEl.removeEventListener('click',       vp._clickHandler);
+    if (vp._dblClickHandler)     vp.rowsEl.removeEventListener('dblclick',    vp._dblClickHandler);
+    if (vp._mapMouseDownHandler) vp.mapEl?.removeEventListener('mousedown',   vp._mapMouseDownHandler);
+    if (vp._mapWheelHandler)     vp.mapEl?.removeEventListener('wheel',       vp._mapWheelHandler);
+    if (vp._mapMoveHandler)      vp.mapEl?.removeEventListener('mousemove',   vp._mapMoveHandler);
+    if (vp._mapLeaveHandler)     vp.mapEl?.removeEventListener('mouseleave',  vp._mapLeaveHandler);
+    if (vp._resizeObs)           vp._resizeObs.disconnect();
+    _hideMapTooltip();
     container.innerHTML = '';
 
     const doc = vp.doc;
