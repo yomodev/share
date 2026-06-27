@@ -304,8 +304,8 @@ function interpretWord(text) {
     if (!isNaN(num) && text.trim() !== '' && !/^0\d/.test(text))
         return { type: 'number', value: num };
 
-    const dt = tryParseDate(text);
-    if (dt !== null) return { type: 'date', value: dt };
+    const result = tryParseDate(text);
+    if (result !== null) return result;
 
     return { type: 'string', value: text };
 }
@@ -316,17 +316,24 @@ const RE_RELATIVE = /^(-?)(\d+)([mhdw])$/i;
 const RE_TIME     = /^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$/i;
 const RE_ISO      = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?z?$/i;
 
-/** @returns {string|null} UTC ISO string */
+/**
+ * Returns a FilterValue or null.
+ * Time-only inputs (HH:MM or HH:MM:SS) return { type: 'time', seconds }
+ * so comparison ignores the date and matches only the time-of-day portion.
+ * Everything else returns { type: 'date', value: isoString }.
+ */
 function tryParseDate(text) {
     const lower = text.toLowerCase();
 
     switch (lower) {
-        case 'now':  case 'nowz':        return new Date().toISOString();
+        case 'now':  case 'nowz':        return { type: 'date', value: new Date().toISOString() };
         case 'today': case 'todayz': {
-            const d = new Date(); d.setUTCHours(0,0,0,0); return d.toISOString();
+            const d = new Date(); d.setUTCHours(0,0,0,0);
+            return { type: 'date', value: d.toISOString() };
         }
         case 'yesterday': case 'yesterdayz': {
-            const d = new Date(); d.setUTCHours(0,0,0,0); d.setUTCDate(d.getUTCDate()-1); return d.toISOString();
+            const d = new Date(); d.setUTCHours(0,0,0,0); d.setUTCDate(d.getUTCDate()-1);
+            return { type: 'date', value: d.toISOString() };
         }
     }
 
@@ -343,7 +350,7 @@ function tryParseDate(text) {
                 case 'd': now.setDate(now.getDate()       - n); break;
                 case 'w': now.setDate(now.getDate()       - n * 7); break;
             }
-            return now.toISOString();
+            return { type: 'date', value: now.toISOString() };
         } else {
             const d = new Date();
             d.setUTCHours(0, 0, 0, 0);
@@ -353,23 +360,24 @@ function tryParseDate(text) {
                 case 'd': d.setUTCDate(d.getUTCDate()       + n); break;
                 case 'w': d.setUTCDate(d.getUTCDate()       + n * 7); break;
             }
-            return d.toISOString();
+            return { type: 'date', value: d.toISOString() };
         }
     }
 
-    // Time-only: 9:30 or 09:30:00
+    // Time-only: 9:30 or 09:30:00 — compare only time-of-day, date-agnostic
     const tm = RE_TIME.exec(text);
     if (tm && !text.startsWith('-')) {
-        const d = new Date();
-        d.setUTCHours(parseInt(tm[1], 10), parseInt(tm[2], 10), tm[3] ? parseInt(tm[3], 10) : 0, 0);
-        return d.toISOString();
+        const h = parseInt(tm[1], 10);
+        const m = parseInt(tm[2], 10);
+        const s = tm[3] ? parseInt(tm[3], 10) : 0;
+        return { type: 'time', seconds: h * 3600 + m * 60 + s };
     }
 
-    // ISO date
+    // ISO date / datetime
     if (RE_ISO.test(text)) {
         const normalised = text.replace(/z$/i, '') + 'Z';
         const d = new Date(normalised);
-        if (!isNaN(d.getTime())) return d.toISOString();
+        if (!isNaN(d.getTime())) return { type: 'date', value: d.toISOString() };
     }
 
     return null;
@@ -457,9 +465,18 @@ function compareValues(rawFieldValue, filterValue) {
         return Number(rawFieldValue) - filterValue.value;
     }
     if (filterValue.type === 'date') {
-        const a = rawFieldValue instanceof Date ? rawFieldValue : new Date(rawFieldValue);
+        const a = rawFieldValue instanceof Date ? rawFieldValue : new Date(String(rawFieldValue).replace(' ', 'T'));
         const b = new Date(filterValue.value);
         return a.getTime() - b.getTime();
+    }
+    if (filterValue.type === 'time') {
+        // Compare only the time-of-day portion — ignores the date entirely.
+        const raw = String(rawFieldValue);
+        // Extract HH:MM:SS from "YYYY-MM-DD HH:MM:SS" or ISO strings.
+        const m = raw.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (!m) return -1;
+        const aSeconds = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0);
+        return aSeconds - filterValue.seconds;
     }
     return String(rawFieldValue).localeCompare(String(filterValue.value));
 }

@@ -256,6 +256,22 @@ describe('log viewer — full pipeline (parseLog → filter with integer pid/thr
     it('lvl:ERROR returns only error entries', () => {
         expect(filter('lvl:ERROR').map(e => e.level)).toEqual(['ERROR'])
     })
+    it('ts:>12:00:00 returns entries after noon (time-only, date-agnostic)', () => {
+        // entries: 12:00:00, 12:00:01, 12:00:02, 12:00:03
+        const r = filter('ts:>12:00:00')
+        expect(r.map(e => e.timestamp)).toEqual([
+            '2024-01-15 12:00:01',
+            '2024-01-15 12:00:02',
+            '2024-01-15 12:00:03',
+        ])
+    })
+    it('ts:12:00:01..12:00:02 returns entries in time range', () => {
+        const r = filter('ts:12:00:01..12:00:02')
+        expect(r.map(e => e.timestamp)).toEqual([
+            '2024-01-15 12:00:01',
+            '2024-01-15 12:00:02',
+        ])
+    })
 })
 
 describe('evaluate — boolean operators', () => {
@@ -318,19 +334,20 @@ describe('parse — positive relative offset (today + N)', () => {
     })
 })
 
-describe('parse — time-only hh:mm resolves to today + time', () => {
-    it('00:10 resolves to today at 00:10:00 UTC', () => {
-        const d = parsedDate('UpdatedDateTime:<00:10')
-        const today = new Date()
-        today.setUTCHours(0, 10, 0, 0)
-        expect(d.getTime()).toBe(today.getTime())
+describe('parse — time-only hh:mm produces time type (date-agnostic)', () => {
+    it('00:10 produces { type: time, seconds: 600 }', () => {
+        const node = leaves(parse('UpdatedDateTime:<00:10', ['UpdatedDateTime']))[0]
+        expect(node?.value).toEqual({ type: 'time', seconds: 600 })
+    })
+    it('19:06:24 produces correct seconds', () => {
+        const node = leaves(parse('UpdatedDateTime:>19:06:24', ['UpdatedDateTime']))[0]
+        expect(node?.value).toEqual({ type: 'time', seconds: 19 * 3600 + 6 * 60 + 24 })
     })
 })
 
-describe('parse — 10m and 00:10 resolve to the same value', () => {
-    it('positive 10m equals time-only 00:10', () => {
-        const d1 = parsedDate('UpdatedDateTime:<10m')
-        const d2 = parsedDate('UpdatedDateTime:<00:10')
-        expect(d1.getTime()).toBe(d2.getTime())
+describe('parse — positive relative offset still produces date type', () => {
+    it('10m produces a date value (not time)', () => {
+        const node = leaves(parse('UpdatedDateTime:<10m', ['UpdatedDateTime']))[0]
+        expect(node?.value?.type).toBe('date')
     })
 })
