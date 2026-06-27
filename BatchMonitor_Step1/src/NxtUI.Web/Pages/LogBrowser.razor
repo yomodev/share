@@ -118,7 +118,7 @@
                     @foreach (var node in _rootNodes)
                     {
                         <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
-                                         Icon="@Icons.Material.Outlined.Folder"
+                                         Icon="@(_loadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                          Expanded="@_expanded.Contains(node.RelativePath)"
                                          ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(node, exp))"
                                          OnClick="@((MouseEventArgs _) => OnItemClickAsync(node))">
@@ -127,7 +127,7 @@
                                 @foreach (var c1 in ch1)
                                 {
                                     <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
-                                                     Icon="@Icons.Material.Outlined.Folder"
+                                                     Icon="@(_loadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                      Expanded="@_expanded.Contains(c1.RelativePath)"
                                                      ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c1, exp))"
                                                      OnClick="@((MouseEventArgs _) => OnItemClickAsync(c1))">
@@ -136,7 +136,7 @@
                                             @foreach (var c2 in ch2)
                                             {
                                                 <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
-                                                                 Icon="@Icons.Material.Outlined.Folder"
+                                                                 Icon="@(_loadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                                  Expanded="@_expanded.Contains(c2.RelativePath)"
                                                                  ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c2, exp))"
                                                                  OnClick="@((MouseEventArgs _) => OnItemClickAsync(c2))">
@@ -149,23 +149,11 @@
                                                                              OnClick="@((MouseEventArgs _) => OnItemClickAsync(c3))" />
                                                         }
                                                     }
-                                                    else if (c2.HasChildren)
-                                                    {
-                                                        <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
-                                                    }
                                                 </MudTreeViewItem>
                                             }
                                         }
-                                        else if (c1.HasChildren)
-                                        {
-                                            <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
-                                        }
                                     </MudTreeViewItem>
                                 }
-                            }
-                            else if (node.HasChildren)
-                            {
-                                <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
                             }
                         </MudTreeViewItem>
                     }
@@ -306,8 +294,6 @@
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
-    // double-click detection
-
     // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
     private List<LogFileEntry> _files        = new();
@@ -316,6 +302,8 @@
     private DateTime?          _lastScan;
     private string?            _lastHint;
     private string?            _initError;
+    // tracks which tree nodes are currently fetching their children
+    private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
 
     // search
     private string    _fileGlob           = "*.log";
@@ -357,10 +345,7 @@
         var todayNode = _rootNodes.FirstOrDefault(n =>
             n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
         if (todayNode is not null)
-        {
-            _expanded.Add(todayNode.RelativePath);
-            await SelectPathAsync(todayNode.RelativePath);
-        }
+            await OnExpandedChangedAsync(todayNode, true);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -431,9 +416,21 @@
             _expanded.Add(node.RelativePath);
             if (!_childCache.ContainsKey(node.RelativePath))
             {
-                var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
-                _childCache[node.RelativePath] = children;
+                _loadingNodes.Add(node.RelativePath);
+                _loadingFiles = true;
                 StateHasChanged();
+                await Task.Yield();
+                try
+                {
+                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
+                    _childCache[node.RelativePath] = children;
+                }
+                finally
+                {
+                    _loadingNodes.Remove(node.RelativePath);
+                    _loadingFiles = _loadingNodes.Count > 0;
+                    StateHasChanged();
+                }
             }
         }
         else
@@ -539,7 +536,7 @@
         }
         finally
         {
-            _loadingFiles = false;
+            _loadingFiles = _loadingNodes.Count > 0;
             StateHasChanged();
         }
     }
