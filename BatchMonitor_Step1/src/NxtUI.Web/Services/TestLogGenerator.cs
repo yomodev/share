@@ -6,18 +6,12 @@ using NxtUI.Models;
 namespace NxtUI.Services;
 
 /// <summary>
-/// Test-only background service. Materialises metrics log files in folders that
-/// match the LogPaths templates (same placeholder expansion the discovery service
-/// uses), so the Services page can find them and the monitoring/parsing can be
-/// exercised end-to-end without real services.
+/// Test-only background service that:
+///   1. Writes Metrics.log files under ServiceTemplates paths (for the monitoring pipeline).
+///   2. Writes realistic App.log files under LogsFolder paths (for the log browser).
 ///
-/// - Seeds each file with a few backfilled lines on startup.
-/// - Appends a new metrics line to every file each WriteIntervalSeconds.
-/// - Deterministically skips ~1/3 of services (by PID) so some have no logs.
-///
-/// Gated by TestLogGenerator:Enabled — keep it off in production. In Development
-/// appsettings, Logs:ServiceTemplates points at a local writable folder so we don't
-/// hit (and hang on) the real UNC shares.
+/// Both sets use today's date so the log browser always shows a folder for the current day.
+/// Gated by TestLogGenerator:Enabled — keep it off in production.
 /// </summary>
 public sealed class TestLogGenerator : BackgroundService
 {
@@ -27,7 +21,77 @@ public sealed class TestLogGenerator : BackgroundService
     private readonly IHeartbeatService         _heartbeat;
     private readonly ILogger<TestLogGenerator> _log;
     private readonly Random                    _rng = new();
-    private readonly List<Target>              _targets = new();
+    private readonly List<MetricsTarget>       _metricsTargets = new();
+    private readonly List<AppLogTarget>        _appLogTargets  = new();
+
+    // ── realistic app-log vocabulary ─────────────────────────────────────────
+    private static readonly string[] InfoMessages =
+    [
+        "Request processed successfully in {ms}ms",
+        "Batch {b} completed: {n} items processed",
+        "Connection established to {host}:{port}",
+        "Cache hit for key={k} (ttl={n}s remaining)",
+        "Scheduled job started: interval={n}s",
+        "Health check passed for component={c}",
+        "Configuration reloaded from {src}",
+        "Queue consumer started on partition={p}",
+        "Snapshot committed: revision={n}",
+        "Session {id} authenticated successfully",
+    ];
+    private static readonly string[] WarnMessages =
+    [
+        "Slow query detected: {ms}ms for table={t}",
+        "Retry attempt {n}/3 for operation={op}",
+        "Queue depth high: {n} pending messages on partition={p}",
+        "Rate limit approaching: {n}/100 requests used",
+        "Memory usage at {n}% of configured limit",
+        "Circuit breaker half-open — allowing probe request",
+        "Dependency {dep} response time degraded: {ms}ms",
+        "Dead-letter queue growing: {n} messages",
+    ];
+    private static readonly string[] DebugMessages =
+    [
+        "Processing item id={n} batch={b}",
+        "Deserializing payload size={n} bytes",
+        "Acquiring lock on resource={r}",
+        "Evaluating rule {n} of {m}",
+        "Cache miss for key={k} — fetching from DB",
+        "Correlation id={id} propagated to downstream",
+    ];
+    private static readonly string[] ErrorMessages =
+    [
+        "Unhandled exception in {caller}",
+        "Failed to connect to {host}:{port} after {n} retries",
+        "Timeout waiting for lock on resource={r}",
+        "Deserialization error in message id={id}",
+    ];
+    private static readonly string[] ExceptionTypes =
+    [
+        "System.InvalidOperationException",
+        "System.TimeoutException",
+        "System.IO.IOException",
+        "System.NullReferenceException",
+        "System.Net.Http.HttpRequestException",
+    ];
+    private static readonly string[] Callers =
+    [
+        "Service.ExecuteAsync",
+        "Worker.ProcessAsync",
+        "Handler.HandleAsync",
+        "Repository.SaveAsync",
+        "Pipeline.RunAsync",
+        "Scheduler.RunJobAsync",
+        "Consumer.ConsumeAsync",
+        "Gateway.ForwardAsync",
+    ];
+    private static readonly string[] Components =
+    [
+        "kafka", "redis", "mongodb", "rabbitmq", "elasticsearch",
+    ];
+    private static readonly string[] Resources =
+    [
+        "resource-0", "resource-1", "resource-2", "resource-3",
+    ];
 
     public TestLogGenerator(
         IOptions<TestLogGeneratorSettings> gen,
@@ -43,7 +107,7 @@ public sealed class TestLogGenerator : BackgroundService
         _log       = log;
     }
 
-    private sealed class Target
+    private sealed class MetricsTarget
     {
         public required string   FilePath   { get; init; }
         public required string   Server     { get; init; }
@@ -56,6 +120,14 @@ public sealed class TestLogGenerator : BackgroundService
         public long Peak;
         public long Child;
         public long ChildPeak;
+    }
+
+    private sealed class AppLogTarget
+    {
+        public required string FilePath  { get; init; }
+        public required string Server    { get; init; }
+        public required int    Pid       { get; init; }
+        public required string Service   { get; init; }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -86,15 +158,15 @@ public sealed class TestLogGenerator : BackgroundService
 
     private async Task SeedAsync(CancellationToken ct)
     {
-        var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
-        var fileName = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
+        var template    = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
+        var metricsFile = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
 
-        // Honour the Environments allowlist — default (empty) means all.
         var envs = _gen.Environments.Count > 0
             ? _app.Environments.Where(e => _gen.Environments.Contains(e.Id, StringComparer.OrdinalIgnoreCase)).ToList()
             : _app.Environments;
 
-        int generated = 0, skipped = 0;
+        int metricsGenerated = 0, appGenerated = 0, skipped = 0;
+
         foreach (var env in envs)
         {
             List<ServiceStatus> services;
@@ -104,19 +176,19 @@ public sealed class TestLogGenerator : BackgroundService
                 _log.LogWarning("TestLogGenerator: skipping env {Env} — {Error}", env.Id, ex.Message);
                 continue;
             }
+
             foreach (var svc in services)
             {
-                // Skip ~1/3 of services (deterministic per PID) so some have no logs.
                 if (svc.ProcessId % 3 == 0) { skipped++; continue; }
 
-                // Always use today so the folder matches what the log browser shows.
-                var folder = LogPathTemplate.Expand(template, svc, env.Id, DateTime.Today)
-                                            .Replace("*", "Run" + RandomHex(8));
-                Directory.CreateDirectory(folder);
+                // ── 1. Metrics.log under ServiceTemplates path ────────────────
+                var metricsFolder = LogPathTemplate.Expand(template, svc, env.Id, DateTime.Today)
+                                                   .Replace("*", "Run" + RandomHex(8));
+                Directory.CreateDirectory(metricsFolder);
 
-                var target = new Target
+                var mt = new MetricsTarget
                 {
-                    FilePath   = Path.Combine(folder, fileName),
+                    FilePath   = Path.Combine(metricsFolder, metricsFile),
                     Server     = svc.HostName,
                     Pid        = svc.ProcessId,
                     StreamName = $"{svc.ServiceName}Stream-{env.Id}",
@@ -127,40 +199,75 @@ public sealed class TestLogGenerator : BackgroundService
                     Child      = 0,
                     ChildPeak  = Mb(500 + _rng.Next(0, 200)),
                 };
-                target.Peak = target.Current;
+                mt.Peak = mt.Current;
 
-                // Backfill lines from midnight (or process start) up to now at the write interval.
                 var now      = DateTime.Now;
-                var dayStart = now.Date;
-                var totalSec = (int)(now - dayStart).TotalSeconds;
+                var totalSec = (int)(now - now.Date).TotalSeconds;
                 var steps    = Math.Max(_gen.InitialLineCount, totalSec / Math.Max(1, _gen.WriteIntervalSeconds));
                 for (var k = steps; k >= 1; k--)
                 {
-                    Advance(target);
-                    WriteLine(target, now.AddSeconds(-(long)k * _gen.WriteIntervalSeconds));
+                    AdvanceMetrics(mt);
+                    WriteMetricsLine(mt, now.AddSeconds(-(long)k * _gen.WriteIntervalSeconds));
                 }
 
-                _targets.Add(target);
-                generated++;
+                _metricsTargets.Add(mt);
+                metricsGenerated++;
+
+                // ── 2. App.log under LogsFolder path ─────────────────────────
+                var logsRoot = _paths.LogsFolder;
+                if (!string.IsNullOrWhiteSpace(logsRoot))
+                {
+                    var appFolder = Path.Combine(
+                        logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase),
+                        DateTime.Today.ToString("yyyy-MM-dd"),
+                        svc.ServiceName);
+                    Directory.CreateDirectory(appFolder);
+
+                    var at = new AppLogTarget
+                    {
+                        FilePath = Path.Combine(appFolder, "App.log"),
+                        Server   = svc.HostName,
+                        Pid      = svc.ProcessId,
+                        Service  = svc.ServiceName,
+                    };
+
+                    // Dense backfill: ~1 line every 30 s from midnight to now.
+                    const int appIntervalSec = 30;
+                    var appSteps = totalSec / appIntervalSec;
+                    for (var k = appSteps; k >= 1; k--)
+                        WriteAppLine(at, now.AddSeconds(-(long)k * appIntervalSec));
+
+                    _appLogTargets.Add(at);
+                    appGenerated++;
+                }
             }
         }
 
         _log.LogInformation(
-            "TestLogGenerator: seeded {Generated} files, skipped {Skipped} services (template '{Template}', file '{File}').",
-            generated, skipped, template, fileName);
+            "TestLogGenerator: seeded {M} metrics files, {A} app-log files, skipped {S} services.",
+            metricsGenerated, appGenerated, skipped);
     }
 
     private void Tick()
     {
         var now = DateTime.Now;
-        foreach (var t in _targets)
+        foreach (var t in _metricsTargets)
         {
-            Advance(t);
-            WriteLine(t, now);
+            AdvanceMetrics(t);
+            WriteMetricsLine(t, now);
+        }
+        foreach (var t in _appLogTargets)
+        {
+            // Write 1-4 app log lines per tick to simulate burst activity.
+            var count = 1 + _rng.Next(0, 4);
+            for (var i = 0; i < count; i++)
+                WriteAppLine(t, now.AddSeconds(-_rng.NextDouble() * _gen.WriteIntervalSeconds));
         }
     }
 
-    private void Advance(Target t)
+    // ── Metrics helpers ───────────────────────────────────────────────────────
+
+    private void AdvanceMetrics(MetricsTarget t)
     {
         t.Current   = Math.Clamp(t.Current + Mb(_rng.Next(-20, 41)), Mb(50), Mb(2048));
         t.Peak      = Math.Max(t.Peak, t.Current);
@@ -168,7 +275,7 @@ public sealed class TestLogGenerator : BackgroundService
         t.ChildPeak = Math.Max(t.ChildPeak, t.Child);
     }
 
-    private void WriteLine(Target t, DateTime ts)
+    private void WriteMetricsLine(MetricsTarget t, DateTime ts)
     {
         var line =
             $"{ts:yyyy-MM-dd HH:mm:ss.ffff}|INFO|{t.Server}|{t.Pid}|{t.Thread}|" +
@@ -179,20 +286,93 @@ public sealed class TestLogGenerator : BackgroundService
             $"child peak usage: {t.ChildPeak}, " +
             $"Process start time \"{t.ProcStart:yyyy-MM-ddTHH:mm:ss.fffffff}Z\"|" +
             $"Axis.Streams.Core.Infrastructure.MetricsTrackerService.Start";
+        AppendLine(t.FilePath, line);
+    }
 
+    // ── App log helpers ───────────────────────────────────────────────────────
+
+    private void WriteAppLine(AppLogTarget t, DateTime ts)
+    {
+        // Weighted level distribution: 60% INFO, 20% DEBUG, 12% WARN, 8% ERROR
+        var roll = _rng.Next(100);
+        string level, message, caller;
+        IEnumerable<string>? extras = null;
+
+        if (roll < 60)
+        {
+            level   = "INFO";
+            message = Fill(Pick(InfoMessages), t);
+            caller  = Pick(Callers);
+        }
+        else if (roll < 80)
+        {
+            level   = "DEBUG";
+            message = Fill(Pick(DebugMessages), t);
+            caller  = Pick(Callers);
+        }
+        else if (roll < 92)
+        {
+            level   = "WARN";
+            message = Fill(Pick(WarnMessages), t);
+            caller  = Pick(Callers);
+        }
+        else
+        {
+            level   = "ERROR";
+            var errMsg = Fill(Pick(ErrorMessages), t);
+            var exType = Pick(ExceptionTypes);
+            var lineNo = 40 + _rng.Next(200);
+            message = errMsg;
+            caller  = Pick(Callers);
+            extras  =
+            [
+                $"   {exType}: {errMsg}",
+                $"   at {t.Service}.{caller}() in {t.Service}.cs:line {lineNo}",
+                $"   at System.Threading.Tasks.Task.Run(Func<Task> function)",
+            ];
+        }
+
+        var tid  = 10 + _rng.Next(90);
+        var main = $"{ts:yyyy-MM-dd HH:mm:ss.ffff}|{level}|{t.Server}|{t.Pid}|{tid}|{message}|{caller}";
+        var lines = extras is null
+            ? main
+            : main + "\n" + string.Join("\n", extras);
+
+        AppendLine(t.FilePath, lines);
+    }
+
+    private string Fill(string template, AppLogTarget t) =>
+        template
+            .Replace("{ms}",   (10 + _rng.Next(990)).ToString())
+            .Replace("{b}",    _rng.Next(50).ToString())
+            .Replace("{n}",    _rng.Next(1000).ToString())
+            .Replace("{host}", t.Server)
+            .Replace("{port}", "9092")
+            .Replace("{k}",    "key-" + _rng.Next(999))
+            .Replace("{t}",    "orders")
+            .Replace("{op}",   "db-write")
+            .Replace("{p}",    _rng.Next(4).ToString())
+            .Replace("{r}",    Pick(Resources))
+            .Replace("{m}",    "12")
+            .Replace("{c}",    Pick(Components))
+            .Replace("{dep}",  Pick(Components))
+            .Replace("{src}",  "appsettings.json")
+            .Replace("{id}",   RandomHex(8))
+            .Replace("{caller}", Pick(Callers));
+
+    private static void AppendLine(string path, string content)
+    {
         try
         {
-            // FileShare.ReadWrite|Delete so the monitoring reader never blocks the writer.
-            using var fs = new FileStream(t.FilePath, FileMode.Append, FileAccess.Write,
+            using var fs = new FileStream(path, FileMode.Append, FileAccess.Write,
                                           FileShare.ReadWrite | FileShare.Delete);
             using var sw = new StreamWriter(fs);
-            sw.WriteLine(line);
+            sw.WriteLine(content);
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "TestLogGenerator: failed writing {Path}", t.FilePath);
-        }
+        catch { /* best-effort */ }
     }
+
+    private T Pick<T>(T[] arr) => arr[_rng.Next(arr.Length)];
 
     private static long Mb(int mb) => (long)mb * 1024 * 1024;
 
