@@ -517,6 +517,7 @@
         if (_selectedPath is null) return;
 
         var path = _selectedPath; // capture — user may change selection while awaiting
+        _files.Clear();
         try
         {
             var serverTasks = _servers.Select(async server =>
