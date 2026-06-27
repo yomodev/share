@@ -5,7 +5,7 @@ LENGTH 136
 # Binary files are auto-detected and left untouched.
 * text=auto eol=crlf
 FILE .gitignore
-LENGTH 2075
+LENGTH 2084
 # ── .NET / MSBuild ────────────────────────────────────────────────────────────
 bin/
 obj/
@@ -54,14 +54,17 @@ desktop.ini
 
 # ── VS Code ───────────────────────────────────────────────────────────────────
 .vscode/
+.github/
 FILE NxtUI.sln
-LENGTH 4603
-
+LENGTH 4691
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.6.11828.311
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{11111111-1111-1111-1111-111111111111}"
+	ProjectSection(SolutionItems) = preProject
+		.gitignore = .gitignore
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{22222222-2222-2222-2222-222222222222}"
 EndProject
@@ -118,13 +121,13 @@ Global
 		{588283CB-E235-4D91-A208-B48C1145CEE0}.Release|x86.ActiveCfg = Release|Any CPU
 		{588283CB-E235-4D91-A208-B48C1145CEE0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {11111111-1111-1111-1111-111111111111}
 		{C2D3E4F5-A6B7-8901-CDEF-012345678901} = {11111111-1111-1111-1111-111111111111}
 		{588283CB-E235-4D91-A208-B48C1145CEE0} = {22222222-2222-2222-2222-222222222222}
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {65914923-6881-41D2-BEA9-ED56992F80B3}
@@ -11804,16 +11807,17 @@ public record MongoHealth
     public string?                     Error         { get; init; }
 }
 FILE src/NxtUI.Core/Models/HeartbeatDocument.cs
-LENGTH 605
+LENGTH 638
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace NxtUI.Models;
 
+[BsonIgnoreExtraElements]
 public class HeartbeatDocument
 {
     [BsonId]
-    public ObjectId Id { get; set; }
+    public required string Id { get; set; }
 
     [BsonElement("ServiceName")]
     public string ServiceName { get; set; } = string.Empty;
@@ -12631,7 +12635,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     }
 }
 FILE src/NxtUI.Core/Services/MongoHeartbeatService.cs
-LENGTH 1548
+LENGTH 1573
 using NxtUI.Configuration;
 using NxtUI.Models;
 using Microsoft.Extensions.Options;
@@ -12660,6 +12664,7 @@ public class MongoHeartbeatService : IHeartbeatService
         var docs = await collection
             .Find(Builders<HeartbeatDocument>.Filter.Empty)
             .SortByDescending(d => d.UpdatedDateTime)
+            .Limit(5000)
             .ToListAsync(ct);
 
         var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
@@ -15531,7 +15536,7 @@ LENGTH 15259
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 3394
+LENGTH 4648
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
 @inject IHeartbeatService HeartbeatSvc
@@ -15548,8 +15553,17 @@ LENGTH 3394
             <span class="bm-treemap-loading-label">Loading memory data…</span>
         </div>
     }
+    else if (_error is not null)
+    {
+        <div class="bm-treemap-error">
+            <MudIcon Icon="@Icons.Material.Outlined.ErrorOutline" Size="Size.Small" Class="bm-treemap-error-icon" />
+            <span class="bm-treemap-error-msg">@_error</span>
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
+                           Title="Retry" OnClick="RetryAsync" Class="bm-treemap-error-btn" />
+        </div>
+    }
     <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"
-         style="@(_loading ? "visibility:hidden" : "")"></div>
+         style="@(_loading || _error is not null ? "visibility:hidden" : "")"></div>
 </div>
 
 @code {
@@ -15559,20 +15573,28 @@ LENGTH 3394
     private IDisposable?     _sub;
     private bool             _dirty;
     private bool             _loading = true;
+    private string?          _error;
     private TreeRoot?        _treeData;
 
     private sealed record TreeRoot(string Name, List<TreeHost> Children);
     private sealed record TreeHost(string Name, List<TreeSvc>  Children);
     private sealed record TreeSvc (string Name, int Pid, double? Ram);
 
+    private string _subscribedEnv = string.Empty;
+
     protected override void OnInitialized()
     {
-        _sub = MetricsMonitor.Subscribe(Env);
         MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (Env == _subscribedEnv) return;
+
+        _sub?.Dispose();
+        _sub = MetricsMonitor.Subscribe(Env);
+        _subscribedEnv = Env;
+
         await LoadAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -15596,25 +15618,47 @@ LENGTH 3394
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+
             var hosts = services
-                .Where(s => s.IsOnline)
+                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
                 .GroupBy(s => s.HostName)
                 .Select(g =>
                 {
-                    var svcs = g.Select(s =>
-                    {
-                        var m   = MetricsMonitor.GetLatest(Env, s);
-                        double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
-                        return new TreeSvc(s.ServiceName, s.ProcessId, ram);
-                    }).ToList();
+                    var svcs = g
+                        .Select(s =>
+                        {
+                            var m   = MetricsMonitor.GetLatest(Env, s);
+                            double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
+                            return new TreeSvc(s.ServiceName, s.ProcessId, ram);
+                        })
+                        .OrderByDescending(s => s.Ram ?? 0)
+                        .Take(10)
+                        .ToList();
                     return new TreeHost(g.Key, svcs);
                 }).ToList();
 
             _treeData = hosts.Count > 0 ? new TreeRoot("root", hosts) : null;
         }
-        catch { _treeData = null; }
+        catch (Exception ex)
+        {
+            _treeData = null;
+            _error    = ex.Message;
+            _loading  = false;
+            return;
+        }
 
+        _error = null;
         _dirty = true;
+    }
+
+    private async Task RetryAsync()
+    {
+        _error   = null;
+        _loading = true;
+        StateHasChanged();
+        await LoadAsync();
+        StateHasChanged();
     }
 
     private async Task RenderAsync()
@@ -24686,7 +24730,7 @@ public class FilterParserTests
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 57888
+LENGTH 58430
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -26181,6 +26225,35 @@ html, body {
 .bm-treemap-loading-label {
     font-size: 12px;
     color: var(--mud-palette-text-secondary);
+}
+
+.bm-treemap-error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    z-index: 1;
+}
+
+.bm-treemap-error-icon {
+    color: var(--mud-palette-error);
+    flex-shrink: 0;
+}
+
+.bm-treemap-error-msg {
+    font-size: 12px;
+    color: var(--mud-palette-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bm-treemap-error-btn {
+    flex-shrink: 0;
+    color: var(--mud-palette-text-secondary) !important;
 }
 
 @keyframes bm-spin {

@@ -3,10 +3,11 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace NxtUI.Models;
 
+[BsonIgnoreExtraElements]
 public class HeartbeatDocument
 {
     [BsonId]
-    public ObjectId Id { get; set; }
+    public required string Id { get; set; }
 
     [BsonElement("ServiceName")]
     public string ServiceName { get; set; } = string.Empty;

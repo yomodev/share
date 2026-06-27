@@ -26,6 +26,7 @@ public class MongoHeartbeatService : IHeartbeatService
         var docs = await collection
             .Find(Builders<HeartbeatDocument>.Filter.Empty)
             .SortByDescending(d => d.UpdatedDateTime)
+            .Limit(5000)
             .ToListAsync(ct);
 
         var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
