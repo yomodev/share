@@ -7,7 +7,7 @@
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
 
     <!-- ── Cell header: always visible ───────────────────────────────────── -->
-    <div class="bm-lv-header @(IsSelected ? "bm-lv-header-selected" : "")">
+    <div class="bm-lv-header @(IsSelected && IsMultiPane ? "bm-lv-header-selected" : "")">
         @if (OnOpen.HasDelegate)
         {
             <MudTooltip Text="Open file… (Ctrl+O)">
@@ -177,7 +177,8 @@
     [Parameter] public string? Path       { get; set; }
     [Parameter] public string  Env        { get; set; } = string.Empty;
     [Parameter] public string? FileName   { get; set; }
-    [Parameter] public bool    IsSelected { get; set; }
+    [Parameter] public bool    IsSelected  { get; set; }
+    [Parameter] public bool    IsMultiPane { get; set; }
 
     [Parameter] public EventCallback OnOpen  { get; set; }
     [Parameter] public EventCallback OnDupH  { get; set; }
