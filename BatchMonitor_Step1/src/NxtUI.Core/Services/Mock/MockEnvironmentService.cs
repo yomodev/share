@@ -2,7 +2,7 @@ using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Models;
 
-namespace NxtUI.Core.Services;
+namespace NxtUI.Core.Services.Mock;
 
 public sealed class MockEnvironmentService : IEnvironmentService
 {

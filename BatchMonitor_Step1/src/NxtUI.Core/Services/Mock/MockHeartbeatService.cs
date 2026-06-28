@@ -2,7 +2,7 @@ using NxtUI.Core.Models;
 using NxtUI.Models;
 using NxtUI.Core.Services;
 
-namespace NxtUI.Core.Services;
+namespace NxtUI.Core.Services.Mock;
 
 public class MockHeartbeatService : IHeartbeatService
 {

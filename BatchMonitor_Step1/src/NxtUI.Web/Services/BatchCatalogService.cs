@@ -1,9 +1,7 @@
 using NxtUI.Core.Services;
+using NxtUI.Models;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
-using NxtUI.Models;
-using NxtUI.Services;
 
 namespace NxtUI.Web.Services;
 

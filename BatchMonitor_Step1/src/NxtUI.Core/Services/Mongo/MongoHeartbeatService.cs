@@ -1,26 +1,24 @@
-using NxtUI.Configuration;
-using NxtUI.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
+using NxtUI.Configuration;
+using NxtUI.Models;
 
-namespace NxtUI.Core.Services;
+namespace NxtUI.Core.Services.Mongo;
 
 public class MongoHeartbeatService : IHeartbeatService
 {
-    private readonly MongoSettings _mongo;
     private readonly HeartbeatSettings _heartbeat;
-    private readonly MongoClient _client;
+    private readonly MongoConnection   _connection;
 
-    public MongoHeartbeatService(IOptions<MongoSettings> mongo, IOptions<HeartbeatSettings> heartbeat)
+    public MongoHeartbeatService(MongoConnection connection, IOptions<HeartbeatSettings> heartbeat)
     {
-        _mongo     = mongo.Value;
-        _heartbeat = heartbeat.Value;
-        _client    = new MongoClient(_mongo.ConnectionString);
+        _connection = connection;
+        _heartbeat  = heartbeat.Value;
     }
 
     public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
     {
-        var db         = _client.GetDatabase(_mongo.GetDatabaseName(env));
+        var db         = _connection.GetDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
         var docs = await collection

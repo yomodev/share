@@ -1,10 +1,10 @@
-using NxtUI.Configuration;
-using NxtUI.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NxtUI.Configuration;
+using NxtUI.Models;
 
-namespace NxtUI.Core.Services;
+namespace NxtUI.Core.Services.Mongo;
 
 /// <summary>
 /// Real MongoDB implementation of <see cref="IRunService"/>.
@@ -13,20 +13,20 @@ namespace NxtUI.Core.Services;
 /// </summary>
 public class MongoRunService : IRunService
 {
-    private readonly MongoSettings _settings;
-    private readonly MongoClient _client;
+    private readonly MongoSettings  _settings;
+    private readonly MongoConnection _connection;
 
-    public MongoRunService(IOptions<MongoSettings> settings)
+    public MongoRunService(MongoConnection connection, IOptions<MongoSettings> settings)
     {
-        _settings = settings.Value;
-        _client   = new MongoClient(_settings.ConnectionString);
+        _connection = connection;
+        _settings   = settings.Value;
     }
 
     public async Task<List<RunSummary>> GetRunsAsync(
         string env, DateTime before, int count,
         RunFilter? filter = null, CancellationToken ct = default)
     {
-        var db         = _client.GetDatabase(_settings.GetDatabaseName(env));
+        var db         = _connection.GetDatabase(env);
         var collection = db.GetCollection<BsonDocument>(_settings.PerformanceTrackerCollection);
 
         // Build filter — adapt field names to match your actual MongoDB schema

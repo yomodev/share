@@ -1,5 +1,7 @@
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
+using NxtUI.Core.Services.Mock;
+using NxtUI.Core.Services.Mongo;
 using NxtUI.Hubs;
 using NxtUI.Services;
 using NxtUI.Web.Services;
@@ -29,6 +31,12 @@ public class Program
 
         builder.Services.Configure<TestLogGeneratorSettings>(
             builder.Configuration.GetSection(TestLogGeneratorSettings.SectionName));
+
+        builder.Services.Configure<KafkaSettings>(
+            builder.Configuration.GetSection(KafkaSettings.SectionName));
+
+        // ── Connection factories (singletons; swap services below to use these) ──
+        builder.Services.AddSingleton<MongoConnection>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
