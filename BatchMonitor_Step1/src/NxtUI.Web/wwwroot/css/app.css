@@ -1328,9 +1328,18 @@ html, body {
 /* Auto-width: size to the longest option, not a fixed px value */
 .bm-mongo-db-select,
 .bm-mongo-db-select .mud-form-control { width: fit-content; min-width: 80px; }
-/* Font only — no height override, let MudBlazor default height apply so it matches the adjacent FilterBox */
-.bm-mongo-db-select .mud-input-root,
-.bm-mongo-db-select .mud-select-input { font-size: 14px !important; }
+/* Font + vertical centering for the DB select value */
+.bm-mongo-db-select .mud-input-root {
+    font-size: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+.bm-mongo-db-select .mud-select-input {
+    font-size: 14px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    line-height: normal !important;
+}
 /* Dropdown popover — no word-wrap, compact item height */
 .bm-mongo-db-popover .mud-list-item {
     white-space: nowrap !important;
