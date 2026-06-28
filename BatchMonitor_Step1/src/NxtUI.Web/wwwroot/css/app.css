@@ -248,6 +248,10 @@ html, body {
     justify-content: flex-start;
     padding: 6px 8px;
 }
+.bm-env-selector--mini {
+    justify-content: center;
+    padding: 6px 0;
+}
 
 /* Menu item: badge + label side by side */
 .bm-env-menu-item {

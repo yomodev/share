@@ -86,7 +86,7 @@
         <div class="bm-sidebar-bottom">
 
             <!-- Environment selector — badge-only trigger, menu lists all envs -->
-            <div class="bm-env-selector">
+            <div class="bm-env-selector @(_drawerOpen ? "" : "bm-env-selector--mini")">
                 <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true">
                     <ActivatorContent>
                         <span class="bm-env-badge bm-env-badge-btn"
