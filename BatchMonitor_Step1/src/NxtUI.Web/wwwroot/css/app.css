@@ -915,18 +915,15 @@ html, body {
 .bm-lb-toolbar-right > .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
 /* ── Reduce FilterBox height to match icon buttons (~30 px) ──────────── */
-/* Drive height via padding on the native <input>, not via height on the  */
-/* container (which clips MudBlazor's absolutely-positioned border).      */
-.bm-filter-box .mud-input-root { min-height: 30px; }
-.bm-filter-box input.mud-input {
-    padding-top: 3px;
-    padding-bottom: 3px;
-    font-size: 12px;
-    line-height: 1.3;
-}
+/* !important needed: MudBlazor sets min-height and padding with higher   */
+/* specificity on margin-dense variants.                                  */
+.bm-filter-box .mud-input-root         { min-height: 30px !important; }
+.bm-filter-box input.mud-input         { padding-top: 3px !important; padding-bottom: 3px !important; }
+.bm-filter-box .mud-input-root,
+.bm-filter-box input.mud-input         { font-size: 12px !important; }
 /* Adornment icons — search and clear × */
-.bm-filter-box .mud-input-adornment .mud-icon-root { font-size: 16px; width: 16px; height: 16px; }
-.bm-filter-box .mud-input-clear-button { padding: 2px; }
+.bm-filter-box .mud-input-adornment .mud-icon-root { font-size: 16px !important; width: 16px !important; height: 16px !important; }
+.bm-filter-box .mud-input-clear-button             { padding: 2px !important; }
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
