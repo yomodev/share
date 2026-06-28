@@ -264,6 +264,9 @@ html, body {
 .bm-env-selector--mini .mud-menu-activator,
 .bm-env-selector--mini .bm-env-badge-btn { width: auto; justify-content: center; }
 
+/* Env menu popover — scrollable when many environments */
+.bm-env-menu-popover .mud-list { max-height: 320px; overflow-y: auto; }
+
 /* Menu item: badge + label side by side */
 .bm-env-menu-item {
     display: flex;

@@ -87,7 +87,7 @@
 
             <!-- Environment selector — badge-only trigger, menu lists all envs -->
             <div class="bm-env-selector @(_drawerOpen ? "" : "bm-env-selector--mini")">
-                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true">
+                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                     <ActivatorContent>
                         <span class="bm-env-badge bm-env-badge-btn"
                               style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
