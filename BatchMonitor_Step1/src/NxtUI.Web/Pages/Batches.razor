@@ -103,8 +103,75 @@
                             <div class="bm-batch-params-grid">
                                 @foreach (var p in _selected.Parameters)
                                 {
+                                    var pk = p.Key;
                                     <div class="bm-batch-param-row">
-                                        @RenderParam(p)
+                                        @if (p.Type == "boolean")
+                                        {
+                                            <MudSwitch T="bool"
+                                                       Label="@p.Label"
+                                                       Value="@_boolValues.GetValueOrDefault(pk)"
+                                                       ValueChanged="@(v => { _boolValues[pk] = v; })"
+                                                       Color="Color.Primary"
+                                                       Class="bm-batch-switch"
+                                                       title="@p.Description" />
+                                        }
+                                        else if (p.Type == "select")
+                                        {
+                                            <MudSelect T="string"
+                                                       Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                       Value="@_strValues.GetValueOrDefault(pk, "")"
+                                                       ValueChanged="@(v => { _strValues[pk] = v; })"
+                                                       Variant="Variant.Outlined"
+                                                       Margin="Margin.Dense"
+                                                       Dense="true"
+                                                       HelperText="@p.Description">
+                                                @foreach (var opt in p.Options)
+                                                {
+                                                    <MudSelectItem T="string" Value="@opt">@opt</MudSelectItem>
+                                                }
+                                            </MudSelect>
+                                        }
+                                        else if (p.Type == "multiselect")
+                                        {
+                                            <MudSelect T="string"
+                                                       Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                       SelectedValues="@(_multiValues.GetValueOrDefault(pk, []))"
+                                                       SelectedValuesChanged="@((IReadOnlyCollection<string> v) => { _multiValues[pk] = v; })"
+                                                       MultiSelection="true"
+                                                       Variant="Variant.Outlined"
+                                                       Margin="Margin.Dense"
+                                                       Dense="true"
+                                                       HelperText="@p.Description">
+                                                @foreach (var opt in p.Options)
+                                                {
+                                                    <MudSelectItem T="string" Value="@opt">@opt</MudSelectItem>
+                                                }
+                                            </MudSelect>
+                                        }
+                                        else if (p.Type == "number")
+                                        {
+                                            <MudNumericField T="double"
+                                                             Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                             Value="@(double.TryParse(_strValues.GetValueOrDefault(pk, "0"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var _n) ? _n : 0d)"
+                                                             ValueChanged="@((double v) => { _strValues[pk] = v.ToString(System.Globalization.CultureInfo.InvariantCulture); })"
+                                                             Variant="Variant.Outlined"
+                                                             Margin="Margin.Dense"
+                                                             Min="@(p.Min ?? double.MinValue)"
+                                                             Max="@(p.Max ?? double.MaxValue)"
+                                                             HelperText="@p.Description" />
+                                        }
+                                        else
+                                        {
+                                            <MudTextField T="string"
+                                                          Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                          Value="@_strValues.GetValueOrDefault(pk, "")"
+                                                          ValueChanged="@(v => { _strValues[pk] = v ?? ""; })"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          Placeholder="@(p.Type == "date" ? "YYYY-MM-DD" : "")"
+                                                          HelperText="@p.Description" />
+                                        }
                                     </div>
                                 }
                             </div>
@@ -274,121 +341,4 @@
             Snackbar.Add(_lastResult.Error ?? "Trigger failed", Severity.Error);
     }
 
-    // ── Dynamic param rendering ───────────────────────────────────────────────
-
-    private RenderFragment RenderParam(BatchParameter p) => builder =>
-    {
-        switch (p.Type)
-        {
-            case "boolean":
-                builder.OpenComponent<MudSwitch<bool>>(0);
-                builder.AddAttribute(1, "Label", p.Label);
-                builder.AddAttribute(2, "Value", _boolValues.GetValueOrDefault(p.Key));
-                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<bool>(this, v =>
-                {
-                    _boolValues[p.Key] = v;
-                    StateHasChanged();
-                }));
-                builder.AddAttribute(4, "Color", Color.Primary);
-                builder.AddAttribute(5, "Class", "bm-batch-switch");
-                if (!string.IsNullOrEmpty(p.Description))
-                    builder.AddAttribute(6, "title", p.Description);
-                builder.CloseComponent();
-                break;
-
-            case "select":
-                builder.OpenComponent<MudSelect<string>>(0);
-                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
-                builder.AddAttribute(2, "Value", _strValues.GetValueOrDefault(p.Key, ""));
-                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<string>(this, v =>
-                {
-                    _strValues[p.Key] = v;
-                    StateHasChanged();
-                }));
-                builder.AddAttribute(4, "Variant", Variant.Outlined);
-                builder.AddAttribute(5, "Margin", Margin.Dense);
-                builder.AddAttribute(6, "Dense", true);
-                if (!string.IsNullOrEmpty(p.Description))
-                    builder.AddAttribute(7, "HelperText", p.Description);
-                builder.AddAttribute(8, "ChildContent", (RenderFragment)(cb =>
-                {
-                    foreach (var opt in p.Options)
-                    {
-                        cb.OpenComponent<MudSelectItem<string>>(0);
-                        cb.AddAttribute(1, "Value", opt);
-                        cb.CloseComponent();
-                    }
-                }));
-                builder.CloseComponent();
-                break;
-
-            case "multiselect":
-                builder.OpenComponent<MudSelect<string>>(0);
-                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
-                builder.AddAttribute(2, "SelectedValues", _multiValues.GetValueOrDefault(p.Key, []));
-                builder.AddAttribute(3, "SelectedValuesChanged",
-                    EventCallback.Factory.Create<IEnumerable<string>>(this, v =>
-                    {
-                        _multiValues[p.Key] = v.ToList();
-                        StateHasChanged();
-                    }));
-                builder.AddAttribute(4, "MultiSelection", true);
-                builder.AddAttribute(5, "Variant", Variant.Outlined);
-                builder.AddAttribute(6, "Margin", Margin.Dense);
-                builder.AddAttribute(7, "Dense", true);
-                if (!string.IsNullOrEmpty(p.Description))
-                    builder.AddAttribute(8, "HelperText", p.Description);
-                builder.AddAttribute(9, "ChildContent", (RenderFragment)(cb =>
-                {
-                    foreach (var opt in p.Options)
-                    {
-                        cb.OpenComponent<MudSelectItem<string>>(0);
-                        cb.AddAttribute(1, "Value", opt);
-                        cb.CloseComponent();
-                    }
-                }));
-                builder.CloseComponent();
-                break;
-
-            case "number":
-                builder.OpenComponent<MudNumericField<double>>(0);
-                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
-                builder.AddAttribute(2, "Value",
-                    double.TryParse(_strValues.GetValueOrDefault(p.Key, "0"),
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0d);
-                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<double>(this, v =>
-                {
-                    _strValues[p.Key] = v.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    StateHasChanged();
-                }));
-                builder.AddAttribute(4, "Variant", Variant.Outlined);
-                builder.AddAttribute(5, "Margin", Margin.Dense);
-                if (p.Min.HasValue) builder.AddAttribute(6, "Min", p.Min.Value);
-                if (p.Max.HasValue) builder.AddAttribute(7, "Max", p.Max.Value);
-                if (!string.IsNullOrEmpty(p.Description))
-                    builder.AddAttribute(8, "HelperText", p.Description);
-                builder.CloseComponent();
-                break;
-
-            default: // string | date
-                builder.OpenComponent<MudTextField<string>>(0);
-                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
-                builder.AddAttribute(2, "Value", _strValues.GetValueOrDefault(p.Key, ""));
-                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<string>(this, v =>
-                {
-                    _strValues[p.Key] = v ?? "";
-                    StateHasChanged();
-                }));
-                builder.AddAttribute(4, "Variant", Variant.Outlined);
-                builder.AddAttribute(5, "Margin", Margin.Dense);
-                builder.AddAttribute(6, "Immediate", true);
-                if (p.Type == "date")
-                    builder.AddAttribute(7, "Placeholder", "YYYY-MM-DD");
-                if (!string.IsNullOrEmpty(p.Description))
-                    builder.AddAttribute(8, "HelperText", p.Description);
-                builder.CloseComponent();
-                break;
-        }
-    };
 }
