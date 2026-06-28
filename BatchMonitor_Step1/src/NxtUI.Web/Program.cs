@@ -78,7 +78,7 @@ public class Program
         builder.Services.AddSingleton<InfraHealthCache>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<InfraHealthCache>());
         builder.Services.AddHttpClient();
-        builder.Services.AddSingleton<IBatchCatalogService, NxtUI.Web.Services.BatchCatalogService>();
+        builder.Services.AddSingleton<IBatchCatalogService, BatchCatalogService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).

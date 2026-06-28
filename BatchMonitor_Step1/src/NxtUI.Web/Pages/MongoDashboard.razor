@@ -55,7 +55,7 @@
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="_loading"
+                           Disabled="@_result.IsLoading"
                            OnClick="LoadCollectionsAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -63,11 +63,7 @@
 
     <!-- Table -->
     <div class="bm-table-wrap">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
                   Dense="true"
@@ -130,6 +126,7 @@
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- Footer -->
@@ -168,7 +165,7 @@
     private string  _selectedDb       = string.Empty;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
-    private bool    _loading          = true;
+    private Result<List<MongoCollectionSummary>> _result;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
@@ -189,7 +186,8 @@
             _selectedDb = _databases[0].Name;
             await LoadCollectionsAsync();
         }
-        else { _loading = false; }
+        // empty env: leave result in loading state with empty list
+        else { _result = Result<List<MongoCollectionSummary>>.Ok([]); }
     }
 
     private async Task OnDbChanged(string db)
@@ -200,16 +198,17 @@
 
     private async Task LoadCollectionsAsync()
     {
-        _loading = true;
+        _result = default; // loading
         StateHasChanged();
         try
         {
             var cols = await MongoSvc.GetCollectionsAsync(Environment, _selectedDb, _cts.Token);
             _all = cols.ToList();
             ApplyFilter();
+            _result = Result<List<MongoCollectionSummary>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
     }
 
     private void OnFilterChanged(string text)

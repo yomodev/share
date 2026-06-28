@@ -19,7 +19,7 @@
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="_loading"
+                           Disabled="@_result.IsLoading"
                            OnClick="LoadAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -27,11 +27,7 @@
 
     <!-- Table -->
     <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
                   Dense="true"
@@ -83,6 +79,7 @@
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- Detail panel -->
@@ -97,15 +94,10 @@
                 </span>
                 <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                Size="Size.Small"
-                               OnClick="@(() => { _selected = null; _topicLags = null; })" />
+                               OnClick="@(() => { _selected = null; _detailResult = default; })" />
             </div>
             <div class="bm-inspector-detail-body">
-                @if (_loadingDetail)
-                {
-                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-                }
-                else if (_topicLags is not null)
-                {
+                <AsyncData Result="_detailResult" Context="lags">
                     <div class="bm-inspector-section-label">Subscribed topics</div>
                     <table class="bm-kafka-info-table" style="width:100%;">
                         <thead>
@@ -116,7 +108,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach (var t in _topicLags)
+                            @foreach (var t in lags)
                             {
                                 <tr>
                                     <td class="bm-kafka-topic-name">@t.TopicName</td>
@@ -133,7 +125,7 @@
                             }
                         </tbody>
                     </table>
-                }
+                </AsyncData>
             </div>
         </div>
     }
@@ -145,9 +137,9 @@
 
     private List<KafkaConsumerGroupOverview>  _all      = new();
     private List<KafkaConsumerGroupOverview>  _filtered = new();
-    private KafkaConsumerGroupOverview?       _selected = null;
-    private List<KafkaGroupTopicLag>?         _topicLags    = null;
-    private bool _loading = true, _loadingDetail = false;
+    private KafkaConsumerGroupOverview?              _selected = null;
+    private Result<List<KafkaConsumerGroupOverview>> _result;
+    private Result<List<KafkaGroupTopicLag>>         _detailResult;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
     private CancellationTokenSource _cts = new();
@@ -171,18 +163,19 @@
 
     private async Task LoadAsync()
     {
-        _loading = true;
-        _selected = null;
-        _topicLags = null;
+        _result       = default; // loading
+        _selected     = null;
+        _detailResult = default;
         StateHasChanged();
         try
         {
             var groups = await KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
             _all = groups.ToList();
             ApplyFilter();
+            _result = Result<List<KafkaConsumerGroupOverview>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
     }
 
     private void OnFilterChanged(string text)
@@ -206,22 +199,22 @@
     {
         if (group is null || ReferenceEquals(_selected, group))
         {
-            _selected  = null;
-            _topicLags = null;
+            _selected     = null;
+            _detailResult = default;
             StateHasChanged();
             return;
         }
-        _selected      = group;
-        _topicLags     = null;
-        _loadingDetail = true;
+        _selected     = group;
+        _detailResult = default; // loading
         StateHasChanged();
         try
         {
-            var lags   = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
-            _topicLags = lags.ToList();
+            var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+            _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
         }
         catch (OperationCanceledException) { }
-        finally { _loadingDetail = false; StateHasChanged(); }
+        catch (Exception ex) { _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message); }
+        StateHasChanged();
     }
 
     private static Color StateColor(string state) => state switch

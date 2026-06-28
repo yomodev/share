@@ -1,0 +1,20 @@
+@namespace NxtUI.Components
+@typeparam T
+
+@if (Result.IsLoading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+}
+else if (Result.IsFailed)
+{
+    <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@Result.Error</MudAlert>
+}
+else if (Result.IsOk)
+{
+    @ChildContent(Result.Value)
+}
+
+@code {
+    [Parameter, EditorRequired] public Result<T> Result { get; set; }
+    [Parameter, EditorRequired] public RenderFragment<T> ChildContent { get; set; } = null!;
+}

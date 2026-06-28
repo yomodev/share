@@ -26,11 +26,7 @@
 
     <!-- ── Table ─────────────────────────────────────────────────────── -->
     <div class="bm-table-wrap">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="RunSummary"
                   Items="@_paged"
                   Dense="true"
@@ -122,6 +118,7 @@
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- ── Footer: count + rows per page + pagination ────────────────── -->
@@ -162,7 +159,7 @@
 
     private int _page     = 1;
     private int _pageSize = 25;
-    private bool _loading = false;
+    private Result<List<RunSummary>> _result;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
 
@@ -189,22 +186,19 @@
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _result = default; // loading
         StateHasChanged();
         try
         {
             _all = await RunService.GetRunsAsync(
                 Environment, DateTime.UtcNow, 200, ct: _cts.Token);
             ApplyFilter();
+            _result = Result<List<RunSummary>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load runs: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _loading = false;
+            _result = Result<List<RunSummary>>.Fail(ex.Message);
         }
     }
 
