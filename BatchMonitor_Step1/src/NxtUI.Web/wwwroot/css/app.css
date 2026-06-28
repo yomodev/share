@@ -917,38 +917,39 @@ html, body {
 .bm-svc-toolbar-left > .bm-filter-box,
 .bm-lb-toolbar-right > .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
-/* ── FilterBox compact size — same look as the LogViewer toolbar ──────── */
-/* Mirrors .bm-lv-toolbar-sm from log-viewer.css, scoped to the standard  */
-/* toolbar containers. The LogViewer is intentionally excluded (it already */
-/* has its own working compact CSS).                                        */
-.bm-batch-toolbar    .bm-filter-box .mud-input-root,
-.bm-svc-toolbar-left .bm-filter-box .mud-input-root,
-.bm-lb-toolbar-right .bm-filter-box .mud-input-root {
+/* ── Compact text inputs in standard toolbars ────────────────────────── */
+/* Applied at the toolbar level so every MudTextField/FilterBox inside    */
+/* automatically matches — no per-control rules needed.                   */
+/* bm-lb-filter-toolbar covers the whole LogBrowser toolbar row           */
+/* (both the filename glob input and the content FilterBox).              */
+.bm-batch-toolbar    .mud-input-root,
+.bm-svc-toolbar-left .mud-input-root,
+.bm-lb-filter-toolbar .mud-input-root {
     font-size: 12px !important;
     min-height: 32px !important;
     height: 32px !important;
 }
-.bm-batch-toolbar    .bm-filter-box .mud-input-slot,
-.bm-svc-toolbar-left .bm-filter-box .mud-input-slot,
-.bm-lb-toolbar-right .bm-filter-box .mud-input-slot {
+.bm-batch-toolbar    .mud-input-slot,
+.bm-svc-toolbar-left .mud-input-slot,
+.bm-lb-filter-toolbar .mud-input-slot {
     min-height: 32px !important;
     height: 32px !important;
     padding-top: 2px !important;
     padding-bottom: 2px !important;
 }
-.bm-batch-toolbar    .bm-filter-box input,
-.bm-svc-toolbar-left .bm-filter-box input,
-.bm-lb-toolbar-right .bm-filter-box input {
+.bm-batch-toolbar    input,
+.bm-svc-toolbar-left input,
+.bm-lb-filter-toolbar input {
     font-size: 12px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
-.bm-batch-toolbar    .bm-filter-box .mud-input-adornment .mud-icon-root,
-.bm-svc-toolbar-left .bm-filter-box .mud-input-adornment .mud-icon-root,
-.bm-lb-toolbar-right .bm-filter-box .mud-input-adornment .mud-icon-root,
-.bm-batch-toolbar    .bm-filter-box .mud-input-adornment .mud-button-root,
-.bm-svc-toolbar-left .bm-filter-box .mud-input-adornment .mud-button-root,
-.bm-lb-toolbar-right .bm-filter-box .mud-input-adornment .mud-button-root {
+.bm-batch-toolbar    .mud-input-adornment .mud-icon-root,
+.bm-svc-toolbar-left .mud-input-adornment .mud-icon-root,
+.bm-lb-filter-toolbar .mud-input-adornment .mud-icon-root,
+.bm-batch-toolbar    .mud-input-adornment .mud-button-root,
+.bm-svc-toolbar-left .mud-input-adornment .mud-button-root,
+.bm-lb-filter-toolbar .mud-input-adornment .mud-button-root {
     font-size: 16px !important;
     width: 20px !important;
     height: 20px !important;
