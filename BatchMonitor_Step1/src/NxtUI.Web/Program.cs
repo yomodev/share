@@ -55,8 +55,7 @@ public class Program
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
-        builder.Services.AddSingleton<IEnvironmentRegistry, EnvironmentRegistry>();
-        builder.Services.AddSingleton<IServerRegistry, ServerRegistry>();
+        builder.Services.AddSingleton<IEnvironmentService, EnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();

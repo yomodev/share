@@ -30,4 +30,7 @@ public class EnvironmentDefinition
 
     /// <summary>Tier name used to derive badge colour: Development | UAT | Staging | Production.</summary>
     public string Tier { get; set; } = string.Empty;
+
+    /// <summary>Hostnames of servers belonging to this environment.</summary>
+    public List<string> Servers { get; set; } = [];
 }

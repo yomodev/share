@@ -4,16 +4,8 @@ using NxtUI.Models;
 
 namespace NxtUI.Core.Services;
 
-/// <summary>
-/// Default <see cref="IEnvironmentRegistry"/> — reads from <c>App:Environments</c>
-/// in configuration. Each environment is assigned a badge colour by hashing its id
-/// against a palette of MudBlazor CSS variable pairs, so badges adapt to the active
-/// theme and new environments get a colour automatically.
-/// </summary>
-public sealed class EnvironmentRegistry : IEnvironmentRegistry
+public sealed class EnvironmentService : IEnvironmentService
 {
-    // Each entry is (background CSS, text CSS) using MudBlazor palette variables.
-    // Pairs are ordered for maximum visual distinction between consecutive entries.
     private static readonly (string Bg, string Text)[] Palette =
     [
         ("var(--mud-palette-primary)",          "var(--mud-palette-primary-text)"),
@@ -35,29 +27,36 @@ public sealed class EnvironmentRegistry : IEnvironmentRegistry
     ];
 
     private readonly IReadOnlyList<EnvironmentInfo> _environments;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _servers;
 
-    public EnvironmentRegistry(IOptions<AppSettings> settings)
+    public EnvironmentService(IOptions<AppSettings> settings)
     {
-        _environments = settings.Value.Environments
-            .Select(e =>
+        var envs = settings.Value.Environments;
+
+        _environments = envs.Select(e =>
+        {
+            var (bg, text) = PickPair(e.Id);
+            return new EnvironmentInfo
             {
-                var (bg, text) = PickPair(e.Id);
-                return new EnvironmentInfo
-                {
-                    Id             = e.Id,
-                    Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
-                    Tier           = e.Tier,
-                    BadgeColor     = bg,
-                    BadgeTextColor = text,
-                };
-            })
-            .ToList();
+                Id             = e.Id,
+                Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
+                Tier           = e.Tier,
+                BadgeColor     = bg,
+                BadgeTextColor = text,
+            };
+        }).ToList();
+
+        _servers = envs.ToDictionary(
+            e => e.Id,
+            e => (IReadOnlyList<string>)e.Servers.AsReadOnly(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyList<EnvironmentInfo> GetAll() => _environments;
-
-    public EnvironmentInfo? Find(string id) =>
-        _environments.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public IReadOnlyList<EnvironmentInfo> GetAll()    => _environments;
+    public EnvironmentInfo? GetById(string id)        => _environments.FirstOrDefault(e =>
+        e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public IReadOnlyList<string> GetServers(string environmentId) =>
+        _servers.TryGetValue(environmentId, out var list) ? list : [];
 
     private static (string Bg, string Text) PickPair(string id)
     {

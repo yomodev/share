@@ -6,8 +6,7 @@
 @using NxtUI.Filtering
 @using Microsoft.Extensions.Options
 @inject ILogBrowserService BrowserSvc
-@inject IEnvironmentRegistry EnvironmentRegistry
-@inject IServerRegistry ServerRegistry
+@inject IEnvironmentService EnvironmentService
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
@@ -324,8 +323,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var envInfo = EnvironmentRegistry.Find(Env) ?? new EnvironmentInfo { Id = Env };
-        _servers    = (await ServerRegistry.GetServersAsync(envInfo, _cts.Token)).ToList();
+        _servers = EnvironmentService.GetServers(Env).ToList();
 
         try
         {

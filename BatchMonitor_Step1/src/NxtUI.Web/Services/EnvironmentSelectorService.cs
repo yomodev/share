@@ -6,29 +6,26 @@ using NxtUI.Models;
 namespace NxtUI.Services;
 
 /// <summary>
-/// Scoped service that owns the "next tab environment" selection.
+/// Scoped service that owns the "currently selected environment" for a Blazor circuit.
 /// Both the sidebar dropdown and the Home environment selector write to this;
 /// both read from it — bidirectional sync via <see cref="OnChange"/>.
 /// </summary>
 public class EnvironmentSelectorService
 {
-    private readonly IEnvironmentRegistry _registry;
+    private readonly IEnvironmentService _envService;
     private string _selectedId;
 
-    public EnvironmentSelectorService(IEnvironmentRegistry registry, IOptions<AppSettings> settings)
+    public EnvironmentSelectorService(IEnvironmentService envService, IOptions<AppSettings> settings)
     {
-        _registry   = registry;
+        _envService = envService;
         _selectedId = settings.Value.DefaultEnvironment;
 
-        // Fall back to first environment if default is not in the list
-        if (_registry.Find(_selectedId) is null && _registry.GetAll().Count > 0)
-            _selectedId = _registry.GetAll()[0].Id;
+        if (_envService.GetById(_selectedId) is null && _envService.GetAll().Count > 0)
+            _selectedId = _envService.GetAll()[0].Id;
     }
 
-    /// <summary>All configured environments.</summary>
-    public IReadOnlyList<EnvironmentInfo> Environments => _registry.GetAll();
+    public IReadOnlyList<EnvironmentInfo> Environments => _envService.GetAll();
 
-    /// <summary>Currently selected environment id.</summary>
     public string SelectedId
     {
         get => _selectedId;
@@ -40,9 +37,7 @@ public class EnvironmentSelectorService
         }
     }
 
-    /// <summary>The full <see cref="EnvironmentInfo"/> for the selected environment.</summary>
-    public EnvironmentInfo? Selected => _registry.Find(_selectedId);
+    public EnvironmentInfo? Selected => _envService.GetById(_selectedId);
 
-    /// <summary>Raised when the selection changes, so all subscribers can re-render.</summary>
     public event Action? OnChange;
 }
