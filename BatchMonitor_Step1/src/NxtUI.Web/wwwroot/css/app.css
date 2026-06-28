@@ -2033,6 +2033,10 @@ tr.bm-row-searching td:first-child {
 }
 
 /* ── Workspace split panels ──────────────────────────────────────────────── */
+.ws-leaf-selected {
+    box-shadow: inset 0 0 0 2px var(--mud-palette-primary);
+}
+
 .ws-handle-h {
     flex: 0 0 4px;
     cursor: col-resize;

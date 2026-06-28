@@ -1,40 +1,263 @@
 @using NxtUI.Models
-@implements IDisposable
+@inject IJSRuntime JS
+@inject TabService TabService
+@implements IAsyncDisposable
 
-<div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;">
-    <WorkspacePanel Node="@_root"
-                    OnSplit="OnSplit"
-                    OnClose="OnClose"
-                    OnRatioChanged="OnRatioChanged"
-                    OnPathSet="OnPathSet" />
+<div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;flex-direction:column;">
+
+    <!-- ── Workspace toolbar ──────────────────────────────────────────────── -->
+    <div class="bm-lv-toolbar" style="flex-shrink:0;gap:4px">
+        <MudTooltip Text="Open file…">
+            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                           Size="Size.Small"
+                           OnClick="OpenDialog" />
+        </MudTooltip>
+
+        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+        <MudTooltip Text="Duplicate right">
+            <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
+                           Size="Size.Small"
+                           Disabled="@(_selected is null)"
+                           OnClick="DupH" />
+        </MudTooltip>
+        <MudTooltip Text="Duplicate down">
+            <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
+                           Size="Size.Small"
+                           Disabled="@(_selected is null)"
+                           OnClick="DupV" />
+        </MudTooltip>
+
+        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+        <MudTooltip Text="Close panel">
+            <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                           Size="Size.Small"
+                           Disabled="@(_selected is null)"
+                           OnClick="CloseSelected" />
+        </MudTooltip>
+    </div>
+
+    <!-- ── Panel tree ─────────────────────────────────────────────────────── -->
+    <div style="flex:1;min-height:0;display:flex;overflow:hidden">
+        <WorkspacePanel Node="@_root"
+                        SelectedLeaf="@_selected"
+                        OnSelect="OnSelect"
+                        OnRatioChanged="OnRatioChanged"
+                        OnPathSet="OnPathSet" />
+    </div>
 </div>
+
+<!-- ── Open file dialog ───────────────────────────────────────────────────── -->
+<MudDialog @bind-IsVisible="_dialogOpen" Options="@_dialogOpts">
+    <TitleContent>Open log file</TitleContent>
+    <DialogContent>
+        <div style="display:flex;flex-direction:column;gap:16px;min-width:420px">
+            <MudTextField @bind-Value="_pendingPath"
+                          Label="File path"
+                          Placeholder="Paste path here…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Outlined.FolderOpen"
+                          AdornmentAriaLabel="Browse…"
+                          OnAdornmentClick="BrowseFile"
+                          OnKeyDown="OnPathKeyDown"
+                          @ref="_pathField" />
+
+            <!-- + shape placement buttons -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:6px;width:168px;align-self:center">
+                <!-- row 1 -->
+                <div></div>
+                <MudTooltip Text="Open above">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                                   Variant="Variant.Outlined" Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_pendingPath)"
+                                   OnClick="@(() => CommitPlacement(WsPlacement.Top))" />
+                </MudTooltip>
+                <div></div>
+                <!-- row 2 -->
+                <MudTooltip Text="Open to the left">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowLeft"
+                                   Variant="Variant.Outlined" Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_pendingPath)"
+                                   OnClick="@(() => CommitPlacement(WsPlacement.Left))" />
+                </MudTooltip>
+                <MudTooltip Text="Replace current panel">
+                    <MudIconButton Icon="@Icons.Material.Outlined.OpenInBrowser"
+                                   Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_pendingPath)"
+                                   OnClick="@(() => CommitPlacement(WsPlacement.Replace))" />
+                </MudTooltip>
+                <MudTooltip Text="Open to the right">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowRight"
+                                   Variant="Variant.Outlined" Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_pendingPath)"
+                                   OnClick="@(() => CommitPlacement(WsPlacement.Right))" />
+                </MudTooltip>
+                <!-- row 3 -->
+                <div></div>
+                <MudTooltip Text="Open below">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                                   Variant="Variant.Outlined" Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_pendingPath)"
+                                   OnClick="@(() => CommitPlacement(WsPlacement.Bottom))" />
+                </MudTooltip>
+                <div></div>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
 
 @code {
     [Parameter] public string? Path     { get; set; }
     [Parameter] public string  Env      { get; set; } = string.Empty;
     [Parameter] public string? FileName { get; set; }
 
-    private WsNode _root = null!;
+    private enum WsPlacement { Replace, Left, Right, Top, Bottom }
+
+    private WsNode  _root     = null!;
+    private WsLeaf? _selected;
+
+    // Dialog
+    private bool         _dialogOpen;
+    private string       _pendingPath = string.Empty;
+    private MudTextField<string>? _pathField;
+    private DotNetObjectReference<LogWorkspace>? _selfRef;
+
+    private static readonly DialogOptions _dialogOpts = new()
+    {
+        CloseButton         = true,
+        MaxWidth            = MaxWidth.Small,
+        FullWidth           = false,
+        CloseOnEscapeKey    = true,
+        BackdropClick       = true,
+    };
 
     protected override void OnInitialized()
     {
-        _root = new WsLeaf(Path, Env, FileName);
+        var leaf = new WsLeaf(Path, Env, FileName);
+        _root     = leaf;
+        _selected = leaf;
     }
 
-    private void OnSplit((WsLeaf leaf, WsDir dir) args)
+    // ── Selection ─────────────────────────────────────────────────────────
+
+    private void OnSelect(WsLeaf leaf)
     {
-        var sibling = new WsLeaf(null, args.leaf.Env);
-        _root = _root.Replace(args.leaf, new WsSplit(args.dir, 0.5, args.leaf, sibling));
+        _selected = leaf;
         StateHasChanged();
     }
 
-    private void OnClose(WsLeaf leaf)
+    // ── Toolbar actions ───────────────────────────────────────────────────
+
+    private void DupH() => Duplicate(WsDir.H);
+    private void DupV() => Duplicate(WsDir.V);
+
+    private void Duplicate(WsDir dir)
     {
-        var next = _root.Remove(leaf);
-        if (next is null) return; // can't close the last panel
-        _root = next;
+        if (_selected is null) return;
+        var clone   = new WsLeaf(_selected.Path, _selected.Env, _selected.FileName);
+        var split   = new WsSplit(dir, 0.5, _selected, clone);
+        _root       = _root.Replace(_selected, split);
+        _selected   = clone;
         StateHasChanged();
     }
+
+    private void CloseSelected()
+    {
+        if (_selected is null) return;
+
+        // Last panel — close the tab/page
+        if (_root is WsLeaf)
+        {
+            if (TabService.ActiveTab is { } tab)
+                TabService.Close(tab.Id);
+            return;
+        }
+
+        // Pick a sibling to select after removal
+        var sibling = _root.FindLeaf(l => !ReferenceEquals(l, _selected));
+        var next    = _root.Remove(_selected);
+        if (next is null) return;
+        _root     = next;
+        _selected = sibling;
+        StateHasChanged();
+    }
+
+    // ── Open dialog ───────────────────────────────────────────────────────
+
+    private async Task OpenDialog()
+    {
+        _pendingPath = string.Empty;
+        _dialogOpen  = true;
+        StateHasChanged();
+        await Task.Yield();
+        if (_pathField is not null)
+            await _pathField.FocusAsync();
+    }
+
+    private async Task BrowseFile()
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmOpenLocalLogFile", _selfRef);
+    }
+
+    [JSInvokable]
+    public void OnLocalFileOpened(string key, string filename)
+    {
+        InvokeAsync(() =>
+        {
+            _pendingPath = "local:" + key;
+            StateHasChanged();
+        });
+    }
+
+    private void OnPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") CommitPlacement(WsPlacement.Replace);
+    }
+
+    private void CommitPlacement(WsPlacement placement)
+    {
+        var path = _pendingPath.Trim();
+        if (string.IsNullOrEmpty(path) || _selected is null) return;
+
+        var fileName = System.IO.Path.GetFileName(path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : path;
+
+        switch (placement)
+        {
+            case WsPlacement.Replace:
+                _selected.Path     = path;
+                _selected.FileName = fileName;
+                break;
+
+            case WsPlacement.Left:
+            case WsPlacement.Top:
+            {
+                var newLeaf = new WsLeaf(path, _selected.Env, fileName);
+                var dir     = placement == WsPlacement.Left ? WsDir.H : WsDir.V;
+                _root       = _root.Replace(_selected, new WsSplit(dir, 0.5, newLeaf, _selected));
+                _selected   = newLeaf;
+                break;
+            }
+
+            case WsPlacement.Right:
+            case WsPlacement.Bottom:
+            {
+                var newLeaf = new WsLeaf(path, _selected.Env, fileName);
+                var dir     = placement == WsPlacement.Right ? WsDir.H : WsDir.V;
+                _root       = _root.Replace(_selected, new WsSplit(dir, 0.5, _selected, newLeaf));
+                _selected   = newLeaf;
+                break;
+            }
+        }
+
+        _dialogOpen = false;
+        StateHasChanged();
+    }
+
+    // ── Panel events ──────────────────────────────────────────────────────
 
     private void OnRatioChanged((WsSplit split, double ratio) args)
     {
@@ -49,5 +272,9 @@
         StateHasChanged();
     }
 
-    public void Dispose() { }
+    public async ValueTask DisposeAsync()
+    {
+        _selfRef?.Dispose();
+        await Task.CompletedTask;
+    }
 }
