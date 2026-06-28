@@ -56,6 +56,12 @@
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
 
+        // Clear immediately so the previous env's data doesn't linger
+        _treeData = null;
+        _error    = null;
+        _loading  = true;
+        StateHasChanged();
+
         await LoadAsync();
         await InvokeAsync(StateHasChanged);
     }

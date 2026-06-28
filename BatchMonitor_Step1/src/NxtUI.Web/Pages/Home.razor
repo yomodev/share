@@ -326,6 +326,8 @@
 
     private async void OnEnvExternalChange()
     {
+        _recent = [];
+        await InvokeAsync(StateHasChanged);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
@@ -333,6 +335,7 @@
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
+        _recent = [];
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
