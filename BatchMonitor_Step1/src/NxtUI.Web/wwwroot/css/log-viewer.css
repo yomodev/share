@@ -81,10 +81,31 @@
 }
 
 /* Compact variant for the find/filter row */
-.bm-lv-toolbar-sm .mud-input-root,
-.bm-lv-toolbar-sm .mud-input-slot,
+.bm-lv-toolbar-sm .mud-input-root {
+    font-size: 12px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+}
+
+.bm-lv-toolbar-sm .mud-input-slot {
+    min-height: 28px !important;
+    height: 28px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+}
+
 .bm-lv-toolbar-sm input {
-    font-size: 11px !important;
+    font-size: 12px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* Shrink adornment icons so they don't force row height */
+.bm-lv-toolbar-sm .mud-input-adornment .mud-icon-root,
+.bm-lv-toolbar-sm .mud-input-adornment .mud-button-root {
+    font-size: 16px !important;
+    width: 20px !important;
+    height: 20px !important;
 }
 
 .bm-lv-toolbar-right {
