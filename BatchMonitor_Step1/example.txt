@@ -10216,7 +10216,7 @@ LENGTH 491
     </NotFound>
 </Router>
 FILE src/NxtUI.Web/appsettings.Development.json
-LENGTH 630
+LENGTH 625
 {
   "Logging": {
     "LogLevel": {
@@ -10232,7 +10232,6 @@ LENGTH 630
     "MetricsFileName": "Metrics.log",
     "MetricsIntervalSeconds": 90,
     "LogsFolder": "C:\\Temp\\logs\\{server}",
-    "Servers": [ "srv-app01", "srv-app02" ],
     "FolderScanIntervalSeconds": 30,
     "FolderScanMinIntervalSeconds": 10
   },
@@ -10241,7 +10240,8 @@ LENGTH 630
     "Enabled": true,
     "WriteIntervalSeconds": 15,
     "InitialLineCount": 5,
-    "TemplateIndex": 0
+    "TemplateIndex": 0,
+    "Environments": [ "DEV1", "DEV2" ]
   }
 }
 FILE src/NxtUI.Web/appsettings.json
@@ -10322,7 +10322,7 @@ LENGTH 565
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 4853
+LENGTH 5156
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Hubs;
@@ -10380,9 +10380,13 @@ public class Program
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+        builder.Services.AddSingleton<IEnvironmentRegistry, EnvironmentRegistry>();
+        builder.Services.AddSingleton<IServerRegistry, ServerRegistry>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<IBatchCatalogService, NxtUI.Web.Services.BatchCatalogService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).
@@ -10609,7 +10613,7 @@ public class MongoSettings
         $"{DatabasePrefix}_{environmentId}";
 }
 FILE src/NxtUI.Core/Configuration/TestLogGeneratorSettings.cs
-LENGTH 834
+LENGTH 1242
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -10631,6 +10635,14 @@ public class TestLogGeneratorSettings
 
     /// <summary>Which LogPaths template to materialise folders from.</summary>
     public int TemplateIndex { get; set; } = 0;
+
+    /// <summary>
+    /// Restrict seeding to these environment IDs. When empty (the default) all
+    /// configured environments are seeded. Set this to only the environments whose
+    /// MongoDB database the development credentials can access, to avoid connection
+    /// errors for UAT/Staging/Production databases at startup.
+    /// </summary>
+    public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 3750
@@ -11621,7 +11633,7 @@ public static class IncrementalFileReader
     }
 }
 FILE src/NxtUI.Core/Logging/LogPathTemplate.cs
-LENGTH 1167
+LENGTH 1250
 using NxtUI.Models;
 
 namespace NxtUI.Logging;
@@ -11633,15 +11645,18 @@ namespace NxtUI.Logging;
 /// </summary>
 public static class LogPathTemplate
 {
-    public static string Expand(string template, ServiceStatus svc, string env) =>
-        template
+    public static string Expand(string template, ServiceStatus svc, string env, DateTime? date = null)
+    {
+        var d = date ?? svc.CreatedDateTime;
+        return template
             // {date-1} before {date} so the longer token wins.
-            .Replace("{date-1}", svc.CreatedDateTime.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{date}",   svc.CreatedDateTime.ToString("yyyy-MM-dd"),              StringComparison.OrdinalIgnoreCase)
-            .Replace("{server}", svc.HostName,                StringComparison.OrdinalIgnoreCase)
-            .Replace("{service}", svc.ServiceName,            StringComparison.OrdinalIgnoreCase)
-            .Replace("{pid}",    svc.ProcessId.ToString(),    StringComparison.OrdinalIgnoreCase)
-            .Replace("{env}",    env,                         StringComparison.OrdinalIgnoreCase);
+            .Replace("{date-1}", d.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{date}",   d.ToString("yyyy-MM-dd"),             StringComparison.OrdinalIgnoreCase)
+            .Replace("{server}", svc.HostName,                         StringComparison.OrdinalIgnoreCase)
+            .Replace("{service}", svc.ServiceName,                     StringComparison.OrdinalIgnoreCase)
+            .Replace("{pid}",    svc.ProcessId.ToString(),             StringComparison.OrdinalIgnoreCase)
+            .Replace("{env}",    env,                                  StringComparison.OrdinalIgnoreCase);
+    }
 }
 FILE src/NxtUI.Core/Logging/MetricsLogParser.cs
 LENGTH 2924
@@ -11736,36 +11751,90 @@ public record MetricsSample
     /// <summary>Peak usage of the process and its children.</summary>
     public long TotalPeakBytes => PeakUsageBytes + ChildPeakUsageBytes;
 }
+FILE src/NxtUI.Core/Models/BatchCatalog.cs
+LENGTH 2921
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace NxtUI.Models;
+
+public class BatchCatalog
+{
+    [JsonPropertyName("batches")]
+    public List<BatchDefinition> Batches { get; init; } = [];
+}
+
+public class BatchDefinition
+{
+    [JsonPropertyName("id")]          public string Id          { get; init; } = "";
+    [JsonPropertyName("name")]        public string Name        { get; init; } = "";
+    [JsonPropertyName("description")] public string Description { get; init; } = "";
+    [JsonPropertyName("category")]    public string Category    { get; init; } = "";
+    [JsonPropertyName("tags")]        public List<string> Tags  { get; init; } = [];
+    [JsonPropertyName("endpoint")]    public BatchEndpoint Endpoint   { get; init; } = new();
+    [JsonPropertyName("parameters")]  public List<BatchParameter> Parameters { get; init; } = [];
+}
+
+public class BatchEndpoint
+{
+    [JsonPropertyName("method")] public string Method { get; init; } = "POST";
+    [JsonPropertyName("url")]    public string Url    { get; init; } = "";
+}
+
+public class BatchParameter
+{
+    [JsonPropertyName("key")]         public string Key         { get; init; } = "";
+    [JsonPropertyName("label")]       public string Label       { get; init; } = "";
+    [JsonPropertyName("description")] public string Description { get; init; } = "";
+    /// <summary>string | number | boolean | date | select | multiselect</summary>
+    [JsonPropertyName("type")]        public string Type        { get; init; } = "string";
+    [JsonPropertyName("default")]     public JsonElement Default { get; init; }
+    [JsonPropertyName("required")]    public bool Required      { get; init; }
+    [JsonPropertyName("options")]     public List<string> Options { get; init; } = [];
+    [JsonPropertyName("min")]         public double? Min        { get; init; }
+    [JsonPropertyName("max")]         public double? Max        { get; init; }
+
+    public string DefaultString() => Default.ValueKind switch
+    {
+        JsonValueKind.String => Default.GetString() ?? "",
+        JsonValueKind.Number => Default.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture),
+        JsonValueKind.True   => "true",
+        JsonValueKind.False  => "false",
+        JsonValueKind.Array  => string.Join(",", Default.EnumerateArray()
+                                    .Select(e => e.GetString() ?? "")),
+        _                    => ""
+    };
+
+    public List<string> DefaultList() => Default.ValueKind == JsonValueKind.Array
+        ? Default.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList()
+        : Default.ValueKind == JsonValueKind.String && Default.GetString() is { Length: > 0 } s
+            ? [s] : [];
+}
+
+public record BatchTriggerResult(
+    bool   Success,
+    string ResolvedUrl,
+    string ResolvedBody,
+    string? JobId   = null,
+    string? Message = null,
+    string? Error   = null);
 FILE src/NxtUI.Core/Models/EnvironmentInfo.cs
-LENGTH 968
+LENGTH 654
 namespace NxtUI.Models;
 
 /// <summary>
-/// Runtime representation of an environment with resolved badge colour.
-/// Derived from <see cref="Configuration.EnvironmentDefinition"/>.
+/// Runtime representation of an environment.
+/// Badge colours are assigned by <see cref="NxtUI.Core.Services.EnvironmentRegistry"/>
+/// based on the environment id — not on the tier — so every environment
+/// automatically gets a stable, distinct colour.
 /// </summary>
 public class EnvironmentInfo
 {
-    public string Id { get; init; } = string.Empty;
-    public string Label { get; init; } = string.Empty;
-    public string Tier { get; init; } = string.Empty;
-
-    /// <summary>MudBlazor colour name for the environment badge.</summary>
-    public string BadgeColor => Tier switch
-    {
-        "Development" => "#00BCD4",   // Teal/Cyan
-        "UAT"         => "#FFB300",   // Amber
-        "Staging"     => "#7B1FA2",   // Purple
-        "Production"  => "#E64A19",   // Deep Orange
-        _             => "#546E7A"    // Blue Grey
-    };
-
-    /// <summary>Text colour to use on top of the badge background.</summary>
-    public string BadgeTextColor => Tier switch
-    {
-        "UAT" => "#1a1a1a",
-        _     => "#ffffff"
-    };
+    public string Id           { get; init; } = string.Empty;
+    public string Label        { get; init; } = string.Empty;
+    public string Tier         { get; init; } = string.Empty;
+    public string BadgeColor   { get; init; } = "#546E7A";
+    public string BadgeTextColor { get; init; } = "#ffffff";
 }
 FILE src/NxtUI.Core/Models/HealthModels.cs
 LENGTH 1314
@@ -12250,6 +12319,116 @@ public class TopologyEdge
     /// <summary>Visual state inherited from the source pipeline row (drives edge colour).</summary>
     public PipelineState State { get; set; } = PipelineState.NotStarted;
 }
+FILE src/NxtUI.Core/Services/EnvironmentRegistry.cs
+LENGTH 3204
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Models;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Default <see cref="IEnvironmentRegistry"/> — reads from <c>App:Environments</c>
+/// in configuration. Each environment is assigned a badge colour by hashing its id
+/// against a palette of MudBlazor CSS variable pairs, so badges adapt to the active
+/// theme and new environments get a colour automatically.
+/// </summary>
+public sealed class EnvironmentRegistry : IEnvironmentRegistry
+{
+    // Each entry is (background CSS, text CSS) using MudBlazor palette variables.
+    // Pairs are ordered for maximum visual distinction between consecutive entries.
+    private static readonly (string Bg, string Text)[] Palette =
+    [
+        ("var(--mud-palette-primary)",          "var(--mud-palette-primary-text)"),
+        ("var(--mud-palette-error)",            "var(--mud-palette-error-text)"),
+        ("var(--mud-palette-success)",          "var(--mud-palette-success-text)"),
+        ("var(--mud-palette-warning)",          "var(--mud-palette-warning-text)"),
+        ("var(--mud-palette-info)",             "var(--mud-palette-info-text)"),
+        ("var(--mud-palette-secondary)",        "var(--mud-palette-secondary-text)"),
+        ("var(--mud-palette-tertiary)",         "var(--mud-palette-tertiary-text)"),
+        ("var(--mud-palette-dark)",             "var(--mud-palette-dark-text)"),
+        ("var(--mud-palette-primary-darken)",   "var(--mud-palette-primary-text)"),
+        ("var(--mud-palette-error-darken)",     "var(--mud-palette-error-text)"),
+        ("var(--mud-palette-success-darken)",   "var(--mud-palette-success-text)"),
+        ("var(--mud-palette-warning-darken)",   "var(--mud-palette-warning-text)"),
+        ("var(--mud-palette-info-darken)",      "var(--mud-palette-info-text)"),
+        ("var(--mud-palette-secondary-darken)", "var(--mud-palette-secondary-text)"),
+        ("var(--mud-palette-tertiary-darken)",  "var(--mud-palette-tertiary-text)"),
+        ("var(--mud-palette-primary-lighten)",  "var(--mud-palette-primary-text)"),
+    ];
+
+    private readonly IReadOnlyList<EnvironmentInfo> _environments;
+
+    public EnvironmentRegistry(IOptions<AppSettings> settings)
+    {
+        _environments = settings.Value.Environments
+            .Select(e =>
+            {
+                var (bg, text) = PickPair(e.Id);
+                return new EnvironmentInfo
+                {
+                    Id             = e.Id,
+                    Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
+                    Tier           = e.Tier,
+                    BadgeColor     = bg,
+                    BadgeTextColor = text,
+                };
+            })
+            .ToList();
+    }
+
+    public IReadOnlyList<EnvironmentInfo> GetAll() => _environments;
+
+    public EnvironmentInfo? Find(string id) =>
+        _environments.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+    private static (string Bg, string Text) PickPair(string id)
+    {
+        var hash = (uint)id.ToUpperInvariant().Aggregate(0, (acc, c) => acc * 31 + c);
+        return Palette[hash % (uint)Palette.Length];
+    }
+}
+FILE src/NxtUI.Core/Services/IBatchCatalogService.cs
+LENGTH 648
+using NxtUI.Models;
+
+namespace NxtUI.Services;
+
+public interface IBatchCatalogService
+{
+    /// <summary>Returns all batch definitions from the catalog.</summary>
+    Task<IReadOnlyList<BatchDefinition>> GetBatchesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Triggers a batch by resolving parameter placeholders, building the request
+    /// body, and calling the batch endpoint.
+    /// </summary>
+    Task<BatchTriggerResult> TriggerAsync(
+        BatchDefinition              batch,
+        Dictionary<string, string>   values,
+        string                       env,
+        CancellationToken            ct = default);
+}
+FILE src/NxtUI.Core/Services/IEnvironmentRegistry.cs
+LENGTH 693
+using NxtUI.Models;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Provides the ordered list of environments known to this portal instance.
+/// The default implementation reads from <c>App:Environments</c> in configuration;
+/// alternative implementations can override the source (e.g. from a database or
+/// a remote configuration service) without changing any callers.
+/// </summary>
+public interface IEnvironmentRegistry
+{
+    /// <summary>Returns all configured environments in declaration order.</summary>
+    IReadOnlyList<EnvironmentInfo> GetAll();
+
+    /// <summary>Returns the environment with the given id, or null if not found.</summary>
+    EnvironmentInfo? Find(string id);
+}
 FILE src/NxtUI.Core/Services/IHeartbeatService.cs
 LENGTH 186
 using NxtUI.Models;
@@ -12292,7 +12471,7 @@ public interface IKafkaService
     Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/ILogBrowserService.cs
-LENGTH 1473
+LENGTH 1398
 using NxtUI.Filtering;
 
 namespace NxtUI.Services;
@@ -12310,8 +12489,6 @@ public record LogFileEntry(
 public interface ILogBrowserService
 {
     string? ResolveRoot(string server);
-
-    IReadOnlyList<string> GetServers(IEnumerable<string> heartbeatHosts);
 
     Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default);
@@ -12474,6 +12651,27 @@ public class RunFilter
         string.IsNullOrWhiteSpace(SearchText) &&
         (Statuses is null || Statuses.Count == 0) &&
         (Types    is null || Types.Count    == 0);
+}
+FILE src/NxtUI.Core/Services/IServerRegistry.cs
+LENGTH 732
+using NxtUI.Models;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Resolves the set of server hostnames relevant for a given environment.
+/// The default implementation prefers the static <c>Logs:Servers</c> config list
+/// and falls back to live heartbeat hosts when the list is empty.
+/// Alternative implementations can resolve servers dynamically (CMDB, per-environment
+/// config, etc.) without changing any callers.
+/// </summary>
+public interface IServerRegistry
+{
+    /// <summary>
+    /// Returns the ordered, deduplicated hostnames of servers to query for the
+    /// given environment.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetServersAsync(EnvironmentInfo environment, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IServiceMetricsMonitor.cs
 LENGTH 1164
@@ -12921,6 +13119,43 @@ public class PerformanceEventStore
         }
     }
 }
+FILE src/NxtUI.Core/Services/ServerRegistry.cs
+LENGTH 1175
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Models;
+using NxtUI.Services;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Default <see cref="IServerRegistry"/> — returns <c>Logs:Servers</c> from config when
+/// non-empty; otherwise queries the heartbeat service to discover hosts for the environment.
+/// </summary>
+public sealed class ServerRegistry : IServerRegistry
+{
+    private readonly LogPathSettings  _settings;
+    private readonly IHeartbeatService _heartbeat;
+
+    public ServerRegistry(IOptions<LogPathSettings> settings, IHeartbeatService heartbeat)
+    {
+        _settings  = settings.Value;
+        _heartbeat = heartbeat;
+    }
+
+    public async Task<IReadOnlyList<string>> GetServersAsync(EnvironmentInfo environment, CancellationToken ct = default)
+    {
+        if (_settings.Servers.Count > 0)
+            return _settings.Servers;
+
+        var statuses = await _heartbeat.GetServiceStatusesAsync(environment.Id, ct);
+        return statuses
+            .Select(s => s.HostName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+}
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
 LENGTH 10381
 using NxtUI.Models;
@@ -13262,7 +13497,7 @@ LENGTH 3066
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 6053
+LENGTH 6221
 @inject NxtUI.Services.TabService _tabSvc
 @* Reusable debounced filter input with inline help popup.
    Value           — controlled value; set from parent so programmatic clear works.
@@ -13273,7 +13508,7 @@ LENGTH 6053
 
 <div class="bm-filter-box @Class">
 
-    <MudTextField T="string"
+    <MudTextField T="string" @ref="_field"
                   Placeholder="@Placeholder"
                   Adornment="Adornment.Start"
                   AdornmentIcon="@Icons.Material.Outlined.Search"
@@ -13374,7 +13609,13 @@ LENGTH 6053
 
     [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
 
-    private MudMenu? _menu;
+    private MudMenu?      _menu;
+    private MudTextField<string>? _field;
+
+    public async Task FocusAsync()
+    {
+        if (_field is not null) await _field.FocusAsync();
+    }
 
     private async Task OpenFullReference()
     {
@@ -13697,8 +13938,113 @@ LENGTH 5694
         catch { }
     }
 }
+FILE src/NxtUI.Web/Components/OpenLogFileDialog.razor
+LENGTH 4388
+@inject IJSRuntime JS
+
+<MudDialog>
+    <TitleContent>Open log file</TitleContent>
+    <DialogContent>
+        <div style="display:flex;flex-direction:column;gap:20px;min-width:380px">
+            <MudTextField @bind-Value="Path"
+                          Label="File path"
+                          Placeholder="Paste path here…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Outlined.FolderOpen"
+                          AdornmentAriaLabel="Browse…"
+                          OnAdornmentClick="BrowseFile"
+                          @onkeydown="OnKeyDown"
+                          @ref="_field" />
+
+            <!-- + shape placement grid -->
+            <div style="display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px 48px;gap:4px;align-self:center">
+                <div></div>
+                <MudTooltip Text="Open above">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Top))" />
+                </MudTooltip>
+                <div></div>
+
+                <MudTooltip Text="Open to the left">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowLeft"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Left))" />
+                </MudTooltip>
+                <MudTooltip Text="Replace current panel">
+                    <MudIconButton Icon="@Icons.Material.Outlined.OpenInBrowser"
+                                   Variant="Variant.Filled" Color="Color.Primary" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Replace))" />
+                </MudTooltip>
+                <MudTooltip Text="Open to the right">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowRight"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Right))" />
+                </MudTooltip>
+
+                <div></div>
+                <MudTooltip Text="Open below">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Bottom))" />
+                </MudTooltip>
+                <div></div>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    public enum WsPlacement { Replace, Left, Right, Top, Bottom }
+
+    private string Path = string.Empty;
+    private MudTextField<string>? _field;
+    private DotNetObjectReference<OpenLogFileDialog>? _selfRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _field is not null)
+            await _field.FocusAsync();
+    }
+
+    private async Task BrowseFile()
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmOpenLocalLogFile", _selfRef);
+    }
+
+    [JSInvokable]
+    public void OnLocalFileOpened(string key, string filename)
+    {
+        InvokeAsync(() =>
+        {
+            Path = "local:" + key;
+            StateHasChanged();
+        });
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(Path))
+            Submit(WsPlacement.Replace);
+    }
+
+    private void Submit(WsPlacement placement) =>
+        MudDialog.Close(DialogResult.Ok((Path.Trim(), placement)));
+
+    public void Dispose() => _selfRef?.Dispose();
+}
 FILE src/NxtUI.Web/Components/WorkspacePanel.razor
-LENGTH 4625
+LENGTH 4397
 @using NxtUI.Models
 @using NxtUI.Pages
 @inject IJSRuntime JS
@@ -13706,88 +14052,76 @@ LENGTH 4625
 
 @if (Node is WsLeaf leaf)
 {
-    <div class="ws-leaf" style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;">
-        @if (leaf.Path is null)
+    var isSelected = ReferenceEquals(leaf, SelectedLeaf);
+    <div class="ws-leaf"
+         style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;position:relative;"
+         @onclick="@(() => OnSelect.InvokeAsync(leaf))" @onclick:stopPropagation="false">
+        <LogViewer Path="@leaf.Path"
+                   Env="@leaf.Env"
+                   FileName="@leaf.FileName"
+                   IsSelected="@isSelected"
+                   IsMultiPane="@ShowRing"
+                   OnOpen="@(() => OnOpen.InvokeAsync(leaf))"
+                   OnDupH="@(() => OnDupH.InvokeAsync(leaf))"
+                   OnDupV="@(() => OnDupV.InvokeAsync(leaf))"
+                   OnClose="@(() => OnClose.InvokeAsync(leaf))" />
+        @if (isSelected && ShowRing)
         {
-            <div class="ws-empty">
-                @if (OnClose.HasDelegate)
-                {
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small" Class="ws-empty-close"
-                                   OnClick="@(() => OnClose.InvokeAsync(leaf))" />
-                }
-                <MudIcon Icon="@Icons.Material.Outlined.Article" Style="font-size:40px;opacity:0.25;margin-bottom:16px" />
-                <MudTextField @bind-Value="_pendingPath"
-                              Placeholder="Paste log file path…"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              Style="width:360px;max-width:90%"
-                              OnKeyDown="OnPathKeyDown"
-                              Adornment="Adornment.End"
-                              AdornmentIcon="@Icons.Material.Outlined.FolderOpen"
-                              OnAdornmentClick="OpenFile" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           Style="margin-top:10px"
-                           OnClick="CommitPath">Open</MudButton>
-            </div>
-        }
-        else
-        {
-            <LogViewer Path="@leaf.Path"
-                       Env="@leaf.Env"
-                       FileName="@leaf.FileName"
-                       OnSplitH="@(() => OnSplit.InvokeAsync((leaf, WsDir.H)))"
-                       OnSplitV="@(() => OnSplit.InvokeAsync((leaf, WsDir.V)))"
-                       OnClose="@(() => OnClose.InvokeAsync(leaf))" />
+            <div class="ws-selection-ring" aria-hidden="true"></div>
         }
     </div>
 }
 else if (Node is WsSplit split)
 {
-    var flexDir  = split.Dir == WsDir.H ? "row" : "column";
-    var ratioPct = (split.Ratio * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-    var invPct   = ((1 - split.Ratio) * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+    var flexDir = split.Dir == WsDir.H ? "row" : "column";
+    var growA   = (split.Ratio * 10000d).ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+    var growB   = ((1d - split.Ratio) * 10000d).ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
 
     <div class="ws-split" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:@flexDir;overflow:hidden;"
          @ref="_containerRef">
-        <div class="ws-pane" style="flex:0 0 @(ratioPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
-            <WorkspacePanel Node="@split.A" OnSplit="OnSplit" OnClose="OnClose" OnRatioChanged="OnRatioChanged" />
+
+        <div class="ws-pane" style="flex:@(growA) @(growA) 0;min-width:0;min-height:0;overflow:hidden;display:flex;">
+            <WorkspacePanel Node="@split.A"
+                            SelectedLeaf="@SelectedLeaf"
+                            ShowRing="@ShowRing"
+                            OnSelect="OnSelect"
+                            OnOpen="OnOpen"
+                            OnDupH="OnDupH"
+                            OnDupV="OnDupV"
+                            OnClose="OnClose"
+                            OnRatioChanged="OnRatioChanged" />
         </div>
 
         <div class="@(split.Dir == WsDir.H ? "ws-handle-h" : "ws-handle-v")"
              @onmousedown="@(e => OnHandleMouseDown(e, split))"></div>
 
-        <div class="ws-pane" style="flex:0 0 @(invPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
-            <WorkspacePanel Node="@split.B" OnSplit="OnSplit" OnClose="OnClose" OnRatioChanged="OnRatioChanged" />
+        <div class="ws-pane" style="flex:@(growB) @(growB) 0;min-width:0;min-height:0;overflow:hidden;display:flex;">
+            <WorkspacePanel Node="@split.B"
+                            SelectedLeaf="@SelectedLeaf"
+                            ShowRing="@ShowRing"
+                            OnSelect="OnSelect"
+                            OnOpen="OnOpen"
+                            OnDupH="OnDupH"
+                            OnDupV="OnDupV"
+                            OnClose="OnClose"
+                            OnRatioChanged="OnRatioChanged" />
         </div>
     </div>
 }
 
 @code {
-    [Parameter, EditorRequired] public WsNode Node { get; set; } = null!;
-    [Parameter] public EventCallback<(WsLeaf, WsDir)>   OnSplit        { get; set; }
-    [Parameter] public EventCallback<WsLeaf>             OnClose        { get; set; }
-    [Parameter] public EventCallback<(WsSplit, double)>  OnRatioChanged { get; set; }
-    [Parameter] public EventCallback<(WsLeaf, string)>   OnPathSet      { get; set; }
+    [Parameter, EditorRequired] public WsNode                           Node           { get; set; } = null!;
+    [Parameter]                 public WsLeaf?                          SelectedLeaf   { get; set; }
+    [Parameter]                 public bool                             ShowRing       { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnSelect       { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnOpen         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnDupH         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnDupV         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnClose        { get; set; }
+    [Parameter]                 public EventCallback<(WsSplit, double)> OnRatioChanged { get; set; }
 
-    private ElementReference _containerRef;
+    private ElementReference                       _containerRef;
     private DotNetObjectReference<WorkspacePanel>? _selfRef;
-    private string _pendingPath = string.Empty;
-
-    private async Task CommitPath()
-    {
-        var path = _pendingPath.Trim();
-        if (string.IsNullOrEmpty(path)) return;
-        if (Node is WsLeaf leaf)
-            await OnPathSet.InvokeAsync((leaf, path));
-    }
-
-    private async Task OnPathKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter") await CommitPath();
-    }
-
-    private Task OpenFile() => Task.CompletedTask; // placeholder — no OS picker in Blazor Server
 
     [JSInvokable]
     public async Task SetRatio(double ratio)
@@ -14501,7 +14835,7 @@ LENGTH 4985
     }
 }
 FILE src/NxtUI.Web/Models/TabModel.cs
-LENGTH 12364
+LENGTH 12357
 namespace NxtUI.Models;
 
 public enum TabType
@@ -14719,10 +15053,10 @@ public class TabModel
     {
         Id          = $"detail:workspace:{Uri.EscapeDataString(path)}:{env}",
         Type        = TabType.LogWorkspace,
-        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Workspace",
+        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
         Environment = env,
         EntityId    = path,
-        Icon        = MudBlazor.Icons.Material.Outlined.GridView
+        Icon        = MudBlazor.Icons.Material.Outlined.Article
     };
 
     public static TabModel CreateFilterHelp() => new()
@@ -14883,6 +15217,352 @@ public sealed class WsSplit(WsDir dir, double ratio, WsNode a, WsNode b) : WsNod
         if (nb is null) return na;
         return new WsSplit(Dir, Ratio, na, nb);
     }
+}
+FILE src/NxtUI.Web/Pages/Batches.razor
+LENGTH 17921
+@using NxtUI.Models
+@using NxtUI.Services
+@inject IBatchCatalogService CatalogSvc
+@inject ISnackbar Snackbar
+
+<div class="bm-page bm-page-fill bm-batches-page">
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-batches-progress" />
+    }
+    else if (_batches.Count == 0)
+    {
+        <div class="bm-lb-empty">
+            <MudIcon Icon="@Icons.Material.Outlined.PlayCircleOutline" Style="font-size:48px;opacity:.3" />
+            <MudText Typo="Typo.body2" Style="opacity:.5">No batches found in catalog</MudText>
+        </div>
+    }
+    else
+    {
+        <div class="bm-batches-layout">
+
+            <!-- ── Left: catalog list ────────────────────────────────────── -->
+            <div class="bm-batches-sidebar">
+                <div class="bm-batches-search">
+                    <MudTextField T="string" @bind-Value="_search" Placeholder="Search batches…"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Outlined.Search"
+                                  Clearable="true" Immediate="true"
+                                  Class="bm-batches-searchfield" />
+                </div>
+
+                <div class="bm-batches-categories">
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(_category == null ? Color.Primary : Color.Default)"
+                             Variant="@(_category == null ? Variant.Filled : Variant.Outlined)"
+                             OnClick="@(() => _category = null)">All</MudChip>
+                    @foreach (var cat in _categories)
+                    {
+                        var c = cat;
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(_category == c ? Color.Primary : Color.Default)"
+                                 Variant="@(_category == c ? Variant.Filled : Variant.Outlined)"
+                                 OnClick="@(() => _category = c)">@c</MudChip>
+                    }
+                </div>
+
+                <div class="bm-batches-list">
+                    @foreach (var batch in Filtered)
+                    {
+                        var b = batch;
+                        var active = ReferenceEquals(b, _selected);
+                        <div class="bm-batch-item @(active ? "bm-batch-item-active" : "")"
+                             @onclick="@(() => SelectBatch(b))">
+                            <div class="bm-batch-item-name">@b.Name</div>
+                            <div class="bm-batch-item-meta">
+                                <span class="bm-batch-item-cat">@b.Category</span>
+                                <span class="bm-batch-item-params">@b.Parameters.Count param@(b.Parameters.Count != 1 ? "s" : "")</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- ── Right: batch detail + parameter form ──────────────────── -->
+            <div class="bm-batches-detail">
+                @if (_selected is null)
+                {
+                    <div class="bm-lb-empty">
+                        <MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Style="font-size:36px;opacity:.3" />
+                        <MudText Typo="Typo.body2" Style="opacity:.5">Select a batch from the list</MudText>
+                    </div>
+                }
+                else
+                {
+                    <div class="bm-batch-detail-inner">
+
+                        <!-- Header -->
+                        <div class="bm-batch-detail-header">
+                            <div>
+                                <div class="bm-batch-detail-title">@_selected.Name</div>
+                                <div class="bm-batch-detail-desc">@_selected.Description</div>
+                                <div class="bm-batch-detail-tags">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                             Variant="Variant.Filled" Class="bm-batch-cat-chip">
+                                        @_selected.Category
+                                    </MudChip>
+                                    @foreach (var tag in _selected.Tags)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@tag</MudChip>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <MudDivider Class="my-3" />
+
+                        <!-- Parameters -->
+                        @if (_selected.Parameters.Count > 0)
+                        {
+                            <div class="bm-batch-params-title">Parameters</div>
+                            <div class="bm-batch-params-grid">
+                                @foreach (var p in _selected.Parameters)
+                                {
+                                    var pk = p.Key;
+                                    <div class="bm-batch-param-row">
+                                        @if (p.Type == "boolean")
+                                        {
+                                            <MudSwitch T="bool"
+                                                       Label="@p.Label"
+                                                       Value="@_boolValues.GetValueOrDefault(pk)"
+                                                       ValueChanged="@(v => { _boolValues[pk] = v; })"
+                                                       Color="Color.Primary"
+                                                       Class="bm-batch-switch"
+                                                       title="@p.Description" />
+                                        }
+                                        else if (p.Type == "select")
+                                        {
+                                            <MudSelect T="string"
+                                                       Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                       Value="@_strValues.GetValueOrDefault(pk, "")"
+                                                       ValueChanged="@(v => { _strValues[pk] = v; })"
+                                                       Variant="Variant.Outlined"
+                                                       Margin="Margin.Dense"
+                                                       Dense="true"
+                                                       HelperText="@p.Description">
+                                                @foreach (var opt in p.Options)
+                                                {
+                                                    <MudSelectItem T="string" Value="@opt">@opt</MudSelectItem>
+                                                }
+                                            </MudSelect>
+                                        }
+                                        else if (p.Type == "multiselect")
+                                        {
+                                            <MudSelect T="string"
+                                                       Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                       SelectedValues="@(_multiValues.GetValueOrDefault(pk, []))"
+                                                       SelectedValuesChanged="@((IReadOnlyCollection<string> v) => { _multiValues[pk] = v; })"
+                                                       MultiSelection="true"
+                                                       Variant="Variant.Outlined"
+                                                       Margin="Margin.Dense"
+                                                       Dense="true"
+                                                       HelperText="@p.Description">
+                                                @foreach (var opt in p.Options)
+                                                {
+                                                    <MudSelectItem T="string" Value="@opt">@opt</MudSelectItem>
+                                                }
+                                            </MudSelect>
+                                        }
+                                        else if (p.Type == "number")
+                                        {
+                                            <MudNumericField T="double"
+                                                             Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                             Value="@(double.TryParse(_strValues.GetValueOrDefault(pk, "0"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var _n) ? _n : 0d)"
+                                                             ValueChanged="@((double v) => { _strValues[pk] = v.ToString(System.Globalization.CultureInfo.InvariantCulture); })"
+                                                             Variant="Variant.Outlined"
+                                                             Margin="Margin.Dense"
+                                                             Min="@(p.Min ?? double.MinValue)"
+                                                             Max="@(p.Max ?? double.MaxValue)"
+                                                             HelperText="@p.Description" />
+                                        }
+                                        else
+                                        {
+                                            <MudTextField T="string"
+                                                          Label="@(p.Label + (p.Required ? " *" : ""))"
+                                                          Value="@_strValues.GetValueOrDefault(pk, "")"
+                                                          ValueChanged="@(v => { _strValues[pk] = v ?? ""; })"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          Placeholder="@(p.Type == "date" ? "YYYY-MM-DD" : "")"
+                                                          HelperText="@p.Description" />
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            <MudDivider Class="my-3" />
+                        }
+
+                        <!-- Endpoint preview -->
+                        <div class="bm-batch-endpoint">
+                            <span class="bm-batch-endpoint-method">@_selected.Endpoint.Method</span>
+                            <span class="bm-batch-endpoint-url">@ResolveUrl(_selected)</span>
+                        </div>
+
+                        <!-- Run button + result -->
+                        <div class="bm-batch-actions">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Outlined.PlayArrow"
+                                       Size="Size.Large"
+                                       Disabled="@(_running || !CanRun)"
+                                       OnClick="RunAsync">
+                                @(_running ? "Running…" : "Run Batch")
+                            </MudButton>
+                            @if (_running)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" Class="ml-3" />
+                            }
+                        </div>
+
+                        @if (_lastResult is not null)
+                        {
+                            <div class="bm-batch-result @(_lastResult.Success ? "bm-batch-result-ok" : "bm-batch-result-err")">
+                                <MudIcon Icon="@(_lastResult.Success ? Icons.Material.Outlined.CheckCircle : Icons.Material.Outlined.Error)"
+                                         Size="Size.Small" Class="mr-1" />
+                                <span>@(_lastResult.Message ?? _lastResult.Error)</span>
+                                @if (_lastResult.JobId is not null)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Class="ml-2"
+                                             Variant="Variant.Outlined">Job: @_lastResult.JobId</MudChip>
+                                }
+                            </div>
+
+                            <MudExpansionPanels Class="mt-2" Dense="true">
+                                <MudExpansionPanel Text="Request details" Dense="true">
+                                    <div class="bm-batch-code">
+                                        <div class="bm-batch-code-label">URL</div>
+                                        <pre class="bm-batch-code-pre">@_lastResult.ResolvedUrl</pre>
+                                        <div class="bm-batch-code-label mt-2">Body</div>
+                                        <pre class="bm-batch-code-pre">@_lastResult.ResolvedBody</pre>
+                                    </div>
+                                </MudExpansionPanel>
+                            </MudExpansionPanels>
+                        }
+
+                    </div>
+                }
+            </div>
+
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private bool   _loading = true;
+    private string _search   = "";
+    private string? _category;
+    private bool   _running;
+
+    private List<BatchDefinition>  _batches    = [];
+    private List<string>           _categories = [];
+    private BatchDefinition?       _selected;
+    private BatchTriggerResult?    _lastResult;
+
+    // Per-param value stores
+    private Dictionary<string, string>        _strValues  = new();
+    private Dictionary<string, bool>          _boolValues = new();
+    private Dictionary<string, IReadOnlyCollection<string>> _multiValues = new();
+
+    private IEnumerable<BatchDefinition> Filtered =>
+        _batches.Where(b =>
+            (_category is null || b.Category == _category) &&
+            (string.IsNullOrWhiteSpace(_search) ||
+             b.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             b.Description.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             b.Tags.Any(t => t.Contains(_search, StringComparison.OrdinalIgnoreCase))));
+
+    private bool CanRun => _selected is not null &&
+        (_selected.Parameters
+            .Where(p => p.Required)
+            .All(p => p.Type == "multiselect"
+                ? (_multiValues.TryGetValue(p.Key, out var mv) && mv.Any())
+                : (_strValues.TryGetValue(p.Key, out var sv) && !string.IsNullOrWhiteSpace(sv))));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
+        _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
+        _loading    = false;
+        if (_batches.Count > 0) SelectBatch(_batches[0]);
+    }
+
+    private void SelectBatch(BatchDefinition batch)
+    {
+        _selected   = batch;
+        _lastResult = null;
+        _strValues  = new();
+        _boolValues = new();
+        _multiValues = new();
+
+        var today     = DateTime.Today.ToString("yyyy-MM-dd");
+        var yesterday = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd");
+        var month     = DateTime.Today.Month.ToString("D2");
+        var year      = DateTime.Today.Year.ToString();
+
+        foreach (var p in batch.Parameters)
+        {
+            if (p.Type == "boolean")
+            {
+                var d = p.DefaultString();
+                _boolValues[p.Key] = d is "true" or "True" or "1";
+            }
+            else if (p.Type == "multiselect")
+            {
+                var list = p.DefaultList().Select(v => ResolvePlaceholder(v, today, yesterday, month, year)).ToList();
+                _multiValues[p.Key] = list;
+            }
+            else
+            {
+                var d = p.DefaultString();
+                _strValues[p.Key] = ResolvePlaceholder(d, today, yesterday, month, year);
+            }
+        }
+    }
+
+    private static string ResolvePlaceholder(string s, string today, string yesterday, string month, string year) =>
+        s.Replace("{today}", today)
+         .Replace("{yesterday}", yesterday)
+         .Replace("{month}", month)
+         .Replace("{year}", year);
+
+    private string ResolveUrl(BatchDefinition b) =>
+        b.Endpoint.Url
+         .Replace("{id}",  b.Id)
+         .Replace("{env}", Environment);
+
+    private async Task RunAsync()
+    {
+        if (_selected is null) return;
+        _running    = true;
+        _lastResult = null;
+        StateHasChanged();
+
+        var flat = new Dictionary<string, string>(_strValues);
+        foreach (var (k, v) in _boolValues)
+            flat[k] = v ? "true" : "false";
+        foreach (var (k, mv) in _multiValues)
+            flat[k] = string.Join(",", mv);
+
+        _lastResult = await CatalogSvc.TriggerAsync(_selected, flat, Environment);
+        _running    = false;
+
+        if (_lastResult.Success)
+            Snackbar.Add(_lastResult.Message ?? "Batch triggered", Severity.Success);
+        else
+            Snackbar.Add(_lastResult.Error ?? "Trigger failed", Severity.Error);
+    }
+
 }
 FILE src/NxtUI.Web/Pages/CatchAllPage.razor
 LENGTH 128
@@ -15536,7 +16216,7 @@ LENGTH 15259
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 4648
+LENGTH 4616
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
 @inject IHeartbeatService HeartbeatSvc
@@ -15618,7 +16298,7 @@ LENGTH 4648
         {
             var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
 
-            var cutoff = DateTime.UtcNow.AddHours(-24);
+            var cutoff = DateTime.UtcNow.AddMinutes(-10);
 
             var hosts = services
                 .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
@@ -15633,7 +16313,6 @@ LENGTH 4648
                             return new TreeSvc(s.ServiceName, s.ProcessId, ram);
                         })
                         .OrderByDescending(s => s.Ram ?? 0)
-                        .Take(10)
                         .ToList();
                     return new TreeHost(g.Key, svcs);
                 }).ToList();
@@ -16755,14 +17434,16 @@ LENGTH 11133
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 29723
+LENGTH 29704
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Configuration
+@using NxtUI.Core.Services
 @using NxtUI.Filtering
 @using Microsoft.Extensions.Options
 @inject ILogBrowserService BrowserSvc
-@inject IHeartbeatService HeartbeatSvc
+@inject IEnvironmentRegistry EnvironmentRegistry
+@inject IServerRegistry ServerRegistry
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
@@ -16876,7 +17557,7 @@ LENGTH 29723
                     @foreach (var node in _rootNodes)
                     {
                         <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
-                                         Icon="@Icons.Material.Outlined.Folder"
+                                         Icon="@(_loadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                          Expanded="@_expanded.Contains(node.RelativePath)"
                                          ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(node, exp))"
                                          OnClick="@((MouseEventArgs _) => OnItemClickAsync(node))">
@@ -16885,7 +17566,7 @@ LENGTH 29723
                                 @foreach (var c1 in ch1)
                                 {
                                     <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
-                                                     Icon="@Icons.Material.Outlined.Folder"
+                                                     Icon="@(_loadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                      Expanded="@_expanded.Contains(c1.RelativePath)"
                                                      ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c1, exp))"
                                                      OnClick="@((MouseEventArgs _) => OnItemClickAsync(c1))">
@@ -16894,7 +17575,7 @@ LENGTH 29723
                                             @foreach (var c2 in ch2)
                                             {
                                                 <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
-                                                                 Icon="@Icons.Material.Outlined.Folder"
+                                                                 Icon="@(_loadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                                  Expanded="@_expanded.Contains(c2.RelativePath)"
                                                                  ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c2, exp))"
                                                                  OnClick="@((MouseEventArgs _) => OnItemClickAsync(c2))">
@@ -16907,23 +17588,11 @@ LENGTH 29723
                                                                              OnClick="@((MouseEventArgs _) => OnItemClickAsync(c3))" />
                                                         }
                                                     }
-                                                    else if (c2.HasChildren)
-                                                    {
-                                                        <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
-                                                    }
                                                 </MudTreeViewItem>
                                             }
                                         }
-                                        else if (c1.HasChildren)
-                                        {
-                                            <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
-                                        }
                                     </MudTreeViewItem>
                                 }
-                            }
-                            else if (node.HasChildren)
-                            {
-                                <MudTreeViewItem Value="@_loadingNode" Text="Loading…" Disabled="true" />
                             }
                         </MudTreeViewItem>
                     }
@@ -16987,15 +17656,10 @@ LENGTH 29723
                                                    Size="Size.Small"
                                                    OnClick="@(() => CopyPathAsync(context.FullPath))" />
                                 </MudTooltip>
-                                <MudTooltip Text="Open in Log Viewer">
+                                <MudTooltip Text="View">
                                     <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
                                                    Size="Size.Small"
                                                    OnClick="@(() => OpenInViewer(context))" />
-                                </MudTooltip>
-                                <MudTooltip Text="Open in Workspace">
-                                    <MudIconButton Icon="@Icons.Material.Outlined.GridView"
-                                                   Size="Size.Small"
-                                                   OnClick="@(() => OpenInWorkspace(context))" />
                                 </MudTooltip>
                             </MudTd>
                         </RowTemplate>
@@ -17064,10 +17728,6 @@ LENGTH 29723
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
-    // double-click detection
-    private DateTime _lastClickTime = DateTime.MinValue;
-    private string?  _lastClickPath;
-
     // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
     private List<LogFileEntry> _files        = new();
@@ -17076,6 +17736,9 @@ LENGTH 29723
     private DateTime?          _lastScan;
     private string?            _lastHint;
     private string?            _initError;
+    // tracks which tree nodes are currently fetching their children
+    private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
+    private string?  _lastManualPollPath;
 
     // search
     private string    _fileGlob           = "*.log";
@@ -17097,9 +17760,8 @@ LENGTH 29723
 
     protected override async Task OnInitializedAsync()
     {
-        var statuses = await HeartbeatSvc.GetServiceStatusesAsync(Env, _cts.Token);
-        var hosts    = statuses.Select(s => s.HostName).Distinct(StringComparer.OrdinalIgnoreCase);
-        _servers     = BrowserSvc.GetServers(hosts).ToList();
+        var envInfo = EnvironmentRegistry.Find(Env) ?? new EnvironmentInfo { Id = Env };
+        _servers    = (await ServerRegistry.GetServersAsync(envInfo, _cts.Token)).ToList();
 
         try
         {
@@ -17111,6 +17773,13 @@ LENGTH 29723
         _initialized = true;
         _lastScan    = DateTime.UtcNow;
         StartPolling();
+
+        // Auto-navigate to today's date folder if one exists at the root.
+        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+        var todayNode = _rootNodes.FirstOrDefault(n =>
+            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+        if (todayNode is not null)
+            await OnExpandedChangedAsync(todayNode, true);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -17170,18 +17839,8 @@ LENGTH 29723
     private async Task OnItemClickAsync(LogFolderNode node)
     {
         if (!node.HasChildren) return;
-        var now = DateTime.UtcNow;
-        if (_lastClickPath == node.RelativePath && (now - _lastClickTime).TotalMilliseconds < 350)
-        {
-            _lastClickPath = null;
-            var isExpanded = _expanded.Contains(node.RelativePath);
-            await OnExpandedChangedAsync(node, !isExpanded);
-        }
-        else
-        {
-            _lastClickPath = node.RelativePath;
-            _lastClickTime = now;
-        }
+        var isExpanded = _expanded.Contains(node.RelativePath);
+        await OnExpandedChangedAsync(node, !isExpanded);
     }
 
     private async Task OnExpandedChangedAsync(LogFolderNode node, bool expanded)
@@ -17191,9 +17850,21 @@ LENGTH 29723
             _expanded.Add(node.RelativePath);
             if (!_childCache.ContainsKey(node.RelativePath))
             {
-                var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
-                _childCache[node.RelativePath] = children;
+                _loadingNodes.Add(node.RelativePath);
+                _loadingFiles = true;
                 StateHasChanged();
+                await Task.Yield();
+                try
+                {
+                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
+                    _childCache[node.RelativePath] = children;
+                }
+                finally
+                {
+                    _loadingNodes.Remove(node.RelativePath);
+                    _loadingFiles = _loadingNodes.Count > 0;
+                    StateHasChanged();
+                }
             }
         }
         else
@@ -17207,13 +17878,26 @@ LENGTH 29723
     private async Task SelectPathAsync(string relativePath)
     {
         _selectedPath = relativePath;
+
+        // Clear stale files and show the progress bar immediately.
+        _files.Clear();
+        _loadingFiles = true;
+        StateHasChanged();
+        await Task.Yield();
+
         var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
-        if ((DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
+        var sameFolder  = relativePath == _lastManualPollPath;
+        if (!sameFolder || (DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
         {
-            _lastManualPoll = DateTime.UtcNow;
+            _lastManualPoll     = DateTime.UtcNow;
+            _lastManualPollPath = relativePath;
             await LoadFilesAsync();
         }
-        else { StateHasChanged(); }
+        else
+        {
+            _loadingFiles = _loadingNodes.Count > 0;
+            StateHasChanged();
+        }
     }
 
     private async Task NavigateBreadcrumbAsync(string relativePath)
@@ -17263,12 +17947,9 @@ LENGTH 29723
     private async Task LoadFilesAsync()
     {
         if (_selectedPath is null) return;
-        _loadingFiles = true;
-        StateHasChanged();
 
-        var path    = _selectedPath;
-        var pending = new List<LogFileEntry>();
-        var first   = true;
+        var path = _selectedPath; // capture — user may change selection while awaiting
+        _files.Clear();
         try
         {
             var serverTasks = _servers.Select(async server =>
@@ -17276,21 +17957,23 @@ LENGTH 29723
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
                 await InvokeAsync(() =>
                 {
-                    pending.AddRange(results);
-                    if (first) { first = false; _files = new List<LogFileEntry>(pending); }
-                    else       { _files.AddRange(results); }
+                    // Discard if the user already navigated elsewhere.
+                    if (_selectedPath != path) return;
+                    _files.AddRange(results);
                     StateHasChanged();
                 });
             });
 
             await Task.WhenAll(serverTasks);
-            if (first) _files.Clear();
             _lastScan = DateTime.UtcNow;
         }
         finally
         {
-            _loadingFiles = false;
-            StateHasChanged();
+            if (_selectedPath == path)
+            {
+                _loadingFiles = _loadingNodes.Count > 0;
+                StateHasChanged();
+            }
         }
     }
 
@@ -17374,7 +18057,7 @@ LENGTH 29723
     // ── helpers ───────────────────────────────────────────────────────────
 
     private void OpenInViewer(LogFileEntry file) =>
-        TabService.OpenOrFocus(TabModel.CreateLogViewer(file.FullPath, Env));
+        TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
 
     private void OpenInWorkspace(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
@@ -17391,7 +18074,7 @@ LENGTH 29723
         InvokeAsync(() =>
         {
             var label = System.IO.Path.GetFileName(filename) is { Length: > 0 } n ? n : filename;
-            var tab = TabModel.CreateLogViewer("local:" + key, Env);
+            var tab   = TabModel.CreateLogWorkspace("local:" + key, Env);
             tab.Label      = label;
             tab.NoNavigate = true;
             TabService.OpenOrFocus(tab);
@@ -17419,146 +18102,164 @@ LENGTH 29723
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 18537
+LENGTH 23570
 @using NxtUI.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="bm-page bm-page-fill bm-lv-page">
+<div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
 
-    <!-- ── Toolbar row 1: file info ──────────────────────────────────────── -->
-    <div class="bm-lv-toolbar">
-        <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="bm-muted" Style="flex-shrink:0" />
-        <MudText Typo="Typo.body2" Style="font-weight:600;flex-shrink:0">@_fileName</MudText>
-        <span class="bm-muted bm-toolbar-hint"
-              style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:11px">
-            @_pathDisplay
-        </span>
-
-        <div class="bm-lv-toolbar-right">
-            @if (_isTailing)
-            {
-                <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                         Style="font-size:10px;height:20px;padding:0 6px">LIVE</MudChip>
-            }
-            <MudTooltip Text="Refresh now">
-                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                               Size="Size.Small" OnClick="RefreshAsync"
-                               Disabled="@_isLoading" />
+    <!-- ── Cell header: always visible ───────────────────────────────────── -->
+    <div class="bm-lv-header @(IsSelected && IsMultiPane ? "bm-lv-header-selected" : "")">
+        @if (OnOpen.HasDelegate)
+        {
+            <MudTooltip Text="Open file… (Ctrl+O)">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnOpen.InvokeAsync())" />
             </MudTooltip>
-            @if (_pathDisplay != "local file")
-            {
-                <MudTooltip Text="Copy share link with current line">
-                    <MudIconButton Icon="@Icons.Material.Outlined.Link"
-                                   Size="Size.Small" OnClick="ShareAsync" />
-                </MudTooltip>
-            }
-            @if (OnSplitH.HasDelegate)
-            {
-                <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-                <MudTooltip Text="Split right">
-                    <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
-                                   Size="Size.Small" OnClick="@(() => OnSplitH.InvokeAsync())" />
-                </MudTooltip>
-                <MudTooltip Text="Split down">
-                    <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
-                                   Size="Size.Small" OnClick="@(() => OnSplitV.InvokeAsync())" />
-                </MudTooltip>
-                <MudTooltip Text="Close panel">
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small" OnClick="@(() => OnClose.InvokeAsync())" />
-                </MudTooltip>
-            }
-        </div>
+        }
+
+        <MudTooltip Text="@_pathTooltip" Delay="400">
+            <span class="bm-lv-header-name" @onclick="OnNameClickAsync">@_fileName</span>
+        </MudTooltip>
+        <span class="bm-lv-header-path">@_pathDisplay</span>
+
+        @if (_isTailing)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                     Style="font-size:10px;height:18px;padding:0 5px;flex-shrink:0">LIVE</MudChip>
+        }
+        @if (_pathDisplay != "local file")
+        {
+            <MudTooltip Text="Copy share link (Ctrl+Shift+C)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Link"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="ShareAsync" />
+            </MudTooltip>
+        }
+        <MudTooltip Text="Refresh (F5)">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small" Class="bm-lv-header-btn"
+                           OnClick="RefreshAsync" Disabled="@_isLoading" />
+        </MudTooltip>
+        @if (OnDupH.HasDelegate)
+        {
+            <MudTooltip Text="Duplicate right (Ctrl+Shift+→)">
+                <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnDupH.InvokeAsync())" />
+            </MudTooltip>
+        }
+        @if (OnDupV.HasDelegate)
+        {
+            <MudTooltip Text="Duplicate down (Ctrl+Shift+↓)">
+                <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnDupV.InvokeAsync())" />
+            </MudTooltip>
+        }
+        @if (OnClose.HasDelegate)
+        {
+            <MudTooltip Text="Close (Ctrl+W)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnClose.InvokeAsync())" />
+            </MudTooltip>
+        }
     </div>
 
-    <!-- ── Toolbar row 2: find + filter + bookmarks + display ───────────── -->
-    <div class="bm-lv-toolbar">
+    <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
+    @if (IsSelected)
+    {
+    <div class="bm-lv-toolbar bm-lv-toolbar-sm">
         <div class="bm-lv-find">
-            <MudTextField T="string" @bind-Value="_findTerm"
-                          Placeholder="Find…"
+            <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
+                          Placeholder="Find… (Ctrl+F)"
                           Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="width:100%"
+                          Style="width:100%;font-size:11px"
                           Adornment="Adornment.End"
                           AdornmentIcon="@Icons.Material.Outlined.Search"
                           OnAdornmentClick="RunFindAsync"
                           @onkeydown="OnFindKeyDown" />
         </div>
 
-        <MudTooltip Text="Regular expression">
+        <MudTooltip Text="Regular expression (Alt+R)">
             <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
                                  Icon="@Icons.Material.Outlined.Code"
                                  ToggledIcon="@Icons.Material.Outlined.Code"
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
-        <MudTooltip Text="Case sensitive">
+        <MudTooltip Text="Case sensitive (Alt+C)">
             <MudToggleIconButton Toggled="@_caseSensitive" ToggledChanged="OnCaseToggled"
                                  Icon="@Icons.Material.Outlined.TextFields"
                                  ToggledIcon="@Icons.Material.Outlined.TextFields"
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
-        <MudTooltip Text="Previous match (Shift+Enter)">
+        <MudTooltip Text="Previous match (Shift+F3)">
             <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
                            Size="Size.Small" OnClick="PrevMatchAsync"
                            Disabled="@(_matchCount == 0)" />
         </MudTooltip>
-        <MudTooltip Text="Next match (Enter)">
+        <MudTooltip Text="Next match (F3)">
             <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
                            Size="Size.Small" OnClick="NextMatchAsync"
                            Disabled="@(_matchCount == 0)" />
         </MudTooltip>
         @if (!string.IsNullOrEmpty(_findTerm))
         {
-            <span class="bm-lv-match-count">@MatchLabel</span>
+            <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
         }
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <FilterBox Value="@_filterStr"
+        <FilterBox @ref="_filterBox"
+                   Value="@_filterStr"
                    OnFilterChanged="OnFilterChangedAsync"
                    ParseError="@_filterError"
-                   Placeholder="Filter…"
+                   Placeholder="Filter… (Ctrl+G)"
                    Class="bm-lv-filter"
                    FieldHints="@LogFieldHints" />
         @if (_filterStr.Length > 0)
         {
-            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap">
+            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
                 @_visibleCount / @_totalCount
             </span>
         }
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <MudTooltip Text="Previous bookmark">
+        <MudTooltip Text="Previous bookmark (Shift+F2)">
             <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
                            Size="Size.Small" OnClick="PrevBookmarkAsync" />
         </MudTooltip>
-        <MudTooltip Text="Next bookmark">
+        <MudTooltip Text="Next bookmark (F2)">
             <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
                            Size="Size.Small" OnClick="NextBookmarkAsync" />
         </MudTooltip>
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <MudTooltip Text="Decrease font">
+        <MudTooltip Text="Decrease font (Ctrl+−)">
             <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
                            Size="Size.Small" OnClick="DecreaseFontAsync"
                            Disabled="@(_fontSize <= _fontSizes[0])" />
         </MudTooltip>
-        <MudTooltip Text="Increase font">
+        <MudTooltip Text="Increase font (Ctrl+=)">
             <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
                            Size="Size.Small" OnClick="IncreaseFontAsync"
                            Disabled="@(_fontSize >= _fontSizes[^1])" />
         </MudTooltip>
-        <MudTooltip Text="Word wrap">
+        <MudTooltip Text="Word wrap (Alt+Z)">
             <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWrapToggled"
                                  Icon="@Icons.Material.Outlined.WrapText"
                                  ToggledIcon="@Icons.Material.Outlined.WrapText"
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
     </div>
+    }
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
@@ -17576,14 +18277,16 @@ LENGTH 18537
 </div>
 
 @code {
-    [Parameter] public string? Path     { get; set; }
-    [Parameter] public string  Env      { get; set; } = string.Empty;
-    [Parameter] public string? FileName { get; set; }
+    [Parameter] public string? Path       { get; set; }
+    [Parameter] public string  Env        { get; set; } = string.Empty;
+    [Parameter] public string? FileName   { get; set; }
+    [Parameter] public bool    IsSelected  { get; set; }
+    [Parameter] public bool    IsMultiPane { get; set; }
 
-    // Workspace split/close — only rendered when set by WorkspacePanel
-    [Parameter] public EventCallback OnSplitH { get; set; }
-    [Parameter] public EventCallback OnSplitV { get; set; }
-    [Parameter] public EventCallback OnClose  { get; set; }
+    [Parameter] public EventCallback OnOpen  { get; set; }
+    [Parameter] public EventCallback OnDupH  { get; set; }
+    [Parameter] public EventCallback OnDupV  { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
 
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 
@@ -17598,15 +18301,14 @@ LENGTH 18537
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    // Viewport component ref
-    private LogViewport? _viewport;
+    private LogViewport?          _viewport;
+    private MudTextField<string>? _findField;
+    private FilterBox?            _filterBox;
 
-    // Lifecycle flags
     private string? _loadedPath;
     private bool    _rendered;
     private bool    _dirty;
 
-    // Loading state
     private bool    _isLoading;
     private string? _error;
     private string? _rawContent;
@@ -17614,33 +18316,35 @@ LENGTH 18537
     private int?    _anchorLine;
     private long    _fileOffset;
 
-    // Filter
     private string  _filterStr   = "";
     private string? _filterError;
     private int     _totalCount;
     private int     _visibleCount;
 
-    // Find
     private string _findTerm      = "";
     private bool   _isRegex;
     private bool   _caseSensitive;
     private int    _matchCount;
     private int    _matchCurrent;
 
-    // Display
     private int  _fontSize = 13;
-    private bool _wordWrap = true;
+    private bool _wordWrap = false;
 
-    // Live tail
     private bool           _isTailing;
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
+
+    private bool _preventKey;
 
     private string _fileName => FileName is { Length: > 0 } fn ? fn :
         System.IO.Path.GetFileName((Path ?? "").TrimEnd('\\', '/')) is { Length: > 0 } n ? n : "Log";
 
     private string _pathDisplay => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
         ? "local file" : (Path ?? "");
+
+    private string _pathTooltip => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
+        ? "local file  •  Ctrl+Click to copy"
+        : $"{Path}  •  Ctrl+Click to copy";
 
     private string MatchLabel =>
         _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
@@ -17665,13 +18369,105 @@ LENGTH 18537
         }
     }
 
-    // ── Word double-click (from LogViewport) ──────────────────────────────
-
     private async Task OnWordDoubleClickedAsync(string word)
     {
         _findTerm = word;
         await RunFindAsync();
         StateHasChanged();
+    }
+
+    private async Task OnNameClickAsync(MouseEventArgs e)
+    {
+        if (!e.CtrlKey) return;
+        var text = Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
+            ? Path["local:".Length..]
+            : (Path ?? "");
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
+        catch { await JS.InvokeVoidAsync("copyText", text); }
+    }
+
+    private async Task OnPageKeyDown(KeyboardEventArgs e)
+    {
+        _preventKey = false;
+        var k = e.Key;
+
+        // ── Cell controls ─────────────────────────────────────────────────
+        // Ctrl+O — open
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "o" && OnOpen.HasDelegate)
+            { _preventKey = true; await OnOpen.InvokeAsync(); return; }
+
+        // Ctrl+W — close
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "w" && OnClose.HasDelegate)
+            { _preventKey = true; await OnClose.InvokeAsync(); return; }
+
+        // F5 — refresh
+        if (!e.CtrlKey && !e.AltKey && k == "F5")
+            { _preventKey = true; await RefreshAsync(); return; }
+
+        // Ctrl+Shift+→ — duplicate right
+        if (e.CtrlKey && e.ShiftKey && k == "ArrowRight" && OnDupH.HasDelegate)
+            { _preventKey = true; await OnDupH.InvokeAsync(); return; }
+
+        // Ctrl+Shift+↓ — duplicate down
+        if (e.CtrlKey && e.ShiftKey && k == "ArrowDown" && OnDupV.HasDelegate)
+            { _preventKey = true; await OnDupV.InvokeAsync(); return; }
+
+        // Ctrl+Shift+C — share link
+        if (e.CtrlKey && e.ShiftKey && k == "C")
+            { _preventKey = true; await ShareAsync(); return; }
+
+        // ── Find / filter ─────────────────────────────────────────────────
+        // Ctrl+F — focus find
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "f")
+        {
+            _preventKey = true;
+            if (_findField is not null) await _findField.FocusAsync().AsTask();
+            return;
+        }
+        // Ctrl+G — focus filter
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "g")
+        {
+            _preventKey = true;
+            if (_filterBox is not null) await _filterBox.FocusAsync();
+            return;
+        }
+        // F3 — next match
+        if (!e.CtrlKey && !e.AltKey && !e.ShiftKey && k == "F3")
+            { _preventKey = true; await NextMatchAsync(); return; }
+
+        // Shift+F3 — previous match
+        if (!e.CtrlKey && !e.AltKey && e.ShiftKey && k == "F3")
+            { _preventKey = true; await PrevMatchAsync(); return; }
+
+        // Alt+R — toggle regex
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "r")
+            { _preventKey = true; await OnRegexToggled(!_isRegex); return; }
+
+        // Alt+C — toggle case sensitive
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "c")
+            { _preventKey = true; await OnCaseToggled(!_caseSensitive); return; }
+
+        // ── Bookmarks ─────────────────────────────────────────────────────
+        // F2 — next bookmark
+        if (!e.CtrlKey && !e.AltKey && !e.ShiftKey && k == "F2")
+            { _preventKey = true; await NextBookmarkAsync(); return; }
+
+        // Shift+F2 — previous bookmark
+        if (!e.CtrlKey && !e.AltKey && e.ShiftKey && k == "F2")
+            { _preventKey = true; await PrevBookmarkAsync(); return; }
+
+        // ── Display ───────────────────────────────────────────────────────
+        // Ctrl+= or Ctrl++ — increase font
+        if (e.CtrlKey && !e.AltKey && (k == "=" || k == "+"))
+            { _preventKey = true; await IncreaseFontAsync(); return; }
+
+        // Ctrl+- or Ctrl+_ — decrease font
+        if (e.CtrlKey && !e.AltKey && (k == "-" || k == "_"))
+            { _preventKey = true; await DecreaseFontAsync(); return; }
+
+        // Alt+Z — word wrap
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "z")
+            { _preventKey = true; await OnWrapToggled(!_wordWrap); return; }
     }
 
     // ── File loading ──────────────────────────────────────────────────────
@@ -17727,8 +18523,6 @@ LENGTH 18537
             StartTail();
         }
     }
-
-    // ── Refresh ───────────────────────────────────────────────────────────
 
     private async Task RefreshAsync()
     {
@@ -17894,16 +18688,22 @@ LENGTH 18537
     }
 }
 FILE src/NxtUI.Web/Pages/LogWorkspace.razor
-LENGTH 1548
+LENGTH 3929
 @using NxtUI.Models
-@implements IDisposable
+@using NxtUI.Components
+@inject IDialogService DialogService
+@inject TabService TabService
 
-<div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;">
+<div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;flex-direction:column;">
     <WorkspacePanel Node="@_root"
-                    OnSplit="OnSplit"
+                    SelectedLeaf="@_selected"
+                    ShowRing="@(_root is not WsLeaf)"
+                    OnSelect="OnSelect"
+                    OnOpen="OnOpen"
+                    OnDupH="OnDupH"
+                    OnDupV="OnDupV"
                     OnClose="OnClose"
-                    OnRatioChanged="OnRatioChanged"
-                    OnPathSet="OnPathSet" />
+                    OnRatioChanged="OnRatioChanged" />
 </div>
 
 @code {
@@ -17911,25 +18711,90 @@ LENGTH 1548
     [Parameter] public string  Env      { get; set; } = string.Empty;
     [Parameter] public string? FileName { get; set; }
 
-    private WsNode _root = null!;
+    private WsNode  _root     = null!;
+    private WsLeaf? _selected;
+
+    private static readonly DialogOptions _dialogOpts = new()
+    {
+        CloseButton      = true,
+        MaxWidth         = MaxWidth.Small,
+        FullWidth        = false,
+        CloseOnEscapeKey = true,
+        BackdropClick    = true,
+    };
 
     protected override void OnInitialized()
     {
-        _root = new WsLeaf(Path, Env, FileName);
+        var leaf  = new WsLeaf(Path, Env, FileName);
+        _root     = leaf;
+        _selected = leaf;
     }
 
-    private void OnSplit((WsLeaf leaf, WsDir dir) args)
+    private void OnSelect(WsLeaf leaf) { _selected = leaf; StateHasChanged(); }
+
+    private async Task OnOpen(WsLeaf leaf)
     {
-        var sibling = new WsLeaf(null, args.leaf.Env);
-        _root = _root.Replace(args.leaf, new WsSplit(args.dir, 0.5, args.leaf, sibling));
+        _selected = leaf;
+        var dialog = await DialogService.ShowAsync<OpenLogFileDialog>("Open log file", _dialogOpts);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        var (path, placement) = ((string, OpenLogFileDialog.WsPlacement))result.Data!;
+        var fileName = System.IO.Path.GetFileName(path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : path;
+
+        switch (placement)
+        {
+            case OpenLogFileDialog.WsPlacement.Replace:
+                leaf.Path     = path;
+                leaf.FileName = fileName;
+                break;
+
+            case OpenLogFileDialog.WsPlacement.Left:
+            case OpenLogFileDialog.WsPlacement.Top:
+            {
+                var dir     = placement == OpenLogFileDialog.WsPlacement.Left ? WsDir.H : WsDir.V;
+                var newLeaf = new WsLeaf(path, leaf.Env, fileName);
+                _root       = _root.Replace(leaf, new WsSplit(dir, 0.5, newLeaf, leaf));
+                _selected   = newLeaf;
+                break;
+            }
+
+            case OpenLogFileDialog.WsPlacement.Right:
+            case OpenLogFileDialog.WsPlacement.Bottom:
+            {
+                var dir     = placement == OpenLogFileDialog.WsPlacement.Right ? WsDir.H : WsDir.V;
+                var newLeaf = new WsLeaf(path, leaf.Env, fileName);
+                _root       = _root.Replace(leaf, new WsSplit(dir, 0.5, leaf, newLeaf));
+                _selected   = newLeaf;
+                break;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void OnDupH(WsLeaf leaf) => Duplicate(leaf, WsDir.H);
+    private void OnDupV(WsLeaf leaf) => Duplicate(leaf, WsDir.V);
+
+    private void Duplicate(WsLeaf leaf, WsDir dir)
+    {
+        var clone = new WsLeaf(leaf.Path, leaf.Env, leaf.FileName);
+        _root     = _root.Replace(leaf, new WsSplit(dir, 0.5, leaf, clone));
+        _selected = clone;
         StateHasChanged();
     }
 
     private void OnClose(WsLeaf leaf)
     {
-        var next = _root.Remove(leaf);
-        if (next is null) return; // can't close the last panel
-        _root = next;
+        if (_root is WsLeaf)
+        {
+            if (TabService.ActiveTab is { } tab) TabService.Close(tab.Id);
+            return;
+        }
+        var sibling = _root.FindLeaf(l => !ReferenceEquals(l, leaf));
+        var next    = _root.Remove(leaf);
+        if (next is null) return;
+        _root     = next;
+        _selected = sibling;
         StateHasChanged();
     }
 
@@ -17938,15 +18803,6 @@ LENGTH 1548
         args.split.Ratio = args.ratio;
         StateHasChanged();
     }
-
-    private void OnPathSet((WsLeaf leaf, string path) args)
-    {
-        args.leaf.Path     = args.path;
-        args.leaf.FileName = System.IO.Path.GetFileName(args.path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : args.path;
-        StateHasChanged();
-    }
-
-    public void Dispose() { }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
 LENGTH 18107
@@ -19758,7 +20614,7 @@ LENGTH 11083
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28667
+LENGTH 28784
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Filtering
@@ -19847,7 +20703,15 @@ LENGTH 28667
                     <div class="bm-svc-group" @key="@(group.Key ?? "__ungrouped__")">
                         @if (group.Key != null)
                         {
-                            <div class="bm-svc-group-header">@group.Key</div>
+                            <div class="bm-svc-group-header">
+                                @group.Key
+                                @{ var groupRam = group.Sum(s => s.RamMb ?? 0); }
+                                @if (groupRam > 0)
+                                {
+                                    <span class="bm-svc-group-ram">@FormatMb(groupRam) MB</span>
+                                }
+                                <span class="bm-svc-group-count">@group.Count()</span>
+                            </div>
                         }
                         <div class="bm-svc-card-row">
                             @foreach (var s in group)
@@ -19865,18 +20729,14 @@ LENGTH 28667
                                         @spark.Svg
                                     }
                                     <div class="bm-svc-card-header">
-                                        <MudIcon Icon="@(s.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
-                                                 Size="Size.Small"
-                                                 Color="@(s.IsOnline ? Color.Success : Color.Error)"
-                                                 Class="bm-svc-dot" />
-                                        <span class="bm-svc-card-name">@s.ServiceName</span>
+                                        <span class="bm-svc-card-name" title="@s.ServiceName">@s.ServiceName</span>
                                     </div>
                                     <div class="bm-svc-card-host">@s.HostName</div>
                                     <div class="bm-svc-card-meta">
                                         <span>PID @s.ProcessId</span>
                                         @if (s.RamMb is not null || s.PeakMb is not null)
                                         {
-                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
+                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
                                         }
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
                                     </div>
@@ -20011,7 +20871,7 @@ LENGTH 28667
     private int  _page     = 1;
     private int  _pageSize = 25;
     private bool _loading  = false;
-    private string  _filterText       = string.Empty;
+    private string  _filterText       = "updated:>-1h";
     private string? _filterParseError = null;
     private string  _groupBy          = "None";
     private bool    _graphView        = true;
@@ -20394,7 +21254,7 @@ public partial class ServicesPage
     };
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 4627
+LENGTH 4261
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
 @inject IJSRuntime JS
@@ -20419,32 +21279,17 @@ LENGTH 4627
                             Choose dark, light, or follow your OS setting
                         </MudText>
                     </div>
-                    <div class="bm-theme-switcher">
-                        <MudButton Variant="@(_mode == ThemeMode.Dark ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.DarkMode"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.Dark))"
-                                   Class="bm-theme-btn">
-                            Dark
-                        </MudButton>
-                        <MudButton Variant="@(_mode == ThemeMode.Light ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.LightMode"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.Light))"
-                                   Class="bm-theme-btn">
-                            Light
-                        </MudButton>
-                        <MudButton Variant="@(_mode == ThemeMode.System ? Variant.Filled : Variant.Outlined)"
-                                   StartIcon="@Icons.Material.Outlined.SettingsBrightness"
-                                   Size="Size.Small"
-                                   Color="Color.Primary"
-                                   OnClick="@(() => SetMode(ThemeMode.System))"
-                                   Class="bm-theme-btn">
-                            System
-                        </MudButton>
-                    </div>
+                    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-theme-switcher">
+                        <MudButton StartIcon="@(_mode == ThemeMode.Dark ? Icons.Material.Filled.DarkMode : Icons.Material.Outlined.DarkMode)"
+                                   Class="@(_mode == ThemeMode.Dark ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetMode(ThemeMode.Dark))">Dark</MudButton>
+                        <MudButton StartIcon="@(_mode == ThemeMode.Light ? Icons.Material.Filled.LightMode : Icons.Material.Outlined.LightMode)"
+                                   Class="@(_mode == ThemeMode.Light ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetMode(ThemeMode.Light))">Light</MudButton>
+                        <MudButton StartIcon="@(_mode == ThemeMode.System ? Icons.Material.Filled.SettingsBrightness : Icons.Material.Outlined.SettingsBrightness)"
+                                   Class="@(_mode == ThemeMode.System ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetMode(ThemeMode.System))">System</MudButton>
+                    </MudButtonGroup>
                 </div>
             </MudPaper>
         </MudItem>
@@ -21282,7 +22127,7 @@ LENGTH 30702
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 16550
+LENGTH 16621
 @page "/"
 @namespace NxtUI.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -21330,7 +22175,7 @@ LENGTH 16550
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=9"></script>
+    <script src="js/d3-home-treemap.js?v=11"></script>
 
     <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
          This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
@@ -21366,6 +22211,8 @@ LENGTH 16550
     <!-- Local log file picker + test log generator -->
     <script>
         window._localFiles = new Map();
+
+        window.bmSetWsRef = function (ref) { window._wsRef = ref; };
 
         window.bmOpenLocalLogFile = function (dotnetRef) {
             var input = document.createElement('input');
@@ -21647,14 +22494,172 @@ LENGTH 267
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:64177;http://localhost:64178"
+      "applicationUrl": "https://localhost:57443;http://localhost:57080"
     }
   }
-}FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
-LENGTH 1819
-using NxtUI.Configuration;
+}FILE src/NxtUI.Web/Services/BatchCatalogService.cs
+LENGTH 6127
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using NxtUI.Models;
+using NxtUI.Services;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Loads the batch catalog from <c>wwwroot/data/batch-catalog.json</c> and
+/// triggers jobs by POSTing a JSON body to the resolved endpoint URL.
+/// Swap the HTTP call with a real client once the backend is available.
+/// </summary>
+public sealed class BatchCatalogService : IBatchCatalogService
+{
+    private readonly IWebHostEnvironment  _env;
+    private readonly IHttpClientFactory   _http;
+    private readonly ILogger<BatchCatalogService> _log;
+
+    private IReadOnlyList<BatchDefinition>? _cache;
+    private readonly SemaphoreSlim _lock = new(1, 1);
+
+    public BatchCatalogService(
+        IWebHostEnvironment env,
+        IHttpClientFactory http,
+        ILogger<BatchCatalogService> log)
+    {
+        _env  = env;
+        _http = http;
+        _log  = log;
+    }
+
+    public async Task<IReadOnlyList<BatchDefinition>> GetBatchesAsync(CancellationToken ct = default)
+    {
+        if (_cache is not null) return _cache;
+
+        await _lock.WaitAsync(ct);
+        try
+        {
+            if (_cache is not null) return _cache;
+
+            var path = Path.Combine(_env.WebRootPath, "data", "batch-catalog.json");
+            await using var stream = File.OpenRead(path);
+            var catalog = await JsonSerializer.DeserializeAsync<BatchCatalog>(stream,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, ct);
+            _cache = catalog?.Batches ?? [];
+            return _cache;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<BatchTriggerResult> TriggerAsync(
+        BatchDefinition            batch,
+        Dictionary<string, string> values,
+        string                     env,
+        CancellationToken          ct = default)
+    {
+        // Build resolved flat values (param values take precedence, then built-in placeholders)
+        var resolved = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase)
+        {
+            ["id"]        = batch.Id,
+            ["env"]       = env,
+            ["today"]     = DateTime.Today.ToString("yyyy-MM-dd"),
+            ["yesterday"] = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd"),
+            ["month"]     = DateTime.Today.Month.ToString("D2"),
+            ["year"]      = DateTime.Today.Year.ToString(),
+        };
+
+        var url  = Substitute(batch.Endpoint.Url, resolved);
+        var body = BuildBody(batch, values);
+
+        _log.LogInformation("Triggering {Batch} → {Method} {Url}", batch.Id, batch.Endpoint.Method, url);
+
+        try
+        {
+            var client  = _http.CreateClient();
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var req = new HttpRequestMessage(
+                new HttpMethod(batch.Endpoint.Method), url) { Content = content };
+
+            using var resp = await client.SendAsync(req, ct);
+            var respBody   = await resp.Content.ReadAsStringAsync(ct);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                var jobId = TryParseJobId(respBody);
+                return new BatchTriggerResult(true, url, body,
+                    JobId:   jobId,
+                    Message: $"HTTP {(int)resp.StatusCode} — job queued{(jobId is not null ? $" ({jobId})" : "")}");
+            }
+
+            return new BatchTriggerResult(false, url, body,
+                Error: $"HTTP {(int)resp.StatusCode}: {respBody.Truncate(200)}");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Trigger failed for {Batch}", batch.Id);
+            // In demo mode there is no real backend — simulate success so the UI
+            // shows the resolved URL/body without crashing.
+            return new BatchTriggerResult(true, url, body,
+                JobId:   Guid.NewGuid().ToString("N")[..8],
+                Message: $"[MOCK] Endpoint unreachable — simulated success. Would call: {batch.Endpoint.Method} {url}");
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static string Substitute(string template, Dictionary<string, string> values)
+    {
+        var sb = new StringBuilder(template);
+        foreach (var (k, v) in values)
+            sb.Replace($"{{{k}}}", v);
+        return sb.ToString();
+    }
+
+    private static string BuildBody(BatchDefinition batch, Dictionary<string, string> values)
+    {
+        var props = new Dictionary<string, object?>();
+        foreach (var p in batch.Parameters)
+        {
+            var raw = values.TryGetValue(p.Key, out var v) ? v : p.DefaultString();
+            props[p.Key] = p.Type switch
+            {
+                "boolean"     => raw is "true" or "True" or "1",
+                "number"      => double.TryParse(raw,
+                                     System.Globalization.NumberStyles.Any,
+                                     System.Globalization.CultureInfo.InvariantCulture,
+                                     out var n) ? n : (object?)raw,
+                "multiselect" => raw.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                    .Select(s => s.Trim()).ToArray(),
+                _             => raw
+            };
+        }
+        return JsonSerializer.Serialize(props, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string? TryParseJobId(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var name in new[] { "jobId", "id", "runId", "correlationId" })
+                if (doc.RootElement.TryGetProperty(name, out var el))
+                    return el.GetString();
+        }
+        catch { }
+        return null;
+    }
+}
+
+file static class StringExtensions
+{
+    public static string Truncate(this string s, int max) =>
+        s.Length <= max ? s : s[..max] + "…";
+}
+FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
+LENGTH 1632
 using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Services;
+using NxtUI.Models;
 
 namespace NxtUI.Services;
 
@@ -21665,29 +22670,21 @@ namespace NxtUI.Services;
 /// </summary>
 public class EnvironmentSelectorService
 {
-    private readonly List<EnvironmentInfo> _environments;
+    private readonly IEnvironmentRegistry _registry;
     private string _selectedId;
 
-    public EnvironmentSelectorService(IOptions<AppSettings> settings)
+    public EnvironmentSelectorService(IEnvironmentRegistry registry, IOptions<AppSettings> settings)
     {
-        _environments = settings.Value.Environments
-            .Select(e => new EnvironmentInfo
-            {
-                Id    = e.Id,
-                Label = e.Label,
-                Tier  = e.Tier
-            })
-            .ToList();
-
+        _registry   = registry;
         _selectedId = settings.Value.DefaultEnvironment;
 
         // Fall back to first environment if default is not in the list
-        if (_environments.All(e => e.Id != _selectedId) && _environments.Count > 0)
-            _selectedId = _environments[0].Id;
+        if (_registry.Find(_selectedId) is null && _registry.GetAll().Count > 0)
+            _selectedId = _registry.GetAll()[0].Id;
     }
 
     /// <summary>All configured environments.</summary>
-    public IReadOnlyList<EnvironmentInfo> Environments => _environments;
+    public IReadOnlyList<EnvironmentInfo> Environments => _registry.GetAll();
 
     /// <summary>Currently selected environment id.</summary>
     public string SelectedId
@@ -21702,14 +22699,13 @@ public class EnvironmentSelectorService
     }
 
     /// <summary>The full <see cref="EnvironmentInfo"/> for the selected environment.</summary>
-    public EnvironmentInfo? Selected =>
-        _environments.FirstOrDefault(e => e.Id == _selectedId);
+    public EnvironmentInfo? Selected => _registry.Find(_selectedId);
 
     /// <summary>Raised when the selection changes, so all subscribers can re-render.</summary>
     public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 11314
+LENGTH 11063
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -21751,12 +22747,6 @@ public class LogBrowserService : ILogBrowserService
     {
         if (string.IsNullOrWhiteSpace(_settings.LogsFolder)) return null;
         return _settings.LogsFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
-    }
-
-    public IReadOnlyList<string> GetServers(IEnumerable<string> heartbeatHosts)
-    {
-        if (_settings.Servers.Count > 0) return _settings.Servers;
-        return heartbeatHosts.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
     }
 
     public async Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
@@ -23670,7 +24660,7 @@ public class TabService
     private void Notify() => OnChange?.Invoke();
 }
 FILE src/NxtUI.Web/Services/TestLogGenerator.cs
-LENGTH 7414
+LENGTH 17499
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
@@ -23679,18 +24669,12 @@ using NxtUI.Models;
 namespace NxtUI.Services;
 
 /// <summary>
-/// Test-only background service. Materialises metrics log files in folders that
-/// match the LogPaths templates (same placeholder expansion the discovery service
-/// uses), so the Services page can find them and the monitoring/parsing can be
-/// exercised end-to-end without real services.
+/// Test-only background service that:
+///   1. Writes Metrics.log files under ServiceTemplates paths (for the monitoring pipeline).
+///   2. Writes realistic App.log files under LogsFolder paths (for the log browser).
 ///
-/// - Seeds each file with a few backfilled lines on startup.
-/// - Appends a new metrics line to every file each WriteIntervalSeconds.
-/// - Deterministically skips ~1/3 of services (by PID) so some have no logs.
-///
-/// Gated by TestLogGenerator:Enabled — keep it off in production. In Development
-/// appsettings, Logs:ServiceTemplates points at a local writable folder so we don't
-/// hit (and hang on) the real UNC shares.
+/// Both sets use today's date so the log browser always shows a folder for the current day.
+/// Gated by TestLogGenerator:Enabled — keep it off in production.
 /// </summary>
 public sealed class TestLogGenerator : BackgroundService
 {
@@ -23700,7 +24684,77 @@ public sealed class TestLogGenerator : BackgroundService
     private readonly IHeartbeatService         _heartbeat;
     private readonly ILogger<TestLogGenerator> _log;
     private readonly Random                    _rng = new();
-    private readonly List<Target>              _targets = new();
+    private readonly List<MetricsTarget>       _metricsTargets = new();
+    private readonly List<AppLogTarget>        _appLogTargets  = new();
+
+    // ── realistic app-log vocabulary ─────────────────────────────────────────
+    private static readonly string[] InfoMessages =
+    [
+        "Request processed successfully in {ms}ms",
+        "Batch {b} completed: {n} items processed",
+        "Connection established to {host}:{port}",
+        "Cache hit for key={k} (ttl={n}s remaining)",
+        "Scheduled job started: interval={n}s",
+        "Health check passed for component={c}",
+        "Configuration reloaded from {src}",
+        "Queue consumer started on partition={p}",
+        "Snapshot committed: revision={n}",
+        "Session {id} authenticated successfully",
+    ];
+    private static readonly string[] WarnMessages =
+    [
+        "Slow query detected: {ms}ms for table={t}",
+        "Retry attempt {n}/3 for operation={op}",
+        "Queue depth high: {n} pending messages on partition={p}",
+        "Rate limit approaching: {n}/100 requests used",
+        "Memory usage at {n}% of configured limit",
+        "Circuit breaker half-open — allowing probe request",
+        "Dependency {dep} response time degraded: {ms}ms",
+        "Dead-letter queue growing: {n} messages",
+    ];
+    private static readonly string[] DebugMessages =
+    [
+        "Processing item id={n} batch={b}",
+        "Deserializing payload size={n} bytes",
+        "Acquiring lock on resource={r}",
+        "Evaluating rule {n} of {m}",
+        "Cache miss for key={k} — fetching from DB",
+        "Correlation id={id} propagated to downstream",
+    ];
+    private static readonly string[] ErrorMessages =
+    [
+        "Unhandled exception in {caller}",
+        "Failed to connect to {host}:{port} after {n} retries",
+        "Timeout waiting for lock on resource={r}",
+        "Deserialization error in message id={id}",
+    ];
+    private static readonly string[] ExceptionTypes =
+    [
+        "System.InvalidOperationException",
+        "System.TimeoutException",
+        "System.IO.IOException",
+        "System.NullReferenceException",
+        "System.Net.Http.HttpRequestException",
+    ];
+    private static readonly string[] Callers =
+    [
+        "Service.ExecuteAsync",
+        "Worker.ProcessAsync",
+        "Handler.HandleAsync",
+        "Repository.SaveAsync",
+        "Pipeline.RunAsync",
+        "Scheduler.RunJobAsync",
+        "Consumer.ConsumeAsync",
+        "Gateway.ForwardAsync",
+    ];
+    private static readonly string[] Components =
+    [
+        "kafka", "redis", "mongodb", "rabbitmq", "elasticsearch",
+    ];
+    private static readonly string[] Resources =
+    [
+        "resource-0", "resource-1", "resource-2", "resource-3",
+    ];
 
     public TestLogGenerator(
         IOptions<TestLogGeneratorSettings> gen,
@@ -23716,7 +24770,7 @@ public sealed class TestLogGenerator : BackgroundService
         _log       = log;
     }
 
-    private sealed class Target
+    private sealed class MetricsTarget
     {
         public required string   FilePath   { get; init; }
         public required string   Server     { get; init; }
@@ -23729,6 +24783,14 @@ public sealed class TestLogGenerator : BackgroundService
         public long Peak;
         public long Child;
         public long ChildPeak;
+    }
+
+    private sealed class AppLogTarget
+    {
+        public required string FilePath  { get; init; }
+        public required string Server    { get; init; }
+        public required int    Pid       { get; init; }
+        public required string Service   { get; init; }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -23744,7 +24806,9 @@ public sealed class TestLogGenerator : BackgroundService
             return;
         }
 
-        try { await SeedAsync(stoppingToken); }
+        await Task.Yield(); // release startup thread immediately
+
+        try { await Task.Run(() => SeedAsync(stoppingToken), stoppingToken); }
         catch (Exception ex) { _log.LogError(ex, "TestLogGenerator: seeding failed."); }
 
         var interval = TimeSpan.FromSeconds(Math.Max(1, _gen.WriteIntervalSeconds));
@@ -23759,66 +24823,144 @@ public sealed class TestLogGenerator : BackgroundService
 
     private async Task SeedAsync(CancellationToken ct)
     {
-        var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
-        var fileName = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
+        var template    = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
+        var metricsFile = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
 
-        int generated = 0, skipped = 0;
-        foreach (var env in _app.Environments)
+        var envs = _gen.Environments.Count > 0
+            ? _app.Environments.Where(e => _gen.Environments.Contains(e.Id, StringComparer.OrdinalIgnoreCase)).ToList()
+            : _app.Environments;
+
+        int metricsGenerated = 0, appGenerated = 0, skipped = 0;
+
+        foreach (var env in envs)
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct);
+            List<ServiceStatus> services;
+            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct); }
+            catch (Exception ex)
+            {
+                _log.LogWarning("TestLogGenerator: skipping env {Env} — {Error}", env.Id, ex.Message);
+                continue;
+            }
+
             foreach (var svc in services)
             {
-                // Skip ~1/3 of services (deterministic per PID) so some have no logs.
                 if (svc.ProcessId % 3 == 0) { skipped++; continue; }
 
-                var folder = LogPathTemplate.Expand(template, svc, env.Id)
-                                            .Replace("*", "Run" + RandomHex(8));
-                Directory.CreateDirectory(folder);
+                // ── 1. Metrics.log under ServiceTemplates path ────────────────
+                var metricsFolder = LogPathTemplate.Expand(template, svc, env.Id, DateTime.Today)
+                                                   .Replace("*", "Run" + RandomHex(8));
+                Directory.CreateDirectory(metricsFolder);
 
-                var target = new Target
+                var mt = new MetricsTarget
                 {
-                    FilePath   = Path.Combine(folder, fileName),
+                    FilePath   = Path.Combine(metricsFolder, metricsFile),
                     Server     = svc.HostName,
                     Pid        = svc.ProcessId,
                     StreamName = $"{svc.ServiceName}Stream-{env.Id}",
                     MsgId      = RandomHex(24),
-                    ProcStart  = svc.CreatedDateTime.ToUniversalTime(),
+                    ProcStart  = DateTime.UtcNow.AddHours(-_rng.Next(1, 8)),
                     Thread     = 200 + _rng.Next(0, 50),
                     Current    = Mb(200 + _rng.Next(0, 120)),
                     Child      = 0,
                     ChildPeak  = Mb(500 + _rng.Next(0, 200)),
                 };
-                target.Peak = target.Current;
+                mt.Peak = mt.Current;
 
-                // Backfill a few lines spaced in the past so a freshly opened file has history.
-                var now = DateTime.Now;
-                for (var k = _gen.InitialLineCount; k >= 1; k--)
+                var now      = DateTime.Now;
+                var totalSec = (int)(now - now.Date).TotalSeconds;
+                var steps    = Math.Max(_gen.InitialLineCount, totalSec / Math.Max(1, _gen.WriteIntervalSeconds));
+                for (var k = steps; k >= 1; k--)
                 {
-                    Advance(target);
-                    WriteLine(target, now.AddSeconds(-k * _gen.WriteIntervalSeconds));
+                    AdvanceMetrics(mt);
+                    WriteMetricsLine(mt, now.AddSeconds(-(long)k * _gen.WriteIntervalSeconds));
                 }
 
-                _targets.Add(target);
-                generated++;
+                _metricsTargets.Add(mt);
+                metricsGenerated++;
+
+                // ── 2. App logs under LogsFolder path (today + past days) ───
+                var logsRoot = _paths.LogsFolder;
+                if (!string.IsNullOrWhiteSpace(logsRoot))
+                {
+                    var serverRoot = logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase);
+                    const int appIntervalSec = 30;
+
+                    // Today — full backfill from midnight to now, keep as live target
+                    {
+                        var appFolder = Path.Combine(serverRoot, DateTime.Today.ToString("yyyy-MM-dd"), svc.ServiceName);
+                        Directory.CreateDirectory(appFolder);
+                        // Errors subfolder (empty on some services, populated on others)
+                        if (svc.ProcessId % 2 == 0)
+                            Directory.CreateDirectory(Path.Combine(appFolder, "Errors"));
+
+                        var at = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                        var appSteps = totalSec / appIntervalSec;
+                        for (var k = appSteps; k >= 1; k--)
+                            WriteAppLine(at, now.AddSeconds(-(long)k * appIntervalSec));
+                        _appLogTargets.Add(at);
+                        appGenerated++;
+                    }
+
+                    // Past days — seed 1–5 days back with full-day logs (86400s / 30s = 2880 lines/day)
+                    var pastDays = new[] { 1, 2, 3, 5 };
+                    foreach (var daysBack in pastDays)
+                    {
+                        // Some services randomly skipped on past days to simulate services not running every day
+                        if (_rng.Next(3) == 0) continue;
+
+                        var date      = DateTime.Today.AddDays(-daysBack);
+                        var appFolder = Path.Combine(serverRoot, date.ToString("yyyy-MM-dd"), svc.ServiceName);
+                        Directory.CreateDirectory(appFolder);
+                        if (svc.ProcessId % 2 == 0)
+                            Directory.CreateDirectory(Path.Combine(appFolder, "Errors"));
+
+                        var at    = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                        var start = date; // midnight
+                        for (var k = 86400 / appIntervalSec; k >= 1; k--)
+                            WriteAppLine(at, start.AddSeconds((long)(86400 / appIntervalSec - k) * appIntervalSec));
+
+                        // Some days also have a Debug.log with verbose output
+                        if (daysBack <= 2 && _rng.Next(2) == 0)
+                        {
+                            var dbg = new AppLogTarget { FilePath = Path.Combine(appFolder, "Debug.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                            for (var k = 86400 / 10; k >= 1; k--)
+                                WriteAppLine(dbg, start.AddSeconds((long)(86400 / 10 - k) * 10));
+                        }
+
+                        appGenerated++;
+                    }
+
+                    // Archive subfolder — empty, just to test browsing empty dirs
+                    Directory.CreateDirectory(Path.Combine(serverRoot, "Archive", svc.ServiceName));
+                }
             }
         }
 
         _log.LogInformation(
-            "TestLogGenerator: seeded {Generated} files, skipped {Skipped} services (template '{Template}', file '{File}').",
-            generated, skipped, template, fileName);
+            "TestLogGenerator: seeded {M} metrics files, {A} app-log files, skipped {S} services.",
+            metricsGenerated, appGenerated, skipped);
     }
 
     private void Tick()
     {
         var now = DateTime.Now;
-        foreach (var t in _targets)
+        foreach (var t in _metricsTargets)
         {
-            Advance(t);
-            WriteLine(t, now);
+            AdvanceMetrics(t);
+            WriteMetricsLine(t, now);
+        }
+        foreach (var t in _appLogTargets)
+        {
+            // Write 1-4 app log lines per tick to simulate burst activity.
+            var count = 1 + _rng.Next(0, 4);
+            for (var i = 0; i < count; i++)
+                WriteAppLine(t, now.AddSeconds(-_rng.NextDouble() * _gen.WriteIntervalSeconds));
         }
     }
 
-    private void Advance(Target t)
+    // ── Metrics helpers ───────────────────────────────────────────────────────
+
+    private void AdvanceMetrics(MetricsTarget t)
     {
         t.Current   = Math.Clamp(t.Current + Mb(_rng.Next(-20, 41)), Mb(50), Mb(2048));
         t.Peak      = Math.Max(t.Peak, t.Current);
@@ -23826,7 +24968,7 @@ public sealed class TestLogGenerator : BackgroundService
         t.ChildPeak = Math.Max(t.ChildPeak, t.Child);
     }
 
-    private void WriteLine(Target t, DateTime ts)
+    private void WriteMetricsLine(MetricsTarget t, DateTime ts)
     {
         var line =
             $"{ts:yyyy-MM-dd HH:mm:ss.ffff}|INFO|{t.Server}|{t.Pid}|{t.Thread}|" +
@@ -23837,20 +24979,93 @@ public sealed class TestLogGenerator : BackgroundService
             $"child peak usage: {t.ChildPeak}, " +
             $"Process start time \"{t.ProcStart:yyyy-MM-ddTHH:mm:ss.fffffff}Z\"|" +
             $"Axis.Streams.Core.Infrastructure.MetricsTrackerService.Start";
+        AppendLine(t.FilePath, line);
+    }
 
+    // ── App log helpers ───────────────────────────────────────────────────────
+
+    private void WriteAppLine(AppLogTarget t, DateTime ts)
+    {
+        // Weighted level distribution: 60% INFO, 20% DEBUG, 12% WARN, 8% ERROR
+        var roll = _rng.Next(100);
+        string level, message, caller;
+        IEnumerable<string>? extras = null;
+
+        if (roll < 60)
+        {
+            level   = "INFO";
+            message = Fill(Pick(InfoMessages), t);
+            caller  = Pick(Callers);
+        }
+        else if (roll < 80)
+        {
+            level   = "DEBUG";
+            message = Fill(Pick(DebugMessages), t);
+            caller  = Pick(Callers);
+        }
+        else if (roll < 92)
+        {
+            level   = "WARN";
+            message = Fill(Pick(WarnMessages), t);
+            caller  = Pick(Callers);
+        }
+        else
+        {
+            level   = "ERROR";
+            var errMsg = Fill(Pick(ErrorMessages), t);
+            var exType = Pick(ExceptionTypes);
+            var lineNo = 40 + _rng.Next(200);
+            message = errMsg;
+            caller  = Pick(Callers);
+            extras  =
+            [
+                $"   {exType}: {errMsg}",
+                $"   at {t.Service}.{caller}() in {t.Service}.cs:line {lineNo}",
+                $"   at System.Threading.Tasks.Task.Run(Func<Task> function)",
+            ];
+        }
+
+        var tid  = 10 + _rng.Next(90);
+        var main = $"{ts:yyyy-MM-dd HH:mm:ss.ffff}|{level}|{t.Server}|{t.Pid}|{tid}|{message}|{caller}";
+        var lines = extras is null
+            ? main
+            : main + "\n" + string.Join("\n", extras);
+
+        AppendLine(t.FilePath, lines);
+    }
+
+    private string Fill(string template, AppLogTarget t) =>
+        template
+            .Replace("{ms}",   (10 + _rng.Next(990)).ToString())
+            .Replace("{b}",    _rng.Next(50).ToString())
+            .Replace("{n}",    _rng.Next(1000).ToString())
+            .Replace("{host}", t.Server)
+            .Replace("{port}", "9092")
+            .Replace("{k}",    "key-" + _rng.Next(999))
+            .Replace("{t}",    "orders")
+            .Replace("{op}",   "db-write")
+            .Replace("{p}",    _rng.Next(4).ToString())
+            .Replace("{r}",    Pick(Resources))
+            .Replace("{m}",    "12")
+            .Replace("{c}",    Pick(Components))
+            .Replace("{dep}",  Pick(Components))
+            .Replace("{src}",  "appsettings.json")
+            .Replace("{id}",   RandomHex(8))
+            .Replace("{caller}", Pick(Callers));
+
+    private static void AppendLine(string path, string content)
+    {
         try
         {
-            // FileShare.ReadWrite|Delete so the monitoring reader never blocks the writer.
-            using var fs = new FileStream(t.FilePath, FileMode.Append, FileAccess.Write,
+            using var fs = new FileStream(path, FileMode.Append, FileAccess.Write,
                                           FileShare.ReadWrite | FileShare.Delete);
             using var sw = new StreamWriter(fs);
-            sw.WriteLine(line);
+            sw.WriteLine(content);
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "TestLogGenerator: failed writing {Path}", t.FilePath);
-        }
+        catch { /* best-effort */ }
     }
+
+    private T Pick<T>(T[] arr) => arr[_rng.Next(arr.Length)];
 
     private static long Mb(int mb) => (long)mb * 1024 * 1024;
 
@@ -24216,7 +25431,7 @@ LENGTH 716
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2769
+LENGTH 2704
 @* Routes the active tab to its correct page component *@
 
 @if (Tab is not null)
@@ -24259,7 +25474,7 @@ LENGTH 2769
                 @<NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
 
             TabType.Batches =>
-                @<NxtUI.Pages.PlaceholderPage Title="Batches" Icon="@Icons.Material.Outlined.ViewList" Environment="@env" />,
+                @<NxtUI.Pages.Batches Environment="@env" />,
 
             TabType.Config =>
                 @<NxtUI.Pages.PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
@@ -24730,7 +25945,7 @@ public class FilterParserTests
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 58430
+LENGTH 64103
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -25278,9 +26493,10 @@ html, body {
 .bm-svc-grouping-label { font-size: 12px; color: var(--mud-palette-text-secondary); white-space: nowrap; }
 .bm-svc-group-toggle { flex-shrink: 0; }
 .bm-svc-group-toggle .mud-button-root { font-size: 12px; font-weight: 500; padding: 0 10px; height: 30px; transition: background-color 120ms ease, color 120ms ease; }
-.bm-svc-group-toggle .bm-view-btn-active  { background-color: var(--mud-palette-primary) !important; color: var(--mud-palette-primary-text) !important; }
-.bm-svc-group-toggle .bm-view-btn-inactive { background-color: transparent !important; color: var(--mud-palette-text-secondary) !important; }
-.bm-svc-group-toggle .bm-view-btn-inactive:hover { background-color: var(--mud-palette-action-default-hover) !important; color: var(--mud-palette-text-primary) !important; }
+/* Shared active/inactive states used by any MudButtonGroup toggle in the app */
+.bm-view-btn-active  { background-color: var(--mud-palette-primary) !important; color: var(--mud-palette-primary-text) !important; border-color: var(--mud-palette-primary) !important; }
+.bm-view-btn-inactive { background-color: transparent !important; color: var(--mud-palette-text-secondary) !important; }
+.bm-view-btn-inactive:hover { background-color: var(--mud-palette-action-default-hover) !important; color: var(--mud-palette-text-primary) !important; }
 .bm-filter-input { flex: 1; }
 .bm-refresh-btn  { flex-shrink: 0; }
 
@@ -25383,8 +26599,14 @@ html, body {
     display: flex; align-items: center;
     justify-content: space-between; gap: 16px;
 }
-.bm-theme-switcher { display: flex; gap: 6px; flex-shrink: 0; }
-.bm-theme-btn      { min-width: 86px !important; }
+/* ── Soften outlined borders on icon buttons and button groups to match other controls ── */
+.mud-icon-button.mud-icon-button-outlined,
+.mud-button-group-outlined .mud-button-root {
+    border-color: var(--mud-palette-divider) !important;
+}
+.mud-icon-button.mud-icon-button-outlined:hover {
+    border-color: var(--mud-palette-text-secondary) !important;
+}
 .bm-about-grid {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -26429,6 +27651,29 @@ html, body {
     padding: 10px 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
     margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bm-svc-group-count {
+    font-size: 10px;
+    font-weight: 500;
+    background: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-secondary);
+    border-radius: 8px;
+    padding: 1px 6px;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.bm-svc-group-ram {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--mud-palette-text-secondary);
+    font-family: var(--bm-font-mono);
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 0.75;
 }
 
 .bm-svc-card-row {
@@ -26472,7 +27717,7 @@ html, body {
 }
 
 .bm-svc-card-name {
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -26625,7 +27870,8 @@ tr.bm-row-searching td:first-child {
 }
 
 .bm-lb-file-table { flex: 1 1 0; }
-.bm-lb-file-table tr.bm-lb-file-row { cursor: pointer; }
+.bm-lb-file-table tr.bm-lb-file-row { cursor: pointer; transition: background 0.12s ease; }
+.bm-lb-file-table tr.bm-lb-file-row:hover { background: var(--mud-palette-action-default-hover) !important; }
 .bm-lb-files-progress { height: 3px; flex-shrink: 0; }
 
 .bm-lb-empty {
@@ -26735,7 +27981,212 @@ tr.bm-row-searching td:first-child {
     font-size: 14px;
 }
 
+/* ── Batches catalog ─────────────────────────────────────────────────────── */
+
+.bm-batches-page { display:flex; flex-direction:column; overflow:hidden; }
+.bm-batches-progress { flex-shrink:0; }
+
+.bm-batches-layout {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Left sidebar */
+.bm-batches-sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 280px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--mud-palette-divider);
+    overflow: hidden;
+}
+
+.bm-batches-search {
+    padding: 8px 10px 4px;
+    flex-shrink: 0;
+}
+
+.bm-batches-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 2px 10px 6px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+.bm-batches-categories .mud-chip { margin: 0 !important; }
+
+.bm-batches-list {
+    flex: 1 1 0;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.bm-batch-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.bm-batch-item:hover { background: var(--mud-palette-action-default-hover); }
+
+.bm-batch-item-active {
+    border-left-color: var(--mud-palette-primary);
+    background: var(--mud-palette-action-default-hover);
+}
+
+.bm-batch-item-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-batch-item-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+}
+
+.bm-batch-item-cat {
+    font-size: 11px;
+    color: var(--mud-palette-primary);
+    font-weight: 500;
+}
+
+.bm-batch-item-params {
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+}
+
+/* Right detail panel */
+.bm-batches-detail {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.bm-batch-detail-inner {
+    padding: 24px 28px;
+    max-width: 760px;
+}
+
+.bm-batch-detail-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.bm-batch-detail-desc {
+    font-size: 13px;
+    color: var(--mud-palette-text-secondary);
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.bm-batch-detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.bm-batch-detail-tags .mud-chip { margin: 0 !important; }
+.bm-batch-cat-chip { font-weight: 600 !important; }
+
+.bm-batch-params-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 12px;
+}
+
+.bm-batch-params-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+}
+
+.bm-batch-param-row { display: flex; flex-direction: column; }
+.bm-batch-switch { margin: 6px 0 0; }
+
+.bm-batch-endpoint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--mud-palette-background-grey);
+    border-radius: 4px;
+    margin-bottom: 20px;
+    font-size: 12px;
+    overflow: hidden;
+}
+
+.bm-batch-endpoint-method {
+    font-weight: 700;
+    color: var(--mud-palette-primary);
+    flex-shrink: 0;
+}
+
+.bm-batch-endpoint-url {
+    font-family: var(--bm-font-mono, monospace);
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-batch-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.bm-batch-result {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.bm-batch-result-ok  { background: color-mix(in srgb, var(--mud-palette-success) 15%, transparent); color: var(--mud-palette-success-darken); }
+.bm-batch-result-err { background: color-mix(in srgb, var(--mud-palette-error)   15%, transparent); color: var(--mud-palette-error-darken); }
+
+.bm-batch-code { padding: 4px 0; }
+.bm-batch-code-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--mud-palette-text-secondary); margin-bottom: 4px; }
+.bm-batch-code-pre {
+    font-family: var(--bm-font-mono, monospace);
+    font-size: 11px;
+    background: var(--mud-palette-background-grey);
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--mud-palette-text-primary);
+}
+
 /* ── Workspace split panels ──────────────────────────────────────────────── */
+.ws-selection-ring {
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--mud-palette-primary);
+    pointer-events: none;
+    z-index: 10;
+}
+
 .ws-handle-h {
     flex: 0 0 4px;
     cursor: col-resize;
@@ -27288,7 +28739,7 @@ LENGTH 8155
 
 .bm-tl-dialog-selected { background: rgba(56,139,253,0.10) !important; }
 FILE src/NxtUI.Web/wwwroot/css/log-viewer.css
-LENGTH 6685
+LENGTH 9288
 /* ── Log Viewer ─────────────────────────────────────────────────────────────── */
 
 /* Outer page layout */
@@ -27299,7 +28750,69 @@ LENGTH 6685
     overflow: hidden;
 }
 
-/* Toolbar shared styles */
+/* Cell header — always visible, shows filename + action buttons */
+.bm-lv-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 0 4px;
+    min-height: 30px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    background: transparent;
+    transition: background 0.15s ease, color 0.15s ease;
+    overflow: hidden;
+}
+
+.bm-lv-header-selected {
+    background: var(--mud-palette-primary);
+    color: var(--mud-palette-primary-text);
+}
+
+.bm-lv-header-selected .bm-lv-header-path,
+.bm-lv-header-selected .mud-icon-root,
+.bm-lv-header-selected .mud-button-root {
+    color: var(--mud-palette-primary-text) !important;
+    opacity: 0.85;
+}
+
+.bm-lv-header-name {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+    max-width: 160px;
+    user-select: none;
+}
+
+.bm-lv-header-name:hover {
+    text-decoration: underline dotted;
+    cursor: pointer;
+}
+
+.bm-lv-header-path {
+    font-size: 10px;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1 1 0;
+    min-width: 0;
+    /* ellipsis from left — prioritises end (filename/host) */
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
+}
+
+.bm-lv-header-btn.mud-icon-button {
+    width: 24px !important;
+    height: 24px !important;
+    padding: 0 !important;
+}
+
+/* Find/filter toolbar */
 .bm-lv-toolbar {
     display: flex;
     align-items: center;
@@ -27307,6 +28820,34 @@ LENGTH 6685
     flex-shrink: 0;
     padding: 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+/* Compact variant for the find/filter row */
+.bm-lv-toolbar-sm .mud-input-root {
+    font-size: 12px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+}
+
+.bm-lv-toolbar-sm .mud-input-slot {
+    min-height: 28px !important;
+    height: 28px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+}
+
+.bm-lv-toolbar-sm input {
+    font-size: 12px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* Shrink adornment icons so they don't force row height */
+.bm-lv-toolbar-sm .mud-input-adornment .mud-icon-root,
+.bm-lv-toolbar-sm .mud-input-adornment .mud-button-root {
+    font-size: 16px !important;
+    width: 20px !important;
+    height: 20px !important;
 }
 
 .bm-lv-toolbar-right {
@@ -27388,6 +28929,24 @@ html[data-theme="light"] .lv-scrollmap { background: #f0f0f0; }
     gap: 8px;
     padding: 2px 2px 2px 0;
     overflow: hidden;
+}
+
+/* When word-wrap is off, let the row overflow horizontally so the scroll
+   container can show a horizontal scrollbar. */
+.lv-scroll[data-wrap="0"] .lv-fields {
+    overflow: visible;
+}
+
+.lv-scroll[data-wrap="0"] .lv-msg {
+    overflow: visible;
+    text-overflow: initial;
+    white-space: pre;
+}
+
+.lv-scroll[data-wrap="0"] .lv-caller {
+    overflow: visible;
+    text-overflow: initial;
+    white-space: pre;
 }
 
 /* Bookmark gutter icon */
@@ -27552,11 +29111,420 @@ mark.lv-hl {
     border-radius: 2px;
     padding: 0 1px;
 }
+FILE src/NxtUI.Web/wwwroot/data/batch-catalog.json
+LENGTH 11952
+{
+  "batches": [
+    {
+      "id": "eod-reconciliation",
+      "name": "EOD Reconciliation",
+      "description": "Reconciles end-of-day trade positions against the clearing house settlement file and flags discrepancies.",
+      "category": "Finance",
+      "tags": ["eod", "reconciliation", "positions"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "businessDate",
+          "label": "Business Date",
+          "description": "The business date to reconcile (YYYY-MM-DD)",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "region",
+          "label": "Region",
+          "type": "select",
+          "default": "ALL",
+          "options": ["EU", "US", "APAC", "ALL"],
+          "required": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "description": "Simulate without committing changes",
+          "type": "boolean",
+          "default": false
+        },
+        {
+          "key": "maxRetries",
+          "label": "Max Retries",
+          "type": "number",
+          "default": 3,
+          "min": 0,
+          "max": 10
+        }
+      ]
+    },
+    {
+      "id": "monthly-pnl-report",
+      "name": "Monthly P&L Report",
+      "description": "Generates the monthly profit and loss report across all accounts and distributes it to stakeholders.",
+      "category": "Reporting",
+      "tags": ["monthly", "report", "pnl"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "year",
+          "label": "Year",
+          "type": "number",
+          "default": "{year}",
+          "min": 2020,
+          "max": 2030,
+          "required": true
+        },
+        {
+          "key": "month",
+          "label": "Month",
+          "type": "select",
+          "default": "{month}",
+          "options": ["01","02","03","04","05","06","07","08","09","10","11","12"],
+          "required": true
+        },
+        {
+          "key": "outputFormat",
+          "label": "Output Format",
+          "type": "select",
+          "default": "PDF",
+          "options": ["PDF", "XLSX", "CSV"],
+          "required": true
+        },
+        {
+          "key": "recipients",
+          "label": "Additional Recipients",
+          "description": "Comma-separated email addresses",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "market-data-import",
+      "name": "Market Data Import",
+      "description": "Imports end-of-day market prices from the external feed provider and stores them in the reference data store.",
+      "category": "Data",
+      "tags": ["import", "market-data", "prices"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "asOfDate",
+          "label": "As-Of Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "assetClasses",
+          "label": "Asset Classes",
+          "type": "multiselect",
+          "default": ["EQUITY", "FX"],
+          "options": ["EQUITY", "FX", "RATES", "CREDIT", "COMMODITY"],
+          "required": true
+        },
+        {
+          "key": "overwriteExisting",
+          "label": "Overwrite Existing",
+          "description": "Overwrite data already imported for this date",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "cache-warmup",
+      "name": "Cache Warm-up",
+      "description": "Pre-populates the distributed cache with reference data and aggregates to reduce latency at market open.",
+      "category": "Infrastructure",
+      "tags": ["cache", "performance", "startup"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "target",
+          "label": "Cache Target",
+          "type": "select",
+          "default": "ALL",
+          "options": ["REFERENCE_DATA", "POSITIONS", "RISK", "ALL"],
+          "required": true
+        },
+        {
+          "key": "ttlMinutes",
+          "label": "TTL (minutes)",
+          "description": "Cache entry time-to-live",
+          "type": "number",
+          "default": 60,
+          "min": 5,
+          "max": 1440
+        }
+      ]
+    },
+    {
+      "id": "customer-data-sync",
+      "name": "Customer Data Sync",
+      "description": "Synchronises customer account data from the CRM to the trading platform, including KYC status and limits.",
+      "category": "Integration",
+      "tags": ["sync", "crm", "customers", "kyc"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "syncMode",
+          "label": "Sync Mode",
+          "type": "select",
+          "default": "INCREMENTAL",
+          "options": ["FULL", "INCREMENTAL"],
+          "required": true
+        },
+        {
+          "key": "sinceDate",
+          "label": "Since Date",
+          "description": "Sync records modified after this date (INCREMENTAL only)",
+          "type": "date",
+          "default": "{yesterday}"
+        },
+        {
+          "key": "batchSize",
+          "label": "Batch Size",
+          "description": "Records per API call",
+          "type": "number",
+          "default": 500,
+          "min": 100,
+          "max": 5000
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "risk-calculation",
+      "name": "Risk Calculation",
+      "description": "Computes VaR, stress-test scenarios and sensitivity metrics across all portfolios using the latest market data.",
+      "category": "Finance",
+      "tags": ["risk", "var", "stress-test", "portfolios"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "valuationDate",
+          "label": "Valuation Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "calculationType",
+          "label": "Calculation Types",
+          "type": "multiselect",
+          "default": ["VAR"],
+          "options": ["VAR", "STRESS_TEST", "SENSITIVITY", "SCENARIO"],
+          "required": true
+        },
+        {
+          "key": "confidenceLevel",
+          "label": "Confidence Level (%)",
+          "type": "number",
+          "default": 99,
+          "min": 90,
+          "max": 99.9
+        },
+        {
+          "key": "horizonDays",
+          "label": "Horizon (days)",
+          "type": "number",
+          "default": 10,
+          "min": 1,
+          "max": 250
+        },
+        {
+          "key": "portfolioFilter",
+          "label": "Portfolio Filter",
+          "description": "Comma-separated portfolio IDs — leave empty for all",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "audit-log-archival",
+      "name": "Audit Log Archival",
+      "description": "Archives audit logs older than the retention threshold to cold storage and purges them from the primary store.",
+      "category": "Compliance",
+      "tags": ["audit", "archival", "retention", "compliance"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "retentionDays",
+          "label": "Retention Days",
+          "description": "Archive logs older than this many days",
+          "type": "number",
+          "default": 90,
+          "min": 30,
+          "max": 730,
+          "required": true
+        },
+        {
+          "key": "archiveTarget",
+          "label": "Archive Target",
+          "type": "select",
+          "default": "S3",
+          "options": ["S3", "AZURE_BLOB", "LOCAL"],
+          "required": true
+        },
+        {
+          "key": "compress",
+          "label": "Compress Archives",
+          "type": "boolean",
+          "default": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "notification-dispatch",
+      "name": "Notification Dispatch",
+      "description": "Processes the notification queue and dispatches pending emails, SMS and push messages to end users.",
+      "category": "Notification",
+      "tags": ["notification", "email", "sms", "dispatch"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "channels",
+          "label": "Channels",
+          "type": "multiselect",
+          "default": ["EMAIL"],
+          "options": ["EMAIL", "SMS", "PUSH", "WEBHOOK"],
+          "required": true
+        },
+        {
+          "key": "priority",
+          "label": "Minimum Priority",
+          "type": "select",
+          "default": "NORMAL",
+          "options": ["LOW", "NORMAL", "HIGH", "CRITICAL"],
+          "required": true
+        },
+        {
+          "key": "maxBatch",
+          "label": "Max Batch Size",
+          "description": "Max notifications per run",
+          "type": "number",
+          "default": 1000,
+          "min": 100,
+          "max": 10000
+        }
+      ]
+    },
+    {
+      "id": "position-snapshot",
+      "name": "Position Snapshot",
+      "description": "Takes a point-in-time snapshot of all open positions and persists it for regulatory and audit purposes.",
+      "category": "Compliance",
+      "tags": ["positions", "snapshot", "regulatory"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "snapshotTime",
+          "label": "Snapshot Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "books",
+          "label": "Books",
+          "description": "Comma-separated book codes — leave empty for all",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "key": "includeZeroPositions",
+          "label": "Include Zero Positions",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "fee-calculation",
+      "name": "Fee Calculation",
+      "description": "Calculates management, performance and transaction fees for all accounts in the selected period.",
+      "category": "Finance",
+      "tags": ["fees", "billing", "accounts"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "periodStart",
+          "label": "Period Start",
+          "type": "date",
+          "default": "{yesterday}",
+          "required": true
+        },
+        {
+          "key": "periodEnd",
+          "label": "Period End",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "feeTypes",
+          "label": "Fee Types",
+          "type": "multiselect",
+          "default": ["MANAGEMENT", "TRANSACTION"],
+          "options": ["MANAGEMENT", "PERFORMANCE", "TRANSACTION", "CUSTODY"],
+          "required": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": true
+        }
+      ]
+    }
+  ]
+}
 FILE src/NxtUI.Web/wwwroot/js/.gitignore
 LENGTH 14
 node_modules/
 FILE src/NxtUI.Web/wwwroot/js/app.js
-LENGTH 10698
+LENGTH 12184
 // Batch Monitor — client-side utilities
 
 // ── localStorage helpers ──────────────────────────────────────────────────
@@ -27743,11 +29711,51 @@ export function initTabDrag(containerEl, dotnetHelper) {
         "font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;";
     document.body.appendChild(tip);
 
+    function closestPt(data, target) {
+        let best = data[0], bestDist = Math.abs(data[0][0] - target);
+        for (const pt of data) {
+            const d = Math.abs(pt[0] - target);
+            if (d < bestDist) { bestDist = d; best = pt; }
+        }
+        return best;
+    }
+
+    function broadcastTimestamp(sourceCard, target) {
+        document.querySelectorAll('.bm-svc-card').forEach(card => {
+            if (card === sourceCard) return;
+            const lbl = card.querySelector('.bm-svc-peak-label');
+            if (!lbl) return;
+            const svg = card.querySelector('.bm-svc-spark');
+            if (!svg) return;
+            let data;
+            try { data = JSON.parse(svg.dataset.spark); } catch { return; }
+            if (!data.length) return;
+            if (!lbl.dataset.orig) lbl.dataset.orig = lbl.textContent;
+            const pt = closestPt(data, target);
+            lbl.textContent = Math.round(pt[1]).toLocaleString();
+            lbl.style.opacity = '0.65';
+            lbl.style.fontStyle = 'italic';
+        });
+    }
+
+    function clearBroadcast(sourceCard) {
+        document.querySelectorAll('.bm-svc-card').forEach(card => {
+            if (card === sourceCard) return;
+            const lbl = card.querySelector('.bm-svc-peak-label');
+            if (lbl && lbl.dataset.orig !== undefined) {
+                lbl.textContent = lbl.dataset.orig;
+                lbl.style.opacity = '';
+                lbl.style.fontStyle = '';
+                delete lbl.dataset.orig;
+            }
+        });
+    }
+
     document.addEventListener('mousemove', e => {
         const card = e.target.closest('.bm-svc-card');
-        if (!card) { tip.style.display = 'none'; return; }
+        if (!card) { tip.style.display = 'none'; clearBroadcast(null); return; }
         const svg = card.querySelector('.bm-svc-spark');
-        if (!svg) { tip.style.display = 'none'; return; }
+        if (!svg) { tip.style.display = 'none'; clearBroadcast(card); return; }
 
         const raw = svg.dataset.spark;
         if (!raw) return;
@@ -27762,11 +29770,7 @@ export function initTabDrag(containerEl, dotnetHelper) {
         const t1     = data[data.length - 1][0];
         const target = t0 + frac * (t1 - t0);
 
-        let best = data[0], bestDist = Math.abs(data[0][0] - target);
-        for (const pt of data) {
-            const d = Math.abs(pt[0] - target);
-            if (d < bestDist) { bestDist = d; best = pt; }
-        }
+        const best = closestPt(data, target);
 
         const dt = new Date(best[0] * 1000);
         const hh = dt.getHours().toString().padStart(2, '0');
@@ -27775,9 +29779,11 @@ export function initTabDrag(containerEl, dotnetHelper) {
         tip.style.display = 'block';
         tip.style.left    = (e.clientX + 12) + 'px';
         tip.style.top     = (e.clientY - 28) + 'px';
+
+        broadcastTimestamp(card, target);
     }, { signal });
 
-    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; }, { capture: true, signal });
+    document.addEventListener('mouseleave', () => { tip.style.display = 'none'; clearBroadcast(null); }, { capture: true, signal });
 })();
 
 /** @param {HTMLElement} containerEl */
@@ -28644,7 +30650,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 5822
+LENGTH 6256
 window.homeMemoryTreemap = (function () {
 
     const _observers = new WeakMap(); // container → ResizeObserver
@@ -28663,20 +30669,26 @@ window.homeMemoryTreemap = (function () {
         const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
         const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
 
-        // Minimum visual weight for null-RAM services so they always get a
-        // visible slice even when neighbours have hundreds of MB.
-        const minVal = H * 0.5;
+        // Small fixed floor so no-data services get a visible pixel without
+        // dominating the layout when many processes lack a RAM sample.
+        const minVal = 4;
 
         const root = d3.hierarchy(data)
             .sum(d => d.children ? 0 : Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
 
+        // Two-level tiling: hosts are diced into vertical columns (side-by-side),
+        // services within each host are squarified — this handles hundreds of
+        // small processes per host without collapsing them into sub-pixel rows.
         d3.treemap()
             .size([W, H])
             .paddingOuter(1)
-            .paddingTop(14)
-            .paddingInner(1)
-            .tile(d3.treemapSliceDice)(root);
+            .paddingTop(12)
+            .paddingInner(0.5)
+            .tile((node, x0, y0, x1, y1) => {
+                if (node.depth === 0) d3.treemapDice(node, x0, y0, x1, y1);
+                else                  d3.treemapSquarify(node, x0, y0, x1, y1);
+            })(root);
 
         const svg = d3.select(container).append('svg')
             .attr('width', '100%')
@@ -28740,7 +30752,7 @@ window.homeMemoryTreemap = (function () {
                         ? Math.round(leaf.data.ram) + ' MB'
                         : 'no data';
                     tip.style('display', 'block')
-                       .html(`<strong>${leaf.data.name}</strong> &nbsp;PID ${leaf.data.pid}<br>${ram}`);
+                       .html(`<strong>${leaf.data.name}</strong><br>PID ${leaf.data.pid} &nbsp;·&nbsp; ${ram}`);
                     const cr = container.getBoundingClientRect();
                     let lx = event.clientX - cr.left + 12;
                     let ly = event.clientY - cr.top  - 40;
@@ -31409,7 +33421,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 32191
+LENGTH 32582
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -31568,7 +33580,8 @@ function createDom(container, opts) {
     scrollEl.appendChild(innerEl);
 
     const rowsEl = document.createElement('div');
-    rowsEl.style.cssText = 'position:absolute;top:0;left:0;right:0;';
+    rowsEl.style.cssText = 'position:absolute;top:0;left:0;';
+    applyRowsWidth(rowsEl, opts.wordWrap ?? false);
     innerEl.appendChild(rowsEl);
 
     const mapEl = document.createElement('canvas');
@@ -31589,6 +33602,18 @@ function applyFontSize(scrollEl, size) {
 
 function applyWordWrap(scrollEl, wrap) {
     scrollEl.dataset.wrap = wrap ? '1' : '0';
+}
+
+function applyRowsWidth(rowsEl, wrap) {
+    if (wrap) {
+        rowsEl.style.right    = '0';
+        rowsEl.style.width    = '';
+        rowsEl.style.minWidth = '';
+    } else {
+        rowsEl.style.right    = '';
+        rowsEl.style.width    = 'max-content';
+        rowsEl.style.minWidth = '100%';
+    }
 }
 
 // ── Scrollmap ─────────────────────────────────────────────────────────────────
@@ -32134,6 +34159,7 @@ function setWordWrap(container, wrap) {
     const vp = _vp.get(container);
     if (!vp) return;
     applyWordWrap(vp.scrollEl, wrap);
+    applyRowsWidth(vp.rowsEl, wrap);
     vp.measuredH.clear();
     vp.cum = buildCumulatives(vp.visibleEntries);
     updateInnerHeight(vp);
@@ -33509,38 +35535,45 @@ export default defineConfig({
     },
 })
 FILE src/NxtUI.Web/wwwroot/js/workspace.js
-LENGTH 2045
+LENGTH 2285
 // Drag-resize handler for WorkspacePanel split handles.
-// Updates pane flex-basis directly during drag for smooth 60fps resize;
-// notifies Blazor via DotNetObjectReference only on mouseup.
+// Panes use flex-grow (not flex-basis %) so the handle's 4px is
+// automatically excluded from the distributed space.
 
 window.wsResizer = (function () {
 
     function start(startX, startY, isH, dotnetRef, containerEl) {
-        const panes    = containerEl.querySelectorAll(':scope > .ws-pane');
+        const panes = containerEl.querySelectorAll(':scope > .ws-pane');
         if (panes.length < 2) return;
 
-        const paneA    = panes[0];
-        const paneB    = panes[1];
-        const totalPx  = isH
-            ? containerEl.getBoundingClientRect().width
-            : containerEl.getBoundingClientRect().height;
+        const handle = containerEl.querySelector(':scope > .ws-handle-h, :scope > .ws-handle-v');
 
-        const startPx  = isH ? startX : startY;
-        const initA    = isH ? paneA.getBoundingClientRect().width
-                              : paneA.getBoundingClientRect().height;
+        const paneA = panes[0];
+        const paneB = panes[1];
+
+        const containerRect = containerEl.getBoundingClientRect();
+        const handlePx  = handle
+            ? (isH ? handle.getBoundingClientRect().width : handle.getBoundingClientRect().height)
+            : 0;
+        const totalPx   = (isH ? containerRect.width : containerRect.height) - handlePx;
+        const startPx   = isH ? startX : startY;
+        const initA     = isH ? paneA.getBoundingClientRect().width
+                               : paneA.getBoundingClientRect().height;
 
         document.body.style.cursor     = isH ? 'col-resize' : 'row-resize';
         document.body.style.userSelect = 'none';
 
+        function setGrow(ratio) {
+            const growA = (ratio * 10000).toFixed(0);
+            const growB = ((1 - ratio) * 10000).toFixed(0);
+            paneA.style.flex = `${growA} ${growA} 0`;
+            paneB.style.flex = `${growB} ${growB} 0`;
+        }
+
         function onMove(e) {
-            const delta   = (isH ? e.clientX : e.clientY) - startPx;
-            const newA    = Math.max(40, Math.min(totalPx - 40, initA + delta));
-            const ratio   = newA / totalPx;
-            const pct     = (ratio * 100).toFixed(2) + '%';
-            const invPct  = ((1 - ratio) * 100).toFixed(2) + '%';
-            paneA.style.flex = `0 0 ${pct}`;
-            paneB.style.flex = `0 0 ${invPct}`;
+            const delta = (isH ? e.clientX : e.clientY) - startPx;
+            const newA  = Math.max(40, Math.min(totalPx - 40, initA + delta));
+            setGrow(newA / totalPx);
         }
 
         function onUp(e) {
@@ -33549,10 +35582,9 @@ window.wsResizer = (function () {
             document.body.style.cursor     = '';
             document.body.style.userSelect = '';
 
-            const delta  = (isH ? e.clientX : e.clientY) - startPx;
-            const newA   = Math.max(40, Math.min(totalPx - 40, initA + delta));
-            const ratio  = newA / totalPx;
-            dotnetRef.invokeMethodAsync('SetRatio', ratio);
+            const delta = (isH ? e.clientX : e.clientY) - startPx;
+            const newA  = Math.max(40, Math.min(totalPx - 40, initA + delta));
+            dotnetRef.invokeMethodAsync('SetRatio', newA / totalPx);
         }
 
         document.addEventListener('mousemove', onMove);

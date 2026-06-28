@@ -60,6 +60,8 @@ public class Program
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<IBatchCatalogService, NxtUI.Web.Services.BatchCatalogService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).

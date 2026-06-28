@@ -1,0 +1,407 @@
+{
+  "batches": [
+    {
+      "id": "eod-reconciliation",
+      "name": "EOD Reconciliation",
+      "description": "Reconciles end-of-day trade positions against the clearing house settlement file and flags discrepancies.",
+      "category": "Finance",
+      "tags": ["eod", "reconciliation", "positions"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "businessDate",
+          "label": "Business Date",
+          "description": "The business date to reconcile (YYYY-MM-DD)",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "region",
+          "label": "Region",
+          "type": "select",
+          "default": "ALL",
+          "options": ["EU", "US", "APAC", "ALL"],
+          "required": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "description": "Simulate without committing changes",
+          "type": "boolean",
+          "default": false
+        },
+        {
+          "key": "maxRetries",
+          "label": "Max Retries",
+          "type": "number",
+          "default": 3,
+          "min": 0,
+          "max": 10
+        }
+      ]
+    },
+    {
+      "id": "monthly-pnl-report",
+      "name": "Monthly P&L Report",
+      "description": "Generates the monthly profit and loss report across all accounts and distributes it to stakeholders.",
+      "category": "Reporting",
+      "tags": ["monthly", "report", "pnl"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "year",
+          "label": "Year",
+          "type": "number",
+          "default": "{year}",
+          "min": 2020,
+          "max": 2030,
+          "required": true
+        },
+        {
+          "key": "month",
+          "label": "Month",
+          "type": "select",
+          "default": "{month}",
+          "options": ["01","02","03","04","05","06","07","08","09","10","11","12"],
+          "required": true
+        },
+        {
+          "key": "outputFormat",
+          "label": "Output Format",
+          "type": "select",
+          "default": "PDF",
+          "options": ["PDF", "XLSX", "CSV"],
+          "required": true
+        },
+        {
+          "key": "recipients",
+          "label": "Additional Recipients",
+          "description": "Comma-separated email addresses",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "market-data-import",
+      "name": "Market Data Import",
+      "description": "Imports end-of-day market prices from the external feed provider and stores them in the reference data store.",
+      "category": "Data",
+      "tags": ["import", "market-data", "prices"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "asOfDate",
+          "label": "As-Of Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "assetClasses",
+          "label": "Asset Classes",
+          "type": "multiselect",
+          "default": ["EQUITY", "FX"],
+          "options": ["EQUITY", "FX", "RATES", "CREDIT", "COMMODITY"],
+          "required": true
+        },
+        {
+          "key": "overwriteExisting",
+          "label": "Overwrite Existing",
+          "description": "Overwrite data already imported for this date",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "cache-warmup",
+      "name": "Cache Warm-up",
+      "description": "Pre-populates the distributed cache with reference data and aggregates to reduce latency at market open.",
+      "category": "Infrastructure",
+      "tags": ["cache", "performance", "startup"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "target",
+          "label": "Cache Target",
+          "type": "select",
+          "default": "ALL",
+          "options": ["REFERENCE_DATA", "POSITIONS", "RISK", "ALL"],
+          "required": true
+        },
+        {
+          "key": "ttlMinutes",
+          "label": "TTL (minutes)",
+          "description": "Cache entry time-to-live",
+          "type": "number",
+          "default": 60,
+          "min": 5,
+          "max": 1440
+        }
+      ]
+    },
+    {
+      "id": "customer-data-sync",
+      "name": "Customer Data Sync",
+      "description": "Synchronises customer account data from the CRM to the trading platform, including KYC status and limits.",
+      "category": "Integration",
+      "tags": ["sync", "crm", "customers", "kyc"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "syncMode",
+          "label": "Sync Mode",
+          "type": "select",
+          "default": "INCREMENTAL",
+          "options": ["FULL", "INCREMENTAL"],
+          "required": true
+        },
+        {
+          "key": "sinceDate",
+          "label": "Since Date",
+          "description": "Sync records modified after this date (INCREMENTAL only)",
+          "type": "date",
+          "default": "{yesterday}"
+        },
+        {
+          "key": "batchSize",
+          "label": "Batch Size",
+          "description": "Records per API call",
+          "type": "number",
+          "default": 500,
+          "min": 100,
+          "max": 5000
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "risk-calculation",
+      "name": "Risk Calculation",
+      "description": "Computes VaR, stress-test scenarios and sensitivity metrics across all portfolios using the latest market data.",
+      "category": "Finance",
+      "tags": ["risk", "var", "stress-test", "portfolios"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "valuationDate",
+          "label": "Valuation Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "calculationType",
+          "label": "Calculation Types",
+          "type": "multiselect",
+          "default": ["VAR"],
+          "options": ["VAR", "STRESS_TEST", "SENSITIVITY", "SCENARIO"],
+          "required": true
+        },
+        {
+          "key": "confidenceLevel",
+          "label": "Confidence Level (%)",
+          "type": "number",
+          "default": 99,
+          "min": 90,
+          "max": 99.9
+        },
+        {
+          "key": "horizonDays",
+          "label": "Horizon (days)",
+          "type": "number",
+          "default": 10,
+          "min": 1,
+          "max": 250
+        },
+        {
+          "key": "portfolioFilter",
+          "label": "Portfolio Filter",
+          "description": "Comma-separated portfolio IDs — leave empty for all",
+          "type": "string",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "audit-log-archival",
+      "name": "Audit Log Archival",
+      "description": "Archives audit logs older than the retention threshold to cold storage and purges them from the primary store.",
+      "category": "Compliance",
+      "tags": ["audit", "archival", "retention", "compliance"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "retentionDays",
+          "label": "Retention Days",
+          "description": "Archive logs older than this many days",
+          "type": "number",
+          "default": 90,
+          "min": 30,
+          "max": 730,
+          "required": true
+        },
+        {
+          "key": "archiveTarget",
+          "label": "Archive Target",
+          "type": "select",
+          "default": "S3",
+          "options": ["S3", "AZURE_BLOB", "LOCAL"],
+          "required": true
+        },
+        {
+          "key": "compress",
+          "label": "Compress Archives",
+          "type": "boolean",
+          "default": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "notification-dispatch",
+      "name": "Notification Dispatch",
+      "description": "Processes the notification queue and dispatches pending emails, SMS and push messages to end users.",
+      "category": "Notification",
+      "tags": ["notification", "email", "sms", "dispatch"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "channels",
+          "label": "Channels",
+          "type": "multiselect",
+          "default": ["EMAIL"],
+          "options": ["EMAIL", "SMS", "PUSH", "WEBHOOK"],
+          "required": true
+        },
+        {
+          "key": "priority",
+          "label": "Minimum Priority",
+          "type": "select",
+          "default": "NORMAL",
+          "options": ["LOW", "NORMAL", "HIGH", "CRITICAL"],
+          "required": true
+        },
+        {
+          "key": "maxBatch",
+          "label": "Max Batch Size",
+          "description": "Max notifications per run",
+          "type": "number",
+          "default": 1000,
+          "min": 100,
+          "max": 10000
+        }
+      ]
+    },
+    {
+      "id": "position-snapshot",
+      "name": "Position Snapshot",
+      "description": "Takes a point-in-time snapshot of all open positions and persists it for regulatory and audit purposes.",
+      "category": "Compliance",
+      "tags": ["positions", "snapshot", "regulatory"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "snapshotTime",
+          "label": "Snapshot Date",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "books",
+          "label": "Books",
+          "description": "Comma-separated book codes — leave empty for all",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "key": "includeZeroPositions",
+          "label": "Include Zero Positions",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "fee-calculation",
+      "name": "Fee Calculation",
+      "description": "Calculates management, performance and transaction fees for all accounts in the selected period.",
+      "category": "Finance",
+      "tags": ["fees", "billing", "accounts"],
+      "endpoint": {
+        "method": "POST",
+        "url": "http://batch-api-{env}/api/v1/jobs/{id}/trigger"
+      },
+      "parameters": [
+        {
+          "key": "periodStart",
+          "label": "Period Start",
+          "type": "date",
+          "default": "{yesterday}",
+          "required": true
+        },
+        {
+          "key": "periodEnd",
+          "label": "Period End",
+          "type": "date",
+          "default": "{today}",
+          "required": true
+        },
+        {
+          "key": "feeTypes",
+          "label": "Fee Types",
+          "type": "multiselect",
+          "default": ["MANAGEMENT", "TRANSACTION"],
+          "options": ["MANAGEMENT", "PERFORMANCE", "TRANSACTION", "CUSTODY"],
+          "required": true
+        },
+        {
+          "key": "dryRun",
+          "label": "Dry Run",
+          "type": "boolean",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

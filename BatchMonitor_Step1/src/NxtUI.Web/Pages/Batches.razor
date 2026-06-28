@@ -1,0 +1,394 @@
+@using NxtUI.Models
+@using NxtUI.Services
+@inject IBatchCatalogService CatalogSvc
+@inject ISnackbar Snackbar
+
+<div class="bm-page bm-page-fill bm-batches-page">
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-batches-progress" />
+    }
+    else if (_batches.Count == 0)
+    {
+        <div class="bm-lb-empty">
+            <MudIcon Icon="@Icons.Material.Outlined.PlayCircleOutline" Style="font-size:48px;opacity:.3" />
+            <MudText Typo="Typo.body2" Style="opacity:.5">No batches found in catalog</MudText>
+        </div>
+    }
+    else
+    {
+        <div class="bm-batches-layout">
+
+            <!-- ── Left: catalog list ────────────────────────────────────── -->
+            <div class="bm-batches-sidebar">
+                <div class="bm-batches-search">
+                    <MudTextField T="string" @bind-Value="_search" Placeholder="Search batches…"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Outlined.Search"
+                                  Clearable="true" Immediate="true"
+                                  Class="bm-batches-searchfield" />
+                </div>
+
+                <div class="bm-batches-categories">
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(_category == null ? Color.Primary : Color.Default)"
+                             Variant="@(_category == null ? Variant.Filled : Variant.Outlined)"
+                             OnClick="@(() => _category = null)">All</MudChip>
+                    @foreach (var cat in _categories)
+                    {
+                        var c = cat;
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(_category == c ? Color.Primary : Color.Default)"
+                                 Variant="@(_category == c ? Variant.Filled : Variant.Outlined)"
+                                 OnClick="@(() => _category = c)">@c</MudChip>
+                    }
+                </div>
+
+                <div class="bm-batches-list">
+                    @foreach (var batch in Filtered)
+                    {
+                        var b = batch;
+                        var active = ReferenceEquals(b, _selected);
+                        <div class="bm-batch-item @(active ? "bm-batch-item-active" : "")"
+                             @onclick="@(() => SelectBatch(b))">
+                            <div class="bm-batch-item-name">@b.Name</div>
+                            <div class="bm-batch-item-meta">
+                                <span class="bm-batch-item-cat">@b.Category</span>
+                                <span class="bm-batch-item-params">@b.Parameters.Count param@(b.Parameters.Count != 1 ? "s" : "")</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- ── Right: batch detail + parameter form ──────────────────── -->
+            <div class="bm-batches-detail">
+                @if (_selected is null)
+                {
+                    <div class="bm-lb-empty">
+                        <MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Style="font-size:36px;opacity:.3" />
+                        <MudText Typo="Typo.body2" Style="opacity:.5">Select a batch from the list</MudText>
+                    </div>
+                }
+                else
+                {
+                    <div class="bm-batch-detail-inner">
+
+                        <!-- Header -->
+                        <div class="bm-batch-detail-header">
+                            <div>
+                                <div class="bm-batch-detail-title">@_selected.Name</div>
+                                <div class="bm-batch-detail-desc">@_selected.Description</div>
+                                <div class="bm-batch-detail-tags">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                             Variant="Variant.Filled" Class="bm-batch-cat-chip">
+                                        @_selected.Category
+                                    </MudChip>
+                                    @foreach (var tag in _selected.Tags)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@tag</MudChip>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <MudDivider Class="my-3" />
+
+                        <!-- Parameters -->
+                        @if (_selected.Parameters.Count > 0)
+                        {
+                            <div class="bm-batch-params-title">Parameters</div>
+                            <div class="bm-batch-params-grid">
+                                @foreach (var p in _selected.Parameters)
+                                {
+                                    <div class="bm-batch-param-row">
+                                        @RenderParam(p)
+                                    </div>
+                                }
+                            </div>
+
+                            <MudDivider Class="my-3" />
+                        }
+
+                        <!-- Endpoint preview -->
+                        <div class="bm-batch-endpoint">
+                            <span class="bm-batch-endpoint-method">@_selected.Endpoint.Method</span>
+                            <span class="bm-batch-endpoint-url">@ResolveUrl(_selected)</span>
+                        </div>
+
+                        <!-- Run button + result -->
+                        <div class="bm-batch-actions">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Outlined.PlayArrow"
+                                       Size="Size.Large"
+                                       Disabled="@(_running || !CanRun)"
+                                       OnClick="RunAsync">
+                                @(_running ? "Running…" : "Run Batch")
+                            </MudButton>
+                            @if (_running)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" Class="ml-3" />
+                            }
+                        </div>
+
+                        @if (_lastResult is not null)
+                        {
+                            <div class="bm-batch-result @(_lastResult.Success ? "bm-batch-result-ok" : "bm-batch-result-err")">
+                                <MudIcon Icon="@(_lastResult.Success ? Icons.Material.Outlined.CheckCircle : Icons.Material.Outlined.Error)"
+                                         Size="Size.Small" Class="mr-1" />
+                                <span>@(_lastResult.Message ?? _lastResult.Error)</span>
+                                @if (_lastResult.JobId is not null)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Class="ml-2"
+                                             Variant="Variant.Outlined">Job: @_lastResult.JobId</MudChip>
+                                }
+                            </div>
+
+                            <MudExpansionPanels Class="mt-2" Dense="true">
+                                <MudExpansionPanel Text="Request details" Dense="true">
+                                    <div class="bm-batch-code">
+                                        <div class="bm-batch-code-label">URL</div>
+                                        <pre class="bm-batch-code-pre">@_lastResult.ResolvedUrl</pre>
+                                        <div class="bm-batch-code-label mt-2">Body</div>
+                                        <pre class="bm-batch-code-pre">@_lastResult.ResolvedBody</pre>
+                                    </div>
+                                </MudExpansionPanel>
+                            </MudExpansionPanels>
+                        }
+
+                    </div>
+                }
+            </div>
+
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public string Environment { get; set; } = string.Empty;
+
+    private bool   _loading = true;
+    private string _search   = "";
+    private string? _category;
+    private bool   _running;
+
+    private List<BatchDefinition>  _batches    = [];
+    private List<string>           _categories = [];
+    private BatchDefinition?       _selected;
+    private BatchTriggerResult?    _lastResult;
+
+    // Per-param value stores
+    private Dictionary<string, string>        _strValues  = new();
+    private Dictionary<string, bool>          _boolValues = new();
+    private Dictionary<string, IReadOnlyCollection<string>> _multiValues = new();
+
+    private IEnumerable<BatchDefinition> Filtered =>
+        _batches.Where(b =>
+            (_category is null || b.Category == _category) &&
+            (string.IsNullOrWhiteSpace(_search) ||
+             b.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             b.Description.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             b.Tags.Any(t => t.Contains(_search, StringComparison.OrdinalIgnoreCase))));
+
+    private bool CanRun => _selected is not null &&
+        (_selected.Parameters
+            .Where(p => p.Required)
+            .All(p => p.Type == "multiselect"
+                ? (_multiValues.TryGetValue(p.Key, out var mv) && mv.Any())
+                : (_strValues.TryGetValue(p.Key, out var sv) && !string.IsNullOrWhiteSpace(sv))));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
+        _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
+        _loading    = false;
+        if (_batches.Count > 0) SelectBatch(_batches[0]);
+    }
+
+    private void SelectBatch(BatchDefinition batch)
+    {
+        _selected   = batch;
+        _lastResult = null;
+        _strValues  = new();
+        _boolValues = new();
+        _multiValues = new();
+
+        var today     = DateTime.Today.ToString("yyyy-MM-dd");
+        var yesterday = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd");
+        var month     = DateTime.Today.Month.ToString("D2");
+        var year      = DateTime.Today.Year.ToString();
+
+        foreach (var p in batch.Parameters)
+        {
+            if (p.Type == "boolean")
+            {
+                var d = p.DefaultString();
+                _boolValues[p.Key] = d is "true" or "True" or "1";
+            }
+            else if (p.Type == "multiselect")
+            {
+                var list = p.DefaultList().Select(v => ResolvePlaceholder(v, today, yesterday, month, year)).ToList();
+                _multiValues[p.Key] = list;
+            }
+            else
+            {
+                var d = p.DefaultString();
+                _strValues[p.Key] = ResolvePlaceholder(d, today, yesterday, month, year);
+            }
+        }
+    }
+
+    private static string ResolvePlaceholder(string s, string today, string yesterday, string month, string year) =>
+        s.Replace("{today}", today)
+         .Replace("{yesterday}", yesterday)
+         .Replace("{month}", month)
+         .Replace("{year}", year);
+
+    private string ResolveUrl(BatchDefinition b) =>
+        b.Endpoint.Url
+         .Replace("{id}",  b.Id)
+         .Replace("{env}", Environment);
+
+    private async Task RunAsync()
+    {
+        if (_selected is null) return;
+        _running    = true;
+        _lastResult = null;
+        StateHasChanged();
+
+        var flat = new Dictionary<string, string>(_strValues);
+        foreach (var (k, v) in _boolValues)
+            flat[k] = v ? "true" : "false";
+        foreach (var (k, mv) in _multiValues)
+            flat[k] = string.Join(",", mv);
+
+        _lastResult = await CatalogSvc.TriggerAsync(_selected, flat, Environment);
+        _running    = false;
+
+        if (_lastResult.Success)
+            Snackbar.Add(_lastResult.Message ?? "Batch triggered", Severity.Success);
+        else
+            Snackbar.Add(_lastResult.Error ?? "Trigger failed", Severity.Error);
+    }
+
+    // ── Dynamic param rendering ───────────────────────────────────────────────
+
+    private RenderFragment RenderParam(BatchParameter p) => builder =>
+    {
+        switch (p.Type)
+        {
+            case "boolean":
+                builder.OpenComponent<MudSwitch<bool>>(0);
+                builder.AddAttribute(1, "Label", p.Label);
+                builder.AddAttribute(2, "Value", _boolValues.GetValueOrDefault(p.Key));
+                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<bool>(this, v =>
+                {
+                    _boolValues[p.Key] = v;
+                    StateHasChanged();
+                }));
+                builder.AddAttribute(4, "Color", Color.Primary);
+                builder.AddAttribute(5, "Class", "bm-batch-switch");
+                if (!string.IsNullOrEmpty(p.Description))
+                    builder.AddAttribute(6, "title", p.Description);
+                builder.CloseComponent();
+                break;
+
+            case "select":
+                builder.OpenComponent<MudSelect<string>>(0);
+                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
+                builder.AddAttribute(2, "Value", _strValues.GetValueOrDefault(p.Key, ""));
+                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<string>(this, v =>
+                {
+                    _strValues[p.Key] = v;
+                    StateHasChanged();
+                }));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Dense", true);
+                if (!string.IsNullOrEmpty(p.Description))
+                    builder.AddAttribute(7, "HelperText", p.Description);
+                builder.AddAttribute(8, "ChildContent", (RenderFragment)(cb =>
+                {
+                    foreach (var opt in p.Options)
+                    {
+                        cb.OpenComponent<MudSelectItem<string>>(0);
+                        cb.AddAttribute(1, "Value", opt);
+                        cb.CloseComponent();
+                    }
+                }));
+                builder.CloseComponent();
+                break;
+
+            case "multiselect":
+                builder.OpenComponent<MudSelect<string>>(0);
+                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
+                builder.AddAttribute(2, "SelectedValues", _multiValues.GetValueOrDefault(p.Key, []));
+                builder.AddAttribute(3, "SelectedValuesChanged",
+                    EventCallback.Factory.Create<IEnumerable<string>>(this, v =>
+                    {
+                        _multiValues[p.Key] = v.ToList();
+                        StateHasChanged();
+                    }));
+                builder.AddAttribute(4, "MultiSelection", true);
+                builder.AddAttribute(5, "Variant", Variant.Outlined);
+                builder.AddAttribute(6, "Margin", Margin.Dense);
+                builder.AddAttribute(7, "Dense", true);
+                if (!string.IsNullOrEmpty(p.Description))
+                    builder.AddAttribute(8, "HelperText", p.Description);
+                builder.AddAttribute(9, "ChildContent", (RenderFragment)(cb =>
+                {
+                    foreach (var opt in p.Options)
+                    {
+                        cb.OpenComponent<MudSelectItem<string>>(0);
+                        cb.AddAttribute(1, "Value", opt);
+                        cb.CloseComponent();
+                    }
+                }));
+                builder.CloseComponent();
+                break;
+
+            case "number":
+                builder.OpenComponent<MudNumericField<double>>(0);
+                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
+                builder.AddAttribute(2, "Value",
+                    double.TryParse(_strValues.GetValueOrDefault(p.Key, "0"),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0d);
+                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<double>(this, v =>
+                {
+                    _strValues[p.Key] = v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    StateHasChanged();
+                }));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                if (p.Min.HasValue) builder.AddAttribute(6, "Min", p.Min.Value);
+                if (p.Max.HasValue) builder.AddAttribute(7, "Max", p.Max.Value);
+                if (!string.IsNullOrEmpty(p.Description))
+                    builder.AddAttribute(8, "HelperText", p.Description);
+                builder.CloseComponent();
+                break;
+
+            default: // string | date
+                builder.OpenComponent<MudTextField<string>>(0);
+                builder.AddAttribute(1, "Label", p.Label + (p.Required ? " *" : ""));
+                builder.AddAttribute(2, "Value", _strValues.GetValueOrDefault(p.Key, ""));
+                builder.AddAttribute(3, "ValueChanged", EventCallback.Factory.Create<string>(this, v =>
+                {
+                    _strValues[p.Key] = v ?? "";
+                    StateHasChanged();
+                }));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Immediate", true);
+                if (p.Type == "date")
+                    builder.AddAttribute(7, "Placeholder", "YYYY-MM-DD");
+                if (!string.IsNullOrEmpty(p.Description))
+                    builder.AddAttribute(8, "HelperText", p.Description);
+                builder.CloseComponent();
+                break;
+        }
+    };
+}

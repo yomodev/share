@@ -1,0 +1,103 @@
+@inject IJSRuntime JS
+
+<MudDialog>
+    <TitleContent>Open log file</TitleContent>
+    <DialogContent>
+        <div style="display:flex;flex-direction:column;gap:20px;min-width:380px">
+            <MudTextField @bind-Value="Path"
+                          Label="File path"
+                          Placeholder="Paste path here…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Outlined.FolderOpen"
+                          AdornmentAriaLabel="Browse…"
+                          OnAdornmentClick="BrowseFile"
+                          @onkeydown="OnKeyDown"
+                          @ref="_field" />
+
+            <!-- + shape placement grid -->
+            <div style="display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px 48px;gap:4px;align-self:center">
+                <div></div>
+                <MudTooltip Text="Open above">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Top))" />
+                </MudTooltip>
+                <div></div>
+
+                <MudTooltip Text="Open to the left">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowLeft"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Left))" />
+                </MudTooltip>
+                <MudTooltip Text="Replace current panel">
+                    <MudIconButton Icon="@Icons.Material.Outlined.OpenInBrowser"
+                                   Variant="Variant.Filled" Color="Color.Primary" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Replace))" />
+                </MudTooltip>
+                <MudTooltip Text="Open to the right">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowRight"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Right))" />
+                </MudTooltip>
+
+                <div></div>
+                <MudTooltip Text="Open below">
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                                   Variant="Variant.Outlined" Size="Size.Medium"
+                                   Disabled="@string.IsNullOrWhiteSpace(Path)"
+                                   OnClick="@(() => Submit(WsPlacement.Bottom))" />
+                </MudTooltip>
+                <div></div>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    public enum WsPlacement { Replace, Left, Right, Top, Bottom }
+
+    private string Path = string.Empty;
+    private MudTextField<string>? _field;
+    private DotNetObjectReference<OpenLogFileDialog>? _selfRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _field is not null)
+            await _field.FocusAsync();
+    }
+
+    private async Task BrowseFile()
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmOpenLocalLogFile", _selfRef);
+    }
+
+    [JSInvokable]
+    public void OnLocalFileOpened(string key, string filename)
+    {
+        InvokeAsync(() =>
+        {
+            Path = "local:" + key;
+            StateHasChanged();
+        });
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(Path))
+            Submit(WsPlacement.Replace);
+    }
+
+    private void Submit(WsPlacement placement) =>
+        MudDialog.Close(DialogResult.Ok((Path.Trim(), placement)));
+
+    public void Dispose() => _selfRef?.Dispose();
+}

@@ -1,0 +1,1 @@
+D:\source\repos\archive\TextArchive\bin\Debug\net8.0\TextArchive.exe -c D:\source\repos\share\BatchMonitor_Step1 D:\source\repos\share\BatchMonitor_Step1\example.txt -e "**/bin/**;**/obj/**;**/.claude/**;**/.vs/**;**/node_modules/**"
