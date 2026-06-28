@@ -2039,7 +2039,7 @@ tr.bm-row-searching td:first-child {
     inset: 0;
     border: 2px solid var(--mud-palette-primary);
     pointer-events: none;
-    z-index: 9999;
+    z-index: 10;
 }
 
 .ws-handle-h {
