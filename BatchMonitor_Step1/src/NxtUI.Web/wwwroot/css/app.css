@@ -902,11 +902,17 @@ html, body {
     display: flex;
     align-items: center;
     gap: 2px;
-    flex: 1;
+    flex: 1 1 0;        /* always grows, doesn't base on content width */
     min-width: 0;
 }
 /* MudTextField fills the remaining space inside the wrapper */
 .bm-filter-box .mud-form-control { flex: 1 1 auto; min-width: 0; }
+
+/* Toolbar containers that hold a FilterBox must not shrink it */
+.bm-batch-toolbar    > .bm-filter-box,
+.bm-lv-toolbar       > .bm-filter-box,
+.bm-svc-toolbar-left > .bm-filter-box,
+.bm-lb-toolbar-right > .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
@@ -1889,7 +1895,6 @@ tr.bm-row-searching td:first-child {
     flex: 0 0 300px;
 }
 .bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.bm-lb-toolbar-right .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
 .bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
 .bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
