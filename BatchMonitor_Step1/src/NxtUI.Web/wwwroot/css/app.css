@@ -1333,6 +1333,8 @@ html, body {
     font-size: 14px !important;
     display: flex !important;
     align-items: center !important;
+    min-height: 36px !important;
+    height: 36px !important;
 }
 .bm-mongo-db-select .mud-select-input {
     font-size: 14px !important;
