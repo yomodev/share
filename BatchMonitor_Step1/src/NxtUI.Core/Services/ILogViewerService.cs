@@ -1,4 +1,4 @@
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public interface ILogViewerService
 {

@@ -1,4 +1,6 @@
+using NxtUI.Core.Services;
 using NxtUI.Hubs;
+using NxtUI.Core.Models;
 using NxtUI.Models;
 using Microsoft.AspNetCore.SignalR;
 

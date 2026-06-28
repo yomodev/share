@@ -3,7 +3,7 @@ using NxtUI.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public class MongoHeartbeatService : IHeartbeatService
 {

@@ -5,7 +5,7 @@ using NxtUI.Configuration;
 using NxtUI.Logging;
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 {

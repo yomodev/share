@@ -1,7 +1,7 @@
 using NxtUI.Logging;
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 /// <summary>
 /// Watches the memory-metrics log files of services and caches the parsed numbers,

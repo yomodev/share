@@ -1,7 +1,7 @@
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public class MockMongoService : IMongoService
 {

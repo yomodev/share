@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 /// <summary>
 /// Real MongoDB implementation of <see cref="IRunService"/>.

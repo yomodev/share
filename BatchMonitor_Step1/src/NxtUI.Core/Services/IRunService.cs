@@ -1,6 +1,6 @@
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 /// <summary>
 /// Abstraction over the batch data source.

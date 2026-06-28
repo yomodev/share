@@ -1,6 +1,6 @@
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 /// <summary>
 /// In-memory event store that accumulates PerformanceEvents

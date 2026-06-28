@@ -1,6 +1,6 @@
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public interface IHeartbeatService
 {

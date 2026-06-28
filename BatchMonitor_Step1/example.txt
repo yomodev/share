@@ -10183,15 +10183,13 @@ The following steps are designed to be executed sequentially by a coding agent. 
 | Kafka dashboard design | Deferred |
 | MongoDB dashboard design | Deferred |
 FILE src/NxtUI.Core/NxtUI.Core.csproj
-LENGTH 568
+LENGTH 476
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>NxtUI</RootNamespace>
-    <AssemblyName>BatchMonitor.Core</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10202,7 +10200,8 @@ LENGTH 568
 
 </Project>
 FILE src/NxtUI.Web/App.razor
-LENGTH 491
+LENGTH 508
+@namespace NxtUI
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
         <RouteView RouteData="@routeData" DefaultLayout="@typeof(NxtUI.Layout.MainLayout)" />
@@ -10300,15 +10299,13 @@ LENGTH 1492
   }
 }
 FILE src/NxtUI.Web/NxtUI.Web.csproj
-LENGTH 565
+LENGTH 485
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>NxtUI</RootNamespace>
-    <AssemblyName>NxtUI</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10322,7 +10319,7 @@ LENGTH 565
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 5156
+LENGTH 5080
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Hubs;
@@ -10380,8 +10377,7 @@ public class Program
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
-        builder.Services.AddSingleton<IEnvironmentRegistry, EnvironmentRegistry>();
-        builder.Services.AddSingleton<IServerRegistry, ServerRegistry>();
+        builder.Services.AddSingleton<IEnvironmentService, EnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
@@ -10431,7 +10427,7 @@ public class Program
     }
 }
 FILE src/NxtUI.Web/_Imports.razor
-LENGTH 506
+LENGTH 545
 @using System.Net.Http
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
@@ -10445,7 +10441,9 @@ LENGTH 506
 @using NxtUI.Components
 @using NxtUI.Core.Models
 @using NxtUI.Configuration
+@using NxtUI.Layout
 @using NxtUI.Models
+@using NxtUI.Pages
 @using NxtUI.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
@@ -10480,7 +10478,7 @@ LENGTH 889
 
 </Project>
 FILE src/NxtUI.Core/Configuration/AppSettings.cs
-LENGTH 1246
+LENGTH 1378
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -10513,6 +10511,9 @@ public class EnvironmentDefinition
 
     /// <summary>Tier name used to derive badge colour: Development | UAT | Staging | Production.</summary>
     public string Tier { get; set; } = string.Empty;
+
+    /// <summary>Hostnames of servers belonging to this environment.</summary>
+    public List<string> Servers { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/HeartbeatSettings.cs
 LENGTH 534
@@ -12319,24 +12320,16 @@ public class TopologyEdge
     /// <summary>Visual state inherited from the source pipeline row (drives edge colour).</summary>
     public PipelineState State { get; set; } = PipelineState.NotStarted;
 }
-FILE src/NxtUI.Core/Services/EnvironmentRegistry.cs
-LENGTH 3204
+FILE src/NxtUI.Core/Services/EnvironmentService.cs
+LENGTH 3053
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Models;
 
 namespace NxtUI.Core.Services;
 
-/// <summary>
-/// Default <see cref="IEnvironmentRegistry"/> — reads from <c>App:Environments</c>
-/// in configuration. Each environment is assigned a badge colour by hashing its id
-/// against a palette of MudBlazor CSS variable pairs, so badges adapt to the active
-/// theme and new environments get a colour automatically.
-/// </summary>
-public sealed class EnvironmentRegistry : IEnvironmentRegistry
+public sealed class EnvironmentService : IEnvironmentService
 {
-    // Each entry is (background CSS, text CSS) using MudBlazor palette variables.
-    // Pairs are ordered for maximum visual distinction between consecutive entries.
     private static readonly (string Bg, string Text)[] Palette =
     [
         ("var(--mud-palette-primary)",          "var(--mud-palette-primary-text)"),
@@ -12358,29 +12351,36 @@ public sealed class EnvironmentRegistry : IEnvironmentRegistry
     ];
 
     private readonly IReadOnlyList<EnvironmentInfo> _environments;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _servers;
 
-    public EnvironmentRegistry(IOptions<AppSettings> settings)
+    public EnvironmentService(IOptions<AppSettings> settings)
     {
-        _environments = settings.Value.Environments
-            .Select(e =>
+        var envs = settings.Value.Environments;
+
+        _environments = envs.Select(e =>
+        {
+            var (bg, text) = PickPair(e.Id);
+            return new EnvironmentInfo
             {
-                var (bg, text) = PickPair(e.Id);
-                return new EnvironmentInfo
-                {
-                    Id             = e.Id,
-                    Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
-                    Tier           = e.Tier,
-                    BadgeColor     = bg,
-                    BadgeTextColor = text,
-                };
-            })
-            .ToList();
+                Id             = e.Id,
+                Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
+                Tier           = e.Tier,
+                BadgeColor     = bg,
+                BadgeTextColor = text,
+            };
+        }).ToList();
+
+        _servers = envs.ToDictionary(
+            e => e.Id,
+            e => (IReadOnlyList<string>)e.Servers.AsReadOnly(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyList<EnvironmentInfo> GetAll() => _environments;
-
-    public EnvironmentInfo? Find(string id) =>
-        _environments.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public IReadOnlyList<EnvironmentInfo> GetAll()    => _environments;
+    public EnvironmentInfo? GetById(string id)        => _environments.FirstOrDefault(e =>
+        e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public IReadOnlyList<string> GetServers(string environmentId) =>
+        _servers.TryGetValue(environmentId, out var list) ? list : [];
 
     private static (string Bg, string Text) PickPair(string id)
     {
@@ -12409,25 +12409,17 @@ public interface IBatchCatalogService
         string                       env,
         CancellationToken            ct = default);
 }
-FILE src/NxtUI.Core/Services/IEnvironmentRegistry.cs
-LENGTH 693
+FILE src/NxtUI.Core/Services/IEnvironmentService.cs
+LENGTH 263
 using NxtUI.Models;
 
 namespace NxtUI.Core.Services;
 
-/// <summary>
-/// Provides the ordered list of environments known to this portal instance.
-/// The default implementation reads from <c>App:Environments</c> in configuration;
-/// alternative implementations can override the source (e.g. from a database or
-/// a remote configuration service) without changing any callers.
-/// </summary>
-public interface IEnvironmentRegistry
+public interface IEnvironmentService
 {
-    /// <summary>Returns all configured environments in declaration order.</summary>
     IReadOnlyList<EnvironmentInfo> GetAll();
-
-    /// <summary>Returns the environment with the given id, or null if not found.</summary>
-    EnvironmentInfo? Find(string id);
+    EnvironmentInfo?               GetById(string id);
+    IReadOnlyList<string>          GetServers(string environmentId);
 }
 FILE src/NxtUI.Core/Services/IHeartbeatService.cs
 LENGTH 186
@@ -12651,27 +12643,6 @@ public class RunFilter
         string.IsNullOrWhiteSpace(SearchText) &&
         (Statuses is null || Statuses.Count == 0) &&
         (Types    is null || Types.Count    == 0);
-}
-FILE src/NxtUI.Core/Services/IServerRegistry.cs
-LENGTH 732
-using NxtUI.Models;
-
-namespace NxtUI.Core.Services;
-
-/// <summary>
-/// Resolves the set of server hostnames relevant for a given environment.
-/// The default implementation prefers the static <c>Logs:Servers</c> config list
-/// and falls back to live heartbeat hosts when the list is empty.
-/// Alternative implementations can resolve servers dynamically (CMDB, per-environment
-/// config, etc.) without changing any callers.
-/// </summary>
-public interface IServerRegistry
-{
-    /// <summary>
-    /// Returns the ordered, deduplicated hostnames of servers to query for the
-    /// given environment.
-    /// </summary>
-    Task<IReadOnlyList<string>> GetServersAsync(EnvironmentInfo environment, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IServiceMetricsMonitor.cs
 LENGTH 1164
@@ -13119,43 +13090,6 @@ public class PerformanceEventStore
         }
     }
 }
-FILE src/NxtUI.Core/Services/ServerRegistry.cs
-LENGTH 1175
-using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
-using NxtUI.Models;
-using NxtUI.Services;
-
-namespace NxtUI.Core.Services;
-
-/// <summary>
-/// Default <see cref="IServerRegistry"/> — returns <c>Logs:Servers</c> from config when
-/// non-empty; otherwise queries the heartbeat service to discover hosts for the environment.
-/// </summary>
-public sealed class ServerRegistry : IServerRegistry
-{
-    private readonly LogPathSettings  _settings;
-    private readonly IHeartbeatService _heartbeat;
-
-    public ServerRegistry(IOptions<LogPathSettings> settings, IHeartbeatService heartbeat)
-    {
-        _settings  = settings.Value;
-        _heartbeat = heartbeat;
-    }
-
-    public async Task<IReadOnlyList<string>> GetServersAsync(EnvironmentInfo environment, CancellationToken ct = default)
-    {
-        if (_settings.Servers.Count > 0)
-            return _settings.Servers;
-
-        var statuses = await _heartbeat.GetServiceStatusesAsync(environment.Id, ct);
-        return statuses
-            .Select(s => s.HostName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-}
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
 LENGTH 10381
 using NxtUI.Models;
@@ -13395,7 +13329,8 @@ public class TopologyComputationService
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 3066
+LENGTH 3094
+@namespace NxtUI.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -13497,7 +13432,8 @@ LENGTH 3066
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 6221
+LENGTH 6513
+@namespace NxtUI.Components
 @inject NxtUI.Services.TabService _tabSvc
 @* Reusable debounced filter input with inline help popup.
    Value           — controlled value; set from parent so programmatic clear works.
@@ -13508,20 +13444,25 @@ LENGTH 6221
 
 <div class="bm-filter-box @Class">
 
-    <MudTextField T="string" @ref="_field"
-                  Placeholder="@Placeholder"
-                  Adornment="Adornment.Start"
-                  AdornmentIcon="@Icons.Material.Outlined.Search"
-                  Value="@Value"
-                  ValueChanged="NotifyChanged"
-                  Immediate="true"
-                  DebounceInterval="@DebounceMs"
-                  Variant="Variant.Outlined"
-                  Margin="Margin.Dense"
-                  Error="@(ParseError is not null)"
-                  Clearable="true"
-                  OnClearButtonClick="ClearAsync"
-                  Style="flex:1;min-width:0;" />
+    <MudTooltip Text="@(ParseError ?? "")"
+                Placement="Placement.Bottom"
+                Disabled="@(ParseError is null)"
+                RootClass="bm-filter-error-tooltip">
+        <MudTextField T="string" @ref="_field"
+                      Placeholder="@Placeholder"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Value="@Value"
+                      ValueChanged="NotifyChanged"
+                      Immediate="true"
+                      DebounceInterval="@DebounceMs"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Error="@(ParseError is not null)"
+                      Clearable="true"
+                      OnClearButtonClick="ClearAsync"
+                      Style="flex:1;min-width:0;" />
+    </MudTooltip>
 
     <MudMenu @ref="_menu"
              AnchorOrigin="Origin.BottomRight"
@@ -13632,7 +13573,8 @@ LENGTH 6221
     }
 }
 FILE src/NxtUI.Web/Components/KafkaConsumerGroupsDialog.razor
-LENGTH 3267
+LENGTH 3295
+@namespace NxtUI.Components
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IKafkaService KafkaSvc
@@ -13721,7 +13663,8 @@ LENGTH 3267
     };
 }
 FILE src/NxtUI.Web/Components/KafkaTopicInfoDialog.razor
-LENGTH 2155
+LENGTH 2183
+@namespace NxtUI.Components
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IKafkaService KafkaSvc
@@ -13803,7 +13746,8 @@ public partial class KafkaTopicInfoDialog
     };
 }
 FILE src/NxtUI.Web/Components/LogViewport.razor
-LENGTH 5694
+LENGTH 5722
+@namespace NxtUI.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -13939,7 +13883,8 @@ LENGTH 5694
     }
 }
 FILE src/NxtUI.Web/Components/OpenLogFileDialog.razor
-LENGTH 4388
+LENGTH 4416
+@namespace NxtUI.Components
 @inject IJSRuntime JS
 
 <MudDialog>
@@ -14044,7 +13989,8 @@ LENGTH 4388
     public void Dispose() => _selfRef?.Dispose();
 }
 FILE src/NxtUI.Web/Components/WorkspacePanel.razor
-LENGTH 4397
+LENGTH 4425
+@namespace NxtUI.Components
 @using NxtUI.Models
 @using NxtUI.Pages
 @inject IJSRuntime JS
@@ -14244,7 +14190,8 @@ public class RunHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"{env}:{runId}");
 }
 FILE src/NxtUI.Web/Layout/HelpLayout.razor
-LENGTH 365
+LENGTH 389
+@namespace NxtUI.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 
@@ -14260,7 +14207,8 @@ LENGTH 365
     // without the main tab-bar and sidebar chrome.
 }
 FILE src/NxtUI.Web/Layout/MainLayout.razor
-LENGTH 4909
+LENGTH 4933
+@namespace NxtUI.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 @inject TabService TabService
@@ -14402,7 +14350,8 @@ LENGTH 4909
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 8415
+LENGTH 8439
+@namespace NxtUI.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
@@ -14592,7 +14541,8 @@ LENGTH 8415
     }
 }
 FILE src/NxtUI.Web/Layout/TabBar.razor
-LENGTH 4249
+LENGTH 4273
+@namespace NxtUI.Layout
 @using NxtUI.Models
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
@@ -14714,7 +14664,8 @@ LENGTH 4249
     }
 }
 FILE src/NxtUI.Web/Layout/TabRenameDialog.razor
-LENGTH 4985
+LENGTH 5009
+@namespace NxtUI.Layout
 @using MudBlazor
 @inject TabService TabService
 @inject IJSRuntime JS
@@ -15219,7 +15170,8 @@ public sealed class WsSplit(WsDir dir, double ratio, WsNode a, WsNode b) : WsNod
     }
 }
 FILE src/NxtUI.Web/Pages/Batches.razor
-LENGTH 17921
+LENGTH 17944
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @using NxtUI.Services
 @inject IBatchCatalogService CatalogSvc
@@ -15565,12 +15517,14 @@ LENGTH 17921
 
 }
 FILE src/NxtUI.Web/Pages/CatchAllPage.razor
-LENGTH 128
+LENGTH 151
+@namespace NxtUI.Pages
 @* Catch-all route — MainLayout renders all content via the tab system; this page has no body. *@
 @page "/"
 @page "/{**path}"
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
-LENGTH 17458
+LENGTH 17481
+@namespace NxtUI.Pages
 <div class="bm-help-page bm-help-page--tab">
 
     <div class="bm-help-header">
@@ -15846,7 +15800,8 @@ LENGTH 17458
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 15259
+LENGTH 15370
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject EnvironmentSelectorService EnvService
@@ -16175,6 +16130,8 @@ LENGTH 15259
 
     private async void OnEnvExternalChange()
     {
+        _recent = [];
+        await InvokeAsync(StateHasChanged);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
@@ -16182,6 +16139,7 @@ LENGTH 15259
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
+        _recent = [];
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
@@ -16216,7 +16174,8 @@ LENGTH 15259
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 4616
+LENGTH 4816
+@namespace NxtUI.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
 @inject IHeartbeatService HeartbeatSvc
@@ -16274,6 +16233,12 @@ LENGTH 4616
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
+
+        // Clear immediately so the previous env's data doesn't linger
+        _treeData = null;
+        _error    = null;
+        _loading  = true;
+        StateHasChanged();
 
         await LoadAsync();
         await InvokeAsync(StateHasChanged);
@@ -16368,7 +16333,8 @@ LENGTH 4616
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 23686
+LENGTH 23709
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -16902,7 +16868,8 @@ LENGTH 23686
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9397
+LENGTH 9420
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -17140,7 +17107,8 @@ LENGTH 9397
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 11133
+LENGTH 11156
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -17434,7 +17402,8 @@ LENGTH 11133
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 29704
+LENGTH 29569
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Configuration
@@ -17442,8 +17411,7 @@ LENGTH 29704
 @using NxtUI.Filtering
 @using Microsoft.Extensions.Options
 @inject ILogBrowserService BrowserSvc
-@inject IEnvironmentRegistry EnvironmentRegistry
-@inject IServerRegistry ServerRegistry
+@inject IEnvironmentService EnvironmentService
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
@@ -17760,8 +17728,7 @@ LENGTH 29704
 
     protected override async Task OnInitializedAsync()
     {
-        var envInfo = EnvironmentRegistry.Find(Env) ?? new EnvironmentInfo { Id = Env };
-        _servers    = (await ServerRegistry.GetServersAsync(envInfo, _cts.Token)).ToList();
+        _servers = EnvironmentService.GetServers(Env).ToList();
 
         try
         {
@@ -18102,7 +18069,8 @@ LENGTH 29704
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 23570
+LENGTH 23655
+@namespace NxtUI.Pages
 @using NxtUI.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
@@ -18172,8 +18140,7 @@ LENGTH 23570
     </div>
 
     <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
-    @if (IsSelected)
-    {
+    <div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
     <div class="bm-lv-toolbar bm-lv-toolbar-sm">
         <div class="bm-lv-find">
             <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
@@ -18259,7 +18226,7 @@ LENGTH 23570
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
     </div>
-    }
+    </div>
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
@@ -18688,7 +18655,8 @@ LENGTH 23570
     }
 }
 FILE src/NxtUI.Web/Pages/LogWorkspace.razor
-LENGTH 3929
+LENGTH 3952
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @using NxtUI.Components
 @inject IDialogService DialogService
@@ -18805,7 +18773,8 @@ LENGTH 3929
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 18107
+LENGTH 18130
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Logging
@@ -19264,7 +19233,8 @@ LENGTH 18107
     }
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor
-LENGTH 4102
+LENGTH 4125
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IMongoService MongoSvc
@@ -19379,7 +19349,8 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 9098
+LENGTH 9121
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -19615,7 +19586,8 @@ LENGTH 9098
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11682
+LENGTH 11705
+@namespace NxtUI.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -19909,7 +19881,8 @@ public partial class MongoDashboard
     };
 }
 FILE src/NxtUI.Web/Pages/PlaceholderPage.razor
-LENGTH 830
+LENGTH 853
+@namespace NxtUI.Pages
 @* Stub page for tabs not yet implemented *@
 
 <div class="bm-placeholder">
@@ -19932,7 +19905,8 @@ LENGTH 830
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16152
+LENGTH 16175
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @inject IRunService RunService
 @inject TabService TabService
@@ -20340,7 +20314,8 @@ LENGTH 16152
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11083
+LENGTH 11106
+@namespace NxtUI.Pages
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
@@ -20614,7 +20589,8 @@ LENGTH 11083
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28784
+LENGTH 28807
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @using NxtUI.Services
 @using NxtUI.Filtering
@@ -21254,7 +21230,8 @@ public partial class ServicesPage
     };
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 4261
+LENGTH 4284
+@namespace NxtUI.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
 @inject IJSRuntime JS
@@ -21357,7 +21334,8 @@ LENGTH 4261
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 30702
+LENGTH 30725
+@namespace NxtUI.Pages
 @using NxtUI.Models
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
@@ -22655,7 +22633,7 @@ file static class StringExtensions
         s.Length <= max ? s : s[..max] + "…";
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
-LENGTH 1632
+LENGTH 1291
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
@@ -22664,29 +22642,26 @@ using NxtUI.Models;
 namespace NxtUI.Services;
 
 /// <summary>
-/// Scoped service that owns the "next tab environment" selection.
+/// Scoped service that owns the "currently selected environment" for a Blazor circuit.
 /// Both the sidebar dropdown and the Home environment selector write to this;
 /// both read from it — bidirectional sync via <see cref="OnChange"/>.
 /// </summary>
 public class EnvironmentSelectorService
 {
-    private readonly IEnvironmentRegistry _registry;
+    private readonly IEnvironmentService _envService;
     private string _selectedId;
 
-    public EnvironmentSelectorService(IEnvironmentRegistry registry, IOptions<AppSettings> settings)
+    public EnvironmentSelectorService(IEnvironmentService envService, IOptions<AppSettings> settings)
     {
-        _registry   = registry;
+        _envService = envService;
         _selectedId = settings.Value.DefaultEnvironment;
 
-        // Fall back to first environment if default is not in the list
-        if (_registry.Find(_selectedId) is null && _registry.GetAll().Count > 0)
-            _selectedId = _registry.GetAll()[0].Id;
+        if (_envService.GetById(_selectedId) is null && _envService.GetAll().Count > 0)
+            _selectedId = _envService.GetAll()[0].Id;
     }
 
-    /// <summary>All configured environments.</summary>
-    public IReadOnlyList<EnvironmentInfo> Environments => _registry.GetAll();
+    public IReadOnlyList<EnvironmentInfo> Environments => _envService.GetAll();
 
-    /// <summary>Currently selected environment id.</summary>
     public string SelectedId
     {
         get => _selectedId;
@@ -22698,10 +22673,8 @@ public class EnvironmentSelectorService
         }
     }
 
-    /// <summary>The full <see cref="EnvironmentInfo"/> for the selected environment.</summary>
-    public EnvironmentInfo? Selected => _registry.Find(_selectedId);
+    public EnvironmentInfo? Selected => _envService.GetById(_selectedId);
 
-    /// <summary>Raised when the selection changes, so all subscribers can re-render.</summary>
     public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
@@ -25346,7 +25319,8 @@ public class TimelineRun(
     }
 }
 FILE src/NxtUI.Web/Shared/ConfirmDialog.razor
-LENGTH 638
+LENGTH 662
+@namespace NxtUI.Shared
 <MudDialog>
     <DialogContent>
         <MudText>@Message</MudText>
@@ -25366,7 +25340,8 @@ LENGTH 638
     [Parameter] public string ConfirmText { get; set; } = "Delete";
 }
 FILE src/NxtUI.Web/Shared/EnvironmentBadge.razor
-LENGTH 408
+LENGTH 432
+@namespace NxtUI.Shared
 @* Renders a small coloured environment badge pill *@
 
 @if (Environment is not null)
@@ -25382,7 +25357,8 @@ LENGTH 408
     [Parameter] public string ExtraStyle { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Shared/SidebarNavItem.razor
-LENGTH 940
+LENGTH 964
+@namespace NxtUI.Shared
 @* Reusable sidebar nav item — icon only when collapsed, icon+label when expanded *@
 
 @if (!IsOpen)
@@ -25409,7 +25385,8 @@ else
     [Parameter] public EventCallback OnClick { get; set; }
 }
 FILE src/NxtUI.Web/Shared/StatusIcon.razor
-LENGTH 716
+LENGTH 740
+@namespace NxtUI.Shared
 @* Status icon with colour and pulse animation for Running *@
 
 <MudTooltip Text="@Status.ToString()">
@@ -25431,7 +25408,8 @@ LENGTH 716
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2704
+LENGTH 2728
+@namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
 @if (Tab is not null)
@@ -25945,7 +25923,7 @@ public class FilterParserTests
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 64103
+LENGTH 64426
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -26834,6 +26812,16 @@ html, body {
 /* ═══════════════════════════════════════════════════════════════════════
    FILTER BOX
    ═══════════════════════════════════════════════════════════════════════ */
+
+/* Error tooltip — amber background so it's visually distinct from info tooltips */
+.bm-filter-error-tooltip .mud-tooltip {
+    background-color: var(--mud-palette-warning-darken) !important;
+    color: #fff !important;
+    font-size: 12px;
+    max-width: 340px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 
 /* Wrapper is a flex row: [text field] [help button] */
 .bm-filter-box {
@@ -28739,7 +28727,7 @@ LENGTH 8155
 
 .bm-tl-dialog-selected { background: rgba(56,139,253,0.10) !important; }
 FILE src/NxtUI.Web/wwwroot/css/log-viewer.css
-LENGTH 9288
+LENGTH 9645
 /* ── Log Viewer ─────────────────────────────────────────────────────────────── */
 
 /* Outer page layout */
@@ -28810,6 +28798,24 @@ LENGTH 9288
     width: 24px !important;
     height: 24px !important;
     padding: 0 !important;
+}
+
+/* Slide-down wrapper for the find/filter toolbar */
+.bm-lv-toolbar-wrap {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 180ms ease;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.bm-lv-toolbar-wrap-open {
+    grid-template-rows: 1fr;
+}
+
+.bm-lv-toolbar-wrap > .bm-lv-toolbar {
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* Find/filter toolbar */

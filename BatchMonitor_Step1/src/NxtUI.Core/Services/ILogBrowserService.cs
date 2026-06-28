@@ -1,6 +1,6 @@
 using NxtUI.Filtering;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 public record LogFolderNode(string Name, string RelativePath, bool HasChildren);
 

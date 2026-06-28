@@ -4,7 +4,7 @@ using NxtUI.Models;
 
 namespace NxtUI.Core.Services;
 
-public sealed class EnvironmentService : IEnvironmentService
+public sealed class MockEnvironmentService : IEnvironmentService
 {
     private static readonly (string Bg, string Text)[] Palette =
     [
@@ -29,7 +29,7 @@ public sealed class EnvironmentService : IEnvironmentService
     private readonly IReadOnlyList<EnvironmentInfo> _environments;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _servers;
 
-    public EnvironmentService(IOptions<AppSettings> settings)
+    public MockEnvironmentService(IOptions<AppSettings> settings)
     {
         var envs = settings.Value.Environments;
 

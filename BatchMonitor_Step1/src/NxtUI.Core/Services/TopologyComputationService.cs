@@ -1,6 +1,6 @@
 using NxtUI.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Core.Services;
 
 /// <summary>
 /// Computes a flow graph topology from the in-memory event store.
