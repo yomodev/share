@@ -8,7 +8,7 @@
 
 <div class="bm-filter-box @Class">
 
-    <MudTextField T="string"
+    <MudTextField T="string" @ref="_field"
                   Placeholder="@Placeholder"
                   Adornment="Adornment.Start"
                   AdornmentIcon="@Icons.Material.Outlined.Search"
@@ -109,7 +109,13 @@
 
     [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
 
-    private MudMenu? _menu;
+    private MudMenu?      _menu;
+    private MudTextField<string>? _field;
+
+    public async Task FocusAsync()
+    {
+        if (_field is not null) await _field.FocusAsync();
+    }
 
     private async Task OpenFullReference()
     {

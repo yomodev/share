@@ -73,8 +73,8 @@
     {
     <div class="bm-lv-toolbar bm-lv-toolbar-sm">
         <div class="bm-lv-find">
-            <MudTextField T="string" @bind-Value="_findTerm"
-                          Placeholder="Find…"
+            <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
+                          Placeholder="Find… (Ctrl+F)"
                           Variant="Variant.Outlined" Margin="Margin.Dense"
                           Style="width:100%;font-size:11px"
                           Adornment="Adornment.End"
@@ -83,24 +83,24 @@
                           @onkeydown="OnFindKeyDown" />
         </div>
 
-        <MudTooltip Text="Regular expression">
+        <MudTooltip Text="Regular expression (Alt+R)">
             <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
                                  Icon="@Icons.Material.Outlined.Code"
                                  ToggledIcon="@Icons.Material.Outlined.Code"
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
-        <MudTooltip Text="Case sensitive">
+        <MudTooltip Text="Case sensitive (Alt+C)">
             <MudToggleIconButton Toggled="@_caseSensitive" ToggledChanged="OnCaseToggled"
                                  Icon="@Icons.Material.Outlined.TextFields"
                                  ToggledIcon="@Icons.Material.Outlined.TextFields"
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
-        <MudTooltip Text="Previous match (Shift+Enter)">
+        <MudTooltip Text="Previous match (Shift+F3)">
             <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
                            Size="Size.Small" OnClick="PrevMatchAsync"
                            Disabled="@(_matchCount == 0)" />
         </MudTooltip>
-        <MudTooltip Text="Next match (Enter)">
+        <MudTooltip Text="Next match (F3)">
             <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
                            Size="Size.Small" OnClick="NextMatchAsync"
                            Disabled="@(_matchCount == 0)" />
@@ -112,10 +112,11 @@
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <FilterBox Value="@_filterStr"
+        <FilterBox @ref="_filterBox"
+                   Value="@_filterStr"
                    OnFilterChanged="OnFilterChangedAsync"
                    ParseError="@_filterError"
-                   Placeholder="Filter…"
+                   Placeholder="Filter… (Ctrl+G)"
                    Class="bm-lv-filter"
                    FieldHints="@LogFieldHints" />
         @if (_filterStr.Length > 0)
@@ -127,28 +128,28 @@
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <MudTooltip Text="Previous bookmark">
+        <MudTooltip Text="Previous bookmark (Shift+F2)">
             <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
                            Size="Size.Small" OnClick="PrevBookmarkAsync" />
         </MudTooltip>
-        <MudTooltip Text="Next bookmark">
+        <MudTooltip Text="Next bookmark (F2)">
             <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
                            Size="Size.Small" OnClick="NextBookmarkAsync" />
         </MudTooltip>
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
 
-        <MudTooltip Text="Decrease font">
+        <MudTooltip Text="Decrease font (Ctrl+−)">
             <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
                            Size="Size.Small" OnClick="DecreaseFontAsync"
                            Disabled="@(_fontSize <= _fontSizes[0])" />
         </MudTooltip>
-        <MudTooltip Text="Increase font">
+        <MudTooltip Text="Increase font (Ctrl+=)">
             <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
                            Size="Size.Small" OnClick="IncreaseFontAsync"
                            Disabled="@(_fontSize >= _fontSizes[^1])" />
         </MudTooltip>
-        <MudTooltip Text="Word wrap">
+        <MudTooltip Text="Word wrap (Alt+Z)">
             <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWrapToggled"
                                  Icon="@Icons.Material.Outlined.WrapText"
                                  ToggledIcon="@Icons.Material.Outlined.WrapText"
@@ -196,7 +197,9 @@
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    private LogViewport? _viewport;
+    private LogViewport?          _viewport;
+    private MudTextField<string>? _findField;
+    private FilterBox?            _filterBox;
 
     private string? _loadedPath;
     private bool    _rendered;
@@ -282,49 +285,85 @@
     private async Task OnPageKeyDown(KeyboardEventArgs e)
     {
         _preventKey = false;
+        var k = e.Key;
 
+        // ── Cell controls ─────────────────────────────────────────────────
         // Ctrl+O — open
-        if (e.CtrlKey && !e.ShiftKey && e.Key == "o" && OnOpen.HasDelegate)
-        {
-            _preventKey = true;
-            await OnOpen.InvokeAsync();
-            return;
-        }
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "o" && OnOpen.HasDelegate)
+            { _preventKey = true; await OnOpen.InvokeAsync(); return; }
+
         // Ctrl+W — close
-        if (e.CtrlKey && !e.ShiftKey && e.Key == "w" && OnClose.HasDelegate)
-        {
-            _preventKey = true;
-            await OnClose.InvokeAsync();
-            return;
-        }
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "w" && OnClose.HasDelegate)
+            { _preventKey = true; await OnClose.InvokeAsync(); return; }
+
         // F5 — refresh
-        if (e.Key == "F5")
-        {
-            _preventKey = true;
-            await RefreshAsync();
-            return;
-        }
+        if (!e.CtrlKey && !e.AltKey && k == "F5")
+            { _preventKey = true; await RefreshAsync(); return; }
+
         // Ctrl+Shift+→ — duplicate right
-        if (e.CtrlKey && e.ShiftKey && e.Key == "ArrowRight" && OnDupH.HasDelegate)
-        {
-            _preventKey = true;
-            await OnDupH.InvokeAsync();
-            return;
-        }
+        if (e.CtrlKey && e.ShiftKey && k == "ArrowRight" && OnDupH.HasDelegate)
+            { _preventKey = true; await OnDupH.InvokeAsync(); return; }
+
         // Ctrl+Shift+↓ — duplicate down
-        if (e.CtrlKey && e.ShiftKey && e.Key == "ArrowDown" && OnDupV.HasDelegate)
-        {
-            _preventKey = true;
-            await OnDupV.InvokeAsync();
-            return;
-        }
+        if (e.CtrlKey && e.ShiftKey && k == "ArrowDown" && OnDupV.HasDelegate)
+            { _preventKey = true; await OnDupV.InvokeAsync(); return; }
+
         // Ctrl+Shift+C — share link
-        if (e.CtrlKey && e.ShiftKey && e.Key == "C")
+        if (e.CtrlKey && e.ShiftKey && k == "C")
+            { _preventKey = true; await ShareAsync(); return; }
+
+        // ── Find / filter ─────────────────────────────────────────────────
+        // Ctrl+F — focus find
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "f")
         {
             _preventKey = true;
-            await ShareAsync();
+            if (_findField is not null) await _findField.FocusAsync().AsTask();
             return;
         }
+        // Ctrl+G — focus filter
+        if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "g")
+        {
+            _preventKey = true;
+            if (_filterBox is not null) await _filterBox.FocusAsync();
+            return;
+        }
+        // F3 — next match
+        if (!e.CtrlKey && !e.AltKey && !e.ShiftKey && k == "F3")
+            { _preventKey = true; await NextMatchAsync(); return; }
+
+        // Shift+F3 — previous match
+        if (!e.CtrlKey && !e.AltKey && e.ShiftKey && k == "F3")
+            { _preventKey = true; await PrevMatchAsync(); return; }
+
+        // Alt+R — toggle regex
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "r")
+            { _preventKey = true; await OnRegexToggled(!_isRegex); return; }
+
+        // Alt+C — toggle case sensitive
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "c")
+            { _preventKey = true; await OnCaseToggled(!_caseSensitive); return; }
+
+        // ── Bookmarks ─────────────────────────────────────────────────────
+        // F2 — next bookmark
+        if (!e.CtrlKey && !e.AltKey && !e.ShiftKey && k == "F2")
+            { _preventKey = true; await NextBookmarkAsync(); return; }
+
+        // Shift+F2 — previous bookmark
+        if (!e.CtrlKey && !e.AltKey && e.ShiftKey && k == "F2")
+            { _preventKey = true; await PrevBookmarkAsync(); return; }
+
+        // ── Display ───────────────────────────────────────────────────────
+        // Ctrl+= or Ctrl++ — increase font
+        if (e.CtrlKey && !e.AltKey && (k == "=" || k == "+"))
+            { _preventKey = true; await IncreaseFontAsync(); return; }
+
+        // Ctrl+- or Ctrl+_ — decrease font
+        if (e.CtrlKey && !e.AltKey && (k == "-" || k == "_"))
+            { _preventKey = true; await DecreaseFontAsync(); return; }
+
+        // Alt+Z — word wrap
+        if (!e.CtrlKey && e.AltKey && !e.ShiftKey && k == "z")
+            { _preventKey = true; await OnWrapToggled(!_wordWrap); return; }
     }
 
     // ── File loading ──────────────────────────────────────────────────────
