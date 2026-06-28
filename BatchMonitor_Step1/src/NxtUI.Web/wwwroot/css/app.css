@@ -1350,9 +1350,10 @@ html, body {
 }
 .mud-select-input {
     font-size: 14px !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    line-height: normal !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    height: 100% !important;
 }
 /* Dropdown popover — no word-wrap, compact item height */
 .bm-mongo-db-popover .mud-list-item {
