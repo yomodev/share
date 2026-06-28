@@ -1328,15 +1328,15 @@ html, body {
 /* Auto-width: size to the longest option, not a fixed px value */
 .bm-mongo-db-select,
 .bm-mongo-db-select .mud-form-control { width: fit-content; min-width: 80px; }
-/* Font + vertical centering for the DB select value */
-.bm-mongo-db-select .mud-input-root {
+/* Global height + vertical centering for ALL MudSelect controls */
+.mud-select.mud-input-root {
     font-size: 14px !important;
     display: flex !important;
     align-items: center !important;
     min-height: 36px !important;
     height: 36px !important;
 }
-.bm-mongo-db-select .mud-select-input {
+.mud-select-input {
     font-size: 14px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
