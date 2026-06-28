@@ -33,7 +33,8 @@
 .bm-tl-select,
 .bm-tl-select .mud-form-control { width: fit-content; min-width: 80px; }
 
-/* Popover items — no word-wrap */
+/* Popover items — no word-wrap, expand to fit longest option */
+.bm-tl-select-popover                     { min-width: max-content !important; }
 .bm-tl-select-popover .mud-list-item      { white-space: nowrap !important; min-height: 0 !important; padding: 4px 16px 4px 12px !important; }
 .bm-tl-select-popover .mud-list-item-text { white-space: nowrap !important; font-size: 14px !important; }
 

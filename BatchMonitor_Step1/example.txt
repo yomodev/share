@@ -10200,17 +10200,51 @@ LENGTH 544
   </ItemGroup>
 
 </Project>
+FILE src/NxtUI.Core/Result.cs
+LENGTH 1105
+using System.Diagnostics.CodeAnalysis;
+
+namespace NxtUI.Core;
+
+/// <summary>
+/// Discriminated result: either a successful value or an error message.
+/// Default (struct zero-value) represents the "not yet loaded" / loading state.
+/// </summary>
+public readonly struct Result<T>
+{
+    private readonly bool   _loaded;
+    private readonly T?     _value;
+    private readonly string? _error;
+
+    private Result(T value)        { _value = value; _loaded = true; _error = null; }
+    private Result(string error)   { _error = error; _loaded = true; _value = default; }
+
+    public T?      Value => _value;
+    public string? Error => _error;
+
+    [MemberNotNullWhen(true, nameof(Value))]
+    public bool IsOk      => _loaded && _error is null;
+
+    [MemberNotNullWhen(true, nameof(Error))]
+    public bool IsFailed  => _error is not null;
+
+    /// <summary>True when neither value nor error has been set (initial / loading state).</summary>
+    public bool IsLoading => !_loaded;
+
+    public static Result<T> Ok(T value)        => new(value);
+    public static Result<T> Fail(string error) => new(error);
+}
 FILE src/NxtUI.Web/App.razor
-LENGTH 508
-@namespace NxtUI
+LENGTH 520
+@namespace NxtUI.Web
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(NxtUI.Layout.MainLayout)" />
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(NxtUI.Web.Layout.MainLayout)" />
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />
     </Found>
     <NotFound>
         <PageTitle>Not found</PageTitle>
-        <LayoutView Layout="@typeof(NxtUI.Layout.MainLayout)">
+        <LayoutView Layout="@typeof(NxtUI.Web.Layout.MainLayout)">
             <MudText Typo="Typo.h6" Class="pa-4">Page not found.</MudText>
         </LayoutView>
     </NotFound>
@@ -10245,7 +10279,7 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1807
+LENGTH 1843
 {
   "Logging": {
     "LogLevel": {
@@ -10262,6 +10296,7 @@ LENGTH 1807
   "Mongo": {
     "ConnectionString": "mongodb://localhost:27017",
     "DatabasePrefix": "BatchMonitor",
+    "HeartbeatsDatabasePrefix": "",
     "PerformanceTrackerCollection": "PerformanceTracker",
     "HeartbeatsCollection": "Heartbeats"
   },
@@ -10324,18 +10359,17 @@ LENGTH 485
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 5427
+LENGTH 6207
+using Microsoft.AspNetCore.SignalR;
+using MudBlazor.Services;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
-using NxtUI.Hubs;
-using NxtUI.Services;
+using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
-using Microsoft.AspNetCore.SignalR;
-using MudBlazor.Services;
 
-namespace NxtUI;
+namespace NxtUI.Web;
 
 public class Program
 {
@@ -10384,9 +10418,17 @@ public class Program
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
 
-        builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
-        builder.Services.AddSingleton<IMongoService, MockMongoService>();
-        builder.Services.AddSingleton<IInfraHealthService, MockInfraHealthService>();
+        // Kafka — one instance, exposed under all three interfaces
+        builder.Services.AddSingleton<MockKafkaService>();
+        builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+
+        // Mongo — one instance, exposed under all three interfaces
+        builder.Services.AddSingleton<MockMongoService>();
+        builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
@@ -10394,8 +10436,10 @@ public class Program
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddSingleton<InfraHealthCache>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<InfraHealthCache>());
         builder.Services.AddHttpClient();
-        builder.Services.AddSingleton<IBatchCatalogService, NxtUI.Web.Services.BatchCatalogService>();
+        builder.Services.AddSingleton<IBatchCatalogService, BatchCatalogService>();
 
         // Metrics monitor — single instance shared between DI consumers and the
         // hosted background loop (so subscriptions and the poller see the same state).
@@ -10403,8 +10447,8 @@ public class Program
         builder.Services.AddSingleton<IServiceMetricsMonitor>(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
 
-        // Test-only: fabricates metrics log files (no-op unless TestLogGenerator:Enabled).
-        builder.Services.AddHostedService<TestLogGenerator>();
+        if (builder.Configuration.GetValue<bool>($"{TestLogGeneratorSettings.SectionName}:Enabled"))
+            builder.Services.AddHostedService<TestLogGenerator>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
@@ -10440,7 +10484,7 @@ public class Program
     }
 }
 FILE src/NxtUI.Web/_Imports.razor
-LENGTH 604
+LENGTH 642
 @using System.Net.Http
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
@@ -10451,15 +10495,16 @@ LENGTH 604
 @using Microsoft.JSInterop
 @using MudBlazor
 @using NxtUI
-@using NxtUI.Components
+@using NxtUI.Web.Components
+@using NxtUI.Core
 @using NxtUI.Core.Models
 @using NxtUI.Configuration
-@using NxtUI.Layout
-@using NxtUI.Models
-@using NxtUI.Pages
+@using NxtUI.Web.Layout
+@using NxtUI.Web.Pages
+@using NxtUI.Web.Models
 @using NxtUI.Core.Services
 @using NxtUI.Core.Services.Mock
-@using NxtUI.Services
+@using NxtUI.Web.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
 LENGTH 889
@@ -10629,7 +10674,7 @@ public class LogPathSettings
     public int FolderScanMinIntervalSeconds { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
-LENGTH 2022
+LENGTH 2774
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -10668,9 +10713,26 @@ public class MongoSettings
     public string? TlsCertificatePath    { get; set; }
     public string? TlsCertificatePassword{ get; set; }
 
+    /// <summary>
+    /// Optional database prefix for the heartbeats database.
+    /// Builds as "{HeartbeatsDatabasePrefix}_{environmentId}".
+    /// Leave empty to share the same database as the other collections.
+    /// </summary>
+    public string HeartbeatsDatabasePrefix { get; set; } = string.Empty;
+
     /// <summary>Returns the fully qualified database name for a given environment.</summary>
     public string GetDatabaseName(string environmentId) =>
         $"{DatabasePrefix}_{environmentId}";
+
+    /// <summary>Returns the heartbeats database name for a given environment.
+    /// Uses HeartbeatsDatabasePrefix when set, otherwise falls back to DatabasePrefix.</summary>
+    public string GetHeartbeatsDatabaseName(string environmentId)
+    {
+        var prefix = string.IsNullOrWhiteSpace(HeartbeatsDatabasePrefix)
+            ? DatabasePrefix
+            : HeartbeatsDatabasePrefix;
+        return $"{prefix}_{environmentId}";
+    }
 }
 FILE src/NxtUI.Core/Configuration/TestLogGeneratorSettings.cs
 LENGTH 1242
@@ -11693,8 +11755,8 @@ public static class IncrementalFileReader
     }
 }
 FILE src/NxtUI.Core/Logging/LogPathTemplate.cs
-LENGTH 1250
-using NxtUI.Models;
+LENGTH 1255
+using NxtUI.Core.Models;
 
 namespace NxtUI.Logging;
 
@@ -11812,11 +11874,11 @@ public record MetricsSample
     public long TotalPeakBytes => PeakUsageBytes + ChildPeakUsageBytes;
 }
 FILE src/NxtUI.Core/Models/BatchCatalog.cs
-LENGTH 2921
+LENGTH 2926
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 public class BatchCatalog
 {
@@ -11879,8 +11941,8 @@ public record BatchTriggerResult(
     string? Message = null,
     string? Error   = null);
 FILE src/NxtUI.Core/Models/EnvironmentInfo.cs
-LENGTH 654
-namespace NxtUI.Models;
+LENGTH 659
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Runtime representation of an environment.
@@ -11936,11 +11998,11 @@ public record MongoHealth
     public string?                     Error         { get; init; }
 }
 FILE src/NxtUI.Core/Models/HeartbeatDocument.cs
-LENGTH 638
+LENGTH 643
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 [BsonIgnoreExtraElements]
 public class HeartbeatDocument
@@ -12081,8 +12143,8 @@ public record MongoCollectionDetails
     public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
 }
 FILE src/NxtUI.Core/Models/PerformanceEvent.cs
-LENGTH 2481
-namespace NxtUI.Models;
+LENGTH 2486
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lean performance event from PerformanceTracker fields (see design doc §7.5).
@@ -12144,8 +12206,8 @@ public class PerformanceEvent
     public DateTime Timestamp => Start;
 }
 FILE src/NxtUI.Core/Models/RunDetails.cs
-LENGTH 610
-namespace NxtUI.Models;
+LENGTH 615
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Detailed metadata for a single batch (returned by /api/{env}/batches/{runId}/details).
@@ -12161,8 +12223,8 @@ public class RunDetails
     public Dictionary<string, string> Metadata { get; set; } = new();
     public TimeSpan Duration => (End ?? DateTime.UtcNow) - Start;
 }FILE src/NxtUI.Core/Models/RunSummary.cs
-LENGTH 596
-namespace NxtUI.Models;
+LENGTH 601
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lightweight batch record returned by the batch list endpoint.
@@ -12187,8 +12249,8 @@ public enum RunStatus
     Failed
 }
 FILE src/NxtUI.Core/Models/ServiceStatus.cs
-LENGTH 655
-namespace NxtUI.Models;
+LENGTH 660
+namespace NxtUI.Core.Models;
 
 public class ServiceStatus
 {
@@ -12206,8 +12268,8 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 6470
-namespace NxtUI.Models;
+LENGTH 6475
+namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
 
@@ -12380,8 +12442,8 @@ public class TopologyEdge
     public PipelineState State { get; set; } = PipelineState.NotStarted;
 }
 FILE src/NxtUI.Core/Services/IBatchCatalogService.cs
-LENGTH 653
-using NxtUI.Models;
+LENGTH 658
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12401,8 +12463,8 @@ public interface IBatchCatalogService
         CancellationToken            ct = default);
 }
 FILE src/NxtUI.Core/Services/IEnvironmentService.cs
-LENGTH 263
-using NxtUI.Models;
+LENGTH 268
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12413,8 +12475,8 @@ public interface IEnvironmentService
     IReadOnlyList<string>          GetServers(string environmentId);
 }
 FILE src/NxtUI.Core/Services/IHeartbeatService.cs
-LENGTH 191
-using NxtUI.Models;
+LENGTH 196
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12422,37 +12484,35 @@ public interface IHeartbeatService
 {
     Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default);
 }
-FILE src/NxtUI.Core/Services/IInfraHealthService.cs
-LENGTH 265
-using NxtUI.Core.Models;
-
-namespace NxtUI.Core.Services;
-
-public interface IInfraHealthService
-{
-    Task<KafkaHealth> CheckKafkaAsync(string env, CancellationToken ct = default);
-    Task<MongoHealth> CheckMongoAsync(string env, CancellationToken ct = default);
-}
 FILE src/NxtUI.Core/Services/IKafkaService.cs
-LENGTH 1398
+LENGTH 1818
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
-public interface IKafkaService
+/// <summary>Read-only Kafka monitoring operations. Safe to inject in any component.</summary>
+public interface IKafkaMonitor
 {
-    Task<KafkaClusterInfo>                    GetClusterInfoAsync(string env, CancellationToken ct = default);
-    Task<IReadOnlyList<KafkaTopicSummary>>    GetTopicsAsync(string env, CancellationToken ct = default);
-    Task<KafkaTopicConfig>                    GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
+    Task<KafkaClusterInfo>                       GetClusterInfoAsync(string env, CancellationToken ct = default);
+    Task<IReadOnlyList<KafkaTopicSummary>>       GetTopicsAsync(string env, CancellationToken ct = default);
+    Task<KafkaTopicConfig>                       GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default);
     /// <param name="maxMessages">Cap on buffered messages. 0 = live/continuous — stream never ends until ct is cancelled.</param>
-    IAsyncEnumerable<KafkaMessage> TailTopicAsync(string env, string topicName, int maxMessages, CancellationToken ct = default);
+    IAsyncEnumerable<KafkaMessage>               TailTopicAsync(string env, string topicName, int maxMessages, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaGroupTopicLag>>         GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);
+}
+
+/// <summary>Destructive Kafka admin operations. Inject only where mutations are explicitly needed.</summary>
+public interface IKafkaAdmin
+{
     Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default);
     Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default);
     Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default);
 }
+
+/// <summary>Combined interface implemented by full Kafka service implementations.</summary>
+public interface IKafkaService : IKafkaMonitor, IKafkaAdmin { }
 FILE src/NxtUI.Core/Services/ILogBrowserService.cs
 LENGTH 1403
 using NxtUI.Filtering;
@@ -12495,8 +12555,8 @@ public interface ILogBrowserService
         CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/ILogPathDiscoveryService.cs
-LENGTH 1329
-using NxtUI.Models;
+LENGTH 1334
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12549,24 +12609,33 @@ public interface ILogViewerService
     (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
-LENGTH 804
+LENGTH 1198
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
-public interface IMongoService
+/// <summary>Read-only Mongo browsing operations. Safe to inject in any component.</summary>
+public interface IMongoReader
 {
-    Task<IReadOnlyList<MongoDatabaseInfo>>     GetDatabasesAsync(string env, CancellationToken ct = default);
+    Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default);
     Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
         string? search, int skip, int limit, CancellationToken ct = default);
     Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default);
+}
+
+/// <summary>Destructive Mongo admin operations. Inject only where mutations are explicitly needed.</summary>
+public interface IMongoAdmin
+{
     Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default);
 }
+
+/// <summary>Combined interface implemented by full Mongo service implementations.</summary>
+public interface IMongoService : IMongoReader, IMongoAdmin { }
 FILE src/NxtUI.Core/Services/IRunService.cs
-LENGTH 2340
-using NxtUI.Models;
+LENGTH 2345
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12636,9 +12705,9 @@ public class RunFilter
         (Types    is null || Types.Count    == 0);
 }
 FILE src/NxtUI.Core/Services/IServiceMetricsMonitor.cs
-LENGTH 1169
+LENGTH 1174
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12666,13 +12735,13 @@ public interface IServiceMetricsMonitor
     event Action<string>? OnMetricsUpdated;
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 4391
+LENGTH 4396
 using System.Collections.Concurrent;
 using System.Linq;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12795,8 +12864,8 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     }
 }
 FILE src/NxtUI.Core/Services/PerformanceEventStore.cs
-LENGTH 2205
-using NxtUI.Models;
+LENGTH 2210
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -12892,8 +12961,8 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 10386
-using NxtUI.Models;
+LENGTH 10391
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
@@ -13129,9 +13198,31 @@ public class TopologyComputationService
     private static string InferTopicName(string pipeline) =>
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
 }
+FILE src/NxtUI.Web/Components/AsyncData.razor
+LENGTH 532
+@namespace NxtUI.Web.Components
+@typeparam T
+
+@if (Result.IsLoading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+}
+else if (Result.IsFailed)
+{
+    <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@Result.Error</MudAlert>
+}
+else if (Result.IsOk)
+{
+    @ChildContent(Result.Value)
+}
+
+@code {
+    [Parameter, EditorRequired] public Result<T> Result { get; set; }
+    [Parameter, EditorRequired] public RenderFragment<T> ChildContent { get; set; } = null!;
+}
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 3094
-@namespace NxtUI.Components
+LENGTH 3098
+@namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -13233,9 +13324,9 @@ LENGTH 3094
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 6513
-@namespace NxtUI.Components
-@inject NxtUI.Services.TabService _tabSvc
+LENGTH 6521
+@namespace NxtUI.Web.Components
+@inject NxtUI.Web.Services.TabService _tabSvc
 @* Reusable debounced filter input with inline help popup.
    Value           — controlled value; set from parent so programmatic clear works.
    OnFilterChanged — fired after DebounceMs of inactivity.
@@ -13374,11 +13465,11 @@ LENGTH 6513
     }
 }
 FILE src/NxtUI.Web/Components/KafkaConsumerGroupsDialog.razor
-LENGTH 3295
-@namespace NxtUI.Components
+LENGTH 3299
+@namespace NxtUI.Web.Components
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@inject IKafkaService KafkaSvc
+@inject IKafkaMonitor KafkaSvc
 
 <MudDialog>
     <TitleContent>
@@ -13464,8 +13555,8 @@ LENGTH 3295
     };
 }
 FILE src/NxtUI.Web/Components/KafkaTopicInfoDialog.razor
-LENGTH 2183
-@namespace NxtUI.Components
+LENGTH 2187
+@namespace NxtUI.Web.Components
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject IKafkaService KafkaSvc
@@ -13522,8 +13613,8 @@ LENGTH 2183
 
 }
 FILE src/NxtUI.Web/Components/KafkaTopicInfoDialog.razor.cs
-LENGTH 794
-namespace NxtUI.Components;
+LENGTH 798
+namespace NxtUI.Web.Components;
 
 public partial class KafkaTopicInfoDialog
 {
@@ -13546,9 +13637,265 @@ public partial class KafkaTopicInfoDialog
         _                     => $"{b / (1024L * 1024 * 1024)} GB",
     };
 }
+FILE src/NxtUI.Web/Components/LogBrowserFileTree.razor
+LENGTH 5338
+@namespace NxtUI.Web.Components
+@using NxtUI.Web.Models
+
+@if (_servers.Count == 0)
+{
+    <div class="bm-lb-empty">
+        <MudText Typo="Typo.body2" Class="bm-muted">No servers configured for this environment.</MudText>
+        <MudText Typo="Typo.caption" Class="bm-muted">Add servers to App:Environments[].Servers in appsettings.</MudText>
+    </div>
+}
+else if (LogsFolderMissing)
+{
+    <div class="bm-lb-empty">
+        <MudText Typo="Typo.body2" Class="bm-muted">Logs:LogsFolder not configured.</MudText>
+    </div>
+}
+else if (InitError is not null)
+{
+    <div class="bm-lb-empty">
+        <MudText Typo="Typo.body2" Color="Color.Error">@InitError</MudText>
+    </div>
+}
+else if (!Initialized)
+{
+    <div class="bm-lb-empty"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
+}
+else if (RootNodes.Count == 0)
+{
+    <div class="bm-lb-empty">
+        <MudText Typo="Typo.body2" Class="bm-muted">No folders found.</MudText>
+    </div>
+}
+else
+{
+    <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
+                 SelectedValueChanged="@((LogFolderNode? n) => OnTreeNodeSelected.InvokeAsync(n))"
+                 Class="bm-lb-tree">
+        @foreach (var node in RootNodes)
+        {
+            <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
+                             Icon="@(LoadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                             Expanded="@Expanded.Contains(node.RelativePath)"
+                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
+                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
+                @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
+                {
+                    @foreach (var c1 in ch1)
+                    {
+                        <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
+                                         Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                         Expanded="@Expanded.Contains(c1.RelativePath)"
+                                         ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
+                                         OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
+                            @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
+                            {
+                                @foreach (var c2 in ch2)
+                                {
+                                    <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
+                                                     Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                                     Expanded="@Expanded.Contains(c2.RelativePath)"
+                                                     ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
+                                                     OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
+                                        @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
+                                        {
+                                            @foreach (var c3 in ch3)
+                                            {
+                                                <MudTreeViewItem @key="@c3.RelativePath" Value="@c3" Text="@c3.Name"
+                                                                 Icon="@Icons.Material.Outlined.Folder"
+                                                                 OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))" />
+                                            }
+                                        }
+                                    </MudTreeViewItem>
+                                }
+                            }
+                        </MudTreeViewItem>
+                    }
+                }
+            </MudTreeViewItem>
+        }
+    </MudTreeView>
+}
+
+@code {
+    [Parameter] public List<string>        Servers        { get; set; } = new();
+    [Parameter] public List<LogFolderNode> RootNodes      { get; set; } = new();
+    [Parameter] public Dictionary<string, IReadOnlyList<LogFolderNode>> ChildCache { get; set; } = new();
+    [Parameter] public HashSet<string>     Expanded       { get; set; } = new();
+    [Parameter] public HashSet<string>     LoadingNodes   { get; set; } = new();
+    [Parameter] public bool                Initialized    { get; set; }
+    [Parameter] public bool                LogsFolderMissing { get; set; }
+    [Parameter] public string?             InitError      { get; set; }
+
+    [Parameter] public EventCallback<LogFolderNode?>          OnTreeNodeSelected { get; set; }
+    [Parameter] public EventCallback<(LogFolderNode, bool)>   OnExpandedChanged  { get; set; }
+    [Parameter] public EventCallback<LogFolderNode>           OnItemClick        { get; set; }
+
+    // Expose the server count for the parent's empty-state check
+    private List<string> _servers => Servers;
+}
+FILE src/NxtUI.Web/Components/LogViewerToolbar.razor
+LENGTH 7203
+@namespace NxtUI.Web.Components
+
+<div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
+<div class="bm-lv-toolbar bm-lv-toolbar-sm">
+    <div class="bm-lv-find">
+        <MudTextField T="string" @ref="_findFieldRef" @bind-Value="_findTermLocal"
+                      Placeholder="Find… (Ctrl+F)"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="width:100%;font-size:11px"
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      OnAdornmentClick="OnAdornmentClickAsync"
+                      @onkeydown="OnFindKeyDownInternal" />
+    </div>
+
+    <MudTooltip Text="Regular expression (Alt+R)">
+        <MudToggleIconButton Toggled="@IsRegex" ToggledChanged="@(val => OnRegexToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.Code"
+                             ToggledIcon="@Icons.Material.Outlined.Code"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+    <MudTooltip Text="Case sensitive (Alt+C)">
+        <MudToggleIconButton Toggled="@CaseSensitive" ToggledChanged="@(val => OnCaseToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.TextFields"
+                             ToggledIcon="@Icons.Material.Outlined.TextFields"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+    <MudTooltip Text="Previous match (Shift+F3)">
+        <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                       Size="Size.Small" OnClick="@(() => OnPrevMatch.InvokeAsync())"
+                       Disabled="@(MatchCount == 0)" />
+    </MudTooltip>
+    <MudTooltip Text="Next match (F3)">
+        <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                       Size="Size.Small" OnClick="@(() => OnNextMatch.InvokeAsync())"
+                       Disabled="@(MatchCount == 0)" />
+    </MudTooltip>
+    @if (!string.IsNullOrEmpty(FindTerm))
+    {
+        <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
+    }
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <FilterBox @ref="_filterBoxRef"
+               Value="@FilterStr"
+               OnFilterChanged="@(v => OnFilterChanged.InvokeAsync(v))"
+               ParseError="@FilterError"
+               Placeholder="Filter… (Ctrl+G)"
+               Class="bm-lv-filter"
+               FieldHints="@FieldHints" />
+    @if (FilterStr.Length > 0)
+    {
+        <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
+            @VisibleCount / @TotalCount
+        </span>
+    }
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <MudTooltip Text="Previous bookmark (Shift+F2)">
+        <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
+                       Size="Size.Small" OnClick="@(() => OnPrevBookmark.InvokeAsync())" />
+    </MudTooltip>
+    <MudTooltip Text="Next bookmark (F2)">
+        <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
+                       Size="Size.Small" OnClick="@(() => OnNextBookmark.InvokeAsync())" />
+    </MudTooltip>
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <MudTooltip Text="Decrease font (Ctrl+−)">
+        <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
+                       Size="Size.Small" OnClick="@(() => OnDecreaseFont.InvokeAsync())"
+                       Disabled="@FontDecreaseDisabled" />
+    </MudTooltip>
+    <MudTooltip Text="Increase font (Ctrl+=)">
+        <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
+                       Size="Size.Small" OnClick="@(() => OnIncreaseFont.InvokeAsync())"
+                       Disabled="@FontIncreaseDisabled" />
+    </MudTooltip>
+    <MudTooltip Text="Word wrap (Alt+Z)">
+        <MudToggleIconButton Toggled="@WordWrap" ToggledChanged="@(val => OnWrapToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.WrapText"
+                             ToggledIcon="@Icons.Material.Outlined.WrapText"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+</div>
+</div>
+
+@code {
+    [Parameter] public bool    IsSelected        { get; set; }
+    [Parameter] public string  FindTerm          { get; set; } = "";
+    [Parameter] public bool    IsRegex           { get; set; }
+    [Parameter] public bool    CaseSensitive     { get; set; }
+    [Parameter] public int     MatchCount        { get; set; }
+    [Parameter] public int     MatchCurrent      { get; set; }
+    [Parameter] public string  FilterStr         { get; set; } = "";
+    [Parameter] public string? FilterError       { get; set; }
+    [Parameter] public int     TotalCount        { get; set; }
+    [Parameter] public int     VisibleCount      { get; set; }
+    [Parameter] public bool    WordWrap          { get; set; }
+    [Parameter] public bool    FontDecreaseDisabled { get; set; }
+    [Parameter] public bool    FontIncreaseDisabled { get; set; }
+    [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
+
+    [Parameter] public EventCallback<string> OnFindTermChanged { get; set; }
+    [Parameter] public EventCallback         OnRunFind         { get; set; }
+    [Parameter] public EventCallback<bool>   OnRegexToggled    { get; set; }
+    [Parameter] public EventCallback<bool>   OnCaseToggled     { get; set; }
+    [Parameter] public EventCallback         OnNextMatch       { get; set; }
+    [Parameter] public EventCallback         OnPrevMatch       { get; set; }
+    [Parameter] public EventCallback<string> OnFilterChanged   { get; set; }
+    [Parameter] public EventCallback         OnNextBookmark    { get; set; }
+    [Parameter] public EventCallback         OnPrevBookmark    { get; set; }
+    [Parameter] public EventCallback         OnIncreaseFont    { get; set; }
+    [Parameter] public EventCallback         OnDecreaseFont    { get; set; }
+    [Parameter] public EventCallback<bool>   OnWrapToggled     { get; set; }
+
+    private MudTextField<string>? _findFieldRef;
+    private FilterBox?            _filterBoxRef;
+
+    // Local mirror so the MudTextField can bind — changes are forwarded to parent
+    private string _findTermLocal
+    {
+        get => FindTerm;
+        set => OnFindTermChanged.InvokeAsync(value);
+    }
+
+    private string MatchLabel =>
+        MatchCount == 0 ? "" : $"{MatchCurrent}/{MatchCount}";
+
+    public async Task FocusFindAsync()
+    {
+        if (_findFieldRef is not null) await _findFieldRef.FocusAsync().AsTask();
+    }
+
+    public async Task FocusFilterAsync()
+    {
+        if (_filterBoxRef is not null) await _filterBoxRef.FocusAsync();
+    }
+
+    private async Task OnAdornmentClickAsync() => await OnRunFind.InvokeAsync();
+
+    private async Task OnFindKeyDownInternal(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            if (e.ShiftKey) await OnPrevMatch.InvokeAsync();
+            else            await OnRunFind.InvokeAsync();
+        }
+    }
+}
 FILE src/NxtUI.Web/Components/LogViewport.razor
-LENGTH 5722
-@namespace NxtUI.Components
+LENGTH 5726
+@namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -13684,8 +14031,8 @@ LENGTH 5722
     }
 }
 FILE src/NxtUI.Web/Components/OpenLogFileDialog.razor
-LENGTH 4416
-@namespace NxtUI.Components
+LENGTH 4420
+@namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 
 <MudDialog>
@@ -13790,10 +14137,10 @@ LENGTH 4416
     public void Dispose() => _selfRef?.Dispose();
 }
 FILE src/NxtUI.Web/Components/WorkspacePanel.razor
-LENGTH 4425
-@namespace NxtUI.Components
-@using NxtUI.Models
-@using NxtUI.Pages
+LENGTH 4437
+@namespace NxtUI.Web.Components
+@using NxtUI.Web.Models
+@using NxtUI.Web.Pages
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -13890,12 +14237,12 @@ else if (Node is WsSplit split)
     public void Dispose() => _selfRef?.Dispose();
 }
 FILE src/NxtUI.Web/Controllers/KafkaController.cs
-LENGTH 1192
+LENGTH 1196
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace NxtUI.Controllers;
+namespace NxtUI.Web.Controllers;
 
 [ApiController]
 [Route("api/{env}/kafka")]
@@ -13922,13 +14269,13 @@ public class KafkaController : ControllerBase
         => Ok(await _svc.GetTopicConsumerGroupsAsync(env, topicName, ct));
 }
 FILE src/NxtUI.Web/Controllers/RunsController.cs
-LENGTH 638
+LENGTH 651
 using NxtUI.Core.Services;
-using NxtUI.Models;
-using NxtUI.Services;
+using NxtUI.Core.Models;
+using NxtUI.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace NxtUI.Controllers;
+namespace NxtUI.Web.Controllers;
 
 [ApiController]
 [Route("api/{env}/runs")]
@@ -13947,11 +14294,11 @@ public class RunsController(IRunService svc) : ControllerBase
     }
 }
 FILE src/NxtUI.Web/Hubs/RunEventsHub.cs
-LENGTH 919
-using NxtUI.Models;
+LENGTH 928
+using NxtUI.Core.Models;
 using Microsoft.AspNetCore.SignalR;
 
-namespace NxtUI.Hubs;
+namespace NxtUI.Web.Hubs;
 
 /// <summary>
 /// SignalR hub for real-time run event streaming.
@@ -13974,10 +14321,10 @@ public class RunEventsHub : Hub
     public static string GroupName(string env, string runId) => $"{env}:{runId}";
 }
 FILE src/NxtUI.Web/Hubs/RunHub.cs
-LENGTH 523
+LENGTH 527
 using Microsoft.AspNetCore.SignalR;
 
-namespace NxtUI.Hubs;
+namespace NxtUI.Web.Hubs;
 
 /// <summary>
 /// SignalR hub for real-time run event streaming.
@@ -13992,8 +14339,8 @@ public class RunHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"{env}:{runId}");
 }
 FILE src/NxtUI.Web/Layout/HelpLayout.razor
-LENGTH 389
-@namespace NxtUI.Layout
+LENGTH 393
+@namespace NxtUI.Web.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 
@@ -14009,8 +14356,8 @@ LENGTH 389
     // without the main tab-bar and sidebar chrome.
 }
 FILE src/NxtUI.Web/Layout/MainLayout.razor
-LENGTH 4933
-@namespace NxtUI.Layout
+LENGTH 4886
+@namespace NxtUI.Web.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 @inject TabService TabService
@@ -14025,13 +14372,13 @@ LENGTH 4933
 
 <MudLayout>
 
-    <NxtUI.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
+    <Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
 
     <MudAppBar Elevation="0"
                Dense="true"
                Class="bm-tabbar"
                Fixed="true">
-        <NxtUI.Layout.TabBar />
+        <TabBar />
     </MudAppBar>
 
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
@@ -14039,7 +14386,7 @@ LENGTH 4933
         <div class="bm-content-area">
             <!-- Home pane: always rendered, hidden when a tab is focused. -->
             <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
-                <NxtUI.Pages.Home />
+                <Home />
             </div>
 
             <!-- One persistent pane per open tab — kept alive in the DOM so
@@ -14048,7 +14395,7 @@ LENGTH 4933
             @foreach (var tab in TabService.Tabs)
             {
                 <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
-                    <NxtUI.Shared.TabContent Tab="@tab" />
+                    <TabContent Tab="@tab" />
                 </div>
             }
         </div>
@@ -14152,8 +14499,8 @@ LENGTH 4933
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 8439
-@namespace NxtUI.Layout
+LENGTH 8443
+@namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
@@ -14343,9 +14690,9 @@ LENGTH 8439
     }
 }
 FILE src/NxtUI.Web/Layout/TabBar.razor
-LENGTH 4273
-@namespace NxtUI.Layout
-@using NxtUI.Models
+LENGTH 4281
+@namespace NxtUI.Web.Layout
+@using NxtUI.Web.Models
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
@@ -14466,8 +14813,8 @@ LENGTH 4273
     }
 }
 FILE src/NxtUI.Web/Layout/TabRenameDialog.razor
-LENGTH 5009
-@namespace NxtUI.Layout
+LENGTH 5013
+@namespace NxtUI.Web.Layout
 @using MudBlazor
 @inject TabService TabService
 @inject IJSRuntime JS
@@ -14588,8 +14935,8 @@ LENGTH 5009
     }
 }
 FILE src/NxtUI.Web/Models/TabModel.cs
-LENGTH 12357
-namespace NxtUI.Models;
+LENGTH 12361
+namespace NxtUI.Web.Models;
 
 public enum TabType
 {
@@ -14925,8 +15272,8 @@ public class TabModel
     }
 }
 FILE src/NxtUI.Web/Models/WsNode.cs
-LENGTH 1606
-namespace NxtUI.Models;
+LENGTH 1610
+namespace NxtUI.Web.Models;
 
 public enum WsDir { H, V }  // H = left/right, V = top/bottom
 
@@ -14972,10 +15319,10 @@ public sealed class WsSplit(WsDir dir, double ratio, WsNode a, WsNode b) : WsNod
     }
 }
 FILE src/NxtUI.Web/Pages/Batches.razor
-LENGTH 17944
-@namespace NxtUI.Pages
-@using NxtUI.Models
-@using NxtUI.Services
+LENGTH 17956
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Web.Services
 @inject IBatchCatalogService CatalogSvc
 @inject ISnackbar Snackbar
 
@@ -15319,14 +15666,14 @@ LENGTH 17944
 
 }
 FILE src/NxtUI.Web/Pages/CatchAllPage.razor
-LENGTH 151
-@namespace NxtUI.Pages
+LENGTH 155
+@namespace NxtUI.Web.Pages
 @* Catch-all route — MainLayout renders all content via the tab system; this page has no body. *@
 @page "/"
 @page "/{**path}"
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
-LENGTH 17481
-@namespace NxtUI.Pages
+LENGTH 17485
+@namespace NxtUI.Web.Pages
 <div class="bm-help-page bm-help-page--tab">
 
     <div class="bm-help-header">
@@ -15602,14 +15949,14 @@ LENGTH 17481
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 15370
-@namespace NxtUI.Pages
+LENGTH 14558
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IRunService RunService
-@inject IInfraHealthService HealthService
+@inject InfraHealthCache HealthCache
 @implements IDisposable
 
 <div class="bm-home">
@@ -15860,9 +16207,10 @@ LENGTH 15370
 
     protected override async Task OnInitializedAsync()
     {
-        EnvService.OnChange += OnEnvExternalChange;
+        EnvService.OnChange         += OnEnvExternalChange;
+        HealthCache.OnHealthUpdated += OnHealthUpdated;
+        HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-        _ = PollHealthAsync();
     }
 
     // ── Batch ─────────────────────────────────────────────────────────────
@@ -15881,51 +16229,18 @@ LENGTH 15370
 
     private async Task CheckHealthAsync()
     {
-        _kafkaChecking = true;
-        _mongoChecking = true;
-        await InvokeAsync(StateHasChanged);
-
         var env = EnvService.SelectedId;
-        var kafkaTask = HealthService.CheckKafkaAsync(env, _cts.Token);
-        var mongoTask = HealthService.CheckMongoAsync(env, _cts.Token);
-
-        try
-        {
-            _kafkaHealth   = await kafkaTask;
-            _kafkaChecking = false;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex)
-        {
-            _kafkaHealth   = new KafkaHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
-            _kafkaChecking = false;
-        }
-
-        try
-        {
-            _mongoHealth   = await mongoTask;
-            _mongoChecking = false;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex)
-        {
-            _mongoHealth   = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
-            _mongoChecking = false;
-        }
-
+        _kafkaHealth   = HealthCache.GetKafka(env);
+        _mongoHealth   = HealthCache.GetMongo(env);
+        _kafkaChecking = false;
+        _mongoChecking = false;
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task PollHealthAsync()
+    private async void OnHealthUpdated(string env)
     {
-        while (!_cts.IsCancellationRequested)
-        {
-            try { await Task.Delay(10_000, _cts.Token); }
-            catch (OperationCanceledException) { return; }
-            await CheckHealthAsync();
-        }
+        if (env != EnvService.SelectedId) return;
+        await CheckHealthAsync();
     }
 
     // ── Env change ────────────────────────────────────────────────────────
@@ -15934,6 +16249,7 @@ LENGTH 15370
     {
         _recent = [];
         await InvokeAsync(StateHasChanged);
+        HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
@@ -15942,6 +16258,7 @@ LENGTH 15370
     {
         EnvService.SelectedId = newId;
         _recent = [];
+        HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
@@ -15971,13 +16288,14 @@ LENGTH 15370
 
     public void Dispose()
     {
-        EnvService.OnChange -= OnEnvExternalChange;
+        EnvService.OnChange         -= OnEnvExternalChange;
+        HealthCache.OnHealthUpdated -= OnHealthUpdated;
         _cts.Cancel();
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 4816
-@namespace NxtUI.Pages
+LENGTH 4820
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
 @inject IHeartbeatService HeartbeatSvc
@@ -16135,8 +16453,8 @@ LENGTH 4816
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 23709
-@namespace NxtUI.Pages
+LENGTH 23713
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -16670,12 +16988,12 @@ LENGTH 23709
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9420
-@namespace NxtUI.Pages
+LENGTH 9482
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
-@inject IKafkaService KafkaSvc
+@inject IKafkaMonitor KafkaSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -16692,7 +17010,7 @@ LENGTH 9420
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="_loading"
+                           Disabled="@_result.IsLoading"
                            OnClick="LoadAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -16700,11 +17018,7 @@ LENGTH 9420
 
     <!-- Table -->
     <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
                   Dense="true"
@@ -16756,6 +17070,7 @@ LENGTH 9420
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- Detail panel -->
@@ -16770,15 +17085,10 @@ LENGTH 9420
                 </span>
                 <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                Size="Size.Small"
-                               OnClick="@(() => { _selected = null; _topicLags = null; })" />
+                               OnClick="@(() => { _selected = null; _detailResult = default; })" />
             </div>
             <div class="bm-inspector-detail-body">
-                @if (_loadingDetail)
-                {
-                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-                }
-                else if (_topicLags is not null)
-                {
+                <AsyncData Result="_detailResult" Context="lags">
                     <div class="bm-inspector-section-label">Subscribed topics</div>
                     <table class="bm-kafka-info-table" style="width:100%;">
                         <thead>
@@ -16789,7 +17099,7 @@ LENGTH 9420
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach (var t in _topicLags)
+                            @foreach (var t in lags)
                             {
                                 <tr>
                                     <td class="bm-kafka-topic-name">@t.TopicName</td>
@@ -16806,7 +17116,7 @@ LENGTH 9420
                             }
                         </tbody>
                     </table>
-                }
+                </AsyncData>
             </div>
         </div>
     }
@@ -16818,9 +17128,9 @@ LENGTH 9420
 
     private List<KafkaConsumerGroupOverview>  _all      = new();
     private List<KafkaConsumerGroupOverview>  _filtered = new();
-    private KafkaConsumerGroupOverview?       _selected = null;
-    private List<KafkaGroupTopicLag>?         _topicLags    = null;
-    private bool _loading = true, _loadingDetail = false;
+    private KafkaConsumerGroupOverview?              _selected = null;
+    private Result<List<KafkaConsumerGroupOverview>> _result;
+    private Result<List<KafkaGroupTopicLag>>         _detailResult;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
     private CancellationTokenSource _cts = new();
@@ -16844,18 +17154,19 @@ LENGTH 9420
 
     private async Task LoadAsync()
     {
-        _loading = true;
-        _selected = null;
-        _topicLags = null;
+        _result       = default; // loading
+        _selected     = null;
+        _detailResult = default;
         StateHasChanged();
         try
         {
             var groups = await KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
             _all = groups.ToList();
             ApplyFilter();
+            _result = Result<List<KafkaConsumerGroupOverview>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
     }
 
     private void OnFilterChanged(string text)
@@ -16879,22 +17190,22 @@ LENGTH 9420
     {
         if (group is null || ReferenceEquals(_selected, group))
         {
-            _selected  = null;
-            _topicLags = null;
+            _selected     = null;
+            _detailResult = default;
             StateHasChanged();
             return;
         }
-        _selected      = group;
-        _topicLags     = null;
-        _loadingDetail = true;
+        _selected     = group;
+        _detailResult = default; // loading
         StateHasChanged();
         try
         {
-            var lags   = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
-            _topicLags = lags.ToList();
+            var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+            _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
         }
         catch (OperationCanceledException) { }
-        finally { _loadingDetail = false; StateHasChanged(); }
+        catch (Exception ex) { _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message); }
+        StateHasChanged();
     }
 
     private static Color StateColor(string state) => state switch
@@ -16909,12 +17220,12 @@ LENGTH 9420
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 11156
-@namespace NxtUI.Pages
+LENGTH 11160
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
-@inject IKafkaService KafkaSvc
+@inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -17204,10 +17515,10 @@ LENGTH 11156
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 29604
-@namespace NxtUI.Pages
-@using NxtUI.Models
-@using NxtUI.Services
+LENGTH 25232
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Web.Services
 @using NxtUI.Configuration
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -17290,84 +17601,17 @@ LENGTH 29604
 
         <!-- left: folder tree -->
         <div class="bm-lb-tree-panel" @ref="_treePanelRef" style="width:@(_treePanelWidth)px">
-            @if (_servers.Count == 0)
-            {
-                <div class="bm-lb-empty">
-                    <MudText Typo="Typo.body2" Class="bm-muted">No servers configured for this environment.</MudText>
-                    <MudText Typo="Typo.caption" Class="bm-muted">Add servers to App:Environments[].Servers in appsettings.</MudText>
-                </div>
-            }
-            else if (string.IsNullOrEmpty(LogSettings.Value.LogsFolder))
-            {
-                <div class="bm-lb-empty">
-                    <MudText Typo="Typo.body2" Class="bm-muted">Logs:LogsFolder not configured.</MudText>
-                </div>
-            }
-            else if (_initError is not null)
-            {
-                <div class="bm-lb-empty">
-                    <MudText Typo="Typo.body2" Color="Color.Error">@_initError</MudText>
-                </div>
-            }
-            else if (!_initialized)
-            {
-                <div class="bm-lb-empty"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
-            }
-            else if (_rootNodes.Count == 0)
-            {
-                <div class="bm-lb-empty">
-                    <MudText Typo="Typo.body2" Class="bm-muted">No folders found.</MudText>
-                </div>
-            }
-            else
-            {
-                <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
-                             SelectedValueChanged="@((LogFolderNode? n) => OnTreeNodeSelectedAsync(n))"
-                             Class="bm-lb-tree">
-                    @foreach (var node in _rootNodes)
-                    {
-                        <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
-                                         Icon="@(_loadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                         Expanded="@_expanded.Contains(node.RelativePath)"
-                                         ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(node, exp))"
-                                         OnClick="@((MouseEventArgs _) => OnItemClickAsync(node))">
-                            @if (_childCache.TryGetValue(node.RelativePath, out var ch1))
-                            {
-                                @foreach (var c1 in ch1)
-                                {
-                                    <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
-                                                     Icon="@(_loadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                                     Expanded="@_expanded.Contains(c1.RelativePath)"
-                                                     ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c1, exp))"
-                                                     OnClick="@((MouseEventArgs _) => OnItemClickAsync(c1))">
-                                        @if (_childCache.TryGetValue(c1.RelativePath, out var ch2))
-                                        {
-                                            @foreach (var c2 in ch2)
-                                            {
-                                                <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
-                                                                 Icon="@(_loadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                                                 Expanded="@_expanded.Contains(c2.RelativePath)"
-                                                                 ExpandedChanged="@((bool exp) => OnExpandedChangedAsync(c2, exp))"
-                                                                 OnClick="@((MouseEventArgs _) => OnItemClickAsync(c2))">
-                                                    @if (_childCache.TryGetValue(c2.RelativePath, out var ch3))
-                                                    {
-                                                        @foreach (var c3 in ch3)
-                                                        {
-                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3" Text="@c3.Name"
-                                                                             Icon="@Icons.Material.Outlined.Folder"
-                                                                             OnClick="@((MouseEventArgs _) => OnItemClickAsync(c3))" />
-                                                        }
-                                                    }
-                                                </MudTreeViewItem>
-                                            }
-                                        }
-                                    </MudTreeViewItem>
-                                }
-                            }
-                        </MudTreeViewItem>
-                    }
-                </MudTreeView>
-            }
+            <LogBrowserFileTree Servers="@_servers"
+                                RootNodes="@_rootNodes"
+                                ChildCache="@_childCache"
+                                Expanded="@_expanded"
+                                LoadingNodes="@_loadingNodes"
+                                Initialized="@_initialized"
+                                LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
+                                InitError="@_initError"
+                                OnTreeNodeSelected="@OnTreeNodeSelectedAsync"
+                                OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
+                                OnItemClick="@OnItemClickAsync" />
         </div>
 
         <!-- drag handle -->
@@ -17871,9 +18115,9 @@ LENGTH 29604
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 23655
-@namespace NxtUI.Pages
-@using NxtUI.Services
+LENGTH 20295
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -17942,93 +18186,33 @@ LENGTH 23655
     </div>
 
     <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
-    <div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
-    <div class="bm-lv-toolbar bm-lv-toolbar-sm">
-        <div class="bm-lv-find">
-            <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
-                          Placeholder="Find… (Ctrl+F)"
-                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="width:100%;font-size:11px"
-                          Adornment="Adornment.End"
-                          AdornmentIcon="@Icons.Material.Outlined.Search"
-                          OnAdornmentClick="RunFindAsync"
-                          @onkeydown="OnFindKeyDown" />
-        </div>
-
-        <MudTooltip Text="Regular expression (Alt+R)">
-            <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
-                                 Icon="@Icons.Material.Outlined.Code"
-                                 ToggledIcon="@Icons.Material.Outlined.Code"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-        <MudTooltip Text="Case sensitive (Alt+C)">
-            <MudToggleIconButton Toggled="@_caseSensitive" ToggledChanged="OnCaseToggled"
-                                 Icon="@Icons.Material.Outlined.TextFields"
-                                 ToggledIcon="@Icons.Material.Outlined.TextFields"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-        <MudTooltip Text="Previous match (Shift+F3)">
-            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
-                           Size="Size.Small" OnClick="PrevMatchAsync"
-                           Disabled="@(_matchCount == 0)" />
-        </MudTooltip>
-        <MudTooltip Text="Next match (F3)">
-            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
-                           Size="Size.Small" OnClick="NextMatchAsync"
-                           Disabled="@(_matchCount == 0)" />
-        </MudTooltip>
-        @if (!string.IsNullOrEmpty(_findTerm))
-        {
-            <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
-        }
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <FilterBox @ref="_filterBox"
-                   Value="@_filterStr"
-                   OnFilterChanged="OnFilterChangedAsync"
-                   ParseError="@_filterError"
-                   Placeholder="Filter… (Ctrl+G)"
-                   Class="bm-lv-filter"
-                   FieldHints="@LogFieldHints" />
-        @if (_filterStr.Length > 0)
-        {
-            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
-                @_visibleCount / @_totalCount
-            </span>
-        }
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Previous bookmark (Shift+F2)">
-            <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
-                           Size="Size.Small" OnClick="PrevBookmarkAsync" />
-        </MudTooltip>
-        <MudTooltip Text="Next bookmark (F2)">
-            <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
-                           Size="Size.Small" OnClick="NextBookmarkAsync" />
-        </MudTooltip>
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Decrease font (Ctrl+−)">
-            <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
-                           Size="Size.Small" OnClick="DecreaseFontAsync"
-                           Disabled="@(_fontSize <= _fontSizes[0])" />
-        </MudTooltip>
-        <MudTooltip Text="Increase font (Ctrl+=)">
-            <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
-                           Size="Size.Small" OnClick="IncreaseFontAsync"
-                           Disabled="@(_fontSize >= _fontSizes[^1])" />
-        </MudTooltip>
-        <MudTooltip Text="Word wrap (Alt+Z)">
-            <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWrapToggled"
-                                 Icon="@Icons.Material.Outlined.WrapText"
-                                 ToggledIcon="@Icons.Material.Outlined.WrapText"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-    </div>
-    </div>
+    <LogViewerToolbar @ref="_toolbar"
+                      IsSelected="@IsSelected"
+                      FindTerm="@_findTerm"
+                      IsRegex="@_isRegex"
+                      CaseSensitive="@_caseSensitive"
+                      MatchCount="@_matchCount"
+                      MatchCurrent="@_matchCurrent"
+                      FilterStr="@_filterStr"
+                      FilterError="@_filterError"
+                      TotalCount="@_totalCount"
+                      VisibleCount="@_visibleCount"
+                      WordWrap="@_wordWrap"
+                      FontDecreaseDisabled="@(_fontSize <= _fontSizes[0])"
+                      FontIncreaseDisabled="@(_fontSize >= _fontSizes[^1])"
+                      FieldHints="@LogFieldHints"
+                      OnFindTermChanged="@(v => { _findTerm = v; })"
+                      OnRunFind="RunFindAsync"
+                      OnRegexToggled="OnRegexToggled"
+                      OnCaseToggled="OnCaseToggled"
+                      OnNextMatch="NextMatchAsync"
+                      OnPrevMatch="PrevMatchAsync"
+                      OnFilterChanged="OnFilterChangedAsync"
+                      OnNextBookmark="NextBookmarkAsync"
+                      OnPrevBookmark="PrevBookmarkAsync"
+                      OnIncreaseFont="IncreaseFontAsync"
+                      OnDecreaseFont="DecreaseFontAsync"
+                      OnWrapToggled="OnWrapToggled" />
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
@@ -18070,9 +18254,8 @@ LENGTH 23655
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    private LogViewport?          _viewport;
-    private MudTextField<string>? _findField;
-    private FilterBox?            _filterBox;
+    private LogViewport?      _viewport;
+    private LogViewerToolbar? _toolbar;
 
     private string? _loadedPath;
     private bool    _rendered;
@@ -18114,9 +18297,6 @@ LENGTH 23655
     private string _pathTooltip => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
         ? "local file  •  Ctrl+Click to copy"
         : $"{Path}  •  Ctrl+Click to copy";
-
-    private string MatchLabel =>
-        _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -18190,14 +18370,14 @@ LENGTH 23655
         if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "f")
         {
             _preventKey = true;
-            if (_findField is not null) await _findField.FocusAsync().AsTask();
+            if (_toolbar is not null) await _toolbar.FocusFindAsync();
             return;
         }
         // Ctrl+G — focus filter
         if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "g")
         {
             _preventKey = true;
-            if (_filterBox is not null) await _filterBox.FocusAsync();
+            if (_toolbar is not null) await _toolbar.FocusFilterAsync();
             return;
         }
         // F3 — next match
@@ -18300,15 +18480,6 @@ LENGTH 23655
     }
 
     // ── Find ──────────────────────────────────────────────────────────────
-
-    private async Task OnFindKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-        {
-            if (e.ShiftKey) await PrevMatchAsync();
-            else            await RunFindAsync();
-        }
-    }
 
     private async Task RunFindAsync()
     {
@@ -18457,10 +18628,10 @@ LENGTH 23655
     }
 }
 FILE src/NxtUI.Web/Pages/LogWorkspace.razor
-LENGTH 3952
-@namespace NxtUI.Pages
-@using NxtUI.Models
-@using NxtUI.Components
+LENGTH 3964
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Web.Components
 @inject IDialogService DialogService
 @inject TabService TabService
 
@@ -18575,10 +18746,10 @@ LENGTH 3952
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 18130
-@namespace NxtUI.Pages
-@using NxtUI.Models
-@using NxtUI.Services
+LENGTH 18142
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Web.Services
 @using NxtUI.Logging
 @inject IHeartbeatService HeartbeatSvc
 @inject IServiceMetricsMonitor MetricsMonitor
@@ -19035,11 +19206,11 @@ LENGTH 18130
     }
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor
-LENGTH 4125
-@namespace NxtUI.Pages
+LENGTH 4128
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@inject IMongoService MongoSvc
+@inject IMongoReader MongoSvc
 
 <MudDialog Style="min-width:560px;">
     <TitleContent>
@@ -19137,8 +19308,8 @@ LENGTH 4125
 
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor.cs
-LENGTH 368
-namespace NxtUI.Pages;
+LENGTH 372
+namespace NxtUI.Web.Pages;
 
 public partial class MongoCollectionInfoDialog
 {
@@ -19151,12 +19322,12 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 9121
-@namespace NxtUI.Pages
+LENGTH 9124
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
-@inject IMongoService MongoSvc
+@inject IMongoReader MongoSvc
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -19388,8 +19559,8 @@ LENGTH 9121
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11705
-@namespace NxtUI.Pages
+LENGTH 12061
+@namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
@@ -19427,14 +19598,17 @@ LENGTH 11705
 
     <!-- Toolbar -->
     <div class="bm-batch-toolbar">
-        <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
-                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                   Class="bm-mongo-db-select" Label="Database">
-            @foreach (var db in _databases)
-            {
-                <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
-            }
-        </MudSelect>
+        <div class="bm-mongo-db-wrap">
+            <span class="bm-toolbar-label">DB</span>
+            <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
+                       Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                       Class="bm-mongo-db-select" PopoverClass="bm-mongo-db-popover">
+                @foreach (var db in _databases)
+                {
+                    <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
 
         <FilterBox Value="@_filterText"
                    OnFilterChanged="OnFilterChanged"
@@ -19446,7 +19620,7 @@ LENGTH 11705
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="_loading"
+                           Disabled="@_result.IsLoading"
                            OnClick="LoadCollectionsAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -19454,11 +19628,7 @@ LENGTH 11705
 
     <!-- Table -->
     <div class="bm-table-wrap">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
                   Dense="true"
@@ -19521,6 +19691,7 @@ LENGTH 11705
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- Footer -->
@@ -19559,7 +19730,7 @@ LENGTH 11705
     private string  _selectedDb       = string.Empty;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
-    private bool    _loading          = true;
+    private Result<List<MongoCollectionSummary>> _result;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
@@ -19580,7 +19751,8 @@ LENGTH 11705
             _selectedDb = _databases[0].Name;
             await LoadCollectionsAsync();
         }
-        else { _loading = false; }
+        // empty env: leave result in loading state with empty list
+        else { _result = Result<List<MongoCollectionSummary>>.Ok([]); }
     }
 
     private async Task OnDbChanged(string db)
@@ -19591,16 +19763,17 @@ LENGTH 11705
 
     private async Task LoadCollectionsAsync()
     {
-        _loading = true;
+        _result = default; // loading
         StateHasChanged();
         try
         {
             var cols = await MongoSvc.GetCollectionsAsync(Environment, _selectedDb, _cts.Token);
             _all = cols.ToList();
             ApplyFilter();
+            _result = Result<List<MongoCollectionSummary>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
     }
 
     private void OnFilterChanged(string text)
@@ -19669,8 +19842,8 @@ LENGTH 11705
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor.cs
-LENGTH 357
-namespace NxtUI.Pages;
+LENGTH 361
+namespace NxtUI.Web.Pages;
 
 public partial class MongoDashboard
 {
@@ -19683,8 +19856,8 @@ public partial class MongoDashboard
     };
 }
 FILE src/NxtUI.Web/Pages/PlaceholderPage.razor
-LENGTH 853
-@namespace NxtUI.Pages
+LENGTH 857
+@namespace NxtUI.Web.Pages
 @* Stub page for tabs not yet implemented *@
 
 <div class="bm-placeholder">
@@ -19707,9 +19880,9 @@ LENGTH 853
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16175
-@namespace NxtUI.Pages
-@using NxtUI.Models
+LENGTH 16166
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
 @inject IRunService RunService
 @inject TabService TabService
 @inject SignalRConnectionService SignalR
@@ -20067,7 +20240,7 @@ LENGTH 16175
     <div class="bm-batch-graph" style="position:relative">
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
-        <NxtUI.Components.D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
+        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
@@ -20116,8 +20289,8 @@ LENGTH 16175
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11106
-@namespace NxtUI.Pages
+LENGTH 11036
+@namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
@@ -20145,11 +20318,7 @@ LENGTH 11106
 
     <!-- ── Table ─────────────────────────────────────────────────────── -->
     <div class="bm-table-wrap">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
+        <AsyncData Result="_result" Context="_">
         <MudTable T="RunSummary"
                   Items="@_paged"
                   Dense="true"
@@ -20241,6 +20410,7 @@ LENGTH 11106
                 </MudTd>
             </RowTemplate>
         </MudTable>
+        </AsyncData>
     </div>
 
     <!-- ── Footer: count + rows per page + pagination ────────────────── -->
@@ -20281,7 +20451,7 @@ LENGTH 11106
 
     private int _page     = 1;
     private int _pageSize = 25;
-    private bool _loading = false;
+    private Result<List<RunSummary>> _result;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
 
@@ -20308,22 +20478,19 @@ LENGTH 11106
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _result = default; // loading
         StateHasChanged();
         try
         {
             _all = await RunService.GetRunsAsync(
                 Environment, DateTime.UtcNow, 200, ct: _cts.Token);
             ApplyFilter();
+            _result = Result<List<RunSummary>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load runs: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _loading = false;
+            _result = Result<List<RunSummary>>.Fail(ex.Message);
         }
     }
 
@@ -20391,10 +20558,10 @@ LENGTH 11106
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28807
-@namespace NxtUI.Pages
-@using NxtUI.Models
-@using NxtUI.Services
+LENGTH 28819
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Web.Services
 @using NxtUI.Filtering
 @inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
@@ -21017,8 +21184,8 @@ LENGTH 28807
     }
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor.cs
-LENGTH 328
-namespace NxtUI.Pages;
+LENGTH 332
+namespace NxtUI.Web.Pages;
 
 public partial class ServicesPage
 {
@@ -21032,8 +21199,8 @@ public partial class ServicesPage
     };
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 4284
-@namespace NxtUI.Pages
+LENGTH 4288
+@namespace NxtUI.Web.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
 @inject IJSRuntime JS
@@ -21136,9 +21303,9 @@ LENGTH 4284
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 30725
-@namespace NxtUI.Pages
-@using NxtUI.Models
+LENGTH 30904
+@namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
@@ -21380,23 +21547,16 @@ LENGTH 30725
 
     // ── Control bar handlers ──────────────────────────────────────────────
 
-    // Native-select handlers — no MudBlazor popover involved, no crash.
-    private void OnGroupByChanged(ChangeEventArgs e)
+    private void OnGroupByChanged(GroupByOption v)
     {
-        if (Enum.TryParse<GroupByOption>(e.Value?.ToString(), out var v))
-        {
-            _groupBy = v;
-            _pendingJsPush = true;
-        }
+        _groupBy = v;
+        _pendingJsPush = true;
     }
 
-    private void OnColourByChanged(ChangeEventArgs e)
+    private void OnColourByChanged(ColourByOption v)
     {
-        if (Enum.TryParse<ColourByOption>(e.Value?.ToString(), out var v))
-        {
-            _colourBy = v;
-            _pendingJsPush = true;
-        }
+        _colourBy = v;
+        _pendingJsPush = true;
     }
 
     private void OnFilterChanged(string v)
@@ -21698,26 +21858,32 @@ LENGTH 30725
                        Class="bm-tl-filter"
                        FieldHints="@_timelineFieldHints" />
 
-            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
-                Group by
-                <select class="bm-tl-native-select" value="@_groupBy" @onchange="OnGroupByChanged" disabled="@_stackView">
-                    <option value="@GroupByOption.ServicePipeline">Service / Pipeline</option>
-                    <option value="@GroupByOption.PidServicePipeline">Service / Pipeline / PID</option>
-                    <option value="@GroupByOption.Service">Service</option>
-                    <option value="@GroupByOption.Pipeline">Pipeline</option>
-                    <option value="@GroupByOption.Pid">PID</option>
-                </select>
-            </label>
+            <div class="bm-tl-select-wrap">
+                <span class="bm-toolbar-label">Group</span>
+                <MudSelect T="GroupByOption" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="_stackView" Class="bm-tl-select"
+                           PopoverClass="bm-tl-select-popover">
+                    <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.PidServicePipeline">Service / Pipeline / PID</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
+                </MudSelect>
+            </div>
 
-            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
-                Colour by
-                <select class="bm-tl-native-select" value="@_colourBy" @onchange="OnColourByChanged" disabled="@_stackView">
-                    <option value="@ColourByOption.Source">Source</option>
-                    <option value="@ColourByOption.Pipeline">Pipeline</option>
-                    <option value="@ColourByOption.Service">Service</option>
-                    <option value="@ColourByOption.Status">Status</option>
-                </select>
-            </label>
+            <div class="bm-tl-select-wrap">
+                <span class="bm-toolbar-label">Color</span>
+                <MudSelect T="ColourByOption" Value="_colourBy" ValueChanged="OnColourByChanged"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="_stackView" Class="bm-tl-select"
+                           PopoverClass="bm-tl-select-popover">
+                    <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
+                </MudSelect>
+            </div>
         </div>
 
         <div class="bm-tl-controls-right">
@@ -21867,7 +22033,7 @@ LENGTH 30725
                         <PropertyColumn Property="x => x.Name" Title="Name" />
                         <TemplateColumn Title="Status">
                             <CellTemplate>
-                                <NxtUI.Shared.StatusIcon Status="@context.Item.Status" />
+                                <StatusIcon Status="@context.Item.Status" />
                             </CellTemplate>
                         </TemplateColumn>
                         <PropertyColumn Property="x => x.Start" Title="Start" Format="HH:mm" />
@@ -21907,9 +22073,9 @@ LENGTH 30725
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 16621
+LENGTH 16630
 @page "/"
-@namespace NxtUI.Pages
+@namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
 @{
     Layout = null;
@@ -21931,7 +22097,7 @@ LENGTH 16621
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css" rel="stylesheet" />
+    <link href="css/app.css?v=21" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -22255,9 +22421,9 @@ LENGTH 16621
 </body>
 </html>
 FILE src/NxtUI.Web/Pages/_ViewImports.cshtml
-LENGTH 103
-@using BatchMonitor
-@namespace BatchMonitor.Pages
+LENGTH 97
+@using NxtUI.Web
+@namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
 FILE src/NxtUI.Web/Pages/_ViewStart.cshtml
 LENGTH 24
@@ -22278,9 +22444,9 @@ LENGTH 267
     }
   }
 }FILE src/NxtUI.Web/Services/BatchCatalogService.cs
-LENGTH 6096
+LENGTH 6101
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using System.Text;
 using System.Text.Json;
 
@@ -22434,13 +22600,13 @@ file static class StringExtensions
         s.Length <= max ? s : s[..max] + "…";
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
-LENGTH 1291
+LENGTH 1300
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service that owns the "currently selected environment" for a Blazor circuit.
@@ -22478,8 +22644,134 @@ public class EnvironmentSelectorService
 
     public event Action? OnChange;
 }
+FILE src/NxtUI.Web/Services/InfraHealthCache.cs
+LENGTH 4683
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Background singleton that polls Kafka and Mongo health every <see cref="PollIntervalSeconds"/>
+/// seconds and caches the results. Consumers read synchronously via <see cref="GetKafka"/> /
+/// <see cref="GetMongo"/> — no await, no per-render network call.
+/// </summary>
+public sealed class InfraHealthCache : BackgroundService
+{
+    private const int PollIntervalSeconds = 30;
+
+    private readonly IKafkaMonitor _kafka;
+    private readonly IMongoReader  _mongo;
+    private readonly ILogger<InfraHealthCache> _log;
+
+    private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MongoHealth>  _mongoCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _lock = new();
+
+    public event Action<string>? OnHealthUpdated;
+
+    public InfraHealthCache(IKafkaMonitor kafka, IMongoReader mongo, ILogger<InfraHealthCache> log)
+    {
+        _kafka = kafka;
+        _mongo = mongo;
+        _log   = log;
+    }
+
+    public KafkaHealth GetKafka(string env)
+    {
+        lock (_lock)
+            return _kafkaCache.TryGetValue(env, out var h) ? h : new KafkaHealth { Status = HealthStatus.Unknown };
+    }
+
+    public MongoHealth GetMongo(string env)
+    {
+        lock (_lock)
+            return _mongoCache.TryGetValue(env, out var h) ? h : new MongoHealth { Status = HealthStatus.Unknown };
+    }
+
+    /// <summary>Force an immediate poll for the given environment (e.g. on tab switch).</summary>
+    public void RequestRefresh(string env) => _ = PollEnvAsync(env, CancellationToken.None);
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(PollIntervalSeconds));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                string[] envs;
+                lock (_lock) envs = [.._kafkaCache.Keys.Union(_mongoCache.Keys)];
+                foreach (var env in envs)
+                    await PollEnvAsync(env, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task PollEnvAsync(string env, CancellationToken ct)
+    {
+        await Task.WhenAll(PollKafkaAsync(env, ct), PollMongoAsync(env, ct));
+        OnHealthUpdated?.Invoke(env);
+    }
+
+    private async Task PollKafkaAsync(string env, CancellationToken ct)
+    {
+        KafkaHealth result;
+        try
+        {
+            var info = await _kafka.GetClusterInfoAsync(env, ct);
+            var onlineBrokers  = info.Brokers.Count(b => b.IsOnline);
+            var totalBrokers   = info.Brokers.Count;
+            result = new KafkaHealth
+            {
+                Status     = onlineBrokers == totalBrokers ? HealthStatus.Healthy
+                           : onlineBrokers == 0            ? HealthStatus.Down
+                                                           : HealthStatus.Degraded,
+                Brokers    = info.Brokers.Select(b => new BrokerHealth
+                             {
+                                 Id       = b.Id,
+                                 Host     = b.Host,
+                                 Port     = b.Port,
+                                 IsOnline = b.IsOnline,
+                             }).ToList(),
+                CheckedAt  = DateTime.UtcNow,
+            };
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "InfraHealthCache: Kafka poll failed for {Env}", env);
+            result = new KafkaHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
+        }
+        lock (_lock) _kafkaCache[env] = result;
+    }
+
+    private async Task PollMongoAsync(string env, CancellationToken ct)
+    {
+        MongoHealth result;
+        try
+        {
+            var dbs = await _mongo.GetDatabasesAsync(env, ct);
+            result = new MongoHealth
+            {
+                Status    = HealthStatus.Healthy,
+                CheckedAt = DateTime.UtcNow,
+                Nodes = dbs.Count > 0
+                    ? [new MongoNodeHealth { Host = $"{env}-mongo", Role = "PRIMARY", IsOnline = true }]
+                    : [],
+            };
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed for {Env}", env);
+            result = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
+        }
+        lock (_lock) _mongoCache[env] = result;
+    }
+}
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 11090
+LENGTH 11094
 using NxtUI.Core.Services;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -22489,7 +22781,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Filtering;
-using NxtUI.Services;
+using NxtUI.Web.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -22778,10 +23070,10 @@ public class LogBrowserService : ILogBrowserService
     }
 }
 FILE src/NxtUI.Web/Services/LogViewerService.cs
-LENGTH 934
+LENGTH 938
 using NxtUI.Core.Services;
 using NxtUI.Logging;
-using NxtUI.Services;
+using NxtUI.Web.Services;
 using System.Text;
 
 namespace NxtUI.Web.Services;
@@ -22807,14 +23099,13 @@ public class LogViewerService : ILogViewerService
     }
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 15865
+LENGTH 15853
 using NxtUI.Core.Services;
-using NxtUI.Hubs;
+using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
-using NxtUI.Models;
 using Microsoft.AspNetCore.SignalR;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 public class MockRunService : IRunService
 {
@@ -23161,12 +23452,12 @@ public class MockRunService : IRunService
     }
 }
 FILE src/NxtUI.Web/Services/PerformanceEventService.cs
-LENGTH 7613
+LENGTH 7622
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using System.Threading.Tasks;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-tab event accumulator. Combines two delivery paths (Step 9):
@@ -23365,15 +23656,15 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 8188
+LENGTH 8269
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Background metrics monitor. For each subscribed environment it periodically reads
@@ -23397,6 +23688,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private readonly Dictionary<string, int> _envRefs  = new();           // env -> subscriber count
     private readonly ConcurrentDictionary<string, Entry>        _entries  = new(); // (env|host|svc|pid) -> data
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new(); // serialise per-env polls
+    private CancellationToken _ct = CancellationToken.None; // set when ExecuteAsync starts
 
     public event Action<string>? OnMetricsUpdated;
 
@@ -23420,7 +23712,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         var env = cacheKey.Split('|', 2)[0]; // CacheKey is "env|host|service|pid"
         if (HasSubscribers(env))
-            _ = PollEnvAsync(env, CancellationToken.None);
+            _ = PollEnvAsync(env, _ct);
     }
 
     public override void Dispose()
@@ -23445,7 +23737,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             _envRefs[env] = _envRefs.TryGetValue(env, out var n) ? n + 1 : 1;
 
         // Poll immediately so a freshly opened tab doesn't wait a full interval.
-        _ = PollEnvAsync(env, CancellationToken.None);
+        _ = PollEnvAsync(env, _ct);
         return new Subscription(this, env);
     }
 
@@ -23498,6 +23790,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        _ct = ct;
         var interval = TimeSpan.FromSeconds(Math.Max(5, _paths.MetricsIntervalSeconds));
         using var timer = new PeriodicTimer(interval);
         try
@@ -23577,12 +23870,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     }
 }
 FILE src/NxtUI.Web/Services/SignalRConnectionService.cs
-LENGTH 5822
-using NxtUI.Models;
+LENGTH 5831
+using NxtUI.Core.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service (one per Blazor circuit) that owns a single SignalR
@@ -23745,10 +24038,10 @@ public class SignalRConnectionService(
     }
 }
 FILE src/NxtUI.Web/Services/TabService.cs
-LENGTH 4680
-using NxtUI.Models;
+LENGTH 4688
+using NxtUI.Web.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service that owns the list of open tabs for a Blazor circuit.
@@ -23890,14 +24183,14 @@ public class TabService
     private void Notify() => OnChange?.Invoke();
 }
 FILE src/NxtUI.Web/Services/TestLogGenerator.cs
-LENGTH 17526
+LENGTH 17405
 using NxtUI.Core.Services;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Test-only background service that:
@@ -24026,11 +24319,6 @@ public sealed class TestLogGenerator : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_gen.Enabled)
-        {
-            _log.LogInformation("TestLogGenerator disabled.");
-            return;
-        }
         if (_paths.ServiceTemplates.Count == 0)
         {
             _log.LogWarning("TestLogGenerator: no Logs:ServiceTemplates configured — nothing to generate.");
@@ -24309,11 +24597,11 @@ public sealed class TestLogGenerator : BackgroundService
     }
 }
 FILE src/NxtUI.Web/Services/ThemeService.cs
-LENGTH 4335
+LENGTH 4339
 using Microsoft.AspNetCore.Http;
 using MudBlazor;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 public enum ThemeMode { Dark, Light, System }
 
@@ -24435,11 +24723,11 @@ public class ThemeService
     };
 }
 FILE src/NxtUI.Web/Services/TimelineRun.cs
-LENGTH 4933
+LENGTH 4942
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-run data container for the Timeline tab.
@@ -24667,7 +24955,7 @@ LENGTH 740
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2728
+LENGTH 2500
 @namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
@@ -24687,61 +24975,61 @@ LENGTH 2728
         return Tab.Type switch
         {
             TabType.Runs =>
-                @<NxtUI.Pages.Runs Environment="@env" />,
+                @<Runs Environment="@env" />,
 
             TabType.RunDetail =>
-                @<NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
+                @<RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Services =>
-                @<NxtUI.Pages.ServicesPage Env="@env" />,
+                @<ServicesPage Env="@env" />,
 
             TabType.Pipelines =>
-                @<NxtUI.Pages.PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
+                @<PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
 
             TabType.Kafka =>
-                @<NxtUI.Pages.KafkaDashboard Environment="@env" />,
+                @<KafkaDashboard Environment="@env" />,
 
             TabType.KafkaGroups =>
-                @<NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />,
+                @<KafkaGroupsDashboard Environment="@env" />,
 
             TabType.MongoDB =>
-                @<NxtUI.Pages.MongoDashboard Environment="@env" />,
+                @<MongoDashboard Environment="@env" />,
 
             TabType.MongoDetail =>
-                @<NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
 
             TabType.Batches =>
-                @<NxtUI.Pages.Batches Environment="@env" />,
+                @<Batches Environment="@env" />,
 
             TabType.Config =>
-                @<NxtUI.Pages.PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
+                @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<NxtUI.Pages.MemoryGraph Env="@env" />,
+                @<MemoryGraph Env="@env" />,
 
             TabType.LogBrowser =>
-                @<NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
 
             TabType.LogViewer =>
-                @<NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
 
             TabType.LogWorkspace =>
-                @<NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
 
             TabType.Settings =>
-                @<NxtUI.Pages.Settings />,
+                @<Settings />,
 
             TabType.Timeline =>
-                @<NxtUI.Pages.TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
+                @<TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
 
             TabType.KafkaMessages =>
-                @<NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
 
             TabType.FilterHelp =>
-                @<NxtUI.Pages.FilterHelp />,
+                @<FilterHelp />,
 
             _ =>
-                @<NxtUI.Pages.PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
+                @<PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
         };
     }
 }
@@ -25253,10 +25541,10 @@ public sealed class KafkaConnection
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockEnvironmentService.cs
-LENGTH 3066
+LENGTH 3071
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mock;
 
@@ -25321,9 +25609,9 @@ public sealed class MockEnvironmentService : IEnvironmentService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockHeartbeatService.cs
-LENGTH 1713
+LENGTH 1718
 using NxtUI.Core.Models;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
 namespace NxtUI.Core.Services.Mock;
@@ -25367,58 +25655,6 @@ public class MockHeartbeatService : IHeartbeatService
         }).ToList();
 
         return Task.FromResult(statuses);
-    }
-}
-FILE src/NxtUI.Core/Services/Mock/MockInfraHealthService.cs
-LENGTH 2038
-using NxtUI.Core.Models;
-using NxtUI.Core.Services;
-
-namespace NxtUI.Core.Services.Mock;
-
-public class MockInfraHealthService : IInfraHealthService
-{
-    private static readonly Random _rng = new();
-
-    public async Task<KafkaHealth> CheckKafkaAsync(string env, CancellationToken ct = default)
-    {
-        // Simulate broker metadata fetch + leader election check (~80-250 ms)
-        await Task.Delay(_rng.Next(80, 250), ct);
-
-        var brokers = new BrokerHealth[]
-        {
-            new() { Id = 1, Host = "kafka-1", Port = 9092, IsOnline = true,  LatencyMs = _rng.Next(2, 9)  },
-            new() { Id = 2, Host = "kafka-2", Port = 9092, IsOnline = true,  LatencyMs = _rng.Next(3, 14) },
-            new() { Id = 3, Host = "kafka-3", Port = 9092, IsOnline = false, LatencyMs = null             },
-        };
-
-        var online = brokers.Count(b => b.IsOnline);
-        var status = online == 0            ? HealthStatus.Down
-                   : online < brokers.Length ? HealthStatus.Degraded
-                   :                           HealthStatus.Healthy;
-
-        return new KafkaHealth { Status = status, Brokers = brokers, CheckedAt = DateTime.UtcNow };
-    }
-
-    public async Task<MongoHealth> CheckMongoAsync(string env, CancellationToken ct = default)
-    {
-        // Simulate replica-set hello + lightweight ping command (~30-150 ms)
-        await Task.Delay(_rng.Next(30, 150), ct);
-
-        var nodes = new MongoNodeHealth[]
-        {
-            new() { Host = "mongo-1:27017", Role = "PRIMARY",   IsOnline = true, LatencyMs = _rng.Next(1, 5)  },
-            new() { Host = "mongo-2:27017", Role = "SECONDARY", IsOnline = true, LatencyMs = _rng.Next(2, 9)  },
-            new() { Host = "mongo-3:27017", Role = "SECONDARY", IsOnline = true, LatencyMs = _rng.Next(2, 11) },
-        };
-
-        return new MongoHealth
-        {
-            Status        = HealthStatus.Healthy,
-            DatabaseCount = 3,
-            Nodes         = nodes,
-            CheckedAt     = DateTime.UtcNow,
-        };
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockKafkaService.cs
@@ -25878,7 +26114,7 @@ public class MockMongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoConnection.cs
-LENGTH 3041
+LENGTH 3196
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
@@ -25915,6 +26151,9 @@ public sealed class MongoConnection
 
     public IMongoDatabase GetDatabase(string environmentId) =>
         _client.GetDatabase(_settings.GetDatabaseName(environmentId));
+
+    public IMongoDatabase GetHeartbeatsDatabase(string environmentId) =>
+        _client.GetDatabase(_settings.GetHeartbeatsDatabaseName(environmentId));
 
     // ── internals ────────────────────────────────────────────────────────────
 
@@ -25960,11 +26199,11 @@ public sealed class MongoConnection
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1466
+LENGTH 1481
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mongo;
 
@@ -25981,7 +26220,7 @@ public class MongoHeartbeatService : IHeartbeatService
 
     public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
     {
-        var db         = _connection.GetDatabase(env);
+        var db         = _connection.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
         var docs = await collection
@@ -26005,12 +26244,12 @@ public class MongoHeartbeatService : IHeartbeatService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoRunService.cs
-LENGTH 5453
+LENGTH 5458
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NxtUI.Configuration;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mongo;
 
@@ -26148,7 +26387,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 64426
+LENGTH 68291
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -26694,8 +26933,11 @@ html, body {
 .bm-svc-toolbar-left  { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .bm-svc-toolbar-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .bm-svc-grouping-label { font-size: 12px; color: var(--mud-palette-text-secondary); white-space: nowrap; }
+/* ── Global height for ALL outlined MudButtonGroup toggles ───────────── */
+.mud-button-group-outlined .mud-button-root { height: 36px !important; }
+
 .bm-svc-group-toggle { flex-shrink: 0; }
-.bm-svc-group-toggle .mud-button-root { font-size: 12px; font-weight: 500; padding: 0 10px; height: 30px; transition: background-color 120ms ease, color 120ms ease; }
+.bm-svc-group-toggle .mud-button-root { font-size: 12px; font-weight: 500; padding: 0 10px; transition: background-color 120ms ease, color 120ms ease; }
 /* Shared active/inactive states used by any MudButtonGroup toggle in the app */
 .bm-view-btn-active  { background-color: var(--mud-palette-primary) !important; color: var(--mud-palette-primary-text) !important; border-color: var(--mud-palette-primary) !important; }
 .bm-view-btn-inactive { background-color: transparent !important; color: var(--mud-palette-text-secondary) !important; }
@@ -27053,11 +27295,67 @@ html, body {
     display: flex;
     align-items: center;
     gap: 2px;
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
 }
 /* MudTextField fills the remaining space inside the wrapper */
-.bm-filter-box .mud-form-control { flex: 1 1 auto; min-width: 0; }
+.bm-filter-box .mud-form-control { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+
+/* Toolbar containers that hold a FilterBox must not shrink it */
+.bm-batch-toolbar    > .bm-filter-box,
+.bm-lv-toolbar       > .bm-filter-box,
+.bm-svc-toolbar-left > .bm-filter-box,
+.bm-lb-toolbar-right > .bm-filter-box { flex: 1 1 0; min-width: 0; }
+
+/* ── Compact text inputs in standard toolbars ────────────────────────── */
+/* Applied at the toolbar level so every MudTextField/FilterBox inside    */
+/* automatically matches — no per-control rules needed.                   */
+/* bm-lb-filter-toolbar covers the whole LogBrowser toolbar row           */
+/* (both the filename glob input and the content FilterBox).              */
+/* font applies to all inputs including selects */
+.bm-batch-toolbar    .mud-input-root,
+.bm-svc-toolbar-left .mud-input-root,
+.bm-lb-filter-toolbar .mud-input-root,
+.bm-tl-controls      .mud-input-root { font-size: 14px !important; }
+
+/* height only for text inputs — selects are excluded so the global
+   .mud-select.mud-input-root rule controls their height/centering */
+.bm-batch-toolbar    .mud-input-root:not(.mud-select),
+.bm-svc-toolbar-left .mud-input-root:not(.mud-select),
+.bm-lb-filter-toolbar .mud-input-root:not(.mud-select),
+.bm-tl-controls      .mud-input-root:not(.mud-select) {
+    min-height: 32px !important;
+    height: 32px !important;
+}
+.bm-batch-toolbar    .mud-input-slot,
+.bm-svc-toolbar-left .mud-input-slot,
+.bm-lb-filter-toolbar .mud-input-slot,
+.bm-tl-controls      .mud-input-slot {
+    min-height: 32px !important;
+    height: 32px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+}
+.bm-batch-toolbar    input,
+.bm-svc-toolbar-left input,
+.bm-lb-filter-toolbar input,
+.bm-tl-controls      input {
+    font-size: 14px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+.bm-batch-toolbar    .mud-input-adornment .mud-icon-root,
+.bm-svc-toolbar-left .mud-input-adornment .mud-icon-root,
+.bm-lb-filter-toolbar .mud-input-adornment .mud-icon-root,
+.bm-tl-controls      .mud-input-adornment .mud-icon-root,
+.bm-batch-toolbar    .mud-input-adornment .mud-button-root,
+.bm-svc-toolbar-left .mud-input-adornment .mud-button-root,
+.bm-lb-filter-toolbar .mud-input-adornment .mud-button-root,
+.bm-tl-controls      .mud-input-adornment .mud-button-root {
+    font-size: 16px !important;
+    width: 20px !important;
+    height: 20px !important;
+}
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
@@ -27416,7 +27714,48 @@ html, body {
    MONGODB
    ═══════════════════════════════════════════════════════════════════════ */
 
-.bm-mongo-db-select { width: 160px; flex-shrink: 0; }
+/* DB selector wrapper — "DB" label + auto-width compact select */
+.bm-mongo-db-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.bm-toolbar-label {
+    font-size: 12px;
+    white-space: nowrap;
+    color: var(--mud-palette-text-secondary);
+    flex-shrink: 0;
+}
+/* Auto-width: size to the longest option, not a fixed px value */
+.bm-mongo-db-select,
+.bm-mongo-db-select .mud-form-control { width: fit-content; min-width: 80px; }
+/* Global height + vertical centering for ALL MudSelect controls */
+.mud-select.mud-input-root {
+    font-size: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 36px !important;
+    height: 36px !important;
+}
+.mud-select-input {
+    font-size: 14px !important;
+    padding: 0 8px !important;
+    display: flex !important;
+    align-items: center !important;
+    height: 100% !important;
+}
+/* Dropdown popover — no word-wrap, expand to fit longest option */
+.bm-mongo-db-popover { min-width: max-content !important; }
+.bm-mongo-db-popover .mud-list-item {
+    white-space: nowrap !important;
+    min-height: 0 !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    padding-left: 12px !important;
+    padding-right: 16px !important;
+}
+.bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; font-size: 14px !important; }
 
 .bm-mongo-id {
     font-size: 11px;
@@ -27583,7 +27922,6 @@ html, body {
     font-size: 13px;
     font-weight: 500;
     padding: 0 14px;
-    height: 32px;
     transition: background-color 120ms ease, color 120ms ease;
 }
 .bm-kafka-view-toggle .bm-view-btn-active {
@@ -28040,7 +28378,6 @@ tr.bm-row-searching td:first-child {
     flex: 0 0 300px;
 }
 .bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.bm-lb-toolbar-right .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
 .bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
 .bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
@@ -28674,7 +29011,7 @@ LENGTH 7502
     font-style: italic;
 }
 FILE src/NxtUI.Web/wwwroot/css/d3-timeline.css
-LENGTH 8155
+LENGTH 7870
 /* ================================================================
    TIMELINE TAB  (Step 10)
    ================================================================ */
@@ -28704,38 +29041,16 @@ LENGTH 8155
 .bm-tl-controls-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
 
 .bm-tl-filter { min-width: 160px; flex: 1 1 0; }
-.bm-tl-select { min-width: 160px; max-width: 200px; }
 
-.bm-tl-native-label {
-    display: flex;
-    flex-direction: column;
-    font-size: 0.65rem;
-    color: var(--mud-palette-text-secondary);
-    gap: 1px;
-}
+/* MudSelect wrappers — label left + auto-width select */
+.bm-tl-select-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.bm-tl-select,
+.bm-tl-select .mud-form-control { width: fit-content; min-width: 80px; }
 
-.bm-tl-native-select {
-    background: var(--mud-palette-surface);
-    color: var(--mud-palette-text-primary);
-    border: 1px solid var(--mud-palette-divider);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 0.8125rem;
-    font-family: inherit;
-    height: 32px;
-    min-width: 140px;
-    cursor: pointer;
-    outline: none;
-}
-
-.bm-tl-native-select:hover  { border-color: var(--mud-palette-text-primary); }
-.bm-tl-native-select:focus  { border-color: var(--mud-palette-primary); border-width: 2px; }
-.bm-tl-native-label--disabled { opacity: 0.38; pointer-events: none; }
-
-.bm-tl-native-select option {
-    background: var(--mud-palette-surface);
-    color: var(--mud-palette-text-primary);
-}
+/* Popover items — no word-wrap, expand to fit longest option */
+.bm-tl-select-popover                     { min-width: max-content !important; }
+.bm-tl-select-popover .mud-list-item      { white-space: nowrap !important; min-height: 0 !important; padding: 4px 16px 4px 12px !important; }
+.bm-tl-select-popover .mud-list-item-text { white-space: nowrap !important; font-size: 14px !important; }
 
 /* ── Canvas wrap — scrolls vertically, fixed horizontally ───────── */
 
