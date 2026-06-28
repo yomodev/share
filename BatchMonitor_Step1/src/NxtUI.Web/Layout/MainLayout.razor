@@ -13,13 +13,13 @@
 
 <MudLayout>
 
-    <NxtUI.Layout.Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
+    <Sidebar DrawerOpenChanged="OnDrawerOpenChanged" />
 
     <MudAppBar Elevation="0"
                Dense="true"
                Class="bm-tabbar"
                Fixed="true">
-        <NxtUI.Layout.TabBar />
+        <TabBar />
     </MudAppBar>
 
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
@@ -27,7 +27,7 @@
         <div class="bm-content-area">
             <!-- Home pane: always rendered, hidden when a tab is focused. -->
             <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
-                <NxtUI.Pages.Home />
+                <Home />
             </div>
 
             <!-- One persistent pane per open tab — kept alive in the DOM so
@@ -36,7 +36,7 @@
             @foreach (var tab in TabService.Tabs)
             {
                 <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
-                    <NxtUI.Shared.TabContent Tab="@tab" />
+                    <TabContent Tab="@tab" />
                 </div>
             }
         </div>

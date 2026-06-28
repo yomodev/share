@@ -17,61 +17,61 @@
         return Tab.Type switch
         {
             TabType.Runs =>
-                @<NxtUI.Pages.Runs Environment="@env" />,
+                @<Runs Environment="@env" />,
 
             TabType.RunDetail =>
-                @<NxtUI.Pages.RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
+                @<RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Services =>
-                @<NxtUI.Pages.ServicesPage Env="@env" />,
+                @<ServicesPage Env="@env" />,
 
             TabType.Pipelines =>
-                @<NxtUI.Pages.PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
+                @<PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
 
             TabType.Kafka =>
-                @<NxtUI.Pages.KafkaDashboard Environment="@env" />,
+                @<KafkaDashboard Environment="@env" />,
 
             TabType.KafkaGroups =>
-                @<NxtUI.Pages.KafkaGroupsDashboard Environment="@env" />,
+                @<KafkaGroupsDashboard Environment="@env" />,
 
             TabType.MongoDB =>
-                @<NxtUI.Pages.MongoDashboard Environment="@env" />,
+                @<MongoDashboard Environment="@env" />,
 
             TabType.MongoDetail =>
-                @<NxtUI.Pages.MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
 
             TabType.Batches =>
-                @<NxtUI.Pages.Batches Environment="@env" />,
+                @<Batches Environment="@env" />,
 
             TabType.Config =>
-                @<NxtUI.Pages.PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
+                @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<NxtUI.Pages.MemoryGraph Env="@env" />,
+                @<MemoryGraph Env="@env" />,
 
             TabType.LogBrowser =>
-                @<NxtUI.Pages.LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
 
             TabType.LogViewer =>
-                @<NxtUI.Pages.LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
 
             TabType.LogWorkspace =>
-                @<NxtUI.Pages.LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
 
             TabType.Settings =>
-                @<NxtUI.Pages.Settings />,
+                @<Settings />,
 
             TabType.Timeline =>
-                @<NxtUI.Pages.TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
+                @<TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
 
             TabType.KafkaMessages =>
-                @<NxtUI.Pages.KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
 
             TabType.FilterHelp =>
-                @<NxtUI.Pages.FilterHelp />,
+                @<FilterHelp />,
 
             _ =>
-                @<NxtUI.Pages.PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
+                @<PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
         };
     }
 }

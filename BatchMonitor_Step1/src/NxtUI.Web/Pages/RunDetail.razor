@@ -357,7 +357,7 @@
     <div class="bm-batch-graph" style="position:relative">
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
-        <NxtUI.Components.D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
+        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
