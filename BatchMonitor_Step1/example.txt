@@ -10279,14 +10279,8 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1843
+LENGTH 1727
 {
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
-    }
-  },
   "AllowedHosts": "*",
 
   "Kafka": {
@@ -10338,8 +10332,57 @@ LENGTH 1843
     ]
   }
 }
+FILE src/NxtUI.Web/nlog.config
+LENGTH 2170
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  ANSI color codes used below (&#27; = ESC):
+    96  bright cyan     → timestamp
+    35  magenta         → thread id
+    93  bright yellow   → caller method
+    90  dark gray       → TRACE
+    37  light gray      → DEBUG
+    92  bright green    → INFO
+    33  yellow          → WARN
+    91  bright red      → ERROR
+    95  bright magenta  → FATAL
+     0  reset
+-->
+<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      autoReload="true"
+      throwConfigExceptions="true">
+
+  <variable name="clr_reset"  value="&#27;[0m" />
+  <variable name="clr_time"   value="&#27;[96m" />
+  <variable name="clr_tid"    value="&#27;[35m" />
+  <variable name="clr_caller" value="&#27;[93m" />
+
+  <!-- level color: pick the right ANSI code based on level -->
+  <variable name="clr_level"
+    value="${when:when=level==LogLevel.Trace:inner=&#27;[90m}${when:when=level==LogLevel.Debug:inner=&#27;[37m}${when:when=level==LogLevel.Info:inner=&#27;[92m}${when:when=level==LogLevel.Warn:inner=&#27;[33m}${when:when=level==LogLevel.Error:inner=&#27;[91m}${when:when=level==LogLevel.Fatal:inner=&#27;[95m}" />
+
+  <targets>
+    <target xsi:type="Console" name="console"
+            layout="${clr_time}${date:format=HH\:mm\:ss.fff}${clr_reset} ${clr_tid}[${threadid:padding=3}]${clr_reset} ${clr_level}${pad:padding=-5:inner=${level:uppercase=true}}${clr_reset} ${clr_caller}${callsite:className=false:methodName=true:fileName=false}${clr_reset} ${message} ${exception:format=tostring}" />
+  </targets>
+
+  <rules>
+    <!-- suppress noisy framework internals -->
+    <logger name="Microsoft.*"                         maxlevel="Info" final="true" />
+    <logger name="System.*"                            maxlevel="Info" final="true" />
+    <logger name="Microsoft.Extensions.Localization.*" maxlevel="Warn" final="true" />
+
+    <!-- app code at Debug and above -->
+    <logger name="NxtUI.*" minlevel="Debug" writeTo="console" />
+
+    <!-- everything else at Info and above -->
+    <logger name="*"       minlevel="Info"  writeTo="console" />
+  </rules>
+
+</nlog>
 FILE src/NxtUI.Web/NxtUI.Web.csproj
-LENGTH 485
+LENGTH 697
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -10349,8 +10392,15 @@ LENGTH 485
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Update="nlog.config">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MudBlazor" Version="9.5.0" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.0" />
+    <PackageReference Include="NLog.Web.AspNetCore" Version="5.3.15" />
   </ItemGroup>
 
   <ItemGroup>
@@ -10359,11 +10409,14 @@ LENGTH 485
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 6207
+LENGTH 9826
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
+using NLog;
+using NLog.Web;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
+using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
 using NxtUI.Web.Hubs;
@@ -10375,7 +10428,12 @@ public class Program
 {
     public static void Main(string[] args)
     {
+        ConfigureNLog();
+
         var builder = WebApplication.CreateBuilder(args);
+
+        builder.Logging.ClearProviders();
+        builder.Host.UseNLog();
 
         // ── Configuration ────────────────────────────────────────────────────
         builder.Services.Configure<MongoSettings>(
@@ -10398,6 +10456,7 @@ public class Program
 
         // ── Connection factories (singletons; swap services below to use these) ──
         builder.Services.AddSingleton<MongoConnection>();
+        builder.Services.AddSingleton<KafkaConnection>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
@@ -10411,27 +10470,38 @@ public class Program
         // ── SignalR ──────────────────────────────────────────────────────────
         builder.Services.AddSignalR();
 
-        // ── Batch service ─────────────────────────────────────────────────────
-        // Use MockRunService for development / demo without a MongoDB instance.
-        // Swap to MongoRunService when connecting to a real cluster:
-        //   builder.Services.AddSingleton<IRunService, MongoRunService>();
+        // ── Batch / Run service ──────────────────────────────────────────────
+        // Mock: fast demo without MongoDB.  Real: swap comment below.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
+        // builder.Services.AddSingleton<IRunService, MongoRunService>();
 
-        // Kafka — one instance, exposed under all three interfaces
+        // ── Kafka ─────────────────────────────────────────────────────────────
+        // Mock: no broker required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockKafkaService>();
         builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
         builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
         builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+        // builder.Services.AddSingleton<KafkaService>();
+        // builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<KafkaService>());
+        // builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<KafkaService>());
+        // builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<KafkaService>());
 
-        // Mongo — one instance, exposed under all three interfaces
+        // ── MongoDB collections ───────────────────────────────────────────────
+        // Mock: no MongoDB required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockMongoService>();
         builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
         builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
         builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
-        // Swap to MongoHeartbeatService when connecting to a real cluster:
-        //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+        // builder.Services.AddSingleton<MongoService>();
+        // builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MongoService>());
+        // builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MongoService>());
+        // builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MongoService>());
+
+        // ── Heartbeat ─────────────────────────────────────────────────────────
+        // Mock: no MongoDB required.  Real: swap comment below.
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+        // builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IEnvironmentService, MockEnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
@@ -10481,6 +10551,50 @@ public class Program
         app.MapFallbackToPage("/_Host");
 
         app.Run();
+    }
+
+    private static void ConfigureNLog()
+    {
+        // ANSI escape sequences —  is the ESC character, valid in C# string literals
+        const string Esc = "";
+        string R  = Esc + "[0m";   // reset
+        string T  = Esc + "[96m";  // bright cyan    - timestamp
+        string TH = Esc + "[35m";  // magenta        - thread id
+        string C  = Esc + "[93m";  // bright yellow  - caller method
+
+        // Per-level color via NLog ${when} — the ESC byte is embedded as a C# escape
+        string levelColor =
+            "${when:when=level==LogLevel.Trace:inner=" + Esc + "[90m}"
+          + "${when:when=level==LogLevel.Debug:inner=" + Esc + "[37m}"
+          + "${when:when=level==LogLevel.Info:inner="  + Esc + "[92m}"
+          + "${when:when=level==LogLevel.Warn:inner="  + Esc + "[33m}"
+          + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
+          + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
+
+        string layout =
+            T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
+          + TH + "[${threadid:padding=3}]" + R + " "
+          + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
+          + C  + "${callsite:className=false:methodName=true:fileName=false}" + R + " "
+          + "${message} ${exception:format=tostring}";
+
+        var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
+
+        var cfg = new NLog.Config.LoggingConfiguration();
+        cfg.AddTarget(console);
+
+        // suppress noisy framework internals
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
+
+        // app code at Debug and above
+        cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
+
+        // everything else at Info and above
+        cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+
+        LogManager.Configuration = cfg;
     }
 }
 FILE src/NxtUI.Web/_Imports.razor
@@ -10674,7 +10788,7 @@ public class LogPathSettings
     public int FolderScanMinIntervalSeconds { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
-LENGTH 2774
+LENGTH 2773
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -10731,7 +10845,7 @@ public class MongoSettings
         var prefix = string.IsNullOrWhiteSpace(HeartbeatsDatabasePrefix)
             ? DatabasePrefix
             : HeartbeatsDatabasePrefix;
-        return $"{prefix}_{environmentId}";
+        return $"{prefix}{environmentId}";
     }
 }
 FILE src/NxtUI.Core/Configuration/TestLogGeneratorSettings.cs
@@ -12735,9 +12849,10 @@ public interface IServiceMetricsMonitor
     event Action<string>? OnMetricsUpdated;
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 4396
+LENGTH 5204
 using System.Collections.Concurrent;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
@@ -12747,16 +12862,18 @@ namespace NxtUI.Core.Services;
 
 public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 {
-    private readonly LogPathSettings _settings;
+    private readonly LogPathSettings                 _settings;
+    private readonly ILogger<LogPathDiscoveryService> _log;
 
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
     public event Action<string>? OnPathResolved;
 
-    public LogPathDiscoveryService(IOptions<LogPathSettings> options)
+    public LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log)
     {
         _settings = options.Value;
+        _log      = log;
     }
 
     public static string CacheKey(ServiceStatus svc, string env) =>
@@ -12775,7 +12892,10 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     public void EnsureDiscovering(ServiceStatus svc, string env)
     {
         var key = CacheKey(svc, env);
-        _cache.GetOrAdd(key, _ => RunSearchAsync(svc, env, key));
+        var added = false;
+        _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
+        if (added)
+            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -12798,7 +12918,14 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     {
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
+        {
+            _log.LogInformation("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
+        }
+        else
+        {
+            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+        }
         return result;
     }
 
@@ -12807,6 +12934,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         foreach (var template in _settings.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
+            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
@@ -14499,7 +14627,7 @@ LENGTH 4886
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 8233
+LENGTH 8268
 @namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
@@ -14589,7 +14717,7 @@ LENGTH 8233
 
             <!-- Environment selector — badge-only trigger, menu lists all envs -->
             <div class="bm-env-selector @(_drawerOpen ? "" : "bm-env-selector--mini")">
-                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true">
+                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                     <ActivatorContent>
                         <span class="bm-env-badge bm-env-badge-btn"
                               style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
@@ -15940,7 +16068,7 @@ LENGTH 17485
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 14944
+LENGTH 14979
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -15961,7 +16089,7 @@ LENGTH 14944
             </MudText>
         </div>
         <div class="bm-home-env">
-            <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true">
+            <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" PopoverClass="bm-env-menu-popover">
                 <ActivatorContent>
                     <span class="bm-env-badge bm-env-badge-btn"
                           style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
@@ -20553,7 +20681,7 @@ LENGTH 11036
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28819
+LENGTH 28827
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20625,8 +20753,7 @@ LENGTH 28819
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-
-        @if (_graphView)
+        else if (_graphView)
         {
             <!-- Card view — grouping supported (pure Blazor, no JS conflict).
                  The container is @key'd by the grouping mode: switching grouping
@@ -20811,9 +20938,9 @@ LENGTH 28819
     private int  _page     = 1;
     private int  _pageSize = 25;
     private bool _loading  = false;
-    private string  _filterText       = "updated:>-1h";
+    private string  _filterText       = "updated:>-30m";
     private string? _filterParseError = null;
-    private string  _groupBy          = "None";
+    private string  _groupBy          = "HostName";
     private bool    _graphView        = true;
     private DateTime? _lastUpdated;
 
@@ -22092,7 +22219,7 @@ LENGTH 16630
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=27" rel="stylesheet" />
+    <link href="css/app.css?v=28" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -23651,7 +23778,7 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 8269
+LENGTH 9086
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
@@ -23811,13 +23938,17 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             try { services = await _heartbeat.GetServiceStatusesAsync(env, ct); }
             catch (Exception ex) { _log.LogWarning(ex, "metrics: heartbeat failed for {Env}", env); return; }
 
+            _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
+
             var changed = false;
+            var parsed  = 0;
             foreach (var svc in services)
             {
                 var folder = _discovery.GetCachedPath(svc, env);
                 if (folder is null)
                 {
-                    _discovery.EnsureDiscovering(svc, env); // resolve for next tick
+                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — folder not yet discovered", env, svc.ServiceName, svc.HostName);
+                    _discovery.EnsureDiscovering(svc, env);
                     continue;
                 }
 
@@ -23825,11 +23956,19 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 var key   = LogPathDiscoveryService.CacheKey(svc, env);
                 var entry = _entries.GetOrAdd(key, _ => new Entry());
 
+                _log.LogDebug("metrics [{Env}]: reading {File} (offset={Offset})", env, file, entry.Offset);
+
                 IncrementalFileReader.Result result;
                 try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, entry.Offset), ct); }
                 catch (Exception ex) { _log.LogWarning(ex, "metrics: read failed {File}", file); continue; }
 
-                if (result.Lines.Count == 0) continue;
+                if (result.Lines.Count == 0)
+                {
+                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — no new lines", env, svc.ServiceName, svc.HostName);
+                    continue;
+                }
+
+                _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — {Lines} new lines", env, svc.ServiceName, svc.HostName, result.Lines.Count);
 
                 lock (entry.Sync)
                 {
@@ -23842,9 +23981,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                         if (entry.History.Count > MaxHistory)
                             entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
                         changed = true;
+                        parsed++;
                     }
                 }
             }
+
+            if (parsed > 0)
+                _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
 
             if (changed) OnMetricsUpdated?.Invoke(env);
         }
@@ -25535,6 +25678,339 @@ public sealed class KafkaConnection
         return cfg;
     }
 }
+FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
+LENGTH 13737
+using Confluent.Kafka;
+using Confluent.Kafka.Admin;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Models;
+
+namespace NxtUI.Core.Services.Kafka;
+
+public class KafkaService : IKafkaService
+{
+    private readonly KafkaConnection       _connection;
+    private readonly KafkaSettings         _settings;
+    private readonly ILogger<KafkaService> _log;
+
+    public KafkaService(KafkaConnection connection, IOptions<KafkaSettings> settings, ILogger<KafkaService> log)
+    {
+        _connection = connection;
+        _settings   = settings.Value;
+        _log        = log;
+    }
+
+    // ── IKafkaMonitor ───────────────────────────────────────────────────────
+
+    public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: getting cluster info", env);
+        using var admin = BuildAdmin();
+        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+
+        var info = new KafkaClusterInfo
+        {
+            ClusterId    = meta.OriginatingBrokerId.ToString(),
+            ControllerId = meta.OriginatingBrokerId,
+            Brokers = meta.Brokers.Select(b => new KafkaBroker
+            {
+                Id       = b.BrokerId,
+                Host     = b.Host,
+                Port     = b.Port,
+                IsOnline = true,
+            }).ToList(),
+        };
+        return Task.FromResult(info);
+    }
+
+    public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: listing topics", env);
+        using var admin = BuildAdmin();
+        var meta   = admin.GetMetadata(TimeSpan.FromSeconds(10));
+
+        IReadOnlyList<KafkaTopicSummary> result = meta.Topics
+            .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
+            .Select(t => new KafkaTopicSummary
+            {
+                Name              = t.Topic,
+                PartitionCount    = t.Partitions.Count,
+                ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+                MessageCount      = 0,
+                CleanupPolicy     = "delete",
+                RetentionMs       = 604_800_000,
+            })
+            .OrderBy(t => t.Name)
+            .ToList();
+
+        return Task.FromResult(result);
+    }
+
+    public async Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: getting config for topic '{Topic}'", env, topicName);
+        using var admin = BuildAdmin();
+
+        var results = await admin.DescribeConfigsAsync(
+            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }]);
+
+        var cfg  = results.First();
+        long Lng(string key, long def) =>
+            cfg.Entries.TryGetValue(key, out var e) && long.TryParse(e.Value, out var v) ? v : def;
+        int Int(string key, int def) =>
+            cfg.Entries.TryGetValue(key, out var e) && int.TryParse(e.Value, out var v) ? v : def;
+        string Str(string key, string def) =>
+            cfg.Entries.TryGetValue(key, out var e) ? e.Value : def;
+
+        var meta      = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
+
+        return new KafkaTopicConfig
+        {
+            RetentionMs       = Lng("retention.ms",        604_800_000),
+            CleanupPolicy     = Str("cleanup.policy",      "delete"),
+            MaxMessageBytes   = Lng("max.message.bytes",   1_048_576),
+            MinInSyncReplicas = Int("min.insync.replicas", 1),
+            CompressionType   = Str("compression.type",    "producer"),
+            PartitionCount    = topicMeta?.Partitions.Count ?? 0,
+            ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+        };
+    }
+
+    public async Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
+        string env, string topicName, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: getting consumer groups for topic '{Topic}'", env, topicName);
+        using var admin = BuildAdmin();
+
+        var listing = await admin.ListConsumerGroupsAsync();
+        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+        if (groupIds.Count == 0) return [];
+
+        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+        var result    = new List<KafkaTopicConsumerGroup>();
+
+        foreach (var desc in described.ConsumerGroupDescriptions)
+        {
+            var assignedToTopic = desc.Members
+                .Any(m => m.Assignment.TopicPartitions.Any(tp => tp.Topic == topicName));
+
+            if (!assignedToTopic) continue;
+
+            var lag = await ComputeGroupLagForTopicAsync(desc.GroupId, topicName, ct);
+            result.Add(new KafkaTopicConsumerGroup
+            {
+                GroupId  = desc.GroupId,
+                State    = desc.State.ToString(),
+                TotalLag = lag,
+            });
+        }
+
+        return result;
+    }
+
+    public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
+        string env, string topicName, int maxMessages,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: tailing topic '{Topic}' maxMessages={Max}", env, topicName, maxMessages);
+
+        bool live   = maxMessages <= 0;
+        var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
+        var config  = _connection.BuildConsumerConfig(groupId);
+        config.EnableAutoCommit   = false;
+        config.AutoOffsetReset    = live ? AutoOffsetReset.Latest : AutoOffsetReset.Earliest;
+        config.EnablePartitionEof = true;
+
+        using var admin = BuildAdmin();
+        var meta      = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        var partCount = meta.Topics.FirstOrDefault(t => t.Topic == topicName)?.Partitions.Count ?? 1;
+
+        using var consumer = new ConsumerBuilder<string?, string>(config).Build();
+        consumer.Subscribe(topicName);
+
+        int consumed = 0;
+        int eofCount = 0;
+
+        while (!ct.IsCancellationRequested && (live || consumed < maxMessages))
+        {
+            ConsumeResult<string?, string>? cr;
+            try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { _log.LogWarning(ex, "kafka: consume error"); break; }
+
+            if (cr is null) continue;
+
+            if (cr.IsPartitionEOF)
+            {
+                if (!live && ++eofCount >= partCount) break;
+                continue;
+            }
+
+            var headers = new Dictionary<string, string>();
+            foreach (var h in cr.Message.Headers)
+            {
+                try { headers[h.Key] = System.Text.Encoding.UTF8.GetString(h.GetValueBytes() ?? []); }
+                catch { /* skip non-UTF8 */ }
+            }
+
+            yield return new KafkaMessage
+            {
+                Offset    = cr.Offset.Value,
+                Partition = cr.Partition.Value,
+                Key       = cr.Message.Key,
+                Value     = cr.Message.Value ?? string.Empty,
+                Timestamp = cr.Message.Timestamp.UtcDateTime,
+                Headers   = headers,
+            };
+
+            consumed++;
+        }
+
+        consumer.Close();
+    }
+
+    public async Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(
+        string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: listing all consumer groups", env);
+        using var admin = BuildAdmin();
+
+        var listing  = await admin.ListConsumerGroupsAsync();
+        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+        if (groupIds.Count == 0) return [];
+
+        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+        var result    = new List<KafkaConsumerGroupOverview>();
+
+        foreach (var desc in described.ConsumerGroupDescriptions)
+        {
+            var topics = desc.Members
+                .SelectMany(m => m.Assignment.TopicPartitions.Select(tp => tp.Topic))
+                .Distinct()
+                .OrderBy(t => t)
+                .ToList();
+
+            var lag = await ComputeGroupTotalLagAsync(desc.GroupId, ct);
+            result.Add(new KafkaConsumerGroupOverview
+            {
+                GroupId    = desc.GroupId,
+                State      = desc.State.ToString(),
+                TopicCount = topics.Count,
+                TotalLag   = lag,
+                Topics     = topics,
+            });
+        }
+
+        return result.OrderBy(g => g.GroupId).ToList();
+    }
+
+    public async Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(
+        string env, string groupId, CancellationToken ct = default)
+    {
+        _log.LogDebug("kafka [{Env}]: getting lag for group '{Group}'", env, groupId);
+        using var admin = BuildAdmin();
+
+        var described = await admin.DescribeConsumerGroupsAsync([groupId]);
+        var desc      = described.ConsumerGroupDescriptions.First();
+
+        var topicPartitions = desc.Members
+            .SelectMany(m => m.Assignment.TopicPartitions)
+            .GroupBy(tp => tp.Topic)
+            .Select(g => (Topic: g.Key, PartitionCount: g.Count()))
+            .ToList();
+
+        var result = new List<KafkaGroupTopicLag>();
+        foreach (var (topic, partCount) in topicPartitions)
+        {
+            var lag = await ComputeGroupLagForTopicAsync(groupId, topic, ct);
+            result.Add(new KafkaGroupTopicLag
+            {
+                TopicName  = topic,
+                Partitions = partCount,
+                Lag        = lag,
+            });
+        }
+
+        return result.OrderBy(x => x.TopicName).ToList();
+    }
+
+    // ── IKafkaAdmin ─────────────────────────────────────────────────────────
+
+    public async Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default)
+    {
+        _log.LogInformation("kafka [{Env}]: deleting topic '{Topic}'", env, topicName);
+        using var admin = BuildAdmin();
+        await admin.DeleteTopicsAsync([topicName]);
+    }
+
+    public async Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default)
+    {
+        _log.LogInformation("kafka [{Env}]: setting retention on '{Topic}' to {Ms}ms", env, topicName, retentionMs);
+        using var admin = BuildAdmin();
+        await admin.AlterConfigsAsync(new Dictionary<ConfigResource, List<ConfigEntry>>
+        {
+            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }] =
+            [
+                new ConfigEntry { Name = "retention.ms", Value = retentionMs.ToString() }
+            ]
+        });
+    }
+
+    public async Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default)
+    {
+        _log.LogInformation("kafka [{Env}]: deleting consumer group '{Group}'", env, groupId);
+        using var admin = BuildAdmin();
+        await admin.DeleteGroupsAsync([groupId]);
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private IAdminClient BuildAdmin() =>
+        new AdminClientBuilder(new AdminClientConfig { BootstrapServers = _settings.BootstrapServers }).Build();
+
+    private Task<long> ComputeGroupLagForTopicAsync(string groupId, string topicName, CancellationToken ct) =>
+        Task.Run(() =>
+        {
+            try
+            {
+                var consumerCfg  = _connection.BuildConsumerConfig($"{groupId}__lag_{Guid.NewGuid():N}");
+                consumerCfg.EnableAutoCommit = false;
+                using var consumer = new ConsumerBuilder<Ignore, Ignore>(consumerCfg).Build();
+
+                using var adminMeta = BuildAdmin();
+                var meta       = adminMeta.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+                var topicMeta  = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
+                if (topicMeta is null) return 0L;
+
+                var tps       = topicMeta.Partitions.Select(p => new TopicPartition(topicName, p.PartitionId)).ToList();
+                var committed = consumer.Committed(tps, TimeSpan.FromSeconds(10));
+
+                long lag = 0;
+                foreach (var tpo in committed)
+                {
+                    var hi             = consumer.QueryWatermarkOffsets(tpo.TopicPartition, TimeSpan.FromSeconds(5));
+                    var committedOff   = tpo.Offset.IsSpecial ? 0 : tpo.Offset.Value;
+                    lag               += Math.Max(0, hi.High.Value - committedOff);
+                }
+                return lag;
+            }
+            catch { return 0L; }
+        }, ct);
+
+    private async Task<long> ComputeGroupTotalLagAsync(string groupId, CancellationToken ct)
+    {
+        using var admin = BuildAdmin();
+        var meta        = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        var topics      = meta.Topics.Where(t => !t.Topic.StartsWith("__")).Select(t => t.Topic).ToList();
+        long total      = 0;
+        foreach (var topic in topics)
+            total += await ComputeGroupLagForTopicAsync(groupId, topic, ct);
+        return total;
+    }
+}
 FILE src/NxtUI.Core/Services/Mock/MockEnvironmentService.cs
 LENGTH 3071
 using Microsoft.Extensions.Options;
@@ -25604,10 +26080,8 @@ public sealed class MockEnvironmentService : IEnvironmentService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockHeartbeatService.cs
-LENGTH 1718
+LENGTH 1666
 using NxtUI.Core.Models;
-using NxtUI.Core.Models;
-using NxtUI.Core.Services;
 
 namespace NxtUI.Core.Services.Mock;
 
@@ -26194,7 +26668,8 @@ public sealed class MongoConnection
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1481
+LENGTH 1858
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
@@ -26204,17 +26679,21 @@ namespace NxtUI.Core.Services.Mongo;
 
 public class MongoHeartbeatService : IHeartbeatService
 {
-    private readonly HeartbeatSettings _heartbeat;
-    private readonly MongoConnection   _connection;
+    private readonly HeartbeatSettings             _heartbeat;
+    private readonly MongoConnection               _connection;
+    private readonly ILogger<MongoHeartbeatService> _log;
 
-    public MongoHeartbeatService(MongoConnection connection, IOptions<HeartbeatSettings> heartbeat)
+    public MongoHeartbeatService(MongoConnection connection, IOptions<HeartbeatSettings> heartbeat, ILogger<MongoHeartbeatService> log)
     {
         _connection = connection;
         _heartbeat  = heartbeat.Value;
+        _log        = log;
     }
 
     public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
     {
+        _log.LogDebug("heartbeat [{Env}]: querying collection '{Col}'", env, _heartbeat.CollectionName);
+
         var db         = _connection.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
@@ -26226,6 +26705,8 @@ public class MongoHeartbeatService : IHeartbeatService
 
         var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
         var now       = DateTime.UtcNow;
+
+        _log.LogDebug("heartbeat [{Env}]: {Count} documents returned", env, docs.Count);
 
         return docs.Select(d => new ServiceStatus
         {
@@ -26381,8 +26862,183 @@ public class MongoRunService : IRunService
         throw new NotImplementedException();
     }
 }
+FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
+LENGTH 7385
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using NxtUI.Configuration;
+using NxtUI.Core.Models;
+
+namespace NxtUI.Core.Services.Mongo;
+
+public class MongoService : IMongoService
+{
+    private readonly MongoConnection               _connection;
+    private readonly ILogger<MongoService>         _log;
+
+    public MongoService(MongoConnection connection, ILogger<MongoService> log)
+    {
+        _connection = connection;
+        _log        = log;
+    }
+
+    public async Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing databases", env);
+        var db     = _connection.GetDatabase(env);
+        var client = db.Client;
+
+        var names = await (await client.ListDatabaseNamesAsync(ct)).ToListAsync(ct);
+        var result = new List<MongoDatabaseInfo>(names.Count);
+
+        foreach (var name in names)
+        {
+            try
+            {
+                var d     = client.GetDatabase(name);
+                var stats = await d.RunCommandAsync<BsonDocument>(new BsonDocument("dbStats", 1), cancellationToken: ct);
+                result.Add(new MongoDatabaseInfo
+                {
+                    Name            = name,
+                    CollectionCount = stats.GetValue("collections", 0).AsInt32,
+                    SizeBytes       = stats.GetValue("storageSize", 0).ToInt64(),
+                });
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for database '{Db}'", env, name);
+                result.Add(new MongoDatabaseInfo { Name = name });
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(
+        string env, string database, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing collections in '{Db}'", env, database);
+        var db      = _connection.Client.GetDatabase(database);
+        var names   = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
+        var result  = new List<MongoCollectionSummary>(names.Count);
+
+        foreach (var name in names)
+        {
+            try
+            {
+                var stats = await db.RunCommandAsync<BsonDocument>(
+                    new BsonDocument { { "collStats", name }, { "scale", 1 } }, cancellationToken: ct);
+
+                result.Add(new MongoCollectionSummary
+                {
+                    Name             = name,
+                    DocumentCount    = stats.GetValue("count",       0).ToInt64(),
+                    AvgDocSizeBytes  = stats.GetValue("avgObjSize",  0).ToInt64(),
+                    StorageSizeBytes = stats.GetValue("storageSize", 0).ToInt64(),
+                    IndexCount       = stats.GetValue("nindexes",    0).AsInt32,
+                });
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for collection '{Db}/{Col}'", env, database, name);
+                result.Add(new MongoCollectionSummary { Name = name });
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
+        string env, string database, string collection,
+        string? search, int skip, int limit, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search}",
+            env, database, collection, skip, limit, search);
+
+        var db  = _connection.Client.GetDatabase(database);
+        var col = db.GetCollection<BsonDocument>(collection);
+
+        FilterDefinition<BsonDocument> filter = FilterDefinition<BsonDocument>.Empty;
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            // Try to match as JSON fragment or as a text search
+            filter = Builders<BsonDocument>.Filter.Or(
+                Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(search.Trim(), "i")),
+                Builders<BsonDocument>.Filter.Text(search.Trim()));
+        }
+
+        var total = await col.CountDocumentsAsync(filter, cancellationToken: ct);
+        var docs  = await col.Find(filter).Skip(skip).Limit(limit).ToListAsync(ct);
+
+        var result = docs.Select(d =>
+        {
+            var id        = d.GetValue("_id", BsonNull.Value).ToString() ?? string.Empty;
+            DateTime? ts  = null;
+            if (d.TryGetValue("timestamp",      out var t1) && t1.BsonType == BsonType.DateTime) ts = t1.ToUniversalTime();
+            else if (d.TryGetValue("createdAt", out var t2) && t2.BsonType == BsonType.DateTime) ts = t2.ToUniversalTime();
+            else if (d.TryGetValue("updatedAt", out var t3) && t3.BsonType == BsonType.DateTime) ts = t3.ToUniversalTime();
+
+            return new MongoDocument
+            {
+                Id        = id,
+                Json      = d.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { Indent = false }),
+                Timestamp = ts,
+            };
+        }).ToList();
+
+        return (result, total);
+    }
+
+    public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(
+        string env, string database, string collection, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: getting details for '{Db}/{Col}'", env, database, collection);
+        var db  = _connection.Client.GetDatabase(database);
+        var col = db.GetCollection<BsonDocument>(collection);
+
+        MongoCollectionSummary summary;
+        try
+        {
+            var stats = await db.RunCommandAsync<BsonDocument>(
+                new BsonDocument { { "collStats", collection }, { "scale", 1 } }, cancellationToken: ct);
+            summary = new MongoCollectionSummary
+            {
+                Name             = collection,
+                DocumentCount    = stats.GetValue("count",       0).ToInt64(),
+                AvgDocSizeBytes  = stats.GetValue("avgObjSize",  0).ToInt64(),
+                StorageSizeBytes = stats.GetValue("storageSize", 0).ToInt64(),
+                IndexCount       = stats.GetValue("nindexes",    0).AsInt32,
+            };
+        }
+        catch
+        {
+            summary = new MongoCollectionSummary { Name = collection };
+        }
+
+        var indexCursor = await col.Indexes.ListAsync(ct);
+        var indexDocs   = await indexCursor.ToListAsync(ct);
+        var indexes = indexDocs.Select(idx => new MongoIndexInfo
+        {
+            Name   = idx.GetValue("name",   "").AsString,
+            Keys   = idx.GetValue("key",    new BsonDocument()).ToJson(),
+            Unique = idx.Contains("unique") && idx["unique"].AsBoolean,
+            Sparse = idx.Contains("sparse") && idx["sparse"].AsBoolean,
+        }).ToList();
+
+        return new MongoCollectionDetails { Summary = summary, Indexes = indexes };
+    }
+
+    public async Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default)
+    {
+        _log.LogInformation("mongo [{Env}]: dropping collection '{Db}/{Col}'", env, database, collection);
+        var db = _connection.Client.GetDatabase(database);
+        await db.DropCollectionAsync(collection, ct);
+    }
+}
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 68139
+LENGTH 68273
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -26648,6 +27304,9 @@ html, body {
 .bm-env-selector--mini > *,
 .bm-env-selector--mini .mud-menu-activator,
 .bm-env-selector--mini .bm-env-badge-btn { width: auto; justify-content: center; }
+
+/* Env menu popover — scrollable when many environments */
+.bm-env-menu-popover .mud-list { max-height: 320px; overflow-y: auto; }
 
 /* Menu item: badge + label side by side */
 .bm-env-menu-item {

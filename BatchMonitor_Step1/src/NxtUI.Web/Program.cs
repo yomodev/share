@@ -1,7 +1,10 @@
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
+using NLog;
+using NLog.Web;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
+using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
 using NxtUI.Web.Hubs;
@@ -13,7 +16,12 @@ public class Program
 {
     public static void Main(string[] args)
     {
+        ConfigureNLog();
+
         var builder = WebApplication.CreateBuilder(args);
+
+        builder.Logging.ClearProviders();
+        builder.Host.UseNLog();
 
         // ── Configuration ────────────────────────────────────────────────────
         builder.Services.Configure<MongoSettings>(
@@ -36,6 +44,7 @@ public class Program
 
         // ── Connection factories (singletons; swap services below to use these) ──
         builder.Services.AddSingleton<MongoConnection>();
+        builder.Services.AddSingleton<KafkaConnection>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
@@ -49,27 +58,38 @@ public class Program
         // ── SignalR ──────────────────────────────────────────────────────────
         builder.Services.AddSignalR();
 
-        // ── Batch service ─────────────────────────────────────────────────────
-        // Use MockRunService for development / demo without a MongoDB instance.
-        // Swap to MongoRunService when connecting to a real cluster:
-        //   builder.Services.AddSingleton<IRunService, MongoRunService>();
+        // ── Batch / Run service ──────────────────────────────────────────────
+        // Mock: fast demo without MongoDB.  Real: swap comment below.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
+        // builder.Services.AddSingleton<IRunService, MongoRunService>();
 
-        // Kafka — one instance, exposed under all three interfaces
+        // ── Kafka ─────────────────────────────────────────────────────────────
+        // Mock: no broker required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockKafkaService>();
         builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
         builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
         builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+        // builder.Services.AddSingleton<KafkaService>();
+        // builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<KafkaService>());
+        // builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<KafkaService>());
+        // builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<KafkaService>());
 
-        // Mongo — one instance, exposed under all three interfaces
+        // ── MongoDB collections ───────────────────────────────────────────────
+        // Mock: no MongoDB required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockMongoService>();
         builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
         builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
         builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
-        // Swap to MongoHeartbeatService when connecting to a real cluster:
-        //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+        // builder.Services.AddSingleton<MongoService>();
+        // builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MongoService>());
+        // builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MongoService>());
+        // builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MongoService>());
+
+        // ── Heartbeat ─────────────────────────────────────────────────────────
+        // Mock: no MongoDB required.  Real: swap comment below.
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+        // builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IEnvironmentService, MockEnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
@@ -119,5 +139,49 @@ public class Program
         app.MapFallbackToPage("/_Host");
 
         app.Run();
+    }
+
+    private static void ConfigureNLog()
+    {
+        // ANSI escape sequences —  is the ESC character, valid in C# string literals
+        const string Esc = "";
+        string R  = Esc + "[0m";   // reset
+        string T  = Esc + "[96m";  // bright cyan    - timestamp
+        string TH = Esc + "[35m";  // magenta        - thread id
+        string C  = Esc + "[93m";  // bright yellow  - caller method
+
+        // Per-level color via NLog ${when} — the ESC byte is embedded as a C# escape
+        string levelColor =
+            "${when:when=level==LogLevel.Trace:inner=" + Esc + "[90m}"
+          + "${when:when=level==LogLevel.Debug:inner=" + Esc + "[37m}"
+          + "${when:when=level==LogLevel.Info:inner="  + Esc + "[92m}"
+          + "${when:when=level==LogLevel.Warn:inner="  + Esc + "[33m}"
+          + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
+          + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
+
+        string layout =
+            T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
+          + TH + "[${threadid:padding=3}]" + R + " "
+          + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
+          + C  + "${callsite:className=false:methodName=true:fileName=false}" + R + " "
+          + "${message} ${exception:format=tostring}";
+
+        var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
+
+        var cfg = new NLog.Config.LoggingConfiguration();
+        cfg.AddTarget(console);
+
+        // suppress noisy framework internals
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
+
+        // app code at Debug and above
+        cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
+
+        // everything else at Info and above
+        cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+
+        LogManager.Configuration = cfg;
     }
 }
