@@ -255,8 +255,9 @@
 
     protected override async Task OnInitializedAsync()
     {
-        EnvService.OnChange     += OnEnvExternalChange;
+        EnvService.OnChange         += OnEnvExternalChange;
         HealthCache.OnHealthUpdated += OnHealthUpdated;
+        HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
@@ -282,8 +283,6 @@
         _kafkaChecking = false;
         _mongoChecking = false;
         await InvokeAsync(StateHasChanged);
-        // Request a background refresh; OnHealthUpdated will trigger StateHasChanged when done.
-        HealthCache.RequestRefresh(env);
     }
 
     private async void OnHealthUpdated(string env)
@@ -298,6 +297,7 @@
     {
         _recent = [];
         await InvokeAsync(StateHasChanged);
+        HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         await InvokeAsync(StateHasChanged);
     }
@@ -306,6 +306,7 @@
     {
         EnvService.SelectedId = newId;
         _recent = [];
+        HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
 
