@@ -18,26 +18,29 @@
             </MudText>
         </div>
         <div class="bm-home-env">
-            <MudSelect T="string"
-                       Value="@EnvService.SelectedId"
-                       ValueChanged="OnEnvChanged"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Margin="Margin.Dense"
-                       Class="bm-home-env-select">
-                @foreach (var env in EnvService.Environments)
-                {
-                    <MudSelectItem Value="@env.Id">
-                        <div class="bm-env-option">
-                            <span class="bm-env-badge"
-                                  style="background:@env.BadgeColor; color:@env.BadgeTextColor">
-                                @env.Id
-                            </span>
-                            <span class="bm-env-label">@env.Label</span>
-                        </div>
-                    </MudSelectItem>
-                }
-            </MudSelect>
+            <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true">
+                <ActivatorContent>
+                    <span class="bm-env-badge bm-env-badge-btn"
+                          style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)">
+                        @EnvService.SelectedId
+                    </span>
+                </ActivatorContent>
+                <ChildContent>
+                    @foreach (var env in EnvService.Environments)
+                    {
+                        var envId = env.Id;
+                        <MudMenuItem OnClick="@(async () => await OnEnvChanged(envId))">
+                            <div class="bm-env-menu-item">
+                                <span class="bm-env-badge"
+                                      style="background:@env.BadgeColor; color:@env.BadgeTextColor">
+                                    @env.Id
+                                </span>
+                                <span class="bm-env-label">@env.Label</span>
+                            </div>
+                        </MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
         </div>
     </div>
 

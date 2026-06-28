@@ -217,26 +217,6 @@ html, body {
 }
 
 /* ── Environment selector ────────────────────────────────────────── */
-.bm-env-selector-expanded {
-    padding: 6px 8px;
-}
-.bm-env-select .mud-input-root { font-size: 0.8rem; }
-/* hide the label entirely */
-.bm-env-select .mud-input-label { display: none !important; }
-.bm-env-select .mud-input-outlined-border { top: 0 !important; }
-
-.bm-env-selector-collapsed {
-    display: flex;
-    justify-content: center;
-    padding: 6px 0;
-}
-.bm-env-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.bm-env-label { font-size: 0.8125rem; }
-
 .bm-env-badge {
     display: inline-flex;
     align-items: center;
@@ -251,18 +231,31 @@ html, body {
     font-family: var(--bm-font-mono);
 }
 
-.bm-env-badge-mini {
-    width: 34px; height: 34px;
-    border-radius: var(--bm-radius);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.6rem; font-weight: 800;
-    letter-spacing: 0.06em;
+/* Clickable badge used as MudMenu activator in Home and Sidebar */
+.bm-env-badge-btn {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.7rem;
     cursor: pointer;
-    font-family: var(--bm-font-mono);
+    user-select: none;
     transition: opacity var(--bm-transition);
-    margin: 0 auto;
 }
-.bm-env-badge-mini:hover { opacity: 0.8; }
+.bm-env-badge-btn:hover { opacity: 0.8; }
+
+/* Sidebar env selector wrapper — centers badge in both open/mini states */
+.bm-env-selector {
+    display: flex;
+    justify-content: center;
+    padding: 6px 8px;
+}
+
+/* Menu item: badge + label side by side */
+.bm-env-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.bm-env-label { font-size: 0.8125rem; }
 
 /* ================================================================
    TAB BAR
@@ -279,24 +272,6 @@ html, body {
     gap: 2px;
 }
 
-/* compact environment selector: hide label in expanded mode so only badge is visible */
-.bm-env-selector-expanded .bm-env-label {
-    display: none;
-}
-
-/* Environment select: fill the sidebar content width, with enough right
-   padding that the dropdown arrow never overlaps the badge value. */
-.bm-env-select {
-    width: 100%;
-}
-.bm-env-select .mud-input-root,
-.bm-env-select .mud-input-slot {
-    padding-right: 28px !important;
-}
-.bm-env-select .mud-input-adornment-end,
-.bm-env-select .mud-select-icon {
-    right: 4px;
-}
 
 .bm-tabs-scroll {
     display: flex;
@@ -465,8 +440,7 @@ html, body {
 }
 .bm-home-title   { font-weight: 700; letter-spacing: -0.01em; }
 .bm-home-subtitle { color: var(--mud-palette-text-secondary); margin-top: 2px; }
-.bm-home-env     { min-width: 200px; }
-.bm-home-env-select { width: 100%; }
+.bm-home-env     { display: flex; align-items: center; }
 
 /* KPI cards — MudGrid applies negative side margins equal to its spacing,
    which otherwise makes the grid wider than its container and triggers

@@ -85,41 +85,32 @@
         <!-- ── Bottom section ────────────────────────────────────────── -->
         <div class="bm-sidebar-bottom">
 
-            <!-- Environment selector — compact badge-only but wide enough to avoid cropping -->
-            @if (_drawerOpen)
-            {
-                <div class="bm-env-selector-expanded">
-                    <MudSelect T="string"
-                               Value="@EnvService.SelectedId"
-                               ValueChanged="OnEnvChanged"
-                               Dense="true"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Class="bm-env-select">
+            <!-- Environment selector — badge-only trigger, menu lists all envs -->
+            <div class="bm-env-selector">
+                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true">
+                    <ActivatorContent>
+                        <span class="bm-env-badge bm-env-badge-btn"
+                              style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)">
+                            @EnvService.SelectedId
+                        </span>
+                    </ActivatorContent>
+                    <ChildContent>
                         @foreach (var env in EnvService.Environments)
                         {
-                            <MudSelectItem Value="@env.Id">
-                                <span class="bm-env-badge"
-                                      style="background:@env.BadgeColor; color:@env.BadgeTextColor">
-                                    @env.Id
-                                </span>
-                            </MudSelectItem>
+                            var envId = env.Id;
+                            <MudMenuItem OnClick="@(() => OnEnvChanged(envId))">
+                                <div class="bm-env-menu-item">
+                                    <span class="bm-env-badge"
+                                          style="background:@env.BadgeColor; color:@env.BadgeTextColor">
+                                        @env.Id
+                                    </span>
+                                    <span class="bm-env-label">@env.Label</span>
+                                </div>
+                            </MudMenuItem>
                         }
-                    </MudSelect>
-                </div>
-            }
-            else
-            {
-                <div class="bm-env-selector-collapsed">
-                    <MudTooltip Text="@EnvService.Selected?.Label" Placement="Placement.Right">
-                        <div class="bm-env-badge-mini"
-                             style="background:@EnvService.Selected?.BadgeColor; color:@EnvService.Selected?.BadgeTextColor"
-                             @onclick="ToggleDrawer">
-                            @ShortId(EnvService.Selected?.Id)
-                        </div>
-                    </MudTooltip>
-                </div>
-            }
+                    </ChildContent>
+                </MudMenu>
+            </div>
 
             <div class="bm-sidebar-divider"></div>
 
@@ -174,7 +165,6 @@
     private void GoHome() => TabService.GoHome();
     private void Open(TabModel tab) => TabService.OpenOrFocus(tab);
     private void OnEnvChanged(string newId) => EnvService.SelectedId = newId;
-    private static string ShortId(string? id) => id is null ? "" : id.Length > 4 ? id[..4] : id;
 
     public async ValueTask DisposeAsync()
     {
