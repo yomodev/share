@@ -241,23 +241,16 @@
 
     // ── Control bar handlers ──────────────────────────────────────────────
 
-    // Native-select handlers — no MudBlazor popover involved, no crash.
-    private void OnGroupByChanged(ChangeEventArgs e)
+    private void OnGroupByChanged(GroupByOption v)
     {
-        if (Enum.TryParse<GroupByOption>(e.Value?.ToString(), out var v))
-        {
-            _groupBy = v;
-            _pendingJsPush = true;
-        }
+        _groupBy = v;
+        _pendingJsPush = true;
     }
 
-    private void OnColourByChanged(ChangeEventArgs e)
+    private void OnColourByChanged(ColourByOption v)
     {
-        if (Enum.TryParse<ColourByOption>(e.Value?.ToString(), out var v))
-        {
-            _colourBy = v;
-            _pendingJsPush = true;
-        }
+        _colourBy = v;
+        _pendingJsPush = true;
     }
 
     private void OnFilterChanged(string v)
@@ -559,26 +552,32 @@
                        Class="bm-tl-filter"
                        FieldHints="@_timelineFieldHints" />
 
-            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
-                Group by
-                <select class="bm-tl-native-select" value="@_groupBy" @onchange="OnGroupByChanged" disabled="@_stackView">
-                    <option value="@GroupByOption.ServicePipeline">Service / Pipeline</option>
-                    <option value="@GroupByOption.PidServicePipeline">Service / Pipeline / PID</option>
-                    <option value="@GroupByOption.Service">Service</option>
-                    <option value="@GroupByOption.Pipeline">Pipeline</option>
-                    <option value="@GroupByOption.Pid">PID</option>
-                </select>
-            </label>
+            <div class="bm-tl-select-wrap">
+                <span class="bm-toolbar-label">Group by</span>
+                <MudSelect T="GroupByOption" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="_stackView" Class="bm-tl-select"
+                           PopoverClass="bm-tl-select-popover">
+                    <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.PidServicePipeline">Service / Pipeline / PID</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
+                    <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
+                </MudSelect>
+            </div>
 
-            <label class="bm-tl-native-label @(_stackView ? "bm-tl-native-label--disabled" : "")">
-                Colour by
-                <select class="bm-tl-native-select" value="@_colourBy" @onchange="OnColourByChanged" disabled="@_stackView">
-                    <option value="@ColourByOption.Source">Source</option>
-                    <option value="@ColourByOption.Pipeline">Pipeline</option>
-                    <option value="@ColourByOption.Service">Service</option>
-                    <option value="@ColourByOption.Status">Status</option>
-                </select>
-            </label>
+            <div class="bm-tl-select-wrap">
+                <span class="bm-toolbar-label">Colour by</span>
+                <MudSelect T="ColourByOption" Value="_colourBy" ValueChanged="OnColourByChanged"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="_stackView" Class="bm-tl-select"
+                           PopoverClass="bm-tl-select-popover">
+                    <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
+                    <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
+                </MudSelect>
+            </div>
         </div>
 
         <div class="bm-tl-controls-right">

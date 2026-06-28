@@ -27,38 +27,14 @@
 .bm-tl-controls-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
 
 .bm-tl-filter { min-width: 160px; flex: 1 1 0; }
-.bm-tl-select { min-width: 160px; max-width: 200px; }
 
-.bm-tl-native-label {
-    display: flex;
-    flex-direction: column;
-    font-size: 0.65rem;
-    color: var(--mud-palette-text-secondary);
-    gap: 1px;
-}
+/* MudSelect wrappers — label left + auto-width select */
+.bm-tl-select-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.bm-tl-select      { min-width: 160px; max-width: 220px; }
 
-.bm-tl-native-select {
-    background: var(--mud-palette-surface);
-    color: var(--mud-palette-text-primary);
-    border: 1px solid var(--mud-palette-divider);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 0.8125rem;
-    font-family: inherit;
-    height: 32px;
-    min-width: 140px;
-    cursor: pointer;
-    outline: none;
-}
-
-.bm-tl-native-select:hover  { border-color: var(--mud-palette-text-primary); }
-.bm-tl-native-select:focus  { border-color: var(--mud-palette-primary); border-width: 2px; }
-.bm-tl-native-label--disabled { opacity: 0.38; pointer-events: none; }
-
-.bm-tl-native-select option {
-    background: var(--mud-palette-surface);
-    color: var(--mud-palette-text-primary);
-}
+/* Popover items — no word-wrap */
+.bm-tl-select-popover .mud-list-item      { white-space: nowrap !important; min-height: 0 !important; padding: 4px 16px 4px 12px !important; }
+.bm-tl-select-popover .mud-list-item-text { white-space: nowrap !important; font-size: 14px !important; }
 
 /* ── Canvas wrap — scrolls vertically, fixed horizontally ───────── */
 

@@ -924,14 +924,16 @@ html, body {
 /* (both the filename glob input and the content FilterBox).              */
 .bm-batch-toolbar    .mud-input-root,
 .bm-svc-toolbar-left .mud-input-root,
-.bm-lb-filter-toolbar .mud-input-root {
+.bm-lb-filter-toolbar .mud-input-root,
+.bm-tl-controls      .mud-input-root {
     font-size: 14px !important;
     min-height: 32px !important;
     height: 32px !important;
 }
 .bm-batch-toolbar    .mud-input-slot,
 .bm-svc-toolbar-left .mud-input-slot,
-.bm-lb-filter-toolbar .mud-input-slot {
+.bm-lb-filter-toolbar .mud-input-slot,
+.bm-tl-controls      .mud-input-slot {
     min-height: 32px !important;
     height: 32px !important;
     padding-top: 2px !important;
@@ -939,7 +941,8 @@ html, body {
 }
 .bm-batch-toolbar    input,
 .bm-svc-toolbar-left input,
-.bm-lb-filter-toolbar input {
+.bm-lb-filter-toolbar input,
+.bm-tl-controls      input {
     font-size: 14px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
@@ -947,9 +950,11 @@ html, body {
 .bm-batch-toolbar    .mud-input-adornment .mud-icon-root,
 .bm-svc-toolbar-left .mud-input-adornment .mud-icon-root,
 .bm-lb-filter-toolbar .mud-input-adornment .mud-icon-root,
+.bm-tl-controls      .mud-input-adornment .mud-icon-root,
 .bm-batch-toolbar    .mud-input-adornment .mud-button-root,
 .bm-svc-toolbar-left .mud-input-adornment .mud-button-root,
-.bm-lb-filter-toolbar .mud-input-adornment .mud-button-root {
+.bm-lb-filter-toolbar .mud-input-adornment .mud-button-root,
+.bm-tl-controls      .mud-input-adornment .mud-button-root {
     font-size: 16px !important;
     width: 20px !important;
     height: 20px !important;
