@@ -68,93 +68,33 @@
     </div>
 
     <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
-    <div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
-    <div class="bm-lv-toolbar bm-lv-toolbar-sm">
-        <div class="bm-lv-find">
-            <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
-                          Placeholder="Find… (Ctrl+F)"
-                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="width:100%;font-size:11px"
-                          Adornment="Adornment.End"
-                          AdornmentIcon="@Icons.Material.Outlined.Search"
-                          OnAdornmentClick="RunFindAsync"
-                          @onkeydown="OnFindKeyDown" />
-        </div>
-
-        <MudTooltip Text="Regular expression (Alt+R)">
-            <MudToggleIconButton Toggled="@_isRegex" ToggledChanged="OnRegexToggled"
-                                 Icon="@Icons.Material.Outlined.Code"
-                                 ToggledIcon="@Icons.Material.Outlined.Code"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-        <MudTooltip Text="Case sensitive (Alt+C)">
-            <MudToggleIconButton Toggled="@_caseSensitive" ToggledChanged="OnCaseToggled"
-                                 Icon="@Icons.Material.Outlined.TextFields"
-                                 ToggledIcon="@Icons.Material.Outlined.TextFields"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-        <MudTooltip Text="Previous match (Shift+F3)">
-            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
-                           Size="Size.Small" OnClick="PrevMatchAsync"
-                           Disabled="@(_matchCount == 0)" />
-        </MudTooltip>
-        <MudTooltip Text="Next match (F3)">
-            <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
-                           Size="Size.Small" OnClick="NextMatchAsync"
-                           Disabled="@(_matchCount == 0)" />
-        </MudTooltip>
-        @if (!string.IsNullOrEmpty(_findTerm))
-        {
-            <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
-        }
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <FilterBox @ref="_filterBox"
-                   Value="@_filterStr"
-                   OnFilterChanged="OnFilterChangedAsync"
-                   ParseError="@_filterError"
-                   Placeholder="Filter… (Ctrl+G)"
-                   Class="bm-lv-filter"
-                   FieldHints="@LogFieldHints" />
-        @if (_filterStr.Length > 0)
-        {
-            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
-                @_visibleCount / @_totalCount
-            </span>
-        }
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Previous bookmark (Shift+F2)">
-            <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
-                           Size="Size.Small" OnClick="PrevBookmarkAsync" />
-        </MudTooltip>
-        <MudTooltip Text="Next bookmark (F2)">
-            <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
-                           Size="Size.Small" OnClick="NextBookmarkAsync" />
-        </MudTooltip>
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Decrease font (Ctrl+−)">
-            <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
-                           Size="Size.Small" OnClick="DecreaseFontAsync"
-                           Disabled="@(_fontSize <= _fontSizes[0])" />
-        </MudTooltip>
-        <MudTooltip Text="Increase font (Ctrl+=)">
-            <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
-                           Size="Size.Small" OnClick="IncreaseFontAsync"
-                           Disabled="@(_fontSize >= _fontSizes[^1])" />
-        </MudTooltip>
-        <MudTooltip Text="Word wrap (Alt+Z)">
-            <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWrapToggled"
-                                 Icon="@Icons.Material.Outlined.WrapText"
-                                 ToggledIcon="@Icons.Material.Outlined.WrapText"
-                                 ToggledColor="Color.Primary" Size="Size.Small" />
-        </MudTooltip>
-    </div>
-    </div>
+    <LogViewerToolbar @ref="_toolbar"
+                      IsSelected="@IsSelected"
+                      FindTerm="@_findTerm"
+                      IsRegex="@_isRegex"
+                      CaseSensitive="@_caseSensitive"
+                      MatchCount="@_matchCount"
+                      MatchCurrent="@_matchCurrent"
+                      FilterStr="@_filterStr"
+                      FilterError="@_filterError"
+                      TotalCount="@_totalCount"
+                      VisibleCount="@_visibleCount"
+                      WordWrap="@_wordWrap"
+                      FontDecreaseDisabled="@(_fontSize <= _fontSizes[0])"
+                      FontIncreaseDisabled="@(_fontSize >= _fontSizes[^1])"
+                      FieldHints="@LogFieldHints"
+                      OnFindTermChanged="@(v => { _findTerm = v; })"
+                      OnRunFind="RunFindAsync"
+                      OnRegexToggled="OnRegexToggled"
+                      OnCaseToggled="OnCaseToggled"
+                      OnNextMatch="NextMatchAsync"
+                      OnPrevMatch="PrevMatchAsync"
+                      OnFilterChanged="OnFilterChangedAsync"
+                      OnNextBookmark="NextBookmarkAsync"
+                      OnPrevBookmark="PrevBookmarkAsync"
+                      OnIncreaseFont="IncreaseFontAsync"
+                      OnDecreaseFont="DecreaseFontAsync"
+                      OnWrapToggled="OnWrapToggled" />
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
@@ -196,9 +136,8 @@
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    private LogViewport?          _viewport;
-    private MudTextField<string>? _findField;
-    private FilterBox?            _filterBox;
+    private LogViewport?      _viewport;
+    private LogViewerToolbar? _toolbar;
 
     private string? _loadedPath;
     private bool    _rendered;
@@ -240,9 +179,6 @@
     private string _pathTooltip => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
         ? "local file  •  Ctrl+Click to copy"
         : $"{Path}  •  Ctrl+Click to copy";
-
-    private string MatchLabel =>
-        _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -316,14 +252,14 @@
         if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "f")
         {
             _preventKey = true;
-            if (_findField is not null) await _findField.FocusAsync().AsTask();
+            if (_toolbar is not null) await _toolbar.FocusFindAsync();
             return;
         }
         // Ctrl+G — focus filter
         if (e.CtrlKey && !e.ShiftKey && !e.AltKey && k == "g")
         {
             _preventKey = true;
-            if (_filterBox is not null) await _filterBox.FocusAsync();
+            if (_toolbar is not null) await _toolbar.FocusFilterAsync();
             return;
         }
         // F3 — next match
@@ -426,15 +362,6 @@
     }
 
     // ── Find ──────────────────────────────────────────────────────────────
-
-    private async Task OnFindKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-        {
-            if (e.ShiftKey) await PrevMatchAsync();
-            else            await RunFindAsync();
-        }
-    }
 
     private async Task RunFindAsync()
     {

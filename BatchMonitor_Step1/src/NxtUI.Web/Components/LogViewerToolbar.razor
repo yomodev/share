@@ -1,0 +1,153 @@
+@namespace NxtUI.Components
+
+<div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
+<div class="bm-lv-toolbar bm-lv-toolbar-sm">
+    <div class="bm-lv-find">
+        <MudTextField T="string" @ref="_findFieldRef" @bind-Value="_findTermLocal"
+                      Placeholder="Find… (Ctrl+F)"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="width:100%;font-size:11px"
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      OnAdornmentClick="OnAdornmentClickAsync"
+                      @onkeydown="OnFindKeyDownInternal" />
+    </div>
+
+    <MudTooltip Text="Regular expression (Alt+R)">
+        <MudToggleIconButton Toggled="@IsRegex" ToggledChanged="@(val => OnRegexToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.Code"
+                             ToggledIcon="@Icons.Material.Outlined.Code"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+    <MudTooltip Text="Case sensitive (Alt+C)">
+        <MudToggleIconButton Toggled="@CaseSensitive" ToggledChanged="@(val => OnCaseToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.TextFields"
+                             ToggledIcon="@Icons.Material.Outlined.TextFields"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+    <MudTooltip Text="Previous match (Shift+F3)">
+        <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowUp"
+                       Size="Size.Small" OnClick="@(() => OnPrevMatch.InvokeAsync())"
+                       Disabled="@(MatchCount == 0)" />
+    </MudTooltip>
+    <MudTooltip Text="Next match (F3)">
+        <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowDown"
+                       Size="Size.Small" OnClick="@(() => OnNextMatch.InvokeAsync())"
+                       Disabled="@(MatchCount == 0)" />
+    </MudTooltip>
+    @if (!string.IsNullOrEmpty(FindTerm))
+    {
+        <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
+    }
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <FilterBox @ref="_filterBoxRef"
+               Value="@FilterStr"
+               OnFilterChanged="@(v => OnFilterChanged.InvokeAsync(v))"
+               ParseError="@FilterError"
+               Placeholder="Filter… (Ctrl+G)"
+               Class="bm-lv-filter"
+               FieldHints="@FieldHints" />
+    @if (FilterStr.Length > 0)
+    {
+        <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
+            @VisibleCount / @TotalCount
+        </span>
+    }
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <MudTooltip Text="Previous bookmark (Shift+F2)">
+        <MudIconButton Icon="@Icons.Material.Outlined.BookmarkBorder"
+                       Size="Size.Small" OnClick="@(() => OnPrevBookmark.InvokeAsync())" />
+    </MudTooltip>
+    <MudTooltip Text="Next bookmark (F2)">
+        <MudIconButton Icon="@Icons.Material.Filled.Bookmark"
+                       Size="Size.Small" OnClick="@(() => OnNextBookmark.InvokeAsync())" />
+    </MudTooltip>
+
+    <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
+
+    <MudTooltip Text="Decrease font (Ctrl+−)">
+        <MudIconButton Icon="@Icons.Material.Outlined.TextDecrease"
+                       Size="Size.Small" OnClick="@(() => OnDecreaseFont.InvokeAsync())"
+                       Disabled="@FontDecreaseDisabled" />
+    </MudTooltip>
+    <MudTooltip Text="Increase font (Ctrl+=)">
+        <MudIconButton Icon="@Icons.Material.Outlined.TextIncrease"
+                       Size="Size.Small" OnClick="@(() => OnIncreaseFont.InvokeAsync())"
+                       Disabled="@FontIncreaseDisabled" />
+    </MudTooltip>
+    <MudTooltip Text="Word wrap (Alt+Z)">
+        <MudToggleIconButton Toggled="@WordWrap" ToggledChanged="@(val => OnWrapToggled.InvokeAsync(val))"
+                             Icon="@Icons.Material.Outlined.WrapText"
+                             ToggledIcon="@Icons.Material.Outlined.WrapText"
+                             ToggledColor="Color.Primary" Size="Size.Small" />
+    </MudTooltip>
+</div>
+</div>
+
+@code {
+    [Parameter] public bool    IsSelected        { get; set; }
+    [Parameter] public string  FindTerm          { get; set; } = "";
+    [Parameter] public bool    IsRegex           { get; set; }
+    [Parameter] public bool    CaseSensitive     { get; set; }
+    [Parameter] public int     MatchCount        { get; set; }
+    [Parameter] public int     MatchCurrent      { get; set; }
+    [Parameter] public string  FilterStr         { get; set; } = "";
+    [Parameter] public string? FilterError       { get; set; }
+    [Parameter] public int     TotalCount        { get; set; }
+    [Parameter] public int     VisibleCount      { get; set; }
+    [Parameter] public bool    WordWrap          { get; set; }
+    [Parameter] public bool    FontDecreaseDisabled { get; set; }
+    [Parameter] public bool    FontIncreaseDisabled { get; set; }
+    [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
+
+    [Parameter] public EventCallback<string> OnFindTermChanged { get; set; }
+    [Parameter] public EventCallback         OnRunFind         { get; set; }
+    [Parameter] public EventCallback<bool>   OnRegexToggled    { get; set; }
+    [Parameter] public EventCallback<bool>   OnCaseToggled     { get; set; }
+    [Parameter] public EventCallback         OnNextMatch       { get; set; }
+    [Parameter] public EventCallback         OnPrevMatch       { get; set; }
+    [Parameter] public EventCallback<string> OnFilterChanged   { get; set; }
+    [Parameter] public EventCallback         OnNextBookmark    { get; set; }
+    [Parameter] public EventCallback         OnPrevBookmark    { get; set; }
+    [Parameter] public EventCallback         OnIncreaseFont    { get; set; }
+    [Parameter] public EventCallback         OnDecreaseFont    { get; set; }
+    [Parameter] public EventCallback<bool>   OnWrapToggled     { get; set; }
+
+    private MudTextField<string>? _findFieldRef;
+    private FilterBox?            _filterBoxRef;
+
+    // Local mirror so the MudTextField can bind — changes are forwarded to parent
+    private string _findTermLocal
+    {
+        get => FindTerm;
+        set => OnFindTermChanged.InvokeAsync(value);
+    }
+
+    private string MatchLabel =>
+        MatchCount == 0 ? "" : $"{MatchCurrent}/{MatchCount}";
+
+    public async Task FocusFindAsync()
+    {
+        if (_findFieldRef is not null) await _findFieldRef.FocusAsync().AsTask();
+    }
+
+    public async Task FocusFilterAsync()
+    {
+        if (_filterBoxRef is not null) await _filterBoxRef.FocusAsync();
+    }
+
+    private async Task OnAdornmentClickAsync() => await OnRunFind.InvokeAsync();
+
+    private async Task OnFindKeyDownInternal(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            if (e.ShiftKey) await OnPrevMatch.InvokeAsync();
+            else            await OnRunFind.InvokeAsync();
+        }
+    }
+}
