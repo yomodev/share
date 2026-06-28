@@ -99,6 +99,24 @@ html[data-theme="light"] .lv-scrollmap { background: #f0f0f0; }
     overflow: hidden;
 }
 
+/* When word-wrap is off, let the row overflow horizontally so the scroll
+   container can show a horizontal scrollbar. */
+.lv-scroll[data-wrap="0"] .lv-fields {
+    overflow: visible;
+}
+
+.lv-scroll[data-wrap="0"] .lv-msg {
+    overflow: visible;
+    text-overflow: initial;
+    white-space: pre;
+}
+
+.lv-scroll[data-wrap="0"] .lv-caller {
+    overflow: visible;
+    text-overflow: initial;
+    white-space: pre;
+}
+
 /* Bookmark gutter icon */
 .lv-bm {
     flex-shrink: 0;

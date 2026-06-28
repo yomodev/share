@@ -6,6 +6,9 @@
 
 <div class="bm-page bm-page-fill bm-lv-page">
 
+    <!-- ── Toolbars: only shown for the selected cell ───────────────────── -->
+    @if (IsSelected)
+    {
     <!-- ── Toolbar row 1: file info ──────────────────────────────────────── -->
     <div class="bm-lv-toolbar">
         <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="bm-muted" Style="flex-shrink:0" />
@@ -122,6 +125,8 @@
         </MudTooltip>
     </div>
 
+    }
+
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
     {
@@ -138,9 +143,10 @@
 </div>
 
 @code {
-    [Parameter] public string? Path     { get; set; }
-    [Parameter] public string  Env      { get; set; } = string.Empty;
-    [Parameter] public string? FileName { get; set; }
+    [Parameter] public string? Path       { get; set; }
+    [Parameter] public string  Env        { get; set; } = string.Empty;
+    [Parameter] public string? FileName   { get; set; }
+    [Parameter] public bool    IsSelected { get; set; }
 
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 

@@ -11,7 +11,8 @@
          @onclick="@(() => OnSelect.InvokeAsync(leaf))" @onclick:stopPropagation="false">
         <LogViewer Path="@leaf.Path"
                    Env="@leaf.Env"
-                   FileName="@leaf.FileName" />
+                   FileName="@leaf.FileName"
+                   IsSelected="@isSelected" />
     </div>
 }
 else if (Node is WsSplit split)

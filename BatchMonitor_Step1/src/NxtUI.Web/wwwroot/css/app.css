@@ -2035,7 +2035,8 @@ tr.bm-row-searching td:first-child {
 
 /* ── Workspace split panels ──────────────────────────────────────────────── */
 .ws-leaf-selected {
-    box-shadow: inset 0 0 0 2px var(--mud-palette-primary);
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: -2px;
 }
 
 .ws-handle-h {
