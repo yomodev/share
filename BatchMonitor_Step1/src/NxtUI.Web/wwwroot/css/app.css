@@ -879,6 +879,9 @@ html, body {
    FILTER BOX
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* MudTooltip root is a direct flex child of bm-filter-box — must grow to fill space */
+.bm-filter-error-tooltip { flex: 1; min-width: 0; }
+
 /* Error tooltip — amber background so it's visually distinct from info tooltips */
 .bm-filter-error-tooltip .mud-tooltip {
     background-color: var(--mud-palette-warning-darken) !important;
