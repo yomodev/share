@@ -57,12 +57,14 @@
                           Placeholder="Paste path here…"
                           Variant="Variant.Outlined"
                           Margin="Margin.Dense"
-                          Adornment="Adornment.End"
-                          AdornmentIcon="@Icons.Material.Outlined.FolderOpen"
-                          AdornmentAriaLabel="Browse…"
-                          OnAdornmentClick="BrowseFile"
                           OnKeyDown="OnPathKeyDown"
                           @ref="_pathField" />
+            <button type="button" class="mud-button-root mud-icon-button mud-ripple"
+                    onclick="bmOpenLocalLogFile(window._wsRef)">
+                <span class="mud-icon-button-label">
+                    <span class="mud-icon material-icons mud-icon-size-medium">folder_open</span>
+                </span>
+            </button>
 
             <!-- + shape placement buttons -->
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:6px;width:168px;align-self:center">
@@ -190,16 +192,14 @@
     {
         _pendingPath = string.Empty;
         _dialogOpen  = true;
+        // Register dotnet ref so the browse button's native onclick can call it
+        // synchronously (Blazor async interop breaks the browser file-picker gesture).
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmSetWsRef", _selfRef);
         StateHasChanged();
         await Task.Yield();
         if (_pathField is not null)
             await _pathField.FocusAsync();
-    }
-
-    private async Task BrowseFile()
-    {
-        _selfRef ??= DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("bmOpenLocalLogFile", _selfRef);
     }
 
     [JSInvokable]

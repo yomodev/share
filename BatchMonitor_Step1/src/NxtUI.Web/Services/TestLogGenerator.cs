@@ -143,7 +143,9 @@ public sealed class TestLogGenerator : BackgroundService
             return;
         }
 
-        try { await SeedAsync(stoppingToken); }
+        await Task.Yield(); // release startup thread immediately
+
+        try { await Task.Run(() => SeedAsync(stoppingToken), stoppingToken); }
         catch (Exception ex) { _log.LogError(ex, "TestLogGenerator: seeding failed."); }
 
         var interval = TimeSpan.FromSeconds(Math.Max(1, _gen.WriteIntervalSeconds));

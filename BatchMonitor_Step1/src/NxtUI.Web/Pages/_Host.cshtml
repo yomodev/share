@@ -82,6 +82,8 @@
     <script>
         window._localFiles = new Map();
 
+        window.bmSetWsRef = function (ref) { window._wsRef = ref; };
+
         window.bmOpenLocalLogFile = function (dotnetRef) {
             var input = document.createElement('input');
             input.type = 'file';
