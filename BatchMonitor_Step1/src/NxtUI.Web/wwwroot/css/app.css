@@ -1328,9 +1328,14 @@ html, body {
 .bm-mongo-db-select .mud-input-root   { min-height: 28px !important; height: 28px !important; font-size: 12px !important; }
 .bm-mongo-db-select .mud-input-slot   { min-height: 28px !important; height: 28px !important; padding-top: 2px !important; padding-bottom: 2px !important; }
 .bm-mongo-db-select .mud-select-input { font-size: 12px !important; padding-top: 0 !important; padding-bottom: 0 !important; line-height: 24px !important; }
-/* Dropdown popover — prevent options from word-wrapping */
-.bm-mongo-db-popover .mud-list-item,
-.bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; }
+/* Dropdown popover — no word-wrap, compact item height */
+.bm-mongo-db-popover .mud-list-item {
+    white-space: nowrap !important;
+    min-height: 0 !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+}
+.bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; font-size: 12px !important; }
 
 .bm-mongo-id {
     font-size: 11px;
