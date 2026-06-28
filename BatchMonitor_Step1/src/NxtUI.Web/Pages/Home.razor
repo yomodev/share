@@ -21,7 +21,8 @@
             <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true">
                 <ActivatorContent>
                     <span class="bm-env-badge bm-env-badge-btn"
-                          style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)">
+                          style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
+                          @onclick="@(async e => await context.ToggleAsync(e))">
                         @EnvService.SelectedId
                     </span>
                 </ActivatorContent>
