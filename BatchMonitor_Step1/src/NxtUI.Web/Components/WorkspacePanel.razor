@@ -6,8 +6,8 @@
 @if (Node is WsLeaf leaf)
 {
     var isSelected = ReferenceEquals(leaf, SelectedLeaf);
-    <div class="ws-leaf @(isSelected ? "ws-leaf-selected" : "")"
-         style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;"
+    <div class="ws-leaf"
+         style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;position:relative;"
          @onclick="@(() => OnSelect.InvokeAsync(leaf))" @onclick:stopPropagation="false">
         <LogViewer Path="@leaf.Path"
                    Env="@leaf.Env"
@@ -17,6 +17,10 @@
                    OnDupH="@(() => OnDupH.InvokeAsync(leaf))"
                    OnDupV="@(() => OnDupV.InvokeAsync(leaf))"
                    OnClose="@(() => OnClose.InvokeAsync(leaf))" />
+        @if (isSelected)
+        {
+            <div class="ws-selection-ring" aria-hidden="true"></div>
+        }
     </div>
 }
 else if (Node is WsSplit split)

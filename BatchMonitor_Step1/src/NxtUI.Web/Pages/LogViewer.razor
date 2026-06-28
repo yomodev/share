@@ -4,21 +4,23 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="bm-page bm-page-fill bm-lv-page">
+<div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
 
     <!-- ── Cell header: always visible ───────────────────────────────────── -->
     <div class="bm-lv-header @(IsSelected ? "bm-lv-header-selected" : "")">
         @if (OnOpen.HasDelegate)
         {
-            <MudTooltip Text="Open file…">
+            <MudTooltip Text="Open file… (Ctrl+O)">
                 <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
                                Size="Size.Small" Class="bm-lv-header-btn"
                                OnClick="@(() => OnOpen.InvokeAsync())" />
             </MudTooltip>
         }
 
-        <span class="bm-lv-header-name">@_fileName</span>
-        <span class="bm-lv-header-path" title="@_pathDisplay">@_pathDisplay</span>
+        <MudTooltip Text="@_pathTooltip" Delay="400">
+            <span class="bm-lv-header-name" @onclick="OnNameClickAsync">@_fileName</span>
+        </MudTooltip>
+        <span class="bm-lv-header-path">@_pathDisplay</span>
 
         <div style="flex:1"></div>
 
@@ -29,20 +31,20 @@
         }
         @if (_pathDisplay != "local file")
         {
-            <MudTooltip Text="Copy share link">
+            <MudTooltip Text="Copy share link (Ctrl+Shift+C)">
                 <MudIconButton Icon="@Icons.Material.Outlined.Link"
                                Size="Size.Small" Class="bm-lv-header-btn"
                                OnClick="ShareAsync" />
             </MudTooltip>
         }
-        <MudTooltip Text="Refresh">
+        <MudTooltip Text="Refresh (F5)">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small" Class="bm-lv-header-btn"
                            OnClick="RefreshAsync" Disabled="@_isLoading" />
         </MudTooltip>
         @if (OnDupH.HasDelegate)
         {
-            <MudTooltip Text="Duplicate right">
+            <MudTooltip Text="Duplicate right (Ctrl+Shift+→)">
                 <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
                                Size="Size.Small" Class="bm-lv-header-btn"
                                OnClick="@(() => OnDupH.InvokeAsync())" />
@@ -50,7 +52,7 @@
         }
         @if (OnDupV.HasDelegate)
         {
-            <MudTooltip Text="Duplicate down">
+            <MudTooltip Text="Duplicate down (Ctrl+Shift+↓)">
                 <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
                                Size="Size.Small" Class="bm-lv-header-btn"
                                OnClick="@(() => OnDupV.InvokeAsync())" />
@@ -58,7 +60,7 @@
         }
         @if (OnClose.HasDelegate)
         {
-            <MudTooltip Text="Close">
+            <MudTooltip Text="Close (Ctrl+W)">
                 <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                Size="Size.Small" Class="bm-lv-header-btn"
                                OnClick="@(() => OnClose.InvokeAsync())" />
@@ -225,11 +227,17 @@
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
 
+    private bool _preventKey;
+
     private string _fileName => FileName is { Length: > 0 } fn ? fn :
         System.IO.Path.GetFileName((Path ?? "").TrimEnd('\\', '/')) is { Length: > 0 } n ? n : "Log";
 
     private string _pathDisplay => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
         ? "local file" : (Path ?? "");
+
+    private string _pathTooltip => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
+        ? "local file  •  Ctrl+Click to copy"
+        : $"{Path}  •  Ctrl+Click to copy";
 
     private string MatchLabel =>
         _matchCount == 0 ? "" : $"{_matchCurrent}/{_matchCount}";
@@ -259,6 +267,64 @@
         _findTerm = word;
         await RunFindAsync();
         StateHasChanged();
+    }
+
+    private async Task OnNameClickAsync(MouseEventArgs e)
+    {
+        if (!e.CtrlKey) return;
+        var text = Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
+            ? Path["local:".Length..]
+            : (Path ?? "");
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
+        catch { await JS.InvokeVoidAsync("copyText", text); }
+    }
+
+    private async Task OnPageKeyDown(KeyboardEventArgs e)
+    {
+        _preventKey = false;
+
+        // Ctrl+O — open
+        if (e.CtrlKey && !e.ShiftKey && e.Key == "o" && OnOpen.HasDelegate)
+        {
+            _preventKey = true;
+            await OnOpen.InvokeAsync();
+            return;
+        }
+        // Ctrl+W — close
+        if (e.CtrlKey && !e.ShiftKey && e.Key == "w" && OnClose.HasDelegate)
+        {
+            _preventKey = true;
+            await OnClose.InvokeAsync();
+            return;
+        }
+        // F5 — refresh
+        if (e.Key == "F5")
+        {
+            _preventKey = true;
+            await RefreshAsync();
+            return;
+        }
+        // Ctrl+Shift+→ — duplicate right
+        if (e.CtrlKey && e.ShiftKey && e.Key == "ArrowRight" && OnDupH.HasDelegate)
+        {
+            _preventKey = true;
+            await OnDupH.InvokeAsync();
+            return;
+        }
+        // Ctrl+Shift+↓ — duplicate down
+        if (e.CtrlKey && e.ShiftKey && e.Key == "ArrowDown" && OnDupV.HasDelegate)
+        {
+            _preventKey = true;
+            await OnDupV.InvokeAsync();
+            return;
+        }
+        // Ctrl+Shift+C — share link
+        if (e.CtrlKey && e.ShiftKey && e.Key == "C")
+        {
+            _preventKey = true;
+            await ShareAsync();
+            return;
+        }
     }
 
     // ── File loading ──────────────────────────────────────────────────────

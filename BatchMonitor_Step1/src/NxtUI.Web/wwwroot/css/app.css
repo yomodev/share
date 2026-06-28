@@ -2034,17 +2034,12 @@ tr.bm-row-searching td:first-child {
 }
 
 /* ── Workspace split panels ──────────────────────────────────────────────── */
-.ws-leaf-selected {
-    position: relative;
-}
-
-.ws-leaf-selected::after {
-    content: '';
+.ws-selection-ring {
     position: absolute;
     inset: 0;
     border: 2px solid var(--mud-palette-primary);
     pointer-events: none;
-    z-index: 100;
+    z-index: 9999;
 }
 
 .ws-handle-h {
