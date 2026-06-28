@@ -1,12 +1,11 @@
+using Microsoft.AspNetCore.SignalR;
+using MudBlazor.Services;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
 using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
-using NxtUI.Web.Services;
-using Microsoft.AspNetCore.SignalR;
-using MudBlazor.Services;
 
 namespace NxtUI.Web;
 
