@@ -30,7 +30,8 @@
 
 /* MudSelect wrappers — label left + auto-width select */
 .bm-tl-select-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.bm-tl-select      { min-width: 160px; max-width: 220px; }
+.bm-tl-select,
+.bm-tl-select .mud-form-control { width: fit-content; min-width: 80px; }
 
 /* Popover items — no word-wrap */
 .bm-tl-select-popover .mud-list-item      { white-space: nowrap !important; min-height: 0 !important; padding: 4px 16px 4px 12px !important; }
