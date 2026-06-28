@@ -54,6 +54,6 @@ public class MongoSettings
         var prefix = string.IsNullOrWhiteSpace(HeartbeatsDatabasePrefix)
             ? DatabasePrefix
             : HeartbeatsDatabasePrefix;
-        return $"{prefix}_{environmentId}";
+        return $"{prefix}{environmentId}";
     }
 }
