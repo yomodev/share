@@ -6,6 +6,7 @@
 <div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;flex-direction:column;">
     <WorkspacePanel Node="@_root"
                     SelectedLeaf="@_selected"
+                    ShowRing="@(_root is not WsLeaf)"
                     OnSelect="OnSelect"
                     OnOpen="OnOpen"
                     OnDupH="OnDupH"

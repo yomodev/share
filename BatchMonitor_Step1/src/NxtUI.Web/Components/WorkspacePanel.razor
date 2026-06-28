@@ -17,7 +17,7 @@
                    OnDupH="@(() => OnDupH.InvokeAsync(leaf))"
                    OnDupV="@(() => OnDupV.InvokeAsync(leaf))"
                    OnClose="@(() => OnClose.InvokeAsync(leaf))" />
-        @if (isSelected)
+        @if (isSelected && ShowRing)
         {
             <div class="ws-selection-ring" aria-hidden="true"></div>
         }
@@ -25,15 +25,17 @@
 }
 else if (Node is WsSplit split)
 {
-    var flexDir  = split.Dir == WsDir.H ? "row" : "column";
-    var ratioPct = (split.Ratio * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-    var invPct   = ((1 - split.Ratio) * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+    var flexDir = split.Dir == WsDir.H ? "row" : "column";
+    var growA   = (split.Ratio * 10000d).ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+    var growB   = ((1d - split.Ratio) * 10000d).ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
 
     <div class="ws-split" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:@flexDir;overflow:hidden;"
          @ref="_containerRef">
-        <div class="ws-pane" style="flex:0 0 @(ratioPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
+
+        <div class="ws-pane" style="flex:@(growA) @(growA) 0;min-width:0;min-height:0;overflow:hidden;display:flex;">
             <WorkspacePanel Node="@split.A"
                             SelectedLeaf="@SelectedLeaf"
+                            ShowRing="@ShowRing"
                             OnSelect="OnSelect"
                             OnOpen="OnOpen"
                             OnDupH="OnDupH"
@@ -45,9 +47,10 @@ else if (Node is WsSplit split)
         <div class="@(split.Dir == WsDir.H ? "ws-handle-h" : "ws-handle-v")"
              @onmousedown="@(e => OnHandleMouseDown(e, split))"></div>
 
-        <div class="ws-pane" style="flex:0 0 @(invPct)%;min-width:0;min-height:0;overflow:hidden;display:flex;">
+        <div class="ws-pane" style="flex:@(growB) @(growB) 0;min-width:0;min-height:0;overflow:hidden;display:flex;">
             <WorkspacePanel Node="@split.B"
                             SelectedLeaf="@SelectedLeaf"
+                            ShowRing="@ShowRing"
                             OnSelect="OnSelect"
                             OnOpen="OnOpen"
                             OnDupH="OnDupH"
@@ -61,6 +64,7 @@ else if (Node is WsSplit split)
 @code {
     [Parameter, EditorRequired] public WsNode                           Node           { get; set; } = null!;
     [Parameter]                 public WsLeaf?                          SelectedLeaf   { get; set; }
+    [Parameter]                 public bool                             ShowRing       { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnSelect       { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnOpen         { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnDupH         { get; set; }
