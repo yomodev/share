@@ -40,7 +40,7 @@
             <span class="bm-toolbar-label">DB</span>
             <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
                        Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                       Class="bm-mongo-db-select">
+                       Class="bm-mongo-db-select" PopoverClass="bm-mongo-db-popover">
                 @foreach (var db in _databases)
                 {
                     <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
