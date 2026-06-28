@@ -9,9 +9,14 @@ public class MockRunService : IRunService
     private static readonly string[] RunTypes    = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] RunEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
 
+    // Hosts match App:Environments[].Servers in appsettings.json (union of all envs)
     private static readonly string[] Servers = {
-        "node-eu-01", "node-eu-02", "node-us-01", "node-us-02",
-        "node-as-01", "node-as-02", "node-dr-01", "node-dr-02",
+        "dev1-srv-01", "dev1-srv-02",
+        "dev2-srv-01",
+        "uat1-srv-01", "uat1-srv-02",
+        "uat2-srv-01",
+        "stg1-srv-01", "stg1-srv-02",
+        "prod-srv-01", "prod-srv-02", "prod-srv-03",
     };
 
     private static readonly string[] Services = {
