@@ -72,24 +72,17 @@
 
 /* Slide-down wrapper for the find/filter toolbar */
 .bm-lv-toolbar-wrap {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 180ms ease;
+    max-height: 0;
     overflow: hidden;
     flex-shrink: 0;
+    transition: max-height 180ms ease, border-bottom-width 0s 180ms;
     border-bottom: 0px solid var(--mud-palette-divider);
-    transition: grid-template-rows 180ms ease, border-bottom-width 0s 180ms;
 }
 
 .bm-lv-toolbar-wrap-open {
-    grid-template-rows: 1fr;
+    max-height: 48px;
     border-bottom-width: 1px;
-    transition: grid-template-rows 180ms ease, border-bottom-width 0s;
-}
-
-.bm-lv-toolbar-wrap > .bm-lv-toolbar {
-    min-height: 0;
-    overflow: hidden;
+    transition: max-height 180ms ease, border-bottom-width 0s;
 }
 
 /* Find/filter toolbar */
