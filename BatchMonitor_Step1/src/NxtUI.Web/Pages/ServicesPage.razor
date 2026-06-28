@@ -69,8 +69,7 @@
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-
-        @if (_graphView)
+        else if (_graphView)
         {
             <!-- Card view — grouping supported (pure Blazor, no JS conflict).
                  The container is @key'd by the grouping mode: switching grouping
