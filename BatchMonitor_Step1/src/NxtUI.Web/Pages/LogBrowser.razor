@@ -86,8 +86,8 @@
             @if (_servers.Count == 0)
             {
                 <div class="bm-lb-empty">
-                    <MudText Typo="Typo.body2" Class="bm-muted">No servers configured.</MudText>
-                    <MudText Typo="Typo.caption" Class="bm-muted">Add servers to Logs:Servers in appsettings.</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-muted">No servers configured for this environment.</MudText>
+                    <MudText Typo="Typo.caption" Class="bm-muted">Add servers to App:Environments[].Servers in appsettings.</MudText>
                 </div>
             }
             else if (string.IsNullOrEmpty(LogSettings.Value.LogsFolder))
