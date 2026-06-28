@@ -157,13 +157,17 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             try { services = await _heartbeat.GetServiceStatusesAsync(env, ct); }
             catch (Exception ex) { _log.LogWarning(ex, "metrics: heartbeat failed for {Env}", env); return; }
 
+            _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
+
             var changed = false;
+            var parsed  = 0;
             foreach (var svc in services)
             {
                 var folder = _discovery.GetCachedPath(svc, env);
                 if (folder is null)
                 {
-                    _discovery.EnsureDiscovering(svc, env); // resolve for next tick
+                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — folder not yet discovered", env, svc.ServiceName, svc.HostName);
+                    _discovery.EnsureDiscovering(svc, env);
                     continue;
                 }
 
@@ -171,11 +175,19 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 var key   = LogPathDiscoveryService.CacheKey(svc, env);
                 var entry = _entries.GetOrAdd(key, _ => new Entry());
 
+                _log.LogDebug("metrics [{Env}]: reading {File} (offset={Offset})", env, file, entry.Offset);
+
                 IncrementalFileReader.Result result;
                 try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, entry.Offset), ct); }
                 catch (Exception ex) { _log.LogWarning(ex, "metrics: read failed {File}", file); continue; }
 
-                if (result.Lines.Count == 0) continue;
+                if (result.Lines.Count == 0)
+                {
+                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — no new lines", env, svc.ServiceName, svc.HostName);
+                    continue;
+                }
+
+                _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — {Lines} new lines", env, svc.ServiceName, svc.HostName, result.Lines.Count);
 
                 lock (entry.Sync)
                 {
@@ -188,9 +200,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                         if (entry.History.Count > MaxHistory)
                             entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
                         changed = true;
+                        parsed++;
                     }
                 }
             }
+
+            if (parsed > 0)
+                _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
 
             if (changed) OnMetricsUpdated?.Invoke(env);
         }

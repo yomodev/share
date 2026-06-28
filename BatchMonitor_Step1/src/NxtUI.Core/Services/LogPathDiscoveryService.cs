@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
@@ -9,16 +10,18 @@ namespace NxtUI.Core.Services;
 
 public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 {
-    private readonly LogPathSettings _settings;
+    private readonly LogPathSettings                 _settings;
+    private readonly ILogger<LogPathDiscoveryService> _log;
 
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
     public event Action<string>? OnPathResolved;
 
-    public LogPathDiscoveryService(IOptions<LogPathSettings> options)
+    public LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log)
     {
         _settings = options.Value;
+        _log      = log;
     }
 
     public static string CacheKey(ServiceStatus svc, string env) =>
@@ -37,7 +40,10 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     public void EnsureDiscovering(ServiceStatus svc, string env)
     {
         var key = CacheKey(svc, env);
-        _cache.GetOrAdd(key, _ => RunSearchAsync(svc, env, key));
+        var added = false;
+        _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
+        if (added)
+            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -60,7 +66,14 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
     {
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
+        {
+            _log.LogInformation("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
+        }
+        else
+        {
+            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+        }
         return result;
     }
 
@@ -69,6 +82,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         foreach (var template in _settings.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
+            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
