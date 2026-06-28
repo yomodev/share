@@ -543,8 +543,11 @@ html, body {
 .bm-svc-toolbar-left  { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .bm-svc-toolbar-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .bm-svc-grouping-label { font-size: 12px; color: var(--mud-palette-text-secondary); white-space: nowrap; }
+/* ── Global height for ALL outlined MudButtonGroup toggles ───────────── */
+.mud-button-group-outlined .mud-button-root { height: 36px !important; }
+
 .bm-svc-group-toggle { flex-shrink: 0; }
-.bm-svc-group-toggle .mud-button-root { font-size: 12px; font-weight: 500; padding: 0 10px; height: 34px; transition: background-color 120ms ease, color 120ms ease; }
+.bm-svc-group-toggle .mud-button-root { font-size: 12px; font-weight: 500; padding: 0 10px; transition: background-color 120ms ease, color 120ms ease; }
 /* Shared active/inactive states used by any MudButtonGroup toggle in the app */
 .bm-view-btn-active  { background-color: var(--mud-palette-primary) !important; color: var(--mud-palette-primary-text) !important; border-color: var(--mud-palette-primary) !important; }
 .bm-view-btn-inactive { background-color: transparent !important; color: var(--mud-palette-text-secondary) !important; }
@@ -1503,7 +1506,6 @@ html, body {
     font-size: 13px;
     font-weight: 500;
     padding: 0 14px;
-    height: 36px;
     transition: background-color 120ms ease, color 120ms ease;
 }
 .bm-kafka-view-toggle .bm-view-btn-active {
