@@ -70,6 +70,24 @@
     padding: 0 !important;
 }
 
+/* Slide-down wrapper for the find/filter toolbar */
+.bm-lv-toolbar-wrap {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 180ms ease;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.bm-lv-toolbar-wrap-open {
+    grid-template-rows: 1fr;
+}
+
+.bm-lv-toolbar-wrap > .bm-lv-toolbar {
+    min-height: 0;
+    overflow: hidden;
+}
+
 /* Find/filter toolbar */
 .bm-lv-toolbar {
     display: flex;

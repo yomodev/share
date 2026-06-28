@@ -67,8 +67,7 @@
     </div>
 
     <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
-    @if (IsSelected)
-    {
+    <div class="bm-lv-toolbar-wrap @(IsSelected ? "bm-lv-toolbar-wrap-open" : "")">
     <div class="bm-lv-toolbar bm-lv-toolbar-sm">
         <div class="bm-lv-find">
             <MudTextField T="string" @ref="_findField" @bind-Value="_findTerm"
@@ -154,7 +153,7 @@
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
     </div>
-    }
+    </div>
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
