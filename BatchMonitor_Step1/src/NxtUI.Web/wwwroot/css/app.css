@@ -242,10 +242,10 @@ html, body {
 }
 .bm-env-badge-btn:hover { opacity: 0.8; }
 
-/* Sidebar env selector wrapper — centers badge in both open/mini states */
+/* Sidebar env selector wrapper */
 .bm-env-selector {
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
     padding: 6px 8px;
 }
 
