@@ -922,11 +922,18 @@ html, body {
 /* automatically matches — no per-control rules needed.                   */
 /* bm-lb-filter-toolbar covers the whole LogBrowser toolbar row           */
 /* (both the filename glob input and the content FilterBox).              */
+/* font applies to all inputs including selects */
 .bm-batch-toolbar    .mud-input-root,
 .bm-svc-toolbar-left .mud-input-root,
 .bm-lb-filter-toolbar .mud-input-root,
-.bm-tl-controls      .mud-input-root {
-    font-size: 14px !important;
+.bm-tl-controls      .mud-input-root { font-size: 14px !important; }
+
+/* height only for text inputs — selects are excluded so the global
+   .mud-select.mud-input-root rule controls their height/centering */
+.bm-batch-toolbar    .mud-input-root:not(.mud-select),
+.bm-svc-toolbar-left .mud-input-root:not(.mud-select),
+.bm-lb-filter-toolbar .mud-input-root:not(.mud-select),
+.bm-tl-controls      .mud-input-root:not(.mud-select) {
     min-height: 32px !important;
     height: 32px !important;
 }
