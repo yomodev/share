@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Web.Models;
 
 public enum TabType
 {

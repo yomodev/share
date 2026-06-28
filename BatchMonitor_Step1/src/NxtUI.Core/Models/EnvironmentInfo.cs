@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Runtime representation of an environment.

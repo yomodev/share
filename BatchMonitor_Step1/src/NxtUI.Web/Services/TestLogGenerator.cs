@@ -2,7 +2,7 @@ using NxtUI.Core.Services;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Services;
 
@@ -133,11 +133,6 @@ public sealed class TestLogGenerator : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_gen.Enabled)
-        {
-            _log.LogInformation("TestLogGenerator disabled.");
-            return;
-        }
         if (_paths.ServiceTemplates.Count == 0)
         {
             _log.LogWarning("TestLogGenerator: no Logs:ServiceTemplates configured — nothing to generate.");

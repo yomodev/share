@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mock;
 

@@ -1,5 +1,5 @@
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using System.Threading.Tasks;
 
 namespace NxtUI.Services;

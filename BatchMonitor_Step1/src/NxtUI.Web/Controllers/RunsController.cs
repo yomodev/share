@@ -1,5 +1,5 @@
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using NxtUI.Services;
 using Microsoft.AspNetCore.Mvc;
 

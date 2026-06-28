@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Detailed metadata for a single batch (returned by /api/{env}/batches/{runId}/details).

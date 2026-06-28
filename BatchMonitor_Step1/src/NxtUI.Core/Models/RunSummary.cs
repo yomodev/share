@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lightweight batch record returned by the batch list endpoint.

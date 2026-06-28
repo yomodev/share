@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lean performance event from PerformanceTracker fields (see design doc §7.5).

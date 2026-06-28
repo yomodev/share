@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Services;
 

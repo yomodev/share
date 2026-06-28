@@ -1,4 +1,4 @@
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Logging;
 

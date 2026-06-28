@@ -4,7 +4,7 @@
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IRunService RunService
-@inject IInfraHealthService HealthService
+@inject InfraHealthCache HealthCache
 @implements IDisposable
 
 <div class="bm-home">
@@ -255,9 +255,9 @@
 
     protected override async Task OnInitializedAsync()
     {
-        EnvService.OnChange += OnEnvExternalChange;
+        EnvService.OnChange     += OnEnvExternalChange;
+        HealthCache.OnHealthUpdated += OnHealthUpdated;
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-        _ = PollHealthAsync();
     }
 
     // ── Batch ─────────────────────────────────────────────────────────────
@@ -276,51 +276,20 @@
 
     private async Task CheckHealthAsync()
     {
-        _kafkaChecking = true;
-        _mongoChecking = true;
-        await InvokeAsync(StateHasChanged);
-
         var env = EnvService.SelectedId;
-        var kafkaTask = HealthService.CheckKafkaAsync(env, _cts.Token);
-        var mongoTask = HealthService.CheckMongoAsync(env, _cts.Token);
-
-        try
-        {
-            _kafkaHealth   = await kafkaTask;
-            _kafkaChecking = false;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex)
-        {
-            _kafkaHealth   = new KafkaHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
-            _kafkaChecking = false;
-        }
-
-        try
-        {
-            _mongoHealth   = await mongoTask;
-            _mongoChecking = false;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex)
-        {
-            _mongoHealth   = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
-            _mongoChecking = false;
-        }
-
+        _kafkaHealth   = HealthCache.GetKafka(env);
+        _mongoHealth   = HealthCache.GetMongo(env);
+        _kafkaChecking = false;
+        _mongoChecking = false;
         await InvokeAsync(StateHasChanged);
+        // Request a background refresh; OnHealthUpdated will trigger StateHasChanged when done.
+        HealthCache.RequestRefresh(env);
     }
 
-    private async Task PollHealthAsync()
+    private async void OnHealthUpdated(string env)
     {
-        while (!_cts.IsCancellationRequested)
-        {
-            try { await Task.Delay(10_000, _cts.Token); }
-            catch (OperationCanceledException) { return; }
-            await CheckHealthAsync();
-        }
+        if (env != EnvService.SelectedId) return;
+        await CheckHealthAsync();
     }
 
     // ── Env change ────────────────────────────────────────────────────────
@@ -366,7 +335,8 @@
 
     public void Dispose()
     {
-        EnvService.OnChange -= OnEnvExternalChange;
+        EnvService.OnChange         -= OnEnvExternalChange;
+        HealthCache.OnHealthUpdated -= OnHealthUpdated;
         _cts.Cancel();
     }
 }

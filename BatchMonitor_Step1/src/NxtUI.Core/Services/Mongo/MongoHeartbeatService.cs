@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mongo;
 

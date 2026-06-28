@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Logging;
-using NxtUI.Models;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Services;
 
@@ -29,6 +29,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private readonly Dictionary<string, int> _envRefs  = new();           // env -> subscriber count
     private readonly ConcurrentDictionary<string, Entry>        _entries  = new(); // (env|host|svc|pid) -> data
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new(); // serialise per-env polls
+    private CancellationToken _ct = CancellationToken.None; // set when ExecuteAsync starts
 
     public event Action<string>? OnMetricsUpdated;
 
@@ -52,7 +53,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         var env = cacheKey.Split('|', 2)[0]; // CacheKey is "env|host|service|pid"
         if (HasSubscribers(env))
-            _ = PollEnvAsync(env, CancellationToken.None);
+            _ = PollEnvAsync(env, _ct);
     }
 
     public override void Dispose()
@@ -77,7 +78,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             _envRefs[env] = _envRefs.TryGetValue(env, out var n) ? n + 1 : 1;
 
         // Poll immediately so a freshly opened tab doesn't wait a full interval.
-        _ = PollEnvAsync(env, CancellationToken.None);
+        _ = PollEnvAsync(env, _ct);
         return new Subscription(this, env);
     }
 
@@ -130,6 +131,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        _ct = ct;
         var interval = TimeSpan.FromSeconds(Math.Max(5, _paths.MetricsIntervalSeconds));
         using var timer = new PeriodicTimer(interval);
         try

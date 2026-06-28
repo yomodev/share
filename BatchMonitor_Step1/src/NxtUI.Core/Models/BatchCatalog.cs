@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 public class BatchCatalog
 {

@@ -57,9 +57,17 @@ public class Program
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
 
-        builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
-        builder.Services.AddSingleton<IMongoService, MockMongoService>();
-        builder.Services.AddSingleton<IInfraHealthService, MockInfraHealthService>();
+        // Kafka — one instance, exposed under all three interfaces
+        builder.Services.AddSingleton<MockKafkaService>();
+        builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+
+        // Mongo — one instance, exposed under all three interfaces
+        builder.Services.AddSingleton<MockMongoService>();
+        builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
         // Swap to MongoHeartbeatService when connecting to a real cluster:
         //   builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
@@ -67,6 +75,8 @@ public class Program
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddSingleton<InfraHealthCache>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<InfraHealthCache>());
         builder.Services.AddHttpClient();
         builder.Services.AddSingleton<IBatchCatalogService, NxtUI.Web.Services.BatchCatalogService>();
 
@@ -76,8 +86,8 @@ public class Program
         builder.Services.AddSingleton<IServiceMetricsMonitor>(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
 
-        // Test-only: fabricates metrics log files (no-op unless TestLogGenerator:Enabled).
-        builder.Services.AddHostedService<TestLogGenerator>();
+        if (builder.Configuration.GetValue<bool>($"{TestLogGeneratorSettings.SectionName}:Enabled"))
+            builder.Services.AddHostedService<TestLogGenerator>();
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

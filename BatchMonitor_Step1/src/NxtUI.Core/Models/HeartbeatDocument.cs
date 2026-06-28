@@ -1,7 +1,7 @@
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 [BsonIgnoreExtraElements]
 public class HeartbeatDocument

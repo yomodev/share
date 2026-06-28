@@ -1,4 +1,4 @@
-using NxtUI.Models;
+using NxtUI.Core.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
 

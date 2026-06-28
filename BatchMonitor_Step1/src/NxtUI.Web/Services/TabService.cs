@@ -1,4 +1,4 @@
-using NxtUI.Models;
+using NxtUI.Web.Models;
 
 namespace NxtUI.Services;
 

@@ -1,4 +1,4 @@
-namespace NxtUI.Models;
+namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
 
