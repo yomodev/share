@@ -18,7 +18,7 @@ public class MongoHeartbeatService : IHeartbeatService
 
     public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
     {
-        var db         = _connection.GetDatabase(env);
+        var db         = _connection.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
         var docs = await collection

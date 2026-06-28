@@ -35,6 +35,9 @@ public sealed class MongoConnection
     public IMongoDatabase GetDatabase(string environmentId) =>
         _client.GetDatabase(_settings.GetDatabaseName(environmentId));
 
+    public IMongoDatabase GetHeartbeatsDatabase(string environmentId) =>
+        _client.GetDatabase(_settings.GetHeartbeatsDatabaseName(environmentId));
+
     // ── internals ────────────────────────────────────────────────────────────
 
     private static IMongoClient BuildClient(MongoSettings s)

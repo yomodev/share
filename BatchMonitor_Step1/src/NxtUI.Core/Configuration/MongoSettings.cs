@@ -36,7 +36,24 @@ public class MongoSettings
     public string? TlsCertificatePath    { get; set; }
     public string? TlsCertificatePassword{ get; set; }
 
+    /// <summary>
+    /// Optional database prefix for the heartbeats database.
+    /// Builds as "{HeartbeatsDatabasePrefix}_{environmentId}".
+    /// Leave empty to share the same database as the other collections.
+    /// </summary>
+    public string HeartbeatsDatabasePrefix { get; set; } = string.Empty;
+
     /// <summary>Returns the fully qualified database name for a given environment.</summary>
     public string GetDatabaseName(string environmentId) =>
         $"{DatabasePrefix}_{environmentId}";
+
+    /// <summary>Returns the heartbeats database name for a given environment.
+    /// Uses HeartbeatsDatabasePrefix when set, otherwise falls back to DatabasePrefix.</summary>
+    public string GetHeartbeatsDatabaseName(string environmentId)
+    {
+        var prefix = string.IsNullOrWhiteSpace(HeartbeatsDatabasePrefix)
+            ? DatabasePrefix
+            : HeartbeatsDatabasePrefix;
+        return $"{prefix}_{environmentId}";
+    }
 }
