@@ -8,7 +8,63 @@
     overflow: hidden;
 }
 
-/* Toolbar shared styles */
+/* Cell header — always visible, shows filename + action buttons */
+.bm-lv-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 0 4px;
+    min-height: 30px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    background: transparent;
+    transition: background 0.15s ease, color 0.15s ease;
+    overflow: hidden;
+}
+
+.bm-lv-header-selected {
+    background: var(--mud-palette-primary);
+    color: var(--mud-palette-primary-text);
+}
+
+.bm-lv-header-selected .bm-lv-header-path,
+.bm-lv-header-selected .mud-icon-root,
+.bm-lv-header-selected .mud-button-root {
+    color: var(--mud-palette-primary-text) !important;
+    opacity: 0.85;
+}
+
+.bm-lv-header-name {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+    max-width: 160px;
+}
+
+.bm-lv-header-path {
+    font-size: 10px;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1 1 0;
+    min-width: 0;
+    /* ellipsis from left — prioritises end (filename/host) */
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
+}
+
+.bm-lv-header-btn.mud-icon-button {
+    width: 24px !important;
+    height: 24px !important;
+    padding: 0 !important;
+}
+
+/* Find/filter toolbar */
 .bm-lv-toolbar {
     display: flex;
     align-items: center;
@@ -16,6 +72,13 @@
     flex-shrink: 0;
     padding: 2px 4px;
     border-bottom: 1px solid var(--mud-palette-divider);
+}
+
+/* Compact variant for the find/filter row */
+.bm-lv-toolbar-sm .mud-input-root,
+.bm-lv-toolbar-sm .mud-input-slot,
+.bm-lv-toolbar-sm input {
+    font-size: 11px !important;
 }
 
 .bm-lv-toolbar-right {

@@ -12,7 +12,11 @@
         <LogViewer Path="@leaf.Path"
                    Env="@leaf.Env"
                    FileName="@leaf.FileName"
-                   IsSelected="@isSelected" />
+                   IsSelected="@isSelected"
+                   OnOpen="@(() => OnOpen.InvokeAsync(leaf))"
+                   OnDupH="@(() => OnDupH.InvokeAsync(leaf))"
+                   OnDupV="@(() => OnDupV.InvokeAsync(leaf))"
+                   OnClose="@(() => OnClose.InvokeAsync(leaf))" />
     </div>
 }
 else if (Node is WsSplit split)
@@ -27,6 +31,10 @@ else if (Node is WsSplit split)
             <WorkspacePanel Node="@split.A"
                             SelectedLeaf="@SelectedLeaf"
                             OnSelect="OnSelect"
+                            OnOpen="OnOpen"
+                            OnDupH="OnDupH"
+                            OnDupV="OnDupV"
+                            OnClose="OnClose"
                             OnRatioChanged="OnRatioChanged" />
         </div>
 
@@ -37,15 +45,23 @@ else if (Node is WsSplit split)
             <WorkspacePanel Node="@split.B"
                             SelectedLeaf="@SelectedLeaf"
                             OnSelect="OnSelect"
+                            OnOpen="OnOpen"
+                            OnDupH="OnDupH"
+                            OnDupV="OnDupV"
+                            OnClose="OnClose"
                             OnRatioChanged="OnRatioChanged" />
         </div>
     </div>
 }
 
 @code {
-    [Parameter, EditorRequired] public WsNode                          Node           { get; set; } = null!;
-    [Parameter]                 public WsLeaf?                         SelectedLeaf   { get; set; }
-    [Parameter]                 public EventCallback<WsLeaf>           OnSelect       { get; set; }
+    [Parameter, EditorRequired] public WsNode                           Node           { get; set; } = null!;
+    [Parameter]                 public WsLeaf?                          SelectedLeaf   { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnSelect       { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnOpen         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnDupH         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnDupV         { get; set; }
+    [Parameter]                 public EventCallback<WsLeaf>            OnClose        { get; set; }
     [Parameter]                 public EventCallback<(WsSplit, double)> OnRatioChanged { get; set; }
 
     private ElementReference                       _containerRef;

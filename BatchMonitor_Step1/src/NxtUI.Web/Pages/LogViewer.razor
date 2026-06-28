@@ -6,46 +6,75 @@
 
 <div class="bm-page bm-page-fill bm-lv-page">
 
-    <!-- ── Toolbars: only shown for the selected cell ───────────────────── -->
-    @if (IsSelected)
-    {
-    <!-- ── Toolbar row 1: file info ──────────────────────────────────────── -->
-    <div class="bm-lv-toolbar">
-        <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Small" Class="bm-muted" Style="flex-shrink:0" />
-        <MudText Typo="Typo.body2" Style="font-weight:600;flex-shrink:0">@_fileName</MudText>
-        <span class="bm-muted bm-toolbar-hint"
-              style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:11px">
-            @_pathDisplay
-        </span>
-
-        <div class="bm-lv-toolbar-right">
-            @if (_isTailing)
-            {
-                <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                         Style="font-size:10px;height:20px;padding:0 6px">LIVE</MudChip>
-            }
-            <MudTooltip Text="Refresh now">
-                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                               Size="Size.Small" OnClick="RefreshAsync"
-                               Disabled="@_isLoading" />
+    <!-- ── Cell header: always visible ───────────────────────────────────── -->
+    <div class="bm-lv-header @(IsSelected ? "bm-lv-header-selected" : "")">
+        @if (OnOpen.HasDelegate)
+        {
+            <MudTooltip Text="Open file…">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnOpen.InvokeAsync())" />
             </MudTooltip>
-            @if (_pathDisplay != "local file")
-            {
-                <MudTooltip Text="Copy share link with current line">
-                    <MudIconButton Icon="@Icons.Material.Outlined.Link"
-                                   Size="Size.Small" OnClick="ShareAsync" />
-                </MudTooltip>
-            }
-        </div>
+        }
+
+        <span class="bm-lv-header-name">@_fileName</span>
+        <span class="bm-lv-header-path" title="@_pathDisplay">@_pathDisplay</span>
+
+        <div style="flex:1"></div>
+
+        @if (_isTailing)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                     Style="font-size:10px;height:18px;padding:0 5px;flex-shrink:0">LIVE</MudChip>
+        }
+        @if (_pathDisplay != "local file")
+        {
+            <MudTooltip Text="Copy share link">
+                <MudIconButton Icon="@Icons.Material.Outlined.Link"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="ShareAsync" />
+            </MudTooltip>
+        }
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small" Class="bm-lv-header-btn"
+                           OnClick="RefreshAsync" Disabled="@_isLoading" />
+        </MudTooltip>
+        @if (OnDupH.HasDelegate)
+        {
+            <MudTooltip Text="Duplicate right">
+                <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnDupH.InvokeAsync())" />
+            </MudTooltip>
+        }
+        @if (OnDupV.HasDelegate)
+        {
+            <MudTooltip Text="Duplicate down">
+                <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnDupV.InvokeAsync())" />
+            </MudTooltip>
+        }
+        @if (OnClose.HasDelegate)
+        {
+            <MudTooltip Text="Close">
+                <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                               Size="Size.Small" Class="bm-lv-header-btn"
+                               OnClick="@(() => OnClose.InvokeAsync())" />
+            </MudTooltip>
+        }
     </div>
 
-    <!-- ── Toolbar row 2: find + filter + bookmarks + display ───────────── -->
-    <div class="bm-lv-toolbar">
+    <!-- ── Find + filter toolbar: selected cell only ─────────────────────── -->
+    @if (IsSelected)
+    {
+    <div class="bm-lv-toolbar bm-lv-toolbar-sm">
         <div class="bm-lv-find">
             <MudTextField T="string" @bind-Value="_findTerm"
                           Placeholder="Find…"
                           Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="width:100%"
+                          Style="width:100%;font-size:11px"
                           Adornment="Adornment.End"
                           AdornmentIcon="@Icons.Material.Outlined.Search"
                           OnAdornmentClick="RunFindAsync"
@@ -76,7 +105,7 @@
         </MudTooltip>
         @if (!string.IsNullOrEmpty(_findTerm))
         {
-            <span class="bm-lv-match-count">@MatchLabel</span>
+            <span class="bm-lv-match-count" style="font-size:11px">@MatchLabel</span>
         }
 
         <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
@@ -89,7 +118,7 @@
                    FieldHints="@LogFieldHints" />
         @if (_filterStr.Length > 0)
         {
-            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap">
+            <span class="bm-toolbar-hint" style="flex-shrink:0;white-space:nowrap;font-size:11px">
                 @_visibleCount / @_totalCount
             </span>
         }
@@ -124,7 +153,6 @@
                                  ToggledColor="Color.Primary" Size="Size.Small" />
         </MudTooltip>
     </div>
-
     }
 
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
@@ -148,6 +176,11 @@
     [Parameter] public string? FileName   { get; set; }
     [Parameter] public bool    IsSelected { get; set; }
 
+    [Parameter] public EventCallback OnOpen  { get; set; }
+    [Parameter] public EventCallback OnDupH  { get; set; }
+    [Parameter] public EventCallback OnDupV  { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
     private static readonly int[] _fontSizes = [11, 12, 13, 14, 15, 16];
 
     private static readonly (string Aliases, string Label)[] LogFieldHints =
@@ -161,15 +194,12 @@
         ("timestamp, ts",    "Timestamp"),
     ];
 
-    // Viewport component ref
     private LogViewport? _viewport;
 
-    // Lifecycle flags
     private string? _loadedPath;
     private bool    _rendered;
     private bool    _dirty;
 
-    // Loading state
     private bool    _isLoading;
     private string? _error;
     private string? _rawContent;
@@ -177,24 +207,20 @@
     private int?    _anchorLine;
     private long    _fileOffset;
 
-    // Filter
     private string  _filterStr   = "";
     private string? _filterError;
     private int     _totalCount;
     private int     _visibleCount;
 
-    // Find
     private string _findTerm      = "";
     private bool   _isRegex;
     private bool   _caseSensitive;
     private int    _matchCount;
     private int    _matchCurrent;
 
-    // Display
     private int  _fontSize = 13;
     private bool _wordWrap = false;
 
-    // Live tail
     private bool           _isTailing;
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
@@ -227,8 +253,6 @@
             await RenderViewerAsync();
         }
     }
-
-    // ── Word double-click (from LogViewport) ──────────────────────────────
 
     private async Task OnWordDoubleClickedAsync(string word)
     {
@@ -290,8 +314,6 @@
             StartTail();
         }
     }
-
-    // ── Refresh ───────────────────────────────────────────────────────────
 
     private async Task RefreshAsync()
     {

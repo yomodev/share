@@ -4,47 +4,14 @@
 @inject TabService TabService
 
 <div class="bm-page bm-page-fill" style="overflow:hidden;display:flex;flex-direction:column;">
-
-    <!-- ── Workspace toolbar ──────────────────────────────────────────────── -->
-    <div class="bm-lv-toolbar" style="flex-shrink:0;gap:4px">
-        <MudTooltip Text="Open file…">
-            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                           Size="Size.Small"
-                           OnClick="OpenDialog" />
-        </MudTooltip>
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Duplicate right">
-            <MudIconButton Icon="@Icons.Material.Outlined.VerticalSplit"
-                           Size="Size.Small"
-                           Disabled="@(_selected is null)"
-                           OnClick="DupH" />
-        </MudTooltip>
-        <MudTooltip Text="Duplicate down">
-            <MudIconButton Icon="@Icons.Material.Outlined.HorizontalSplit"
-                           Size="Size.Small"
-                           Disabled="@(_selected is null)"
-                           OnClick="DupV" />
-        </MudTooltip>
-
-        <MudDivider Vertical="true" FlexItem="true" Style="margin:4px 2px" />
-
-        <MudTooltip Text="Close panel">
-            <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                           Size="Size.Small"
-                           Disabled="@(_selected is null)"
-                           OnClick="CloseSelected" />
-        </MudTooltip>
-    </div>
-
-    <!-- ── Panel tree ─────────────────────────────────────────────────────── -->
-    <div style="flex:1;min-height:0;display:flex;overflow:hidden">
-        <WorkspacePanel Node="@_root"
-                        SelectedLeaf="@_selected"
-                        OnSelect="OnSelect"
-                        OnRatioChanged="OnRatioChanged" />
-    </div>
+    <WorkspacePanel Node="@_root"
+                    SelectedLeaf="@_selected"
+                    OnSelect="OnSelect"
+                    OnOpen="OnOpen"
+                    OnDupH="OnDupH"
+                    OnDupV="OnDupV"
+                    OnClose="OnClose"
+                    OnRatioChanged="OnRatioChanged" />
 </div>
 
 @code {
@@ -71,54 +38,14 @@
         _selected = leaf;
     }
 
-    // ── Selection ─────────────────────────────────────────────────────────
+    private void OnSelect(WsLeaf leaf) { _selected = leaf; StateHasChanged(); }
 
-    private void OnSelect(WsLeaf leaf)
+    private async Task OnOpen(WsLeaf leaf)
     {
         _selected = leaf;
-        StateHasChanged();
-    }
-
-    // ── Toolbar actions ───────────────────────────────────────────────────
-
-    private void DupH() => Duplicate(WsDir.H);
-    private void DupV() => Duplicate(WsDir.V);
-
-    private void Duplicate(WsDir dir)
-    {
-        if (_selected is null) return;
-        var clone = new WsLeaf(_selected.Path, _selected.Env, _selected.FileName);
-        _root     = _root.Replace(_selected, new WsSplit(dir, 0.5, _selected, clone));
-        _selected = clone;
-        StateHasChanged();
-    }
-
-    private void CloseSelected()
-    {
-        if (_selected is null) return;
-
-        if (_root is WsLeaf)
-        {
-            if (TabService.ActiveTab is { } tab)
-                TabService.Close(tab.Id);
-            return;
-        }
-
-        var sibling = _root.FindLeaf(l => !ReferenceEquals(l, _selected));
-        var next    = _root.Remove(_selected);
-        if (next is null) return;
-        _root     = next;
-        _selected = sibling;
-        StateHasChanged();
-    }
-
-    // ── Open dialog ───────────────────────────────────────────────────────
-
-    private async Task OpenDialog()
-    {
         var dialog = await DialogService.ShowAsync<OpenLogFileDialog>("Open log file", _dialogOpts);
         var result = await dialog.Result;
-        if (result is null || result.Canceled || _selected is null) return;
+        if (result is null || result.Canceled) return;
 
         var (path, placement) = ((string, OpenLogFileDialog.WsPlacement))result.Data!;
         var fileName = System.IO.Path.GetFileName(path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : path;
@@ -126,16 +53,16 @@
         switch (placement)
         {
             case OpenLogFileDialog.WsPlacement.Replace:
-                _selected.Path     = path;
-                _selected.FileName = fileName;
+                leaf.Path     = path;
+                leaf.FileName = fileName;
                 break;
 
             case OpenLogFileDialog.WsPlacement.Left:
             case OpenLogFileDialog.WsPlacement.Top:
             {
                 var dir     = placement == OpenLogFileDialog.WsPlacement.Left ? WsDir.H : WsDir.V;
-                var newLeaf = new WsLeaf(path, _selected.Env, fileName);
-                _root       = _root.Replace(_selected, new WsSplit(dir, 0.5, newLeaf, _selected));
+                var newLeaf = new WsLeaf(path, leaf.Env, fileName);
+                _root       = _root.Replace(leaf, new WsSplit(dir, 0.5, newLeaf, leaf));
                 _selected   = newLeaf;
                 break;
             }
@@ -144,17 +71,40 @@
             case OpenLogFileDialog.WsPlacement.Bottom:
             {
                 var dir     = placement == OpenLogFileDialog.WsPlacement.Right ? WsDir.H : WsDir.V;
-                var newLeaf = new WsLeaf(path, _selected.Env, fileName);
-                _root       = _root.Replace(_selected, new WsSplit(dir, 0.5, _selected, newLeaf));
+                var newLeaf = new WsLeaf(path, leaf.Env, fileName);
+                _root       = _root.Replace(leaf, new WsSplit(dir, 0.5, leaf, newLeaf));
                 _selected   = newLeaf;
                 break;
             }
         }
-
         StateHasChanged();
     }
 
-    // ── Panel events ──────────────────────────────────────────────────────
+    private void OnDupH(WsLeaf leaf) => Duplicate(leaf, WsDir.H);
+    private void OnDupV(WsLeaf leaf) => Duplicate(leaf, WsDir.V);
+
+    private void Duplicate(WsLeaf leaf, WsDir dir)
+    {
+        var clone = new WsLeaf(leaf.Path, leaf.Env, leaf.FileName);
+        _root     = _root.Replace(leaf, new WsSplit(dir, 0.5, leaf, clone));
+        _selected = clone;
+        StateHasChanged();
+    }
+
+    private void OnClose(WsLeaf leaf)
+    {
+        if (_root is WsLeaf)
+        {
+            if (TabService.ActiveTab is { } tab) TabService.Close(tab.Id);
+            return;
+        }
+        var sibling = _root.FindLeaf(l => !ReferenceEquals(l, leaf));
+        var next    = _root.Remove(leaf);
+        if (next is null) return;
+        _root     = next;
+        _selected = sibling;
+        StateHasChanged();
+    }
 
     private void OnRatioChanged((WsSplit split, double ratio) args)
     {
