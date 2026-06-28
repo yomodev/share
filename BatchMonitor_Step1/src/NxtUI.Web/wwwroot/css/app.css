@@ -925,7 +925,7 @@ html, body {
 .bm-batch-toolbar    .mud-input-root,
 .bm-svc-toolbar-left .mud-input-root,
 .bm-lb-filter-toolbar .mud-input-root {
-    font-size: 12px !important;
+    font-size: 14px !important;
     min-height: 32px !important;
     height: 32px !important;
 }
@@ -940,7 +940,7 @@ html, body {
 .bm-batch-toolbar    input,
 .bm-svc-toolbar-left input,
 .bm-lb-filter-toolbar input {
-    font-size: 12px !important;
+    font-size: 14px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
@@ -1330,7 +1330,7 @@ html, body {
 .bm-mongo-db-select .mud-form-control { width: fit-content; min-width: 80px; }
 /* Font only — no height override, let MudBlazor default height apply so it matches the adjacent FilterBox */
 .bm-mongo-db-select .mud-input-root,
-.bm-mongo-db-select .mud-select-input { font-size: 12px !important; }
+.bm-mongo-db-select .mud-select-input { font-size: 14px !important; }
 /* Dropdown popover — no word-wrap, compact item height */
 .bm-mongo-db-popover .mud-list-item {
     white-space: nowrap !important;
@@ -1340,7 +1340,7 @@ html, body {
     padding-left: 12px !important;
     padding-right: 16px !important;
 }
-.bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; font-size: 12px !important; }
+.bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; font-size: 14px !important; }
 
 .bm-mongo-id {
     font-size: 11px;
