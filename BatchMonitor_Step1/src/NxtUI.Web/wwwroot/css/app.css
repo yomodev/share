@@ -922,14 +922,14 @@ html, body {
 .bm-svc-toolbar-left .bm-filter-box .mud-input-root,
 .bm-lb-toolbar-right .bm-filter-box .mud-input-root {
     font-size: 12px !important;
-    min-height: 28px !important;
-    height: 28px !important;
+    min-height: 32px !important;
+    height: 32px !important;
 }
 .bm-batch-toolbar    .bm-filter-box .mud-input-slot,
 .bm-svc-toolbar-left .bm-filter-box .mud-input-slot,
 .bm-lb-toolbar-right .bm-filter-box .mud-input-slot {
-    min-height: 28px !important;
-    height: 28px !important;
+    min-height: 32px !important;
+    height: 32px !important;
     padding-top: 2px !important;
     padding-bottom: 2px !important;
 }
