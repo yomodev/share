@@ -625,7 +625,7 @@
     // ── helpers ───────────────────────────────────────────────────────────
 
     private void OpenInViewer(LogFileEntry file) =>
-        TabService.OpenOrFocus(TabModel.CreateLogViewer(file.FullPath, Env));
+        TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
 
     private void OpenInWorkspace(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
@@ -642,7 +642,7 @@
         InvokeAsync(() =>
         {
             var label = System.IO.Path.GetFileName(filename) is { Length: > 0 } n ? n : filename;
-            var tab = TabModel.CreateLogViewer("local:" + key, Env);
+            var tab   = TabModel.CreateLogWorkspace("local:" + key, Env);
             tab.Label      = label;
             tab.NoNavigate = true;
             TabService.OpenOrFocus(tab);

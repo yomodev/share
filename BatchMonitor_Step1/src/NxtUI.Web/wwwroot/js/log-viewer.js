@@ -156,7 +156,8 @@ function createDom(container, opts) {
     scrollEl.appendChild(innerEl);
 
     const rowsEl = document.createElement('div');
-    rowsEl.style.cssText = 'position:absolute;top:0;left:0;right:0;';
+    rowsEl.style.cssText = 'position:absolute;top:0;left:0;';
+    applyRowsWidth(rowsEl, opts.wordWrap ?? false);
     innerEl.appendChild(rowsEl);
 
     const mapEl = document.createElement('canvas');
@@ -177,6 +178,18 @@ function applyFontSize(scrollEl, size) {
 
 function applyWordWrap(scrollEl, wrap) {
     scrollEl.dataset.wrap = wrap ? '1' : '0';
+}
+
+function applyRowsWidth(rowsEl, wrap) {
+    if (wrap) {
+        rowsEl.style.right    = '0';
+        rowsEl.style.width    = '';
+        rowsEl.style.minWidth = '';
+    } else {
+        rowsEl.style.right    = '';
+        rowsEl.style.width    = 'max-content';
+        rowsEl.style.minWidth = '100%';
+    }
 }
 
 // ── Scrollmap ─────────────────────────────────────────────────────────────────
@@ -722,6 +735,7 @@ function setWordWrap(container, wrap) {
     const vp = _vp.get(container);
     if (!vp) return;
     applyWordWrap(vp.scrollEl, wrap);
+    applyRowsWidth(vp.rowsEl, wrap);
     vp.measuredH.clear();
     vp.cum = buildCumulatives(vp.visibleEntries);
     updateInnerHeight(vp);

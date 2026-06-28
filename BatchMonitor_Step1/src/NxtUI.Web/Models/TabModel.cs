@@ -215,10 +215,10 @@ public class TabModel
     {
         Id          = $"detail:workspace:{Uri.EscapeDataString(path)}:{env}",
         Type        = TabType.LogWorkspace,
-        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Workspace",
+        Label       = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
         Environment = env,
         EntityId    = path,
-        Icon        = MudBlazor.Icons.Material.Outlined.GridView
+        Icon        = MudBlazor.Icons.Material.Outlined.Article
     };
 
     public static TabModel CreateFilterHelp() => new()

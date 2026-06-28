@@ -2035,8 +2035,16 @@ tr.bm-row-searching td:first-child {
 
 /* ── Workspace split panels ──────────────────────────────────────────────── */
 .ws-leaf-selected {
-    outline: 2px solid var(--mud-palette-primary);
-    outline-offset: -2px;
+    position: relative;
+}
+
+.ws-leaf-selected::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--mud-palette-primary);
+    pointer-events: none;
+    z-index: 100;
 }
 
 .ws-handle-h {
