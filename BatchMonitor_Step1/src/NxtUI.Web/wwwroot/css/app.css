@@ -914,16 +914,25 @@ html, body {
 .bm-svc-toolbar-left > .bm-filter-box,
 .bm-lb-toolbar-right > .bm-filter-box { flex: 1 1 0; min-width: 0; }
 
-/* ── Reduce FilterBox height to match icon buttons (~30 px) ──────────── */
-/* !important needed: MudBlazor sets min-height and padding with higher   */
-/* specificity on margin-dense variants.                                  */
-.bm-filter-box .mud-input-root         { min-height: 30px !important; }
-.bm-filter-box input.mud-input         { padding-top: 3px !important; padding-bottom: 3px !important; }
-.bm-filter-box .mud-input-root,
-.bm-filter-box input.mud-input         { font-size: 12px !important; }
-/* Adornment icons — search and clear × */
-.bm-filter-box .mud-input-adornment .mud-icon-root { font-size: 16px !important; width: 16px !important; height: 16px !important; }
-.bm-filter-box .mud-input-clear-button             { padding: 2px !important; }
+/* ── FilterBox height: match icon buttons (~30 px) in standard toolbars ─ */
+/* Scoped to specific toolbar contexts so the LogViewer toolbar (which has */
+/* its own compact CSS under .bm-lv-toolbar-sm) is not affected.           */
+.bm-batch-toolbar    .bm-filter-box .mud-input-root,
+.bm-svc-toolbar-left .bm-filter-box .mud-input-root,
+.bm-lb-toolbar-right .bm-filter-box .mud-input-root { min-height: 30px !important; }
+
+.bm-batch-toolbar    .bm-filter-box input.mud-input,
+.bm-svc-toolbar-left .bm-filter-box input.mud-input,
+.bm-lb-toolbar-right .bm-filter-box input.mud-input {
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+    font-size: 12px !important;
+}
+.bm-batch-toolbar    .bm-filter-box .mud-input-adornment .mud-icon-root,
+.bm-svc-toolbar-left .bm-filter-box .mud-input-adornment .mud-icon-root,
+.bm-lb-toolbar-right .bm-filter-box .mud-input-adornment .mud-icon-root {
+    font-size: 16px !important; width: 16px !important; height: 16px !important;
+}
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
