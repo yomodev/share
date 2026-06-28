@@ -2,7 +2,7 @@ using NxtUI.Core.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service (one per Blazor circuit) that owns a single SignalR

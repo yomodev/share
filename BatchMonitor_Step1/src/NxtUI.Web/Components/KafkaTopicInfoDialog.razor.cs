@@ -1,4 +1,4 @@
-namespace NxtUI.Components;
+namespace NxtUI.Web.Components;
 
 public partial class KafkaTopicInfoDialog
 {

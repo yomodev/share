@@ -1,7 +1,7 @@
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-run data container for the Timeline tab.

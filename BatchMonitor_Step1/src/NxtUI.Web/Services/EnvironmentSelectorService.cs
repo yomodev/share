@@ -3,7 +3,7 @@ using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service that owns the "currently selected environment" for a Blazor circuit.

@@ -4,7 +4,7 @@ using NxtUI.Configuration;
 using NxtUI.Logging;
 using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Test-only background service that:

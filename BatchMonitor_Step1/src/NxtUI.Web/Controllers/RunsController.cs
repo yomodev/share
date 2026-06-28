@@ -1,9 +1,9 @@
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
-using NxtUI.Services;
+using NxtUI.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace NxtUI.Controllers;
+namespace NxtUI.Web.Controllers;
 
 [ApiController]
 [Route("api/{env}/runs")]

@@ -7,7 +7,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Filtering;
-using NxtUI.Services;
+using NxtUI.Web.Services;
 
 namespace NxtUI.Web.Services;
 

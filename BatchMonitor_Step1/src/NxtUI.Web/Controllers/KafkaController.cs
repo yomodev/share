@@ -2,7 +2,7 @@ using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace NxtUI.Controllers;
+namespace NxtUI.Web.Controllers;
 
 [ApiController]
 [Route("api/{env}/kafka")]

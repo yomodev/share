@@ -1,9 +1,9 @@
 using NxtUI.Core.Services;
-using NxtUI.Hubs;
+using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
 using Microsoft.AspNetCore.SignalR;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 public class MockRunService : IRunService
 {

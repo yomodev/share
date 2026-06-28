@@ -1,4 +1,4 @@
-namespace NxtUI.Pages;
+namespace NxtUI.Web.Pages;
 
 public partial class ServicesPage
 {

@@ -5,7 +5,7 @@ using NxtUI.Configuration;
 using NxtUI.Logging;
 using NxtUI.Core.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Background metrics monitor. For each subscribed environment it periodically reads

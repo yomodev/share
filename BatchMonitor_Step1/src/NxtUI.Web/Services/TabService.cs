@@ -1,6 +1,6 @@
 using NxtUI.Web.Models;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Scoped service that owns the list of open tabs for a Blazor circuit.

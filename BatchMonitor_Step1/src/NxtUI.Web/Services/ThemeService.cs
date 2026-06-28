@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using MudBlazor;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 public enum ThemeMode { Dark, Light, System }
 

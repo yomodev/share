@@ -3,7 +3,7 @@ using NxtUI.Configuration;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Background singleton that polls Kafka and Mongo health every <see cref="PollIntervalSeconds"/>

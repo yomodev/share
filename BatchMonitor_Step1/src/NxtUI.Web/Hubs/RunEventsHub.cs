@@ -1,7 +1,7 @@
 using NxtUI.Core.Models;
 using Microsoft.AspNetCore.SignalR;
 
-namespace NxtUI.Hubs;
+namespace NxtUI.Web.Hubs;
 
 /// <summary>
 /// SignalR hub for real-time run event streaming.

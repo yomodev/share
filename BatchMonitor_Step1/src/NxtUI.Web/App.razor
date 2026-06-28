@@ -1,12 +1,12 @@
-@namespace NxtUI
+@namespace NxtUI.Web
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(NxtUI.Layout.MainLayout)" />
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(NxtUI.Web.Layout.MainLayout)" />
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />
     </Found>
     <NotFound>
         <PageTitle>Not found</PageTitle>
-        <LayoutView Layout="@typeof(NxtUI.Layout.MainLayout)">
+        <LayoutView Layout="@typeof(NxtUI.Web.Layout.MainLayout)">
             <MudText Typo="Typo.h6" Class="pa-4">Page not found.</MudText>
         </LayoutView>
     </NotFound>

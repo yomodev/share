@@ -2,7 +2,7 @@ using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 using System.Threading.Tasks;
 
-namespace NxtUI.Services;
+namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-tab event accumulator. Combines two delivery paths (Step 9):
