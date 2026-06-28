@@ -1334,6 +1334,8 @@ html, body {
     min-height: 0 !important;
     padding-top: 4px !important;
     padding-bottom: 4px !important;
+    padding-left: 12px !important;
+    padding-right: 16px !important;
 }
 .bm-mongo-db-popover .mud-list-item-text { white-space: nowrap !important; font-size: 12px !important; }
 
