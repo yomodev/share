@@ -887,6 +887,16 @@ html, body {
    FILTER BOX
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Error tooltip — amber background so it's visually distinct from info tooltips */
+.bm-filter-error-tooltip .mud-tooltip {
+    background-color: var(--mud-palette-warning-darken) !important;
+    color: #fff !important;
+    font-size: 12px;
+    max-width: 340px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Wrapper is a flex row: [text field] [help button] */
 .bm-filter-box {
     display: flex;

@@ -8,20 +8,25 @@
 
 <div class="bm-filter-box @Class">
 
-    <MudTextField T="string" @ref="_field"
-                  Placeholder="@Placeholder"
-                  Adornment="Adornment.Start"
-                  AdornmentIcon="@Icons.Material.Outlined.Search"
-                  Value="@Value"
-                  ValueChanged="NotifyChanged"
-                  Immediate="true"
-                  DebounceInterval="@DebounceMs"
-                  Variant="Variant.Outlined"
-                  Margin="Margin.Dense"
-                  Error="@(ParseError is not null)"
-                  Clearable="true"
-                  OnClearButtonClick="ClearAsync"
-                  Style="flex:1;min-width:0;" />
+    <MudTooltip Text="@(ParseError ?? "")"
+                Placement="Placement.Bottom"
+                Disabled="@(ParseError is null)"
+                RootClass="bm-filter-error-tooltip">
+        <MudTextField T="string" @ref="_field"
+                      Placeholder="@Placeholder"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Outlined.Search"
+                      Value="@Value"
+                      ValueChanged="NotifyChanged"
+                      Immediate="true"
+                      DebounceInterval="@DebounceMs"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Error="@(ParseError is not null)"
+                      Clearable="true"
+                      OnClearButtonClick="ClearAsync"
+                      Style="flex:1;min-width:0;" />
+    </MudTooltip>
 
     <MudMenu @ref="_menu"
              AnchorOrigin="Origin.BottomRight"
