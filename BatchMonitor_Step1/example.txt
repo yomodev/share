@@ -10411,7 +10411,7 @@ LENGTH 697
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 11612
+LENGTH 11711
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 using NLog;
@@ -10567,9 +10567,9 @@ public class Program
             var services = heartbeat.GetServices(env);
             if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
 
-            var cutoff = DateTime.UtcNow.AddMinutes(-10);
+            // Include all services the heartbeat knows about (online and offline).
+            // The heartbeat service already manages freshness — no extra cutoff here.
             var hosts = services
-                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
                 .GroupBy(s => s.HostName)
                 .Select(g => new
                 {
@@ -10579,9 +10579,10 @@ public class Program
                         var m = metrics.GetLatest(env, s);
                         return new
                         {
-                            name = s.ServiceName,
-                            pid  = s.ProcessId,
-                            ram  = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                            name   = s.ServiceName,
+                            pid    = s.ProcessId,
+                            online = s.IsOnline,
+                            ram    = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
                         };
                     })
                     .OrderByDescending(s => s.ram ?? 0)
@@ -10665,7 +10666,7 @@ LENGTH 642
 @using NxtUI.Web.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
-LENGTH 889
+LENGTH 1196
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -10677,9 +10678,15 @@ LENGTH 889
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
+  <!-- Needed to resolve ASP.NET Core types from NxtUI.Web -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="FluentAssertions" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
@@ -10692,6 +10699,7 @@ LENGTH 889
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\NxtUI.Core\NxtUI.Core.csproj" />
+    <ProjectReference Include="..\..\src\NxtUI.Web\NxtUI.Web.csproj" />
   </ItemGroup>
 
 </Project>
@@ -22351,7 +22359,7 @@ LENGTH 16875
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=15"></script>
+    <script src="js/d3-home-treemap.js?v=16"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -25970,6 +25978,632 @@ public class FilterParserTests
             case OrNode or:  Collect(or.Left, acc);  Collect(or.Right, acc); break;
             case AndNode and: Collect(and.Left, acc); Collect(and.Right, acc); break;
             case NotNode not: Collect(not.Operand, acc); break;
+        }
+    }
+}
+FILE tests/NxtUI.Tests/Performance/HomeTreemapPerfTests.cs
+LENGTH 5229
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Services;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Reproduces the home treemap data flow:
+///   1. HeartbeatMonitor.Subscribe(env) → triggers immediate poll of IHeartbeatService
+///   2. Wait for cache to fill (OnServicesUpdated fires)
+///   3. ServiceMetricsMonitor data (RAM per service) read from log files
+///   4. Assemble the same payload the /api/treemap/{env} endpoint returns
+///
+/// "Taking ages" is most commonly caused by:
+///   - IHeartbeatService (MongoDB) taking long on cold start
+///   - Log file UNC paths unreachable → connection timeouts in ServiceMetricsMonitor
+///   - 10-second JS poll interval after the first empty response
+/// </summary>
+public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task HeartbeatCacheFill_Timing()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Subscribing to env '{env}'…");
+
+        // The subscription triggers an immediate poll (same as HomeMemoryTreemap.razor
+        // calling MetricsMonitor.Subscribe → which subscribes HeartbeatMonitor).
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e =>
+        {
+            if (e == env) tcs.TrySetResult(e);
+        };
+
+        using var sub = heartbeat.Subscribe(env);
+        out_.WriteLine($"[{sw.Elapsed:c}] Subscribe() returned — waiting for first OnServicesUpdated…");
+
+        var notified = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+        out_.WriteLine($"[{sw.Elapsed:c}] OnServicesUpdated fired: {notified == tcs.Task}");
+
+        // Read the cache exactly as the API endpoint does.
+        var services = heartbeat.GetServices(env);
+        out_.WriteLine($"[{sw.Elapsed:c}] GetServices → {services?.Count ?? 0} services");
+
+        // Assemble the treemap payload (mirrors Program.cs MapGet logic).
+        if (services is not null)
+        {
+            var metrics = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+            var cutoff  = DateTime.UtcNow.AddMinutes(-10);
+            var hosts   = services
+                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
+                .GroupBy(s => s.HostName)
+                .Select(g => new
+                {
+                    host     = g.Key,
+                    services = g.Select(s =>
+                    {
+                        var m = metrics.GetLatest(env, s);
+                        return new { s.ServiceName, ramMb = m is null ? (double?)null : (m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0 };
+                    }).ToArray()
+                }).ToArray();
+
+            out_.WriteLine($"[{sw.Elapsed:c}] Treemap payload: {hosts.Length} hosts");
+            foreach (var h in hosts)
+            {
+                var withRam = h.services.Count(s => s.ramMb.HasValue);
+                out_.WriteLine($"  {h.host}: {h.services.Length} services, {withRam} with RAM data");
+            }
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task MetricsAvailability_AfterHeartbeatFills()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        // Ensure heartbeat is filled.
+        var hbDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) hbDone.TrySetResult(true); };
+        using var hbSub = heartbeat.Subscribe(env);
+        await Task.WhenAny(hbDone.Task, Task.Delay(30_000));
+        out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat ready — {heartbeat.GetServices(env)?.Count ?? 0} services");
+
+        // Subscribe to metrics (same as the ServicesPage + HomeMemoryTreemap do).
+        // MetricsMonitor will start reading log files in background.
+        var metricsFired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        metrics.OnMetricsUpdated += e => { if (e == env) metricsFired.TrySetResult(true); };
+        using var mSub = metrics.Subscribe(env);
+        out_.WriteLine($"[{sw.Elapsed:c}] MetricsMonitor subscribed — waiting for first OnMetricsUpdated…");
+
+        var got = await Task.WhenAny(metricsFired.Task, Task.Delay(TimeSpan.FromMinutes(2)));
+        out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {got == metricsFired.Task}");
+
+        // Sample how many services have RAM data.
+        var services = heartbeat.GetServices(env) ?? [];
+        var withRam  = services.Count(s => metrics.GetLatest(env, s) is not null);
+        out_.WriteLine($"[{sw.Elapsed:c}] {withRam}/{services.Count} services have RAM data.");
+    }
+}
+FILE tests/NxtUI.Tests/Performance/KafkaPerfTests.cs
+LENGTH 3169
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Reproduces the KafkaDashboard load sequence:
+///   Phase 1 — GetClusterInfoAsync (shows cluster bar) + GetTopicsAsync (shows table)
+///   Phase 2 — GetTopicConfigAsync per topic (enriches cleanup policy / retention)
+/// </summary>
+public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task TopicsLoad_TwoPhase_Timing()
+    {
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        // Phase 1a — cluster info (renders the cluster bar in the UI).
+        var clusterTask = kafka.GetClusterInfoAsync(env);
+        var topicsTask  = kafka.GetTopicsAsync(env);
+
+        var cluster = await clusterTask;
+        out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers, " +
+                       $"controller={cluster.ControllerId}, cluster={cluster.ClusterId}");
+
+        // Phase 1b — topic list (renders the table).
+        var topics = (await topicsTask).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] GetTopicsAsync: {topics.Count} topics");
+
+        // Phase 2 — per-topic config enrichment (runs in parallel in the page).
+        out_.WriteLine($"[{sw.Elapsed:c}] Starting per-topic config enrichment ({topics.Count} topics)…");
+        var enriched = 0;
+        await Task.WhenAll(topics.Select(async t =>
+        {
+            var tSw  = Stopwatch.StartNew();
+            var cfg  = await kafka.GetTopicConfigAsync(env, t.Name);
+            Interlocked.Increment(ref enriched);
+            out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: policy={cfg.CleanupPolicy}, retention={FormatRetention(cfg.RetentionMs)}");
+        }));
+
+        out_.WriteLine($"[{sw.Elapsed:c}] All {enriched} topics enriched.");
+    }
+
+    [Fact]
+    public async Task ConsumersLoad_Timing()
+    {
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        var clusterTask = kafka.GetClusterInfoAsync(env);
+        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env);
+
+        var cluster = await clusterTask;
+        out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers");
+
+        var groups = (await groupsTask).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] GetAllConsumerGroupsAsync: {groups.Count} groups");
+
+        // Per-group lag detail (triggered when user selects a group in the UI).
+        foreach (var g in groups.Take(3))
+        {
+            var lags = await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+            out_.WriteLine($"  [{sw.Elapsed:c}] {g.GroupId}: {lags.Count} topics, totalLag={lags.Sum(l => l.Lag)}");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    private static string FormatRetention(long ms) =>
+        ms < 0 ? "∞" : ms >= 86_400_000 ? $"{ms / 86_400_000}d" : $"{ms / 3_600_000}h";
+}
+FILE tests/NxtUI.Tests/Performance/LogBrowserPerfTests.cs
+LENGTH 4018
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Reproduces the LogBrowser load sequence:
+///   OnInitializedAsync — GetSubfoldersAsync(servers, "") — root-level folder enumeration
+///   User expands node  — GetSubfoldersAsync(servers, path)
+///   User searches      — SearchAsync (recursive, streaming)
+///
+/// Bottlenecks are typically UNC path access latency and the number of servers/folders
+/// that must be enumerated in parallel.
+/// </summary>
+public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task RootFolderEnumeration_Timing()
+    {
+        var browser  = fix.Services.GetRequiredService<ILogBrowserService>();
+        var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
+        var sw       = Stopwatch.StartNew();
+
+        var servers = logPaths.Servers;
+        out_.WriteLine($"[{sw.Elapsed:c}] Servers configured: {servers.Count}");
+        foreach (var s in servers)
+            out_.WriteLine($"  {s} → root={browser.ResolveRoot(s) ?? "(no root)"}");
+
+        if (servers.Count == 0)
+        {
+            out_.WriteLine("No servers configured in Logs:Servers — add server names to appsettings.json to test log browser.");
+            return;
+        }
+
+        // Same call as LogBrowser OnInitializedAsync.
+        out_.WriteLine($"[{sw.Elapsed:c}] GetSubfoldersAsync(\"\") — enumerating root folders across all servers…");
+        var roots = await browser.GetSubfoldersAsync(servers, "", CancellationToken.None);
+        out_.WriteLine($"[{sw.Elapsed:c}] Root folders: {roots.Count}");
+        foreach (var r in roots.Take(20))
+            out_.WriteLine($"  {r.RelativePath} [{r.Name}] (hasChildren={r.HasChildren})");
+
+        // Expand the first few nodes (simulates user clicking expand in the tree).
+        foreach (var node in roots.Where(r => r.HasChildren).Take(3))
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Expanding '{node.RelativePath}'…");
+            var children = await browser.GetSubfoldersAsync(servers, node.RelativePath, CancellationToken.None);
+            out_.WriteLine($"[{sw.Elapsed:c}]   {children.Count} children");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task FileSearch_Timing()
+    {
+        var browser  = fix.Services.GetRequiredService<ILogBrowserService>();
+        var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
+        var sw       = Stopwatch.StartNew();
+
+        var servers = logPaths.Servers;
+        if (servers.Count == 0)
+        {
+            out_.WriteLine("No servers configured — skipping file search test.");
+            return;
+        }
+
+        // Simulates the user searching for *.log files with no content filter.
+        using var cts   = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var fileCount   = 0;
+        var totalBytes  = 0L;
+
+        out_.WriteLine($"[{sw.Elapsed:c}] SearchAsync *.log (no content filter, root path)…");
+
+        await foreach (var entry in browser.SearchAsync(servers, "", "*.log", null, cts.Token))
+        {
+            fileCount++;
+            totalBytes += entry.SizeBytes;
+
+            // Print first 10 then every 100th.
+            if (fileCount <= 10 || fileCount % 100 == 0)
+                out_.WriteLine($"  [{sw.Elapsed:c}] #{fileCount} {entry.Server}/{entry.FileName} ({FormatBytes(entry.SizeBytes)})");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Search complete: {fileCount} files, {FormatBytes(totalBytes)} total.");
+    }
+
+    private static string FormatBytes(long b) =>
+        b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
+}
+FILE tests/NxtUI.Tests/Performance/MongoPerfTests.cs
+LENGTH 3618
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Reproduces the MongoDashboard load sequence:
+///   OnInitializedAsync — GetDatabasesAsync
+///   Phase 1            — GetCollectionNamesAsync (fast — renders table immediately)
+///   Phase 2            — GetCollectionStatsAsync per collection (enriches docs/size/indexes)
+/// </summary>
+public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task DatabasesAndCollections_TwoPhase_Timing()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        // OnInitializedAsync — list databases.
+        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync: {databases.Count} databases");
+        foreach (var db in databases)
+            out_.WriteLine($"  {db.Name}: {db.CollectionCount} collections, {FormatBytes(db.SizeBytes)}");
+
+        if (databases.Count == 0) { out_.WriteLine("No databases — skipping collection tests."); return; }
+
+        var firstDb = databases[0].Name;
+        out_.WriteLine($"[{sw.Elapsed:c}] Loading collections for '{firstDb}'…");
+
+        // Phase 1 — collection names (fast, renders table rows immediately).
+        var names = (await mongo.GetCollectionNamesAsync(env, firstDb)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] GetCollectionNamesAsync: {names.Count} collections");
+
+        // Phase 2 — per-collection stats enrichment (parallel, same pattern as the page).
+        out_.WriteLine($"[{sw.Elapsed:c}] Enriching {names.Count} collections in parallel…");
+        var enriched = 0;
+        await Task.WhenAll(names.Select(async name =>
+        {
+            var tSw  = Stopwatch.StartNew();
+            var stats = await mongo.GetCollectionStatsAsync(env, firstDb, name);
+            Interlocked.Increment(ref enriched);
+            if (stats is not null)
+                out_.WriteLine($"  [{tSw.Elapsed:c}] {name}: {stats.DocumentCount:N0} docs, {FormatBytes(stats.StorageSizeBytes)}, {stats.IndexCount} indexes");
+            else
+                out_.WriteLine($"  [{tSw.Elapsed:c}] {name}: stats unavailable");
+        }));
+
+        out_.WriteLine($"[{sw.Elapsed:c}] All {enriched} collections enriched.");
+    }
+
+    [Fact]
+    public async Task AllDatabases_CollectionStats_Timing()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] {databases.Count} databases");
+
+        foreach (var db in databases)
+        {
+            var names = (await mongo.GetCollectionNamesAsync(env, db.Name)).ToList();
+            out_.WriteLine($"[{sw.Elapsed:c}] {db.Name}: {names.Count} collections");
+
+            var enrichTask = Task.WhenAll(names.Select(n => mongo.GetCollectionStatsAsync(env, db.Name, n)));
+            await enrichTask;
+            out_.WriteLine($"[{sw.Elapsed:c}] {db.Name} enrichment done");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Total time for all databases.");
+    }
+
+    private static string FormatBytes(long b) =>
+        b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
+}
+FILE tests/NxtUI.Tests/Performance/ServiceFixture.cs
+LENGTH 8555
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Services;
+using NxtUI.Core.Services.Kafka;
+using NxtUI.Core.Services.Mock;
+using NxtUI.Core.Services.Mongo;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Shared xUnit class fixture that boots the same DI container as Program.cs
+/// (minus Blazor / MudBlazor / HTTP pipeline) so perf tests exercise the
+/// real service call paths.
+///
+/// By default the mock implementations are registered — same as the running app.
+/// To test against real infrastructure, swap the commented lines in RegisterServices().
+/// </summary>
+public sealed class ServiceFixture : IAsyncLifetime
+{
+    private IHost _host = null!;
+
+    public IServiceProvider Services => _host.Services;
+
+    /// <summary>Environment IDs from App.Environments in appsettings.json.</summary>
+    public string[] Environments { get; private set; } = [];
+
+    /// <summary>The default environment (App.DefaultEnvironment).</summary>
+    public string DefaultEnv { get; private set; } = "DEV1";
+
+    // ── IAsyncLifetime ────────────────────────────────────────────────────────
+
+    public async ValueTask InitializeAsync()
+    {
+        var config = BuildConfiguration();
+
+        var appSettings = config.GetSection(AppSettings.SectionName).Get<AppSettings>() ?? new();
+        Environments = appSettings.Environments.Select(e => e.Id).ToArray();
+        DefaultEnv   = appSettings.DefaultEnvironment;
+
+        _host = Host.CreateDefaultBuilder()
+            .ConfigureLogging(log =>
+            {
+                log.ClearProviders();
+                // Uncomment to see debug output from services in test output:
+                // log.AddConsole().SetMinimumLevel(LogLevel.Debug);
+            })
+            .ConfigureServices((_, svc) => RegisterServices(svc, config))
+            .Build();
+
+        await _host.StartAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _host.StopAsync();
+        _host.Dispose();
+    }
+
+    // ── private ───────────────────────────────────────────────────────────────
+
+    private static IConfiguration BuildConfiguration()
+    {
+        // Walk up from the test output directory to find appsettings.json in NxtUI.Web.
+        // Typical path: tests/NxtUI.Tests/bin/Debug/net8.0 → src/NxtUI.Web
+        var dir = AppContext.BaseDirectory;
+        for (int i = 0; i < 8; i++)
+        {
+            var candidate = Path.Combine(dir, "src", "NxtUI.Web", "appsettings.json");
+            if (File.Exists(candidate))
+                return new ConfigurationBuilder()
+                    .SetBasePath(Path.GetDirectoryName(candidate)!)
+                    .AddJsonFile("appsettings.json")
+                    .AddJsonFile("appsettings.Development.json", optional: true)
+                    .AddEnvironmentVariables()
+                    .Build();
+            dir = Path.GetDirectoryName(dir) ?? dir;
+        }
+
+        // Fallback: minimal in-memory config so tests can still run without the file.
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["App:DefaultEnvironment"]       = "DEV1",
+                ["App:Environments:0:Id"]        = "DEV1",
+                ["App:Environments:0:Label"]     = "Development 1",
+                ["App:Environments:0:Tier"]      = "Development",
+                ["Heartbeats:IntervalSeconds"]   = "30",
+                ["Heartbeats:IdleReleaseMinutes"]= "10",
+                ["Logs:MetricsIntervalSeconds"]  = "90",
+                ["Logs:IdleReleaseMinutes"]      = "10",
+                ["Mongo:ConnectionString"]       = "mongodb://localhost:27017",
+                ["Kafka:BootstrapServers"]       = "localhost:9092",
+            })
+            .Build();
+    }
+
+    private static void RegisterServices(IServiceCollection svc, IConfiguration config)
+    {
+        // ── Configuration ─────────────────────────────────────────────────────
+        svc.Configure<AppSettings>      (config.GetSection(AppSettings.SectionName));
+        svc.Configure<HeartbeatSettings>(config.GetSection("Heartbeats"));
+        svc.Configure<LogPathSettings>  (config.GetSection(LogPathSettings.SectionName));
+        svc.Configure<MongoSettings>    (config.GetSection(MongoSettings.SectionName));
+        svc.Configure<KafkaSettings>    (config.GetSection(KafkaSettings.SectionName));
+
+        // ── Connection factories (used by real services) ───────────────────────
+        svc.AddSingleton<MongoConnection>();
+        svc.AddSingleton<KafkaConnection>();
+
+        // ── Heartbeat ─────────────────────────────────────────────────────────
+        // Mock (default — same as running app):
+        svc.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+        // Real MongoDB heartbeat — swap comment to test real infrastructure:
+        // svc.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+
+        svc.AddSingleton<HeartbeatMonitor>();
+        svc.AddSingleton<IHeartbeatMonitor>(sp => sp.GetRequiredService<HeartbeatMonitor>());
+        svc.AddHostedService(sp => sp.GetRequiredService<HeartbeatMonitor>());
+
+        // ── Mongo ─────────────────────────────────────────────────────────────
+        // Mock (default):
+        svc.AddSingleton<MockMongoService>();
+        svc.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MockMongoService>());
+        svc.AddSingleton<IMongoReader> (sp => sp.GetRequiredService<MockMongoService>());
+        svc.AddSingleton<IMongoAdmin>  (sp => sp.GetRequiredService<MockMongoService>());
+        // Real MongoDB — swap comment block:
+        // svc.AddSingleton<MongoService>();
+        // svc.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MongoService>());
+        // svc.AddSingleton<IMongoReader> (sp => sp.GetRequiredService<MongoService>());
+        // svc.AddSingleton<IMongoAdmin>  (sp => sp.GetRequiredService<MongoService>());
+
+        // ── Kafka ─────────────────────────────────────────────────────────────
+        // Mock (default):
+        svc.AddSingleton<MockKafkaService>();
+        svc.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<MockKafkaService>());
+        svc.AddSingleton<IKafkaMonitor>(sp => sp.GetRequiredService<MockKafkaService>());
+        svc.AddSingleton<IKafkaAdmin>  (sp => sp.GetRequiredService<MockKafkaService>());
+        // Real Kafka broker — swap comment block:
+        // svc.AddSingleton<KafkaService>();
+        // svc.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<KafkaService>());
+        // svc.AddSingleton<IKafkaMonitor>(sp => sp.GetRequiredService<KafkaService>());
+        // svc.AddSingleton<IKafkaAdmin>  (sp => sp.GetRequiredService<KafkaService>());
+
+        // ── Log discovery + browser ───────────────────────────────────────────
+        svc.AddSingleton<IEnvironmentService, MockEnvironmentService>();
+        svc.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
+        svc.AddSingleton<ILogBrowserService, LogBrowserService>();
+        svc.AddHttpClient();
+
+        // ── Metrics monitor ───────────────────────────────────────────────────
+        svc.AddSingleton<ServiceMetricsMonitor>();
+        svc.AddSingleton<IServiceMetricsMonitor>(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
+        svc.AddHostedService(sp => sp.GetRequiredService<ServiceMetricsMonitor>());
+    }
+}
+FILE tests/NxtUI.Tests/Performance/ServicesPerfTests.cs
+LENGTH 4647
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Services;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Reproduces the ServicesPage load sequence:
+///   OnInitializedAsync — HeartbeatMonitor.GetServices (cache hit or wait)
+///   Background         — ServiceMetricsMonitor reads log files → RAM data fills in
+///
+/// The page shows immediately from cache. The bottleneck when cache is cold is the
+/// time for IHeartbeatService.GetServiceStatusesAsync (MongoDB heartbeats query).
+/// The RAM columns fill in as ServiceMetricsMonitor reads log files from UNC paths.
+/// </summary>
+public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task ServicesPage_InitialLoad_Timing()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        // Check if cache is already warm (page shows immediately in this case).
+        var cached = heartbeat.GetServices(env);
+        if (cached is not null)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Cache already warm: {cached.Count} services — page shows immediately.");
+        }
+        else
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Cache cold — subscribing (triggers immediate poll)…");
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
+
+            using var sub = heartbeat.Subscribe(env);
+            await Task.WhenAny(tcs.Task, Task.Delay(30_000));
+            out_.WriteLine($"[{sw.Elapsed:c}] First heartbeat poll done: {heartbeat.GetServices(env)?.Count ?? 0} services");
+        }
+
+        // Log the service list (same as the page's LoadFromCache does).
+        var services = heartbeat.GetServices(env) ?? [];
+        out_.WriteLine($"[{sw.Elapsed:c}] Total services: {services.Count}");
+
+        var online  = services.Count(s => s.IsOnline);
+        var offline = services.Count - online;
+        out_.WriteLine($"  Online: {online}, Offline: {offline}");
+
+        // Group by host (useful for diagnosing per-server heartbeat delays).
+        foreach (var g in services.GroupBy(s => s.HostName).OrderBy(g => g.Key))
+            out_.WriteLine($"  Host {g.Key}: {g.Count()} services");
+
+        // Now check metrics availability.
+        out_.WriteLine($"[{sw.Elapsed:c}] Checking metrics (RAM data) availability…");
+        using var metSub = metrics.Subscribe(env);
+        var withRam = services.Count(s => metrics.GetLatest(env, s) is not null);
+        out_.WriteLine($"[{sw.Elapsed:c}] Immediate RAM data: {withRam}/{services.Count} services");
+
+        // Wait a moment to see if more metrics arrive quickly.
+        if (withRam < services.Count && services.Count > 0)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Waiting up to 10s for metrics to fill in…");
+            var metricsFired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            metrics.OnMetricsUpdated += e => { if (e == env) metricsFired.TrySetResult(true); };
+            await Task.WhenAny(metricsFired.Task, Task.Delay(10_000));
+            withRam = services.Count(s => metrics.GetLatest(env, s) is not null);
+            out_.WriteLine($"[{sw.Elapsed:c}] RAM data after wait: {withRam}/{services.Count} services");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task HeartbeatService_DirectCall_Timing()
+    {
+        // Bypass HeartbeatMonitor and call IHeartbeatService directly.
+        // This isolates the raw MongoDB / network cost of the heartbeat query.
+        var heartbeatSvc = fix.Services.GetRequiredService<IHeartbeatService>();
+        var env          = fix.DefaultEnv;
+        var sw           = Stopwatch.StartNew();
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Calling IHeartbeatService.GetServiceStatusesAsync('{env}')…");
+        var services = await heartbeatSvc.GetServiceStatusesAsync(env);
+        out_.WriteLine($"[{sw.Elapsed:c}] Result: {services.Count} services");
+
+        foreach (var g in services.GroupBy(s => s.HostName).OrderBy(g => g.Key))
+        {
+            var online = g.Count(s => s.IsOnline);
+            out_.WriteLine($"  {g.Key}: {g.Count()} total, {online} online");
         }
     }
 }
@@ -32353,27 +32987,35 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 7346
+LENGTH 10006
 window.homeMemoryTreemap = (function () {
 
-    const _observers = new WeakMap(); // container → ResizeObserver
+    // ── colour + label helpers ─────────────────────────────────────────────────
 
-    function color(ram) {
-        if (ram == null) return 'rgba(128,128,128,0.35)';
-        if (ram > 500)   return '#E24B4A';
-        if (ram > 200)   return '#BA7517';
+    function leafColor(d) {
+        if (!d.online) return 'rgba(180,50,50,0.25)';   // offline — dim red
+        if (d.ram == null) return 'rgba(128,128,128,0.28)'; // online, no RAM yet — gray
+        if (d.ram > 500)   return '#E24B4A';
+        if (d.ram > 200)   return '#BA7517';
         return '#1D9E75';
     }
 
+    function leafOpacity(d) { return d.online ? 0.82 : 0.45; }
+
+    // ── paint ──────────────────────────────────────────────────────────────────
+
     function paint(container, data, forcedW) {
-        d3.select(container).selectAll('*').remove();
+        // Only clear the container (which may hold the spinner) when we actually
+        // have data to show. Returning before clearing keeps the spinner alive.
         if (!data || !data.children || data.children.length === 0) return;
+
+        d3.select(container).selectAll('*').remove();
 
         const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
         const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
 
-        // Small fixed floor so no-data services get a visible pixel without
-        // dominating the layout when many processes lack a RAM sample.
+        // Each service gets at least 4 units so offline/no-data services are
+        // still visible as small rectangles rather than collapsed to nothing.
         const minVal = 4;
 
         const root = d3.hierarchy(data)
@@ -32381,8 +33023,7 @@ window.homeMemoryTreemap = (function () {
             .sort((a, b) => b.value - a.value);
 
         // Two-level tiling: hosts are diced into vertical columns (side-by-side),
-        // services within each host are squarified — this handles hundreds of
-        // small processes per host without collapsing them into sub-pixel rows.
+        // services within each host are squarified.
         d3.treemap()
             .size([W, H])
             .paddingOuter(1)
@@ -32441,20 +33082,20 @@ window.homeMemoryTreemap = (function () {
         root.leaves().forEach(leaf => {
             const w = Math.max(2, leaf.x1 - leaf.x0 - 2);
             const h = Math.max(2, leaf.y1 - leaf.y0 - 2);
+            const d = leaf.data;
 
             svg.append('rect')
                 .attr('x', leaf.x0 + 1).attr('y', leaf.y0 + 1)
                 .attr('width', w).attr('height', h)
-                .attr('fill', color(leaf.data.ram))
-                .attr('opacity', 0.82)
+                .attr('fill', leafColor(d))
+                .attr('opacity', leafOpacity(d))
                 .attr('rx', 2)
                 .style('cursor', 'pointer')
                 .on('mousemove', event => {
-                    const ram = leaf.data.ram != null
-                        ? Math.round(leaf.data.ram)
-                        : 'no data';
+                    const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';
+                    const status = d.online ? '' : ' <span style="color:#f87171">offline</span>';
                     tip.style('display', 'block')
-                       .html(`<strong>${leaf.data.name}</strong><br>PID ${leaf.data.pid} &nbsp;·&nbsp; ${ram}`);
+                       .html(`<strong>${d.name}</strong>${status}<br>PID ${d.pid} &nbsp;·&nbsp; ${ram}`);
                     const cr = container.getBoundingClientRect();
                     let lx = event.clientX - cr.left + 12;
                     let ly = event.clientY - cr.top  - 40;
@@ -32463,34 +33104,54 @@ window.homeMemoryTreemap = (function () {
                 })
                 .on('mouseleave', () => tip.style('display', 'none'));
 
-            if (w >= 34 && h >= 14 && leaf.data.ram != null) {
-                svg.append('text')
-                    .attr('x', leaf.x0 + 1 + w / 2)
-                    .attr('y', leaf.y0 + 1 + h / 2 + 4)
-                    .attr('text-anchor', 'middle')
-                    .attr('font-size', '10px')
-                    .attr('fill', 'rgba(255,255,255,0.88)')
-                    .attr('pointer-events', 'none')
-                    .text(Math.round(leaf.data.ram));
+            // Show label inside box when large enough.
+            // RAM number if available; service name if no RAM yet.
+            if (w >= 34 && h >= 14) {
+                const label = d.ram != null
+                    ? String(Math.round(d.ram))
+                    : (w >= 60 && h >= 18 ? d.name.split(/[-_]/)[0] : '');
+                if (label) {
+                    svg.append('text')
+                        .attr('x', leaf.x0 + 1 + w / 2)
+                        .attr('y', leaf.y0 + 1 + h / 2 + 4)
+                        .attr('text-anchor', 'middle')
+                        .attr('font-size', '10px')
+                        .attr('fill', d.online ? 'rgba(255,255,255,0.88)' : 'rgba(255,180,180,0.7)')
+                        .attr('pointer-events', 'none')
+                        .text(label);
+                }
             }
         });
     }
 
-    // ── client-side polling (no SignalR for data) ─────────────────────────────
+    // ── "no heartbeat data" placeholder ───────────────────────────────────────
 
-    const _state = new WeakMap(); // container → { aborted, data, ro }
+    function showNoData(container, env) {
+        d3.select(container).selectAll('*').remove();
+        const el = document.createElement('div');
+        el.className = 'bm-treemap-loading';
+        el.innerHTML =
+            '<span class="bm-treemap-loading-label" style="opacity:0.5">' +
+            'No services found for <strong>' + env + '</strong>' +
+            '</span>';
+        container.appendChild(el);
+    }
+
+    // ── client-side polling ────────────────────────────────────────────────────
+
+    const _state = new WeakMap(); // container → { aborted, data, ro, _wake }
 
     function start(container, env, intervalMs) {
         stop(container);
 
-        const s = { aborted: false, data: null, ro: null };
+        const s = { aborted: false, data: null, ro: null, _wake: null };
         _state.set(container, s);
 
-        // Show a spinner while the first fetch is in flight.
+        // Show a spinner immediately — cleared by paint() on first successful data.
         container.innerHTML =
             '<div class="bm-treemap-loading">' +
               '<div class="bm-treemap-spinner"></div>' +
-              '<span class="bm-treemap-loading-label">Loading memory data…</span>' +
+              '<span class="bm-treemap-loading-label">Loading…</span>' +
             '</div>';
 
         // ResizeObserver repaints on resize using the last fetched data.
@@ -32500,20 +33161,40 @@ window.homeMemoryTreemap = (function () {
         });
         s.ro.observe(container);
 
-        const interval = intervalMs || 10000;
-        const url      = `/api/treemap/${encodeURIComponent(env)}`;
+        const steadyInterval = intervalMs || 10000;
+        const retryInterval  = 2000;   // aggressive retry while waiting for heartbeat
+        const maxRetries     = 15;     // give up after 30 s showing "no data"
+        const url            = `/api/treemap/${encodeURIComponent(env)}`;
 
         async function poll() {
+            let emptyCount = 0;
             while (!s.aborted) {
+                let hasData = false;
                 try {
                     const resp = await fetch(url);
                     if (!s.aborted && resp.ok) {
-                        s.data = await resp.json();
-                        paint(container, s.data);
+                        const json = await resp.json();
+                        hasData = json && json.children && json.children.length > 0;
+                        if (hasData) {
+                            // First real data: clear spinner, render, reset retry counter.
+                            s.data     = json;
+                            emptyCount = 0;
+                            paint(container, s.data);
+                        }
                     }
-                } catch (_) { /* network error — retry next interval */ }
-                // Wait for the interval, but allow abort to cut it short.
-                await new Promise(resolve => { s._wake = resolve; setTimeout(resolve, interval); });
+                } catch (_) { /* network error — retry */ }
+
+                if (!hasData) {
+                    emptyCount++;
+                    if (emptyCount >= maxRetries) {
+                        // Heartbeat gave us nothing for 30 s — show a gentle message.
+                        if (!s.aborted) showNoData(container, env);
+                    }
+                }
+
+                // Use short retry interval until we have data; then switch to steady poll.
+                const delay = (s.data ? steadyInterval : retryInterval);
+                await new Promise(resolve => { s._wake = resolve; setTimeout(resolve, delay); });
             }
         }
 

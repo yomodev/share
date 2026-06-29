@@ -153,9 +153,9 @@ public class Program
             var services = heartbeat.GetServices(env);
             if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
 
-            var cutoff = DateTime.UtcNow.AddMinutes(-10);
+            // Include all services the heartbeat knows about (online and offline).
+            // The heartbeat service already manages freshness — no extra cutoff here.
             var hosts = services
-                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
                 .GroupBy(s => s.HostName)
                 .Select(g => new
                 {
@@ -165,9 +165,10 @@ public class Program
                         var m = metrics.GetLatest(env, s);
                         return new
                         {
-                            name = s.ServiceName,
-                            pid  = s.ProcessId,
-                            ram  = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                            name   = s.ServiceName,
+                            pid    = s.ProcessId,
+                            online = s.IsOnline,
+                            ram    = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
                         };
                     })
                     .OrderByDescending(s => s.ram ?? 0)
