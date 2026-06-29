@@ -49,14 +49,14 @@
                   SelectedItemChanged="OnRowSelected"
                   Class="bm-batch-table bm-inspector-table">
             <HeaderContent>
-                <MudTh Style="width:200px;">_id</MudTh>
-                <MudTh>Preview</MudTh>
+                <MudTh Style="width:200px; white-space:nowrap;">_id</MudTh>
+                <MudTh Style="width:100%;">Preview</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
+                <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                 </MudTd>
             </RowTemplate>
@@ -141,7 +141,7 @@
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("text search", "matches anywhere in _id or the document JSON"),
+        ("(plain text)", "searched against _id and the full document JSON — no field prefix needed"),
     ];
 
     protected override async Task OnParametersSetAsync()

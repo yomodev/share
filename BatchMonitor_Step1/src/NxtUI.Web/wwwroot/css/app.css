@@ -1422,7 +1422,7 @@ html, body {
 
 .bm-mongo-id {
     font-size: 11px;
-    color: var(--mud-palette-text-secondary);
+    color: var(--bm-jv-key);
     letter-spacing: .02em;
 }
 
