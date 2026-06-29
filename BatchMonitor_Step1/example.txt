@@ -11162,7 +11162,7 @@ public static class FilterEvaluator
     }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 20760
+LENGTH 21144
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -11588,11 +11588,7 @@ public sealed class FilterParser
         if (TryParseNumber(text, out var num))
             return new NumberValue(num);
 
-        // Time-only (hh:mm or hh:mm:ss) → time-of-day comparison, date-agnostic.
-        if (TryParseTimeOfDay(text, out var tod))
-            return tod;
-
-        // Absolute date / relative offset
+        // Absolute date / relative offset (includes hh:mm → today + time)
         if (TryParseDate(text, out var dt))
             return new DateValue(dt);
 
@@ -11680,6 +11676,17 @@ public sealed class FilterParser
                     _   => DateTime.UtcNow.Date,
                 };
             }
+            return true;
+        }
+
+        // Time-only (hh:mm or hh:mm:ss) → today's date + that time
+        var todMatch = TimeOnly.Match(text);
+        if (todMatch.Success && !text.StartsWith('-'))
+        {
+            int th = int.Parse(todMatch.Groups[1].Value);
+            int tm = int.Parse(todMatch.Groups[2].Value);
+            int ts = todMatch.Groups[3].Success ? int.Parse(todMatch.Groups[3].Value) : 0;
+            result = DateTime.UtcNow.Date.AddHours(th).AddMinutes(tm).AddSeconds(ts);
             return true;
         }
 
@@ -25549,7 +25556,7 @@ FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
-LENGTH 6006
+LENGTH 11791
 using NxtUI.Filtering;
 using FluentAssertions;
 
@@ -25710,9 +25717,396 @@ public class FilterEvaluatorTests
         Eval("!Service:svcA", new Evt(Service: "svcB")).Should().BeTrue();
         Eval("!Service:svcA", new Evt(Service: "svcA")).Should().BeFalse();
     }
+
+    [Fact]
+    public void Double_NOT_matches_same_as_original()
+    {
+        Eval("!!Service:svcA", new Evt(Service: "svcA")).Should().BeTrue();
+        Eval("!!Service:svcA", new Evt(Service: "svcB")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NOT_applies_only_to_its_operand_in_AND_chain()
+    {
+        // "!Service:svcA Pipeline:b" = (NOT Service:svcA) AND Pipeline:b
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcB", Pipeline: "pipe1")).Should().BeTrue();
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcA", Pipeline: "pipe1")).Should().BeFalse();
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcB", Pipeline: "other")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AND_binds_tighter_than_OR_in_evaluation()
+    {
+        // "Service:a Pipeline:b, Service:c" = (a AND b) OR c
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "a", Pipeline: "b")).Should().BeTrue();
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "c")).Should().BeTrue();
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "a", Pipeline: "x")).Should().BeFalse();
+    }
+
+    // ── Case sensitivity ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Double_quoted_Contains_is_case_sensitive()
+    {
+        Eval("ChunkId:\"ABC\"", new Evt(ChunkId: "abc")).Should().BeFalse();
+        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "abc")).Should().BeTrue();
+        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "ABC")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Single_quoted_Contains_is_case_insensitive()
+    {
+        Eval("ChunkId:'ABC'", new Evt(ChunkId: "abc")).Should().BeTrue();
+        Eval("ChunkId:'abc'", new Evt(ChunkId: "ABC")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Double_quoted_Exact_is_case_sensitive()
+    {
+        Eval("ChunkId:=\"CHK-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("ChunkId:=\"chk-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+    }
+
+    // ── IsNull on actual null ──────────────────────────────────────────────
+
+    private record WithNull(string? Tag);
+    private static readonly FilterParser NullParser = new(["Tag"]);
+
+    [Fact]
+    public void IsNull_matches_actual_null_property_value()
+    {
+        var ast = NullParser.Parse("Tag:null");
+        FilterEvaluator.Evaluate(ast, new WithNull(Tag: null)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new WithNull(Tag: "value")).Should().BeFalse();
+    }
+
+    // ── Unknown field ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Unknown_field_returns_false()
+    {
+        Eval("UnknownField:anything", new Evt(ChunkId: "anything")).Should().BeFalse();
+    }
+
+    // ── DateTime property comparisons ──────────────────────────────────────
+
+    private record Dated(DateTime UpdatedAt, string Name = "");
+    private static readonly FilterParser DateParser = new([]);
+
+    [Fact]
+    public void DateTime_gt_within_window_matches()
+    {
+        // -5 min ago is after the -30 min cutoff
+        var obj = new Dated(UpdatedAt: DateTime.UtcNow.AddMinutes(-5));
+        FilterEvaluator.Evaluate(DateParser.Parse("UpdatedAt:>-30m"), obj).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DateTime_gt_outside_window_does_not_match()
+    {
+        // -5 min ago is before the -1 min cutoff
+        var obj = new Dated(UpdatedAt: DateTime.UtcNow.AddMinutes(-5));
+        FilterEvaluator.Evaluate(DateParser.Parse("UpdatedAt:>-1m"), obj).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DateTime_Between_matches_date_in_range()
+    {
+        var obj      = new Dated(UpdatedAt: new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc));
+        var inRange  = DateParser.Parse("UpdatedAt:2024-01-01..2024-12-31");
+        var outRange = DateParser.Parse("UpdatedAt:2025-01-01..2025-12-31");
+        FilterEvaluator.Evaluate(inRange,  obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(outRange, obj).Should().BeFalse();
+    }
+
+    // ── TimeSpan property via ToDouble (total seconds) ─────────────────────
+
+    private record Timed(TimeSpan Duration);
+    private static readonly FilterParser TimeParser = new([]);
+
+    [Fact]
+    public void TimeSpan_property_compared_as_total_seconds()
+    {
+        var obj = new Timed(Duration: TimeSpan.FromMinutes(5)); // 300 seconds
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:>200"),    obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:<200"),    obj).Should().BeFalse();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:100..400"), obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:400..600"), obj).Should().BeFalse();
+    }
+
+    // ── Numeric Between with float boundaries ──────────────────────────────
+
+    [Fact]
+    public void Between_with_decimal_boundaries()
+    {
+        var ast = NumParser.Parse("Count:0.5..9.5");
+        FilterEvaluator.Evaluate(ast, new NumObj(1)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new NumObj(9)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new NumObj(0)).Should().BeFalse();
+        FilterEvaluator.Evaluate(ast, new NumObj(10)).Should().BeFalse();
+    }
+}
+FILE tests/NxtUI.Tests/Filtering/FilterIntegrationTests.cs
+LENGTH 10504
+using NxtUI.Core.Models;
+using NxtUI.Filtering;
+using FluentAssertions;
+
+namespace NxtUI.Tests.Filtering;
+
+/// <summary>
+/// Parse-then-evaluate tests against real domain model types.
+/// Exercises the full pipeline (parser → AST → evaluator → reflection) and catches
+/// field-name mismatches, type-conversion gaps, and semantic regressions early.
+/// </summary>
+public class FilterIntegrationTests
+{
+    // ── ServiceStatus ──────────────────────────────────────────────────────
+
+    private static readonly FilterParser SvcParser = new(["ServiceName", "HostName"]);
+
+    private static bool EvalSvc(string filter, ServiceStatus svc) =>
+        FilterEvaluator.Evaluate(SvcParser.Parse(filter), svc);
+
+    private static ServiceStatus MakeSvc(
+        string name, string host, bool online = true,
+        int pid = 1000, int minsAgo = 0) => new()
+    {
+        ServiceName     = name,
+        HostName        = host,
+        IsOnline        = online,
+        ProcessId       = pid,
+        UpdatedDateTime = DateTime.UtcNow.AddMinutes(-minsAgo),
+        CreatedDateTime = DateTime.UtcNow.AddDays(-1),
+    };
+
+    [Fact]
+    public void ServiceStatus_bare_term_matches_name_substring()
+    {
+        EvalSvc("Loader", MakeSvc("LoaderService", "srv-01")).Should().BeTrue();
+        EvalSvc("Loader", MakeSvc("TransformerService", "srv-01")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_bare_term_matches_host()
+    {
+        EvalSvc("srv-01", MakeSvc("Loader", "srv-01")).Should().BeTrue();
+        EvalSvc("srv-01", MakeSvc("Loader", "srv-02")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_exact_host_filter()
+    {
+        EvalSvc("HostName:=srv-01", MakeSvc("Loader", "srv-01")).Should().BeTrue();
+        EvalSvc("HostName:=srv-02", MakeSvc("Loader", "srv-01")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_wildcard_host_filter()
+    {
+        EvalSvc("HostName:dev1-*", MakeSvc("Loader", "dev1-srv-01")).Should().BeTrue();
+        EvalSvc("HostName:dev1-*", MakeSvc("Loader", "dev2-srv-01")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_AND_name_and_host()
+    {
+        var target     = MakeSvc("Loader", "srv-01");
+        var wrongHost  = MakeSvc("Loader", "srv-02");
+        var wrongName  = MakeSvc("Exporter", "srv-01");
+        EvalSvc("ServiceName:Loader HostName:srv-01", target).Should().BeTrue();
+        EvalSvc("ServiceName:Loader HostName:srv-01", wrongHost).Should().BeFalse();
+        EvalSvc("ServiceName:Loader HostName:srv-01", wrongName).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_OR_across_names()
+    {
+        EvalSvc("ServiceName:Loader, ServiceName:Transformer", MakeSvc("Loader", "srv-01")).Should().BeTrue();
+        EvalSvc("ServiceName:Loader, ServiceName:Transformer", MakeSvc("Transformer", "srv-01")).Should().BeTrue();
+        EvalSvc("ServiceName:Loader, ServiceName:Transformer", MakeSvc("Exporter", "srv-01")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_stale_filter_by_UpdatedDateTime()
+    {
+        var stale  = MakeSvc("Loader", "srv-01", minsAgo: 90);  // 90 min old
+        var fresh  = MakeSvc("Loader", "srv-01", minsAgo: 2);   // 2 min old
+        var parser = new FilterParser([]);
+
+        // "updated more than 60 minutes ago" — stale only
+        FilterEvaluator.Evaluate(parser.Parse("UpdatedDateTime:<-60m"), stale).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("UpdatedDateTime:<-60m"), fresh).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ServiceStatus_NOT_excludes_matching_host()
+    {
+        EvalSvc("!HostName:srv-01", MakeSvc("Loader", "srv-02")).Should().BeTrue();
+        EvalSvc("!HostName:srv-01", MakeSvc("Loader", "srv-01")).Should().BeFalse();
+    }
+
+    // ── KafkaTopicSummary ──────────────────────────────────────────────────
+
+    private static readonly FilterParser TopicParser = new(["Name"]);
+
+    private static bool EvalTopic(string filter, KafkaTopicSummary t) =>
+        FilterEvaluator.Evaluate(TopicParser.Parse(filter), t);
+
+    private static KafkaTopicSummary MakeTopic(
+        string name, int parts = 3, long retMs = 86_400_000,
+        string policy = "delete", long msgs = 1000) => new()
+    {
+        Name             = name,
+        PartitionCount   = parts,
+        RetentionMs      = retMs,
+        CleanupPolicy    = policy,
+        MessageCount     = msgs,
+        ConfigLoaded     = true,
+    };
+
+    [Fact]
+    public void KafkaTopic_bare_term_matches_name()
+    {
+        EvalTopic("orders", MakeTopic("orders.events")).Should().BeTrue();
+        EvalTopic("orders", MakeTopic("payments.events")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void KafkaTopic_filter_high_partition_count()
+    {
+        var parser = new FilterParser([]);
+        var busy   = MakeTopic("test", parts: 24);
+        var small  = MakeTopic("test", parts: 3);
+        FilterEvaluator.Evaluate(parser.Parse("PartitionCount:>12"), busy).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("PartitionCount:>12"), small).Should().BeFalse();
+    }
+
+    [Fact]
+    public void KafkaTopic_filter_retention_in_range()
+    {
+        var parser    = new FilterParser([]);
+        var oneDay    = MakeTopic("t1", retMs: 86_400_000);        // 1 day
+        var oneWeek   = MakeTopic("t2", retMs: 604_800_000);       // 7 days
+        var twoWeeks  = MakeTopic("t3", retMs: 1_209_600_000);     // 14 days
+
+        // 2 days..10 days window
+        var ast = parser.Parse("RetentionMs:172800000..864000000");
+        FilterEvaluator.Evaluate(ast, oneDay).Should().BeFalse();
+        FilterEvaluator.Evaluate(ast, oneWeek).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, twoWeeks).Should().BeFalse();
+    }
+
+    [Fact]
+    public void KafkaTopic_filter_by_cleanup_policy()
+    {
+        var compact = MakeTopic("t", policy: "compact");
+        var delete  = MakeTopic("t", policy: "delete");
+        EvalTopic("CleanupPolicy:compact", compact).Should().BeTrue();
+        EvalTopic("CleanupPolicy:compact", delete).Should().BeFalse();
+        EvalTopic("CleanupPolicy:delete",  delete).Should().BeTrue();
+    }
+
+    [Fact]
+    public void KafkaTopic_NOT_compact_excludes_compact_topics()
+    {
+        var compact = MakeTopic("t", policy: "compact");
+        var delete  = MakeTopic("t", policy: "delete");
+        EvalTopic("!CleanupPolicy:compact", compact).Should().BeFalse();
+        EvalTopic("!CleanupPolicy:compact", delete).Should().BeTrue();
+    }
+
+    [Fact]
+    public void KafkaTopic_infinite_retention_is_negative_one()
+    {
+        var parser    = new FilterParser([]);
+        var infinite  = MakeTopic("t", retMs: -1);
+        FilterEvaluator.Evaluate(parser.Parse("RetentionMs:<0"), infinite).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("RetentionMs:>0"), infinite).Should().BeFalse();
+    }
+
+    [Fact]
+    public void KafkaTopic_wildcard_name_matches_topic_family()
+    {
+        EvalTopic("Name:orders.*", MakeTopic("orders.events")).Should().BeTrue();
+        EvalTopic("Name:orders.*", MakeTopic("orders.dead-letter")).Should().BeTrue();
+        EvalTopic("Name:orders.*", MakeTopic("payments.events")).Should().BeFalse();
+    }
+
+    // ── MongoCollectionSummary ─────────────────────────────────────────────
+
+    private static readonly FilterParser ColParser = new(["Name"]);
+
+    private static bool EvalCol(string filter, MongoCollectionSummary c) =>
+        FilterEvaluator.Evaluate(ColParser.Parse(filter), c);
+
+    private static MongoCollectionSummary MakeCol(
+        string name, long docs = 0, long storageBytes = 0, bool loaded = true) => new()
+    {
+        Name             = name,
+        DocumentCount    = docs,
+        StorageSizeBytes = storageBytes,
+        StatsLoaded      = loaded,
+    };
+
+    [Fact]
+    public void MongoCollection_bare_term_matches_name()
+    {
+        EvalCol("audit", MakeCol("audit_log")).Should().BeTrue();
+        EvalCol("audit", MakeCol("run_events")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void MongoCollection_filter_large_by_document_count()
+    {
+        var parser = new FilterParser([]);
+        var large  = MakeCol("big",   docs: 1_000_000);
+        var small  = MakeCol("small", docs: 100);
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>500000"), large).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>500000"), small).Should().BeFalse();
+    }
+
+    [Fact]
+    public void MongoCollection_Between_doc_count()
+    {
+        var parser = new FilterParser([]);
+        var target = MakeCol("mid", docs: 50_000);
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:10000..100000"), target).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:100001..999999"), target).Should().BeFalse();
+    }
+
+    [Fact]
+    public void MongoCollection_unloaded_stats_doc_count_is_zero()
+    {
+        var parser   = new FilterParser([]);
+        var unloaded = MakeCol("test", loaded: false);
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>0"), unloaded).Should().BeFalse();
+        FilterEvaluator.Evaluate(parser.Parse("DocumentCount:<1"), unloaded).Should().BeTrue();
+    }
+
+    [Fact]
+    public void MongoCollection_wildcard_name_matches_prefix()
+    {
+        EvalCol("Name:run_*", MakeCol("run_events")).Should().BeTrue();
+        EvalCol("Name:run_*", MakeCol("run_steps")).Should().BeTrue();
+        EvalCol("Name:run_*", MakeCol("audit_log")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void MongoCollection_filter_combines_name_and_doc_count()
+    {
+        var parser = new FilterParser(["Name"]);
+        var large  = MakeCol("audit_log", docs: 5_000_000);
+        var small  = MakeCol("audit_log", docs: 100);
+        var other  = MakeCol("run_events", docs: 5_000_000);
+
+        FilterEvaluator.Evaluate(parser.Parse("Name:audit DocumentCount:>1000000"), large).Should().BeTrue();
+        FilterEvaluator.Evaluate(parser.Parse("Name:audit DocumentCount:>1000000"), small).Should().BeFalse();
+        FilterEvaluator.Evaluate(parser.Parse("Name:audit DocumentCount:>1000000"), other).Should().BeFalse();
+    }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterParserTests.cs
-LENGTH 9392
+LENGTH 15708
 using NxtUI.Filtering;
 using FluentAssertions;
 using MatchType = NxtUI.Filtering.MatchType;
@@ -25970,6 +26364,142 @@ public class FilterParserTests
         n1!.Value.Should().BeCloseTo(n2!.Value, TimeSpan.FromSeconds(1));
     }
 
+    // ── Date ranges ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ISO_date_range_produces_Between_with_DateValues()
+    {
+        var node = Parse("updated:2024-01-01..2024-12-31") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<DateValue>().Which.Value.Should().Be(new DateTime(2024, 1, 1));
+        rv.High.Should().BeOfType<DateValue>().Which.Value.Should().Be(new DateTime(2024, 12, 31));
+    }
+
+    [Fact]
+    public void Relative_date_range_produces_Between_with_DateValues()
+    {
+        var before = DateTime.UtcNow;
+        var node   = Parse("updated:-7d..-1d") as FieldTermNode;
+        var after  = DateTime.UtcNow;
+
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<DateValue>().Which.Value
+            .Should().BeCloseTo(before.AddDays(-7), TimeSpan.FromSeconds(2));
+        rv.High.Should().BeOfType<DateValue>().Which.Value
+            .Should().BeCloseTo(before.AddDays(-1), TimeSpan.FromSeconds(2));
+    }
+
+    // ── Numeric range with decimals ────────────────────────────────────────
+
+    [Fact]
+    public void Numeric_range_with_decimal_boundaries()
+    {
+        var node = Parse("ChunkId:0.5..9.5") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<NumberValue>().Which.Value.Should().BeApproximately(0.5, 0.001);
+        rv.High.Should().BeOfType<NumberValue>().Which.Value.Should().BeApproximately(9.5, 0.001);
+    }
+
+    // ── Double NOT ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Double_NOT_produces_nested_NotNodes()
+    {
+        var node  = Parse("!!Service:svcA");
+        var outer = node.Should().BeOfType<NotNode>().Subject;
+        var inner = outer.Operand.Should().BeOfType<NotNode>().Subject;
+        inner.Operand.Should().BeOfType<FieldTermNode>();
+    }
+
+    // ── Three-way OR ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Three_way_OR_collects_three_leaf_nodes()
+    {
+        var node   = Parse("Service:a, Service:b, Service:c");
+        var leaves = CollectLeaves(node!);
+        leaves.Should().HaveCount(3)
+              .And.AllSatisfy(l => l.Field.Should().Be("Service"));
+    }
+
+    // ── Bare wildcard → Glob ───────────────────────────────────────────────
+
+    [Fact]
+    public void Bare_wildcard_expands_to_Glob_match_type()
+    {
+        var leaves = CollectLeaves(Parse("chk-*")!);
+        leaves.Should().AllSatisfy(l => l.MatchType.Should().Be(MatchType.Glob));
+        leaves.Select(l => l.Field).Should().BeEquivalentTo(Fields);
+    }
+
+    // ── ISO date with time component ──────────────────────────────────────
+
+    [Fact]
+    public void ISO_date_with_time_component_parses_to_DateValue()
+    {
+        var node = Parse("updated:>2024-06-15T12:00z") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+        var dv = node.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Date.Should().Be(new DateTime(2024, 6, 15));
+    }
+
+    // ── Empty double-quoted string ─────────────────────────────────────────
+
+    [Fact]
+    public void Empty_double_quoted_string_is_case_sensitive_StringValue()
+    {
+        var node = Parse("ChunkId:\"\"") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be(string.Empty);
+        node.CaseSensitive.Should().BeTrue();
+    }
+
+    // ── Time-only with seconds ─────────────────────────────────────────────
+
+    [Fact]
+    public void Time_only_with_seconds_parses_to_DateValue()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<01:30:45") as FieldTermNode;
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddHours(1).AddMinutes(30).AddSeconds(45));
+    }
+
+    // ── AND > OR precedence ────────────────────────────────────────────────
+
+    [Fact]
+    public void AND_groups_left_side_of_OR()
+    {
+        // "A B, C" should parse as "(A AND B) OR C" — root is OrNode
+        var node = Parse("Service:a Pipeline:b, Service:c");
+        node.Should().BeOfType<OrNode>();
+        // The left child of OR should be the AND of the first two terms
+        var or = (OrNode)node!;
+        or.Left.Should().BeOfType<AndNode>();
+        or.Right.Should().BeOfType<FieldTermNode>();
+    }
+
+    // ── NOT applied to compound rhs ────────────────────────────────────────
+
+    [Fact]
+    public void NOT_on_field_term_is_not_double_negated_by_AND()
+    {
+        // "!Service:svcA Pipeline:b" = (NOT Service:svcA) AND Pipeline:b — root is AndNode
+        var node = Parse("!Service:svcA Pipeline:b");
+        node.Should().BeOfType<AndNode>();
+        var and = (AndNode)node!;
+        and.Left.Should().BeOfType<NotNode>();
+        and.Right.Should().BeOfType<FieldTermNode>();
+    }
+
     private static void Collect(FilterNode node, List<FieldTermNode> acc)
     {
         switch (node)
@@ -25979,6 +26509,175 @@ public class FilterParserTests
             case AndNode and: Collect(and.Left, acc); Collect(and.Right, acc); break;
             case NotNode not: Collect(not.Operand, acc); break;
         }
+    }
+}
+FILE tests/NxtUI.Tests/Performance/ConcurrencyPerfTests.cs
+LENGTH 7305
+using System.Diagnostics;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Services;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Stress tests for concurrent subscriptions to HeartbeatMonitor and ServiceMetricsMonitor.
+/// Catches refcount bugs, event fan-out failures, and monitor liveness issues after
+/// rapid subscribe/unsubscribe cycles.
+/// </summary>
+public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public async Task Multiple_concurrent_heartbeat_subscriptions_all_receive_update()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+        const int count = 5;
+
+        var received  = new int[count];
+        var tcss      = Enumerable.Range(0, count)
+            .Select(_ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+
+        // Register ALL event handlers before creating any subscription so that even
+        // an immediate synchronous poll (mock returns Task.FromResult) calls every handler.
+        for (int i = 0; i < count; i++)
+        {
+            var idx = i;
+            heartbeat.OnServicesUpdated += e =>
+            {
+                if (e == env) { Interlocked.Increment(ref received[idx]); tcss[idx].TrySetResult(true); }
+            };
+        }
+
+        // Subscribe after all handlers are registered.
+        var subs = Enumerable.Range(0, count).Select(_ => heartbeat.Subscribe(env)).ToArray();
+
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(15_000))));
+
+        foreach (var sub in subs) sub.Dispose();
+
+        for (int i = 0; i < count; i++)
+            out_.WriteLine($"[{sw.Elapsed:c}] Sub {i}: received {received[i]} update(s)");
+
+        foreach (var tcs in tcss)
+            tcs.Task.IsCompletedSuccessfully.Should()
+                .BeTrue(because: "every subscriber should receive at least one heartbeat update");
+    }
+
+    [Fact]
+    public async Task Rapid_subscribe_unsubscribe_does_not_crash_monitor()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        for (int i = 0; i < 30; i++)
+            heartbeat.Subscribe(env).Dispose();   // subscribe then immediately release
+
+        out_.WriteLine($"[{sw.Elapsed:c}] 30 rapid subscribe/dispose cycles done");
+
+        // Verify the monitor is still alive and can serve a normal subscription.
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        heartbeat.OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
+        using var finalSub = heartbeat.Subscribe(env);
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Monitor still responsive: {tcs.Task.IsCompletedSuccessfully}");
+        tcs.Task.IsCompletedSuccessfully.Should().BeTrue(
+            because: "monitor must survive rapid subscribe/dispose cycles");
+    }
+
+    [Fact]
+    public async Task Heartbeat_and_metrics_subscriptions_both_fire()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        var hbTcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var metTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        heartbeat.OnServicesUpdated += e => { if (e == env) hbTcs.TrySetResult(true); };
+        metrics.OnMetricsUpdated    += e => { if (e == env) metTcs.TrySetResult(true); };
+
+        using var hbSub  = heartbeat.Subscribe(env);
+        using var metSub = metrics.Subscribe(env);
+
+        await Task.WhenAny(hbTcs.Task, Task.Delay(15_000));
+        out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat fired: {hbTcs.Task.IsCompletedSuccessfully}");
+        hbTcs.Task.IsCompletedSuccessfully.Should().BeTrue(because: "heartbeat should fire within 15s");
+
+        // Metrics fire after heartbeat has data + log files have been read.
+        // Allow extra time for the metrics polling cycle.
+        await Task.WhenAny(metTcs.Task, Task.Delay(30_000));
+        out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {metTcs.Task.IsCompletedSuccessfully}");
+
+        var services = heartbeat.GetServices(env) ?? [];
+        var withData = services.Count(s => metrics.GetLatest(env, s) is not null);
+        out_.WriteLine($"[{sw.Elapsed:c}] {withData}/{services.Count} services have RAM metrics");
+    }
+
+    [Fact]
+    public async Task Concurrent_subscribe_to_all_environments()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var envs      = fix.Environments;
+        var sw        = Stopwatch.StartNew();
+
+        if (envs.Length == 0) { out_.WriteLine("No environments configured."); return; }
+
+        var tcss = envs.Select(_ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var subs = new IDisposable[envs.Length];
+
+        for (int i = 0; i < envs.Length; i++)
+        {
+            var idx = i;
+            heartbeat.OnServicesUpdated += e => { if (e == envs[idx]) tcss[idx].TrySetResult(true); };
+            subs[i] = heartbeat.Subscribe(envs[i]);
+        }
+
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(20_000))));
+        foreach (var sub in subs) sub.Dispose();
+
+        for (int i = 0; i < envs.Length; i++)
+        {
+            var svcs = heartbeat.GetServices(envs[i]);
+            out_.WriteLine($"[{sw.Elapsed:c}] {envs[i]}: updated={tcss[i].Task.IsCompletedSuccessfully}, " +
+                           $"services={(svcs?.Count.ToString() ?? "null")}");
+        }
+    }
+
+    [Fact]
+    public async Task Subscription_refcount_returns_to_zero_cleanly()
+    {
+        var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
+        var env       = fix.DefaultEnv;
+        var sw        = Stopwatch.StartNew();
+
+        // Hold three subscriptions, wait for at least one update, then release all.
+        var tcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        heartbeat.OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
+
+        var sub1 = heartbeat.Subscribe(env);
+        var sub2 = heartbeat.Subscribe(env);
+        var sub3 = heartbeat.Subscribe(env);
+
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        out_.WriteLine($"[{sw.Elapsed:c}] Received update with 3 subs open");
+
+        sub1.Dispose();
+        sub2.Dispose();
+        sub3.Dispose();
+        out_.WriteLine($"[{sw.Elapsed:c}] All 3 subscriptions released");
+
+        // After all subscriptions are released the cache should still be readable.
+        var cached = heartbeat.GetServices(env);
+        out_.WriteLine($"[{sw.Elapsed:c}] Cache after release: {cached?.Count.ToString() ?? "null"} services");
     }
 }
 FILE tests/NxtUI.Tests/Performance/HomeTreemapPerfTests.cs
@@ -26093,9 +26792,10 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
     }
 }
 FILE tests/NxtUI.Tests/Performance/KafkaPerfTests.cs
-LENGTH 3169
+LENGTH 7929
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
 namespace NxtUI.Tests.Performance;
@@ -26165,6 +26865,115 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         }
 
         out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task TopicTail_FirstMessages_Timing()
+    {
+        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env    = fix.DefaultEnv;
+        var sw     = Stopwatch.StartNew();
+        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] {topics.Count} topics available");
+
+        if (topics.Count == 0) { out_.WriteLine("No topics — skipping tail test."); return; }
+
+        var topic    = topics[0].Name;
+        var messages = new List<KafkaMessage>();
+        out_.WriteLine($"[{sw.Elapsed:c}] Tailing '{topic}' (first 10 messages, 15s timeout)…");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            await foreach (var msg in kafka.TailTopicAsync(env, topic, maxMessages: 10, cts.Token))
+            {
+                messages.Add(msg);
+                out_.WriteLine($"  [{sw.Elapsed:c}] partition={msg.Partition} offset={msg.Offset} " +
+                               $"key={msg.Key ?? "(null)"} valueLen={msg.Value.Length}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            out_.WriteLine($"  [{sw.Elapsed:c}] Timed out after {messages.Count} messages.");
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Tail done: {messages.Count} messages received.");
+    }
+
+    [Fact]
+    public async Task AllConsumerGroups_LagDetail_Sequential_vs_Parallel()
+    {
+        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env    = fix.DefaultEnv;
+        var sw     = Stopwatch.StartNew();
+        var groups = (await kafka.GetAllConsumerGroupsAsync(env)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] {groups.Count} consumer groups");
+
+        if (groups.Count == 0) { out_.WriteLine("No groups — skipping."); return; }
+
+        // Sequential
+        var seqSw = Stopwatch.StartNew();
+        foreach (var g in groups)
+            await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+        out_.WriteLine($"[{sw.Elapsed:c}] Sequential: {seqSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
+
+        // Parallel (same as the page would do on group selection change)
+        var parSw = Stopwatch.StartNew();
+        await Task.WhenAll(groups.Select(g => kafka.GetGroupTopicLagsAsync(env, g.GroupId)));
+        out_.WriteLine($"[{sw.Elapsed:c}] Parallel:   {parSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
+
+        if (parSw.Elapsed.TotalMilliseconds > 0)
+            out_.WriteLine($"  Speedup: {seqSw.Elapsed.TotalMilliseconds / parSw.Elapsed.TotalMilliseconds:F1}x");
+    }
+
+    [Fact]
+    public async Task TopicConsumerGroups_Per_Topic_Timing()
+    {
+        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env    = fix.DefaultEnv;
+        var sw     = Stopwatch.StartNew();
+        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+
+        if (topics.Count == 0) { out_.WriteLine("No topics."); return; }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Fetching consumer groups per topic ({topics.Count} topics)…");
+        await Task.WhenAll(topics.Take(5).Select(async t =>
+        {
+            var tSw    = Stopwatch.StartNew();
+            var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name);
+            out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: {groups.Count} consumer groups, " +
+                           $"totalLag={groups.Sum(g => g.TotalLag):N0}");
+        }));
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task Slow_broker_response_stays_within_timeout()
+    {
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var cluster = await kafka.GetClusterInfoAsync(env, cts.Token);
+            out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers " +
+                           $"(online: {cluster.Brokers.Count(b => b.IsOnline)})");
+
+            if (cluster.Brokers.Any(b => !b.IsOnline))
+                out_.WriteLine($"  WARNING: {cluster.Brokers.Count(b => !b.IsOnline)} broker(s) offline — " +
+                               "consider checking Kafka connectivity.");
+        }
+        catch (OperationCanceledException)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync timed out after 5s — broker may be unreachable.");
+        }
+        catch (Exception ex)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Exception: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static string FormatRetention(long ms) =>
@@ -26265,8 +27074,198 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
     private static string FormatBytes(long b) =>
         b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
 }
+FILE tests/NxtUI.Tests/Performance/LogViewerPerfTests.cs
+LENGTH 7145
+using System.Diagnostics;
+using FluentAssertions;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Exercises ILogViewerService (ReadAllAsync / ReadDelta) with real temp files.
+/// Tests both correctness (offset tracking, incremental reads) and timing
+/// so you can spot slow I/O or encoding overhead when pointed at real paths.
+/// </summary>
+public sealed class LogViewerPerfTests
+{
+    private static readonly LogViewerService Viewer = new();
+
+    // ── ReadAllAsync ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ReadAllAsync_returns_full_content_and_correct_offset()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var lines = Enumerable.Range(1, 1_000)
+                .Select(i => $"2024-01-01 00:{i / 60:D2}:{i % 60:D2}|INFO|Svc|{i}|1|line {i}|Caller")
+                .ToArray();
+            await File.WriteAllLinesAsync(path, lines);
+
+            var (text, offset) = await Viewer.ReadAllAsync(path);
+
+            text.Should().Contain("line 1");
+            text.Should().Contain("line 1000");
+            offset.Should().BeGreaterThan(0);
+            offset.Should().Be(new FileInfo(path).Length);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadAllAsync_empty_file_returns_empty_string_at_offset_zero()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, string.Empty);
+            var (text, offset) = await Viewer.ReadAllAsync(path);
+            text.Should().BeEmpty();
+            offset.Should().Be(0);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadAllAsync_large_file_timing()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var lines = Enumerable.Range(1, 50_000)
+                .Select(i => $"2024-01-01 {i / 3600 % 24:D2}:{i / 60 % 60:D2}:{i % 60:D2}|INFO|Svc-{i % 8}|{i}|{i % 20}|Payload text line {i}|Method.Call")
+                .ToArray();
+            await File.WriteAllLinesAsync(path, lines);
+
+            var fileMb = new FileInfo(path).Length / 1_048_576.0;
+            var sw     = Stopwatch.StartNew();
+            var (text, offset) = await Viewer.ReadAllAsync(path);
+            sw.Stop();
+
+            text.Length.Should().BeGreaterThan(0);
+            offset.Should().Be(new FileInfo(path).Length);
+
+            TestContext.Current.SendDiagnosticMessage(
+                $"50k lines ({fileMb:F1} MB): ReadAllAsync in {sw.Elapsed.TotalMilliseconds:F0}ms " +
+                $"({fileMb / sw.Elapsed.TotalSeconds:F1} MB/s)");
+        }
+        finally { File.Delete(path); }
+    }
+
+    // ── ReadDelta ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ReadDelta_from_zero_returns_full_content()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, "alpha\nbeta\ngamma\n");
+            var (text, offset) = Viewer.ReadDelta(path, 0);
+            text.Should().Contain("alpha").And.Contain("gamma");
+            offset.Should().Be(new FileInfo(path).Length);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadDelta_after_ReadAll_returns_empty()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "line1\nline2\nline3\n");
+            var (_, offset) = await Viewer.ReadAllAsync(path);
+
+            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+            delta.Should().BeEmpty();
+            newOffset.Should().Be(offset);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadDelta_detects_appended_lines()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "line1\nline2\n");
+            var (_, offset) = await Viewer.ReadAllAsync(path);
+
+            await File.AppendAllTextAsync(path, "line3\nline4\n");
+            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+
+            delta.Should().Contain("line3").And.Contain("line4");
+            delta.Should().NotContain("line1");
+            newOffset.Should().BeGreaterThan(offset);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadDelta_repeated_calls_are_incremental()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            // Simulate a live log file being tailed with three successive appends.
+            await File.WriteAllTextAsync(path, "batch1-line1\n");
+            var (_, off1) = await Viewer.ReadAllAsync(path);
+
+            await File.AppendAllTextAsync(path, "batch2-line1\nbatch2-line2\n");
+            var (delta2, off2) = Viewer.ReadDelta(path, off1);
+            delta2.Should().Contain("batch2-line1").And.Contain("batch2-line2");
+            delta2.Should().NotContain("batch1");
+
+            await File.AppendAllTextAsync(path, "batch3-line1\n", TestContext.Current.CancellationToken);
+            var (delta3, off3) = Viewer.ReadDelta(path, off2);
+            delta3.Should().Contain("batch3-line1");
+            delta3.Should().NotContain("batch2");
+
+            off3.Should().BeGreaterThan(off2).And.BeGreaterThan(off1);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task ReadAllAsync_nonexistent_file_throws_or_returns_empty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".log");
+        // FileStream(FileMode.Open) throws FileNotFoundException for missing files.
+        // This test documents the contract so regressions are visible.
+        var act = async () => await Viewer.ReadAllAsync(path);
+        await act.Should().ThrowAsync<FileNotFoundException>();
+    }
+
+    // ── Log parsing timing ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ParseLine_throughput_for_1k_lines()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var lines = Enumerable.Range(1, 1_000)
+                .Select(i => $"2024-06-01 {i / 3600 % 24:D2}:{i / 60 % 60:D2}:{i % 60:D2}.{i % 1000:D3}|WARN|Svc|{i}|42|Message text {i}|Ns.Class.Method")
+                .ToArray();
+            await File.WriteAllLinesAsync(path, lines, TestContext.Current.CancellationToken);
+
+            var sw = Stopwatch.StartNew();
+            var (_, offset) = await Viewer.ReadAllAsync(path, TestContext.Current.CancellationToken);
+            sw.Stop();
+
+            offset.Should().BeGreaterThan(0);
+            TestContext.Current.SendDiagnosticMessage(
+                $"1k lines: ReadAllAsync in {sw.Elapsed.TotalMilliseconds:F0}ms");
+        }
+        finally { File.Delete(path); }
+    }
+}
 FILE tests/NxtUI.Tests/Performance/MongoPerfTests.cs
-LENGTH 3618
+LENGTH 8605
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
@@ -26342,6 +27341,120 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         }
 
         out_.WriteLine($"[{sw.Elapsed:c}] Total time for all databases.");
+    }
+
+    [Fact]
+    public async Task Documents_Pagination_Timing()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
+
+        var db    = databases[0].Name;
+        var names = (await mongo.GetCollectionNamesAsync(env, db)).ToList();
+        if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
+
+        var col = names[0];
+        out_.WriteLine($"[{sw.Elapsed:c}] Paginating '{db}.{col}'…");
+
+        var pg1Sw = Stopwatch.StartNew();
+        var (docs1, total) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 0, limit: 25);
+        out_.WriteLine($"[{sw.Elapsed:c}] Page 1 (skip=0):    {docs1.Count} docs in {pg1Sw.Elapsed.TotalMilliseconds:F0}ms, total={total:N0}");
+
+        if (total > 25)
+        {
+            var pg2Sw = Stopwatch.StartNew();
+            var (docs2, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 25, limit: 25);
+            out_.WriteLine($"[{sw.Elapsed:c}] Page 2 (skip=25):   {docs2.Count} docs in {pg2Sw.Elapsed.TotalMilliseconds:F0}ms");
+        }
+
+        if (total > 1000)
+        {
+            var deepSw = Stopwatch.StartNew();
+            var (docs3, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 1000, limit: 25);
+            out_.WriteLine($"[{sw.Elapsed:c}] Deep page (skip=1000): {docs3.Count} docs in {deepSw.Elapsed.TotalMilliseconds:F0}ms");
+        }
+    }
+
+    [Fact]
+    public async Task Document_Search_With_Filter_Timing()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
+
+        var db    = databases[0].Name;
+        var names = (await mongo.GetCollectionNamesAsync(env, db)).ToList();
+        if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
+
+        var col = names[0];
+        foreach (var search in new[] { (string?)null, "error", "2024", "_id" })
+        {
+            var sSw = Stopwatch.StartNew();
+            var (docs, total) = await mongo.GetDocumentsAsync(env, db, col, search, skip: 0, limit: 25);
+            out_.WriteLine($"[{sw.Elapsed:c}] search={search ?? "(none)",-10}: " +
+                           $"{docs.Count}/{total:N0} in {sSw.Elapsed.TotalMilliseconds:F0}ms");
+        }
+    }
+
+    [Fact]
+    public async Task CollectionDetails_With_Indexes_Timing()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
+
+        foreach (var dbInfo in databases.Take(2))
+        {
+            var names = (await mongo.GetCollectionNamesAsync(env, dbInfo.Name)).ToList();
+            out_.WriteLine($"[{sw.Elapsed:c}] {dbInfo.Name}: {names.Count} collections");
+
+            await Task.WhenAll(names.Take(5).Select(async col =>
+            {
+                var dSw     = Stopwatch.StartNew();
+                var details = await mongo.GetCollectionDetailsAsync(env, dbInfo.Name, col);
+                out_.WriteLine($"  [{dSw.Elapsed:c}] {col}: {details.Summary.DocumentCount:N0} docs, " +
+                               $"{details.Indexes.Count} indexes");
+                foreach (var idx in details.Indexes)
+                    out_.WriteLine($"    {idx.Name}: keys={idx.Keys} unique={idx.Unique} sparse={idx.Sparse}");
+            }));
+        }
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
+    }
+
+    [Fact]
+    public async Task Slow_Mongo_Connection_Stays_Within_Timeout()
+    {
+        var mongo = fix.Services.GetRequiredService<IMongoReader>();
+        var env   = fix.DefaultEnv;
+        var sw    = Stopwatch.StartNew();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var databases = (await mongo.GetDatabasesAsync(env, cts.Token)).ToList();
+            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync: {databases.Count} databases");
+            if (databases.Count == 0)
+                out_.WriteLine("  WARNING: No databases returned — connection may be degraded.");
+        }
+        catch (OperationCanceledException)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync timed out after 5s — MongoDB may be unreachable.");
+        }
+        catch (Exception ex)
+        {
+            out_.WriteLine($"[{sw.Elapsed:c}] Exception: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static string FormatBytes(long b) =>

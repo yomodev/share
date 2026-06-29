@@ -158,4 +158,132 @@ public class FilterEvaluatorTests
         Eval("!Service:svcA", new Evt(Service: "svcB")).Should().BeTrue();
         Eval("!Service:svcA", new Evt(Service: "svcA")).Should().BeFalse();
     }
+
+    [Fact]
+    public void Double_NOT_matches_same_as_original()
+    {
+        Eval("!!Service:svcA", new Evt(Service: "svcA")).Should().BeTrue();
+        Eval("!!Service:svcA", new Evt(Service: "svcB")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NOT_applies_only_to_its_operand_in_AND_chain()
+    {
+        // "!Service:svcA Pipeline:b" = (NOT Service:svcA) AND Pipeline:b
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcB", Pipeline: "pipe1")).Should().BeTrue();
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcA", Pipeline: "pipe1")).Should().BeFalse();
+        Eval("!Service:svcA Pipeline:pipe1", new Evt(Service: "svcB", Pipeline: "other")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AND_binds_tighter_than_OR_in_evaluation()
+    {
+        // "Service:a Pipeline:b, Service:c" = (a AND b) OR c
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "a", Pipeline: "b")).Should().BeTrue();
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "c")).Should().BeTrue();
+        Eval("Service:a Pipeline:b, Service:c", new Evt(Service: "a", Pipeline: "x")).Should().BeFalse();
+    }
+
+    // ── Case sensitivity ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Double_quoted_Contains_is_case_sensitive()
+    {
+        Eval("ChunkId:\"ABC\"", new Evt(ChunkId: "abc")).Should().BeFalse();
+        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "abc")).Should().BeTrue();
+        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "ABC")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Single_quoted_Contains_is_case_insensitive()
+    {
+        Eval("ChunkId:'ABC'", new Evt(ChunkId: "abc")).Should().BeTrue();
+        Eval("ChunkId:'abc'", new Evt(ChunkId: "ABC")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Double_quoted_Exact_is_case_sensitive()
+    {
+        Eval("ChunkId:=\"CHK-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("ChunkId:=\"chk-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+    }
+
+    // ── IsNull on actual null ──────────────────────────────────────────────
+
+    private record WithNull(string? Tag);
+    private static readonly FilterParser NullParser = new(["Tag"]);
+
+    [Fact]
+    public void IsNull_matches_actual_null_property_value()
+    {
+        var ast = NullParser.Parse("Tag:null");
+        FilterEvaluator.Evaluate(ast, new WithNull(Tag: null)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new WithNull(Tag: "value")).Should().BeFalse();
+    }
+
+    // ── Unknown field ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Unknown_field_returns_false()
+    {
+        Eval("UnknownField:anything", new Evt(ChunkId: "anything")).Should().BeFalse();
+    }
+
+    // ── DateTime property comparisons ──────────────────────────────────────
+
+    private record Dated(DateTime UpdatedAt, string Name = "");
+    private static readonly FilterParser DateParser = new([]);
+
+    [Fact]
+    public void DateTime_gt_within_window_matches()
+    {
+        // -5 min ago is after the -30 min cutoff
+        var obj = new Dated(UpdatedAt: DateTime.UtcNow.AddMinutes(-5));
+        FilterEvaluator.Evaluate(DateParser.Parse("UpdatedAt:>-30m"), obj).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DateTime_gt_outside_window_does_not_match()
+    {
+        // -5 min ago is before the -1 min cutoff
+        var obj = new Dated(UpdatedAt: DateTime.UtcNow.AddMinutes(-5));
+        FilterEvaluator.Evaluate(DateParser.Parse("UpdatedAt:>-1m"), obj).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DateTime_Between_matches_date_in_range()
+    {
+        var obj      = new Dated(UpdatedAt: new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc));
+        var inRange  = DateParser.Parse("UpdatedAt:2024-01-01..2024-12-31");
+        var outRange = DateParser.Parse("UpdatedAt:2025-01-01..2025-12-31");
+        FilterEvaluator.Evaluate(inRange,  obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(outRange, obj).Should().BeFalse();
+    }
+
+    // ── TimeSpan property via ToDouble (total seconds) ─────────────────────
+
+    private record Timed(TimeSpan Duration);
+    private static readonly FilterParser TimeParser = new([]);
+
+    [Fact]
+    public void TimeSpan_property_compared_as_total_seconds()
+    {
+        var obj = new Timed(Duration: TimeSpan.FromMinutes(5)); // 300 seconds
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:>200"),    obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:<200"),    obj).Should().BeFalse();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:100..400"), obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:400..600"), obj).Should().BeFalse();
+    }
+
+    // ── Numeric Between with float boundaries ──────────────────────────────
+
+    [Fact]
+    public void Between_with_decimal_boundaries()
+    {
+        var ast = NumParser.Parse("Count:0.5..9.5");
+        FilterEvaluator.Evaluate(ast, new NumObj(1)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new NumObj(9)).Should().BeTrue();
+        FilterEvaluator.Evaluate(ast, new NumObj(0)).Should().BeFalse();
+        FilterEvaluator.Evaluate(ast, new NumObj(10)).Should().BeFalse();
+    }
 }

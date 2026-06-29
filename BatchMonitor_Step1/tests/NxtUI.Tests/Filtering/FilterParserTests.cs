@@ -255,6 +255,142 @@ public class FilterParserTests
         n1!.Value.Should().BeCloseTo(n2!.Value, TimeSpan.FromSeconds(1));
     }
 
+    // ── Date ranges ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ISO_date_range_produces_Between_with_DateValues()
+    {
+        var node = Parse("updated:2024-01-01..2024-12-31") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<DateValue>().Which.Value.Should().Be(new DateTime(2024, 1, 1));
+        rv.High.Should().BeOfType<DateValue>().Which.Value.Should().Be(new DateTime(2024, 12, 31));
+    }
+
+    [Fact]
+    public void Relative_date_range_produces_Between_with_DateValues()
+    {
+        var before = DateTime.UtcNow;
+        var node   = Parse("updated:-7d..-1d") as FieldTermNode;
+        var after  = DateTime.UtcNow;
+
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<DateValue>().Which.Value
+            .Should().BeCloseTo(before.AddDays(-7), TimeSpan.FromSeconds(2));
+        rv.High.Should().BeOfType<DateValue>().Which.Value
+            .Should().BeCloseTo(before.AddDays(-1), TimeSpan.FromSeconds(2));
+    }
+
+    // ── Numeric range with decimals ────────────────────────────────────────
+
+    [Fact]
+    public void Numeric_range_with_decimal_boundaries()
+    {
+        var node = Parse("ChunkId:0.5..9.5") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
+        rv.Low.Should().BeOfType<NumberValue>().Which.Value.Should().BeApproximately(0.5, 0.001);
+        rv.High.Should().BeOfType<NumberValue>().Which.Value.Should().BeApproximately(9.5, 0.001);
+    }
+
+    // ── Double NOT ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Double_NOT_produces_nested_NotNodes()
+    {
+        var node  = Parse("!!Service:svcA");
+        var outer = node.Should().BeOfType<NotNode>().Subject;
+        var inner = outer.Operand.Should().BeOfType<NotNode>().Subject;
+        inner.Operand.Should().BeOfType<FieldTermNode>();
+    }
+
+    // ── Three-way OR ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Three_way_OR_collects_three_leaf_nodes()
+    {
+        var node   = Parse("Service:a, Service:b, Service:c");
+        var leaves = CollectLeaves(node!);
+        leaves.Should().HaveCount(3)
+              .And.AllSatisfy(l => l.Field.Should().Be("Service"));
+    }
+
+    // ── Bare wildcard → Glob ───────────────────────────────────────────────
+
+    [Fact]
+    public void Bare_wildcard_expands_to_Glob_match_type()
+    {
+        var leaves = CollectLeaves(Parse("chk-*")!);
+        leaves.Should().AllSatisfy(l => l.MatchType.Should().Be(MatchType.Glob));
+        leaves.Select(l => l.Field).Should().BeEquivalentTo(Fields);
+    }
+
+    // ── ISO date with time component ──────────────────────────────────────
+
+    [Fact]
+    public void ISO_date_with_time_component_parses_to_DateValue()
+    {
+        var node = Parse("updated:>2024-06-15T12:00z") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+        var dv = node.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Date.Should().Be(new DateTime(2024, 6, 15));
+    }
+
+    // ── Empty double-quoted string ─────────────────────────────────────────
+
+    [Fact]
+    public void Empty_double_quoted_string_is_case_sensitive_StringValue()
+    {
+        var node = Parse("ChunkId:\"\"") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be(string.Empty);
+        node.CaseSensitive.Should().BeTrue();
+    }
+
+    // ── Time-only with seconds ─────────────────────────────────────────────
+
+    [Fact]
+    public void Time_only_with_seconds_parses_to_DateValue()
+    {
+        var today = DateTime.UtcNow.Date;
+        var node  = Parse("updated:<01:30:45") as FieldTermNode;
+        node.Should().NotBeNull();
+        var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
+        dv.Value.Should().Be(today.AddHours(1).AddMinutes(30).AddSeconds(45));
+    }
+
+    // ── AND > OR precedence ────────────────────────────────────────────────
+
+    [Fact]
+    public void AND_groups_left_side_of_OR()
+    {
+        // "A B, C" should parse as "(A AND B) OR C" — root is OrNode
+        var node = Parse("Service:a Pipeline:b, Service:c");
+        node.Should().BeOfType<OrNode>();
+        // The left child of OR should be the AND of the first two terms
+        var or = (OrNode)node!;
+        or.Left.Should().BeOfType<AndNode>();
+        or.Right.Should().BeOfType<FieldTermNode>();
+    }
+
+    // ── NOT applied to compound rhs ────────────────────────────────────────
+
+    [Fact]
+    public void NOT_on_field_term_is_not_double_negated_by_AND()
+    {
+        // "!Service:svcA Pipeline:b" = (NOT Service:svcA) AND Pipeline:b — root is AndNode
+        var node = Parse("!Service:svcA Pipeline:b");
+        node.Should().BeOfType<AndNode>();
+        var and = (AndNode)node!;
+        and.Left.Should().BeOfType<NotNode>();
+        and.Right.Should().BeOfType<FieldTermNode>();
+    }
+
     private static void Collect(FilterNode node, List<FieldTermNode> acc)
     {
         switch (node)

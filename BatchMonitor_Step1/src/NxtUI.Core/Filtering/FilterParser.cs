@@ -423,11 +423,7 @@ public sealed class FilterParser
         if (TryParseNumber(text, out var num))
             return new NumberValue(num);
 
-        // Time-only (hh:mm or hh:mm:ss) → time-of-day comparison, date-agnostic.
-        if (TryParseTimeOfDay(text, out var tod))
-            return tod;
-
-        // Absolute date / relative offset
+        // Absolute date / relative offset (includes hh:mm → today + time)
         if (TryParseDate(text, out var dt))
             return new DateValue(dt);
 
@@ -515,6 +511,17 @@ public sealed class FilterParser
                     _   => DateTime.UtcNow.Date,
                 };
             }
+            return true;
+        }
+
+        // Time-only (hh:mm or hh:mm:ss) → today's date + that time
+        var todMatch = TimeOnly.Match(text);
+        if (todMatch.Success && !text.StartsWith('-'))
+        {
+            int th = int.Parse(todMatch.Groups[1].Value);
+            int tm = int.Parse(todMatch.Groups[2].Value);
+            int ts = todMatch.Groups[3].Success ? int.Parse(todMatch.Groups[3].Value) : 0;
+            result = DateTime.UtcNow.Date.AddHours(th).AddMinutes(tm).AddSeconds(ts);
             return true;
         }
 
