@@ -139,7 +139,10 @@ public class MongoService : IMongoService
             return new MongoDocument
             {
                 Id        = id,
-                Json      = d.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { Indent = false }),
+                Json      = d.ToJson(new MongoDB.Bson.IO.JsonWriterSettings
+                {
+                    OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson,
+                }),
                 Timestamp = ts,
             };
         }).ToList();
