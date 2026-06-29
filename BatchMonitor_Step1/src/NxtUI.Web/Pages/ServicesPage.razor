@@ -318,15 +318,20 @@
         HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
 
-        // Populate from cache immediately (may be empty on first open; OnServicesUpdated
-        // fires once the background poll completes and fills the cache).
-        LoadFromCache();
+        var cached = HeartbeatMonitor.GetServices(Env);
+        if (cached is not null)
+            LoadFromCache(cached);
+        else
+            _loading = true;   // show spinner until the first poll completes
+
         await InvokeAsync(StateHasChanged);
     }
 
-    private void LoadFromCache()
+    private void LoadFromCache(IReadOnlyList<ServiceStatus>? services = null)
     {
-        _all         = HeartbeatMonitor.GetServices(Env)?.ToList() ?? _all;
+        services ??= HeartbeatMonitor.GetServices(Env);
+        if (services is null) return;
+        _all         = services.ToList();
         _lastUpdated = DateTime.UtcNow;
         RecomputeFilter();
         foreach (var svc in _all)
@@ -339,6 +344,7 @@
         _ = InvokeAsync(() =>
         {
             LoadFromCache();
+            _loading = false;
             ScheduleRender();
         });
     }
@@ -410,8 +416,7 @@
             return;
         }
 
-        await JS.InvokeVoidAsync("copyText", path);
-        await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
+        await JS.InvokeVoidAsync("copyText", path, "Path copied to clipboard");
     }
 
     private async Task OpenLogViewerAsync(ServiceStatus svc)

@@ -929,32 +929,7 @@ const TIMELINE_ALIASES = {
             `Duration: ${durStr}`,
         ];
         if (e.error) lines.push(`Error:    ${e.error}`);
-        navigator.clipboard?.writeText(lines.join('\n')).then(() => showCopyToast());
-    }
-
-    function showCopyToast() {
-        const el = document.createElement('div');
-        el.textContent = 'Copied to clipboard';
-        Object.assign(el.style, {
-            position:      'fixed',
-            bottom:        '28px',
-            left:          '50%',
-            transform:     'translateX(-50%)',
-            background:    '#3FB950',
-            color:         '#fff',
-            padding:       '7px 20px',
-            borderRadius:  '6px',
-            fontSize:      '0.8rem',
-            fontWeight:    '600',
-            fontFamily:    'var(--bm-font-mono, monospace)',
-            zIndex:        '99999',
-            pointerEvents: 'none',
-            opacity:       '1',
-            transition:    'opacity 0.35s ease',
-        });
-        document.body.appendChild(el);
-        setTimeout(() => { el.style.opacity = '0'; }, 1400);
-        setTimeout(() => { document.body.removeChild(el); }, 1750);
+        window.copyText(lines.join('\n'), 'Copied to clipboard');
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────

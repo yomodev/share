@@ -213,8 +213,7 @@
         var text = Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
             ? Path["local:".Length..]
             : (Path ?? "");
-        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
-        catch { await JS.InvokeVoidAsync("copyText", text); }
+        await JS.InvokeVoidAsync("copyText", text, "Copied to clipboard");
     }
 
     private async Task OnPageKeyDown(KeyboardEventArgs e)
@@ -443,8 +442,7 @@
             var lineIdx  = await _viewport.GetCurrentTopLineAsync();
             var baseUrl  = Nav.Uri.Split('#')[0];
             var shareUrl = $"{baseUrl}#L{lineIdx + 1}";
-            await JS.InvokeVoidAsync("copyText", shareUrl);
-            await JS.InvokeVoidAsync("showCopyToast", "Share link copied");
+            await JS.InvokeVoidAsync("copyText", shareUrl, "Share link copied");
         }
         catch (JSDisconnectedException) { }
     }

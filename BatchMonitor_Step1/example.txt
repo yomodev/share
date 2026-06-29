@@ -12237,7 +12237,7 @@ public record KafkaTopicSummary
     public long RetentionMs { get; init; }
 }
 FILE src/NxtUI.Core/Models/MongoModels.cs
-LENGTH 1066
+LENGTH 1190
 namespace NxtUI.Core.Models;
 
 public record MongoDatabaseInfo
@@ -12254,6 +12254,8 @@ public record MongoCollectionSummary
     public long AvgDocSizeBytes { get; init; }
     public long StorageSizeBytes { get; init; }
     public int IndexCount { get; init; }
+    /// <summary>False while background enrichment is still in flight.</summary>
+    public bool StatsLoaded { get; init; }
 }
 
 public record MongoDocument
@@ -12743,7 +12745,7 @@ public interface ILogViewerService
     (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
-LENGTH 1198
+LENGTH 1479
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -12752,6 +12754,8 @@ namespace NxtUI.Core.Services;
 public interface IMongoReader
 {
     Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
+    Task<IReadOnlyList<string>>                 GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
+    Task<MongoCollectionSummary?>               GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);
     Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default);
     Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
@@ -12915,7 +12919,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var added = false;
         _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
         if (added)
-            _log.LogTrace("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -12939,12 +12943,12 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
         {
-            _log.LogTrace("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            _log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            _log.LogTrace("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
         }
         return result;
     }
@@ -12954,7 +12958,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         foreach (var template in _settings.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
-            _log.LogTrace("discovery [{Env}]: trying {Expanded}", env, expanded);
+            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
@@ -17682,7 +17686,7 @@ LENGTH 11562
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 25658
+LENGTH 25665
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -18273,7 +18277,7 @@ LENGTH 25658
 
 
     private async Task CopyPathAsync(string path) =>
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
+        await JS.InvokeVoidAsync("copyText", path, "Path copied to clipboard");
 
 
     private static string FormatSize(long bytes)
@@ -18293,7 +18297,7 @@ LENGTH 25658
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 20295
+LENGTH 20172
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
@@ -18509,8 +18513,7 @@ LENGTH 20295
         var text = Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
             ? Path["local:".Length..]
             : (Path ?? "");
-        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
-        catch { await JS.InvokeVoidAsync("copyText", text); }
+        await JS.InvokeVoidAsync("copyText", text, "Copied to clipboard");
     }
 
     private async Task OnPageKeyDown(KeyboardEventArgs e)
@@ -18739,8 +18742,7 @@ LENGTH 20295
             var lineIdx  = await _viewport.GetCurrentTopLineAsync();
             var baseUrl  = Nav.Uri.Split('#')[0];
             var shareUrl = $"{baseUrl}#L{lineIdx + 1}";
-            await JS.InvokeVoidAsync("copyText", shareUrl);
-            await JS.InvokeVoidAsync("showCopyToast", "Share link copied");
+            await JS.InvokeVoidAsync("copyText", shareUrl, "Share link copied");
         }
         catch (JSDisconnectedException) { }
     }
@@ -19741,7 +19743,7 @@ LENGTH 9131
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 12419
+LENGTH 14162
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19810,6 +19812,10 @@ LENGTH 12419
 
     <!-- Table -->
     <div class="bm-table-wrap">
+        @if (_enriching)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
         <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
@@ -19839,13 +19845,28 @@ LENGTH 12419
                     <span class="bm-kafka-topic-name">@context.Name</span>
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
+                    @if (context.StatsLoaded)
+                    {
+                        <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
+                    }
+                    else
+                    {
+                        <span class="bm-muted">—</span>
+                    }
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
+                    @if (context.StatsLoaded)
+                    {
+                        <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
+                    }
+                    else
+                    {
+                        <span class="bm-muted">—</span>
+                    }
                 </MudTd>
                 <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    @context.IndexCount
+                    @if (context.StatsLoaded) { @context.IndexCount }
+                    else { <span class="bm-muted">—</span> }
                 </MudTd>
                 <MudTd Style="text-align:center;">
                     <div class="bm-row-actions">
@@ -19911,6 +19932,7 @@ LENGTH 12419
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
     private Result<List<MongoCollectionSummary>> _result;
+    private bool    _enriching = false;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
@@ -19956,17 +19978,34 @@ LENGTH 12419
 
     private async Task LoadCollectionsAsync()
     {
-        _result = default; // loading
+        _result    = default; // loading state — progress bar visible via _result.IsLoading || _enriching
+        _enriching = false;
         StateHasChanged();
         try
         {
-            var cols = await MongoSvc.GetCollectionsAsync(Environment, _selectedDb, _cts.Token);
-            _all = cols.ToList();
+            // Phase 1 — names only: instant, renders the table immediately
+            var names = await MongoSvc.GetCollectionNamesAsync(Environment, _selectedDb, _cts.Token);
+            _all = names.Select(n => new MongoCollectionSummary { Name = n }).ToList();
             ApplyFilter();
-            _result = Result<List<MongoCollectionSummary>>.Ok(_all);
+            _result    = Result<List<MongoCollectionSummary>>.Ok(_all);
+            _enriching = true;   // keep progress bar visible while stats load
+            StateHasChanged();
+
+            // Phase 2 — enrich each row with stats in parallel, updating the UI as each completes
+            var ct = _cts.Token;
+            await Task.WhenAll(names.Select(async name =>
+            {
+                var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
+                if (stats is null || ct.IsCancellationRequested) return;
+                var idx = _all.FindIndex(c => c.Name == name);
+                if (idx < 0) return;
+                _all[idx] = stats;
+                await InvokeAsync(() => { ApplyFilter(); StateHasChanged(); });
+            }));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
+        finally { _enriching = false; StateHasChanged(); }
     }
 
     private void OnFilterChanged(string text)
@@ -20753,7 +20792,7 @@ LENGTH 11162
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28545
+LENGTH 28655
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -21074,15 +21113,20 @@ LENGTH 28545
         HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
 
-        // Populate from cache immediately (may be empty on first open; OnServicesUpdated
-        // fires once the background poll completes and fills the cache).
-        LoadFromCache();
+        var cached = HeartbeatMonitor.GetServices(Env);
+        if (cached is not null)
+            LoadFromCache(cached);
+        else
+            _loading = true;   // show spinner until the first poll completes
+
         await InvokeAsync(StateHasChanged);
     }
 
-    private void LoadFromCache()
+    private void LoadFromCache(IReadOnlyList<ServiceStatus>? services = null)
     {
-        _all         = HeartbeatMonitor.GetServices(Env)?.ToList() ?? _all;
+        services ??= HeartbeatMonitor.GetServices(Env);
+        if (services is null) return;
+        _all         = services.ToList();
         _lastUpdated = DateTime.UtcNow;
         RecomputeFilter();
         foreach (var svc in _all)
@@ -21095,6 +21139,7 @@ LENGTH 28545
         _ = InvokeAsync(() =>
         {
             LoadFromCache();
+            _loading = false;
             ScheduleRender();
         });
     }
@@ -21166,8 +21211,7 @@ LENGTH 28545
             return;
         }
 
-        await JS.InvokeVoidAsync("copyText", path);
-        await JS.InvokeVoidAsync("showCopyToast", "Path copied to clipboard");
+        await JS.InvokeVoidAsync("copyText", path, "Path copied to clipboard");
     }
 
     private async Task OpenLogViewerAsync(ServiceStatus svc)
@@ -22256,7 +22300,7 @@ LENGTH 30904
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 16723
+LENGTH 16875
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22304,7 +22348,7 @@ LENGTH 16723
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=11"></script>
+    <script src="js/d3-home-treemap.js?v=13"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -22526,14 +22570,16 @@ LENGTH 16723
             }
             // Clipboard API needs a secure context (HTTPS/localhost). Fall back to
             // the legacy execCommand path so copy still works over plain HTTP.
-            function copyText(text) {
+            function copyText(text, message) {
                 if (navigator.clipboard && window.isSecureContext) {
-                    navigator.clipboard.writeText(text).catch(function () { legacyCopy(text); });
+                    navigator.clipboard.writeText(text)
+                        .then(function () { showCopyToast(message || 'Copied to clipboard'); })
+                        .catch(function () { legacyCopy(text, message); });
                 } else {
-                    legacyCopy(text);
+                    legacyCopy(text, message);
                 }
             }
-            function legacyCopy(text) {
+            function legacyCopy(text, message) {
                 var ta = document.createElement('textarea');
                 ta.value = text;
                 ta.setAttribute('readonly', '');
@@ -22544,6 +22590,7 @@ LENGTH 16723
                 ta.select();
                 try { document.execCommand('copy'); } catch (err) { /* nothing more we can do */ }
                 document.body.removeChild(ta);
+                showCopyToast(message || 'Copied to clipboard');
             }
             // Expose globally so Blazor server-side code can invoke them via IJSRuntime
             window.copyText      = copyText;
@@ -22580,8 +22627,7 @@ LENGTH 16723
                             });
                         lines.push(cells.join(','));
                     });
-                    copyText(lines.join('\n'));
-                    showCopyToast('Copied ' + (lines.length - 1) + ' rows as CSV');
+                    copyText(lines.join('\n'), 'Copied ' + (lines.length - 1) + ' rows as CSV');
                 } else {
                     var parts = Array.from(tr.querySelectorAll('td')).map(function (td, i) {
                         var hdr = headers[i] || '';
@@ -22589,8 +22635,7 @@ LENGTH 16723
                         if (!val) return null;
                         return hdr ? hdr + ': ' + val : val;
                     }).filter(Boolean);
-                    copyText(parts.join('\n'));
-                    showCopyToast('Row copied to clipboard');
+                    copyText(parts.join('\n'), 'Row copied to clipboard');
                 }
             });
         })();
@@ -24032,7 +24077,7 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 10513
+LENGTH 11651
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
@@ -24056,12 +24101,16 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMonitor
 {
-    private const int MaxHistory = 1000;
+    private const int MaxHistory   = 1000;
+    private const int MaxParallel  = 48;   // max concurrent file reads across all envs
 
     private readonly IHeartbeatMonitor               _heartbeatMonitor;
     private readonly ILogPathDiscoveryService        _discovery;
     private readonly LogPathSettings                 _paths;
     private readonly ILogger<ServiceMetricsMonitor>  _log;
+
+    // Limits simultaneous network file reads to avoid overwhelming the servers.
+    private readonly SemaphoreSlim _ioGate = new(MaxParallel, MaxParallel);
 
     private readonly object                             _subLock  = new();
     private readonly Dictionary<string, int>            _envRefs  = new();   // env -> subscriber count
@@ -24104,10 +24153,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private sealed class Entry
     {
-        public readonly object              Sync    = new();
+        public readonly object              Sync         = new();
+        public string?                      FilePath;    // cached once discovered; never re-searched
         public long                         Offset;
+        public DateTime                     LastWriteUtc = DateTime.MinValue;
         public MetricsSample?               Latest;
-        public readonly List<MetricsSample> History = new();
+        public readonly List<MetricsSample> History      = new();
     }
 
     // ── Subscription ───────────────────────────────────────────────────────────
@@ -24187,8 +24238,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             while (await timer.WaitForNextTickAsync(ct))
             {
                 CleanupIdleEnvs();
-                foreach (var env in SubscribedEnvs())
-                    await PollEnvAsync(env, ct);
+                await Task.WhenAll(SubscribedEnvs().Select(env => PollEnvAsync(env, ct)));
             }
         }
         catch (OperationCanceledException) { /* shutting down */ }
@@ -24233,39 +24283,59 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
             _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
 
-            var changed = false;
+            var changed = 0;
             var parsed  = 0;
-            foreach (var svc in services)
-            {
-                var folder = _discovery.GetCachedPath(svc, env);
-                if (folder is null)
-                {
-                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — folder not yet discovered", env, svc.ServiceName, svc.HostName);
-                    _discovery.EnsureDiscovering(svc, env);
-                    continue;
-                }
 
-                var file  = Path.Combine(folder, _paths.MetricsFileName);
+            await Task.WhenAll(services.Select(async svc =>
+            {
                 var key   = LogPathDiscoveryService.CacheKey(svc, env);
                 var entry = _entries.GetOrAdd(key, _ => new Entry());
 
-                _log.LogDebug("metrics [{Env}]: reading {File} (offset={Offset})", env, file, entry.Offset);
-
-                IncrementalFileReader.Result result;
-                try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, entry.Offset), ct); }
-                catch (Exception ex) { _log.LogWarning(ex, "metrics: read failed {File}", file); continue; }
-
-                if (result.Lines.Count == 0)
+                // Resolve and cache the file path once; never re-search after that.
+                if (entry.FilePath is null)
                 {
-                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — no new lines", env, svc.ServiceName, svc.HostName);
-                    continue;
+                    var folder = _discovery.GetCachedPath(svc, env);
+                    if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
+                    entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
                 }
 
-                _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — {Lines} new lines", env, svc.ServiceName, svc.HostName, result.Lines.Count);
+                var file = entry.FilePath;
+
+                // Cheap stat — skip the read entirely if the file hasn't changed.
+                // Runs unthrottled because a stat is far cheaper than a read.
+                DateTime mtime;
+                try
+                {
+                    mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
+                }
+                catch { return; }
 
                 lock (entry.Sync)
                 {
-                    entry.Offset = result.NewOffset;
+                    if (mtime <= entry.LastWriteUtc) return;
+                }
+
+                // File changed — throttle concurrent reads to avoid saturating servers.
+                long offset;
+                lock (entry.Sync) offset = entry.Offset;
+
+                await _ioGate.WaitAsync(ct);
+                IncrementalFileReader.Result result;
+                try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                      { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+                finally { _ioGate.Release(); }
+
+                if (result.Lines.Count == 0)
+                {
+                    lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
+                    return;
+                }
+
+                lock (entry.Sync)
+                {
+                    entry.Offset      = result.NewOffset;
+                    entry.LastWriteUtc = mtime;
                     foreach (var line in result.Lines)
                     {
                         if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
@@ -24273,16 +24343,16 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                         entry.History.Add(sample);
                         if (entry.History.Count > MaxHistory)
                             entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
-                        changed = true;
-                        parsed++;
+                        Interlocked.Increment(ref changed);
+                        Interlocked.Increment(ref parsed);
                     }
                 }
-            }
+            }));
 
             if (parsed > 0)
                 _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
 
-            if (changed) OnMetricsUpdated?.Invoke(env);
+            if (changed > 0) OnMetricsUpdated?.Invoke(env);
         }
         finally
         {
@@ -26634,7 +26704,7 @@ public class MockKafkaService : IKafkaService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockMongoService.cs
-LENGTH 14802
+LENGTH 15777
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -26826,10 +26896,27 @@ public class MockMongoService : IMongoService
     public Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
         => Task.FromResult(_databases);
 
+    public Task<IReadOnlyList<string>> GetCollectionNamesAsync(string env, string database, CancellationToken ct = default)
+    {
+        var names = _collections.TryGetValue(database, out var cols)
+            ? (IReadOnlyList<string>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).Select(c => c.Name).ToList()
+            : (IReadOnlyList<string>)[];
+        return Task.FromResult(names);
+    }
+
+    public Task<MongoCollectionSummary?> GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default)
+    {
+        MongoCollectionSummary? result = null;
+        if (_collections.TryGetValue(database, out var cols))
+            result = cols.FirstOrDefault(c => c.Name == name && !_dropped.Contains($"{database}/{c.Name}"));
+        return Task.FromResult(result is null ? null : result with { StatsLoaded = true });
+    }
+
     public Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default)
     {
         var result = _collections.TryGetValue(database, out var cols)
-            ? (IReadOnlyList<MongoCollectionSummary>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).ToList()
+            ? (IReadOnlyList<MongoCollectionSummary>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}"))
+                                                         .Select(c => c with { StatsLoaded = true }).ToList()
             : (IReadOnlyList<MongoCollectionSummary>)[];
         return Task.FromResult(result);
     }
@@ -27156,7 +27243,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 8044
+LENGTH 8633
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -27209,47 +27296,58 @@ public class MongoService : IMongoService
         return result;
     }
 
+    public async Task<IReadOnlyList<string>> GetCollectionNamesAsync(
+        string env, string database, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing collection names in '{Db}'", env, database);
+        var db    = _connection.Client.GetDatabase(database);
+        var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
+        return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<MongoCollectionSummary?> GetCollectionStatsAsync(
+        string env, string database, string name, CancellationToken ct = default)
+    {
+        try
+        {
+            var db       = _connection.Client.GetDatabase(database);
+            var col      = db.GetCollection<BsonDocument>(name);
+            var pipeline = new[]
+            {
+                new BsonDocument("$collStats",
+                    new BsonDocument("storageStats", new BsonDocument("scale", 1)))
+            };
+            using var cursor = await col.AggregateAsync<BsonDocument>(
+                PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
+                cancellationToken: ct);
+            var doc = await cursor.FirstOrDefaultAsync(ct);
+            if (doc is null) return new MongoCollectionSummary { Name = name, StatsLoaded = true };
+            var ss = doc["storageStats"].AsBsonDocument;
+            return new MongoCollectionSummary
+            {
+                Name             = name,
+                DocumentCount    = ss.GetValue("count",      0).ToInt64(),
+                AvgDocSizeBytes  = ss.GetValue("avgObjSize", 0).ToInt64(),
+                StorageSizeBytes = ss.GetValue("storageSize",0).ToInt64(),
+                IndexCount       = ss.GetValue("nindexes",   0).AsInt32,
+                StatsLoaded      = true,
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for '{Db}/{Col}'", env, database, name);
+            return new MongoCollectionSummary { Name = name, StatsLoaded = true };
+        }
+    }
+
     public async Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(
         string env, string database, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing collections in '{Db}'", env, database);
-        var db    = _connection.Client.GetDatabase(database);
-        var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
-
-        // Run one $collStats aggregation per collection in parallel — much faster than sequential collStats commands.
-        var tasks = names.Select(async name =>
-        {
-            try
-            {
-                var col      = db.GetCollection<BsonDocument>(name);
-                var pipeline = new[]
-                {
-                    new BsonDocument("$collStats",
-                        new BsonDocument("storageStats", new BsonDocument("scale", 1)))
-                };
-                using var cursor = await col.AggregateAsync<BsonDocument>(
-                    PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
-                    cancellationToken: ct);
-                var doc = await cursor.FirstOrDefaultAsync(ct);
-                if (doc is null) return new MongoCollectionSummary { Name = name };
-                var ss = doc["storageStats"].AsBsonDocument;
-                return new MongoCollectionSummary
-                {
-                    Name             = name,
-                    DocumentCount    = ss.GetValue("count",      0).ToInt64(),
-                    AvgDocSizeBytes  = ss.GetValue("avgObjSize", 0).ToInt64(),
-                    StorageSizeBytes = ss.GetValue("storageSize",0).ToInt64(),
-                    IndexCount       = ss.GetValue("nindexes",   0).AsInt32,
-                };
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for '{Db}/{Col}'", env, database, name);
-                return new MongoCollectionSummary { Name = name };
-            }
-        });
-
+        var names = await GetCollectionNamesAsync(env, database, ct);
+        var tasks = names.Select(name => GetCollectionStatsAsync(env, database, name, ct));
         return (await Task.WhenAll(tasks))
+            .OfType<MongoCollectionSummary>()
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -32203,7 +32301,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 6256
+LENGTH 6224
 window.homeMemoryTreemap = (function () {
 
     const _observers = new WeakMap(); // container → ResizeObserver
@@ -32289,9 +32387,8 @@ window.homeMemoryTreemap = (function () {
 
         // Service leaf rectangles
         root.leaves().forEach(leaf => {
-            const w = leaf.x1 - leaf.x0 - 2;
-            const h = leaf.y1 - leaf.y0 - 2;
-            if (w <= 0 || h <= 0) return;
+            const w = Math.max(2, leaf.x1 - leaf.x0 - 2);
+            const h = Math.max(2, leaf.y1 - leaf.y0 - 2);
 
             svg.append('rect')
                 .attr('x', leaf.x0 + 1).attr('y', leaf.y0 + 1)
@@ -32302,7 +32399,7 @@ window.homeMemoryTreemap = (function () {
                 .style('cursor', 'pointer')
                 .on('mousemove', event => {
                     const ram = leaf.data.ram != null
-                        ? Math.round(leaf.data.ram) + ' MB'
+                        ? Math.round(leaf.data.ram)
                         : 'no data';
                     tip.style('display', 'block')
                        .html(`<strong>${leaf.data.name}</strong><br>PID ${leaf.data.pid} &nbsp;·&nbsp; ${ram}`);
@@ -32322,7 +32419,7 @@ window.homeMemoryTreemap = (function () {
                     .attr('font-size', '10px')
                     .attr('fill', 'rgba(255,255,255,0.88)')
                     .attr('pointer-events', 'none')
-                    .text(Math.round(leaf.data.ram) + ' MB');
+                    .text(Math.round(leaf.data.ram));
             }
         });
     }
@@ -32596,7 +32693,7 @@ window.memoryLineChart = (() => {
     return { render };
 })();
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 49081
+LENGTH 48129
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -33528,32 +33625,7 @@ const TIMELINE_ALIASES = {
             `Duration: ${durStr}`,
         ];
         if (e.error) lines.push(`Error:    ${e.error}`);
-        navigator.clipboard?.writeText(lines.join('\n')).then(() => showCopyToast());
-    }
-
-    function showCopyToast() {
-        const el = document.createElement('div');
-        el.textContent = 'Copied to clipboard';
-        Object.assign(el.style, {
-            position:      'fixed',
-            bottom:        '28px',
-            left:          '50%',
-            transform:     'translateX(-50%)',
-            background:    '#3FB950',
-            color:         '#fff',
-            padding:       '7px 20px',
-            borderRadius:  '6px',
-            fontSize:      '0.8rem',
-            fontWeight:    '600',
-            fontFamily:    'var(--bm-font-mono, monospace)',
-            zIndex:        '99999',
-            pointerEvents: 'none',
-            opacity:       '1',
-            transition:    'opacity 0.35s ease',
-        });
-        document.body.appendChild(el);
-        setTimeout(() => { el.style.opacity = '0'; }, 1400);
-        setTimeout(() => { document.body.removeChild(el); }, 1750);
+        window.copyText(lines.join('\n'), 'Copied to clipboard');
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────

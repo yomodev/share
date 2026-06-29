@@ -21,12 +21,16 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMonitor
 {
-    private const int MaxHistory = 1000;
+    private const int MaxHistory   = 1000;
+    private const int MaxParallel  = 48;   // max concurrent file reads across all envs
 
     private readonly IHeartbeatMonitor               _heartbeatMonitor;
     private readonly ILogPathDiscoveryService        _discovery;
     private readonly LogPathSettings                 _paths;
     private readonly ILogger<ServiceMetricsMonitor>  _log;
+
+    // Limits simultaneous network file reads to avoid overwhelming the servers.
+    private readonly SemaphoreSlim _ioGate = new(MaxParallel, MaxParallel);
 
     private readonly object                             _subLock  = new();
     private readonly Dictionary<string, int>            _envRefs  = new();   // env -> subscriber count
@@ -69,10 +73,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private sealed class Entry
     {
-        public readonly object              Sync    = new();
+        public readonly object              Sync         = new();
+        public string?                      FilePath;    // cached once discovered; never re-searched
         public long                         Offset;
+        public DateTime                     LastWriteUtc = DateTime.MinValue;
         public MetricsSample?               Latest;
-        public readonly List<MetricsSample> History = new();
+        public readonly List<MetricsSample> History      = new();
     }
 
     // ── Subscription ───────────────────────────────────────────────────────────
@@ -152,8 +158,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             while (await timer.WaitForNextTickAsync(ct))
             {
                 CleanupIdleEnvs();
-                foreach (var env in SubscribedEnvs())
-                    await PollEnvAsync(env, ct);
+                await Task.WhenAll(SubscribedEnvs().Select(env => PollEnvAsync(env, ct)));
             }
         }
         catch (OperationCanceledException) { /* shutting down */ }
@@ -198,39 +203,59 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
             _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
 
-            var changed = false;
+            var changed = 0;
             var parsed  = 0;
-            foreach (var svc in services)
-            {
-                var folder = _discovery.GetCachedPath(svc, env);
-                if (folder is null)
-                {
-                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — folder not yet discovered", env, svc.ServiceName, svc.HostName);
-                    _discovery.EnsureDiscovering(svc, env);
-                    continue;
-                }
 
-                var file  = Path.Combine(folder, _paths.MetricsFileName);
+            await Task.WhenAll(services.Select(async svc =>
+            {
                 var key   = LogPathDiscoveryService.CacheKey(svc, env);
                 var entry = _entries.GetOrAdd(key, _ => new Entry());
 
-                _log.LogDebug("metrics [{Env}]: reading {File} (offset={Offset})", env, file, entry.Offset);
-
-                IncrementalFileReader.Result result;
-                try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, entry.Offset), ct); }
-                catch (Exception ex) { _log.LogWarning(ex, "metrics: read failed {File}", file); continue; }
-
-                if (result.Lines.Count == 0)
+                // Resolve and cache the file path once; never re-search after that.
+                if (entry.FilePath is null)
                 {
-                    _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — no new lines", env, svc.ServiceName, svc.HostName);
-                    continue;
+                    var folder = _discovery.GetCachedPath(svc, env);
+                    if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
+                    entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
                 }
 
-                _log.LogDebug("metrics [{Env}]: {Svc}@{Host} — {Lines} new lines", env, svc.ServiceName, svc.HostName, result.Lines.Count);
+                var file = entry.FilePath;
+
+                // Cheap stat — skip the read entirely if the file hasn't changed.
+                // Runs unthrottled because a stat is far cheaper than a read.
+                DateTime mtime;
+                try
+                {
+                    mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
+                }
+                catch { return; }
 
                 lock (entry.Sync)
                 {
-                    entry.Offset = result.NewOffset;
+                    if (mtime <= entry.LastWriteUtc) return;
+                }
+
+                // File changed — throttle concurrent reads to avoid saturating servers.
+                long offset;
+                lock (entry.Sync) offset = entry.Offset;
+
+                await _ioGate.WaitAsync(ct);
+                IncrementalFileReader.Result result;
+                try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                      { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+                finally { _ioGate.Release(); }
+
+                if (result.Lines.Count == 0)
+                {
+                    lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
+                    return;
+                }
+
+                lock (entry.Sync)
+                {
+                    entry.Offset      = result.NewOffset;
+                    entry.LastWriteUtc = mtime;
                     foreach (var line in result.Lines)
                     {
                         if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
@@ -238,16 +263,16 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                         entry.History.Add(sample);
                         if (entry.History.Count > MaxHistory)
                             entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
-                        changed = true;
-                        parsed++;
+                        Interlocked.Increment(ref changed);
+                        Interlocked.Increment(ref parsed);
                     }
                 }
-            }
+            }));
 
             if (parsed > 0)
                 _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
 
-            if (changed) OnMetricsUpdated?.Invoke(env);
+            if (changed > 0) OnMetricsUpdated?.Invoke(env);
         }
         finally
         {

@@ -189,10 +189,27 @@ public class MockMongoService : IMongoService
     public Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
         => Task.FromResult(_databases);
 
+    public Task<IReadOnlyList<string>> GetCollectionNamesAsync(string env, string database, CancellationToken ct = default)
+    {
+        var names = _collections.TryGetValue(database, out var cols)
+            ? (IReadOnlyList<string>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).Select(c => c.Name).ToList()
+            : (IReadOnlyList<string>)[];
+        return Task.FromResult(names);
+    }
+
+    public Task<MongoCollectionSummary?> GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default)
+    {
+        MongoCollectionSummary? result = null;
+        if (_collections.TryGetValue(database, out var cols))
+            result = cols.FirstOrDefault(c => c.Name == name && !_dropped.Contains($"{database}/{c.Name}"));
+        return Task.FromResult(result is null ? null : result with { StatsLoaded = true });
+    }
+
     public Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default)
     {
         var result = _collections.TryGetValue(database, out var cols)
-            ? (IReadOnlyList<MongoCollectionSummary>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).ToList()
+            ? (IReadOnlyList<MongoCollectionSummary>)cols.Where(c => !_dropped.Contains($"{database}/{c.Name}"))
+                                                         .Select(c => c with { StatsLoaded = true }).ToList()
             : (IReadOnlyList<MongoCollectionSummary>)[];
         return Task.FromResult(result);
     }

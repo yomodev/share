@@ -66,6 +66,10 @@
 
     <!-- Table -->
     <div class="bm-table-wrap">
+        @if (_enriching)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
         <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
@@ -95,13 +99,28 @@
                     <span class="bm-kafka-topic-name">@context.Name</span>
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
+                    @if (context.StatsLoaded)
+                    {
+                        <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
+                    }
+                    else
+                    {
+                        <span class="bm-muted">—</span>
+                    }
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
+                    @if (context.StatsLoaded)
+                    {
+                        <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
+                    }
+                    else
+                    {
+                        <span class="bm-muted">—</span>
+                    }
                 </MudTd>
                 <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    @context.IndexCount
+                    @if (context.StatsLoaded) { @context.IndexCount }
+                    else { <span class="bm-muted">—</span> }
                 </MudTd>
                 <MudTd Style="text-align:center;">
                     <div class="bm-row-actions">
@@ -167,6 +186,7 @@
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
     private Result<List<MongoCollectionSummary>> _result;
+    private bool    _enriching = false;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
@@ -212,17 +232,34 @@
 
     private async Task LoadCollectionsAsync()
     {
-        _result = default; // loading
+        _result    = default; // loading state — progress bar visible via _result.IsLoading || _enriching
+        _enriching = false;
         StateHasChanged();
         try
         {
-            var cols = await MongoSvc.GetCollectionsAsync(Environment, _selectedDb, _cts.Token);
-            _all = cols.ToList();
+            // Phase 1 — names only: instant, renders the table immediately
+            var names = await MongoSvc.GetCollectionNamesAsync(Environment, _selectedDb, _cts.Token);
+            _all = names.Select(n => new MongoCollectionSummary { Name = n }).ToList();
             ApplyFilter();
-            _result = Result<List<MongoCollectionSummary>>.Ok(_all);
+            _result    = Result<List<MongoCollectionSummary>>.Ok(_all);
+            _enriching = true;   // keep progress bar visible while stats load
+            StateHasChanged();
+
+            // Phase 2 — enrich each row with stats in parallel, updating the UI as each completes
+            var ct = _cts.Token;
+            await Task.WhenAll(names.Select(async name =>
+            {
+                var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
+                if (stats is null || ct.IsCancellationRequested) return;
+                var idx = _all.FindIndex(c => c.Name == name);
+                if (idx < 0) return;
+                _all[idx] = stats;
+                await InvokeAsync(() => { ApplyFilter(); StateHasChanged(); });
+            }));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
+        finally { _enriching = false; StateHasChanged(); }
     }
 
     private void OnFilterChanged(string text)

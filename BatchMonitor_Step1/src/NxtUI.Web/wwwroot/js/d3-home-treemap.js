@@ -83,9 +83,8 @@ window.homeMemoryTreemap = (function () {
 
         // Service leaf rectangles
         root.leaves().forEach(leaf => {
-            const w = leaf.x1 - leaf.x0 - 2;
-            const h = leaf.y1 - leaf.y0 - 2;
-            if (w <= 0 || h <= 0) return;
+            const w = Math.max(2, leaf.x1 - leaf.x0 - 2);
+            const h = Math.max(2, leaf.y1 - leaf.y0 - 2);
 
             svg.append('rect')
                 .attr('x', leaf.x0 + 1).attr('y', leaf.y0 + 1)
@@ -96,7 +95,7 @@ window.homeMemoryTreemap = (function () {
                 .style('cursor', 'pointer')
                 .on('mousemove', event => {
                     const ram = leaf.data.ram != null
-                        ? Math.round(leaf.data.ram) + ' MB'
+                        ? Math.round(leaf.data.ram)
                         : 'no data';
                     tip.style('display', 'block')
                        .html(`<strong>${leaf.data.name}</strong><br>PID ${leaf.data.pid} &nbsp;·&nbsp; ${ram}`);
@@ -116,7 +115,7 @@ window.homeMemoryTreemap = (function () {
                     .attr('font-size', '10px')
                     .attr('fill', 'rgba(255,255,255,0.88)')
                     .attr('pointer-events', 'none')
-                    .text(Math.round(leaf.data.ram) + ' MB');
+                    .text(Math.round(leaf.data.ram));
             }
         });
     }

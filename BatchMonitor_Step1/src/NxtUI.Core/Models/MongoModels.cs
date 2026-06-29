@@ -14,6 +14,8 @@ public record MongoCollectionSummary
     public long AvgDocSizeBytes { get; init; }
     public long StorageSizeBytes { get; init; }
     public int IndexCount { get; init; }
+    /// <summary>False while background enrichment is still in flight.</summary>
+    public bool StatsLoaded { get; init; }
 }
 
 public record MongoDocument

@@ -588,7 +588,7 @@
 
 
     private async Task CopyPathAsync(string path) =>
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
+        await JS.InvokeVoidAsync("copyText", path, "Path copied to clipboard");
 
 
     private static string FormatSize(long bytes)

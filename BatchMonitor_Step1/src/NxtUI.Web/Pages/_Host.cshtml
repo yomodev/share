@@ -45,7 +45,7 @@
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=11"></script>
+    <script src="js/d3-home-treemap.js?v=13"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -267,14 +267,16 @@
             }
             // Clipboard API needs a secure context (HTTPS/localhost). Fall back to
             // the legacy execCommand path so copy still works over plain HTTP.
-            function copyText(text) {
+            function copyText(text, message) {
                 if (navigator.clipboard && window.isSecureContext) {
-                    navigator.clipboard.writeText(text).catch(function () { legacyCopy(text); });
+                    navigator.clipboard.writeText(text)
+                        .then(function () { showCopyToast(message || 'Copied to clipboard'); })
+                        .catch(function () { legacyCopy(text, message); });
                 } else {
-                    legacyCopy(text);
+                    legacyCopy(text, message);
                 }
             }
-            function legacyCopy(text) {
+            function legacyCopy(text, message) {
                 var ta = document.createElement('textarea');
                 ta.value = text;
                 ta.setAttribute('readonly', '');
@@ -285,6 +287,7 @@
                 ta.select();
                 try { document.execCommand('copy'); } catch (err) { /* nothing more we can do */ }
                 document.body.removeChild(ta);
+                showCopyToast(message || 'Copied to clipboard');
             }
             // Expose globally so Blazor server-side code can invoke them via IJSRuntime
             window.copyText      = copyText;
@@ -321,8 +324,7 @@
                             });
                         lines.push(cells.join(','));
                     });
-                    copyText(lines.join('\n'));
-                    showCopyToast('Copied ' + (lines.length - 1) + ' rows as CSV');
+                    copyText(lines.join('\n'), 'Copied ' + (lines.length - 1) + ' rows as CSV');
                 } else {
                     var parts = Array.from(tr.querySelectorAll('td')).map(function (td, i) {
                         var hdr = headers[i] || '';
@@ -330,8 +332,7 @@
                         if (!val) return null;
                         return hdr ? hdr + ': ' + val : val;
                     }).filter(Boolean);
-                    copyText(parts.join('\n'));
-                    showCopyToast('Row copied to clipboard');
+                    copyText(parts.join('\n'), 'Row copied to clipboard');
                 }
             });
         })();

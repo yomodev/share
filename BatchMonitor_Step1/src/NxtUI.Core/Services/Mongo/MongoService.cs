@@ -50,47 +50,58 @@ public class MongoService : IMongoService
         return result;
     }
 
+    public async Task<IReadOnlyList<string>> GetCollectionNamesAsync(
+        string env, string database, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing collection names in '{Db}'", env, database);
+        var db    = _connection.Client.GetDatabase(database);
+        var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
+        return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<MongoCollectionSummary?> GetCollectionStatsAsync(
+        string env, string database, string name, CancellationToken ct = default)
+    {
+        try
+        {
+            var db       = _connection.Client.GetDatabase(database);
+            var col      = db.GetCollection<BsonDocument>(name);
+            var pipeline = new[]
+            {
+                new BsonDocument("$collStats",
+                    new BsonDocument("storageStats", new BsonDocument("scale", 1)))
+            };
+            using var cursor = await col.AggregateAsync<BsonDocument>(
+                PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
+                cancellationToken: ct);
+            var doc = await cursor.FirstOrDefaultAsync(ct);
+            if (doc is null) return new MongoCollectionSummary { Name = name, StatsLoaded = true };
+            var ss = doc["storageStats"].AsBsonDocument;
+            return new MongoCollectionSummary
+            {
+                Name             = name,
+                DocumentCount    = ss.GetValue("count",      0).ToInt64(),
+                AvgDocSizeBytes  = ss.GetValue("avgObjSize", 0).ToInt64(),
+                StorageSizeBytes = ss.GetValue("storageSize",0).ToInt64(),
+                IndexCount       = ss.GetValue("nindexes",   0).AsInt32,
+                StatsLoaded      = true,
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for '{Db}/{Col}'", env, database, name);
+            return new MongoCollectionSummary { Name = name, StatsLoaded = true };
+        }
+    }
+
     public async Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(
         string env, string database, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing collections in '{Db}'", env, database);
-        var db    = _connection.Client.GetDatabase(database);
-        var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
-
-        // Run one $collStats aggregation per collection in parallel — much faster than sequential collStats commands.
-        var tasks = names.Select(async name =>
-        {
-            try
-            {
-                var col      = db.GetCollection<BsonDocument>(name);
-                var pipeline = new[]
-                {
-                    new BsonDocument("$collStats",
-                        new BsonDocument("storageStats", new BsonDocument("scale", 1)))
-                };
-                using var cursor = await col.AggregateAsync<BsonDocument>(
-                    PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
-                    cancellationToken: ct);
-                var doc = await cursor.FirstOrDefaultAsync(ct);
-                if (doc is null) return new MongoCollectionSummary { Name = name };
-                var ss = doc["storageStats"].AsBsonDocument;
-                return new MongoCollectionSummary
-                {
-                    Name             = name,
-                    DocumentCount    = ss.GetValue("count",      0).ToInt64(),
-                    AvgDocSizeBytes  = ss.GetValue("avgObjSize", 0).ToInt64(),
-                    StorageSizeBytes = ss.GetValue("storageSize",0).ToInt64(),
-                    IndexCount       = ss.GetValue("nindexes",   0).AsInt32,
-                };
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for '{Db}/{Col}'", env, database, name);
-                return new MongoCollectionSummary { Name = name };
-            }
-        });
-
+        var names = await GetCollectionNamesAsync(env, database, ct);
+        var tasks = names.Select(name => GetCollectionStatsAsync(env, database, name, ct));
         return (await Task.WhenAll(tasks))
+            .OfType<MongoCollectionSummary>()
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
