@@ -1,32 +1,13 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
-@using NxtUI.Core.Models
 @using NxtUI.Web.Services
-@inject IHeartbeatMonitor HeartbeatMonitor
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
-    @if (_loading)
-    {
-        <div class="bm-treemap-loading">
-            <div class="bm-treemap-spinner"></div>
-            <span class="bm-treemap-loading-label">Loading memory data…</span>
-        </div>
-    }
-    else if (_error is not null)
-    {
-        <div class="bm-treemap-error">
-            <MudIcon Icon="@Icons.Material.Outlined.ErrorOutline" Size="Size.Small" Class="bm-treemap-error-icon" />
-            <span class="bm-treemap-error-msg">@_error</span>
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
-                           title="Retry" OnClick="RetryAsync" Class="bm-treemap-error-btn" />
-        </div>
-    }
-    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"
-         style="@(_loading || _error is not null ? "visibility:hidden" : "")"></div>
+    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
 </div>
 
 @code {
@@ -34,121 +15,32 @@
 
     private ElementReference _ref;
     private IDisposable?     _sub;
-    private bool             _dirty;
-    private bool             _loading = true;
-    private string?          _error;
-    private TreeRoot?        _treeData;
-
-    private sealed record TreeRoot(string Name, List<TreeHost> Children);
-    private sealed record TreeHost(string Name, List<TreeSvc>  Children);
-    private sealed record TreeSvc (string Name, int Pid, double? Ram);
-
-    private string _subscribedEnv = string.Empty;
-
-    protected override void OnInitialized()
-    {
-        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
-    }
+    private string           _subscribedEnv = string.Empty;
+    private bool             _started;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
 
+        // Keep MetricsMonitor (→ HeartbeatMonitor) subscribed so server-side polling stays alive.
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
 
-        // Clear immediately so the previous env's data doesn't linger
-        _treeData = null;
-        _error    = null;
-        _loading  = true;
-        StateHasChanged();
-
-        await LoadAsync();
-        await InvokeAsync(StateHasChanged);
+        if (_started)
+        {
+            // Env changed while mounted — restart the JS poller on the new env.
+            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
+            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_dirty) return;
-        _dirty = false;
-        await RenderAsync();
-    }
-
-    private void OnMetricsUpdated(string env)
-    {
-        if (env != Env) return;
-        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
-    }
-
-    private void OnServicesUpdated(string env)
-    {
-        if (env != Env) return;
-        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
-    }
-
-    private Task LoadAsync()
-    {
-        try
-        {
-            var services = HeartbeatMonitor.GetServices(Env) ?? [];
-
-            var cutoff = DateTime.UtcNow.AddMinutes(-10);
-
-            var hosts = services
-                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
-                .GroupBy(s => s.HostName)
-                .Select(g =>
-                {
-                    var svcs = g
-                        .Select(s =>
-                        {
-                            var m   = MetricsMonitor.GetLatest(Env, s);
-                            double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
-                            return new TreeSvc(s.ServiceName, s.ProcessId, ram);
-                        })
-                        .OrderByDescending(s => s.Ram ?? 0)
-                        .ToList();
-                    return new TreeHost(g.Key, svcs);
-                }).ToList();
-
-            _treeData = hosts.Count > 0 ? new TreeRoot("root", hosts) : null;
-        }
-        catch (Exception ex)
-        {
-            _treeData = null;
-            _error    = ex.Message;
-            _loading  = false;
-            return Task.CompletedTask;
-        }
-
-        _error   = null;
-        _loading = false;
-        if (_treeData is not null) _dirty = true;
-        return Task.CompletedTask;
-    }
-
-    private async Task RetryAsync()
-    {
-        _error   = null;
-        _loading = true;
-        StateHasChanged();
-        await LoadAsync();
-        StateHasChanged();
-    }
-
-    private async Task RenderAsync()
-    {
-        if (_treeData is null) return;
-        try
-        {
-            await JS.InvokeVoidAsync("homeMemoryTreemap.render", _ref, _treeData);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
-        }
+        if (!firstRender || _started) return;
+        _started = true;
+        // JS polls /api/treemap/{env} every 10 s on its own — no SignalR involvement.
+        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
     }
 
     private void OpenServices() =>
@@ -156,9 +48,7 @@
 
     public async ValueTask DisposeAsync()
     {
-        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _sub?.Dispose();
-        try { await JS.InvokeVoidAsync("homeMemoryTreemap.destroy", _ref); } catch { }
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
     }
 }

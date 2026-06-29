@@ -10411,7 +10411,7 @@ LENGTH 697
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 10163
+LENGTH 11612
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 using NLog;
@@ -10556,6 +10556,42 @@ public class Program
         app.MapBlazorHub();
         app.MapHub<RunHub>("/hubs/run");
         app.MapHub<RunEventsHub>("/hubs/run-events");
+
+        // Lightweight JSON endpoint for the home treemap — JS polls this directly
+        // so the data never travels over SignalR.
+        app.MapGet("/api/treemap/{env}", (
+            string env,
+            HeartbeatMonitor        heartbeat,
+            ServiceMetricsMonitor   metrics) =>
+        {
+            var services = heartbeat.GetServices(env);
+            if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
+
+            var cutoff = DateTime.UtcNow.AddMinutes(-10);
+            var hosts = services
+                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
+                .GroupBy(s => s.HostName)
+                .Select(g => new
+                {
+                    name     = g.Key,
+                    children = g.Select(s =>
+                    {
+                        var m = metrics.GetLatest(env, s);
+                        return new
+                        {
+                            name = s.ServiceName,
+                            pid  = s.ProcessId,
+                            ram  = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                        };
+                    })
+                    .OrderByDescending(s => s.ram ?? 0)
+                    .ToArray()
+                })
+                .ToArray();
+
+            return Results.Ok(new { name = "root", children = hosts });
+        });
+
         app.MapFallbackToPage("/_Host");
 
         app.Run();
@@ -16441,36 +16477,17 @@ LENGTH 14979
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 5150
+LENGTH 1764
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
-@using NxtUI.Core.Models
 @using NxtUI.Web.Services
-@inject IHeartbeatMonitor HeartbeatMonitor
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
-    @if (_loading)
-    {
-        <div class="bm-treemap-loading">
-            <div class="bm-treemap-spinner"></div>
-            <span class="bm-treemap-loading-label">Loading memory data…</span>
-        </div>
-    }
-    else if (_error is not null)
-    {
-        <div class="bm-treemap-error">
-            <MudIcon Icon="@Icons.Material.Outlined.ErrorOutline" Size="Size.Small" Class="bm-treemap-error-icon" />
-            <span class="bm-treemap-error-msg">@_error</span>
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
-                           title="Retry" OnClick="RetryAsync" Class="bm-treemap-error-btn" />
-        </div>
-    }
-    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"
-         style="@(_loading || _error is not null ? "visibility:hidden" : "")"></div>
+    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
 </div>
 
 @code {
@@ -16478,121 +16495,32 @@ LENGTH 5150
 
     private ElementReference _ref;
     private IDisposable?     _sub;
-    private bool             _dirty;
-    private bool             _loading = true;
-    private string?          _error;
-    private TreeRoot?        _treeData;
-
-    private sealed record TreeRoot(string Name, List<TreeHost> Children);
-    private sealed record TreeHost(string Name, List<TreeSvc>  Children);
-    private sealed record TreeSvc (string Name, int Pid, double? Ram);
-
-    private string _subscribedEnv = string.Empty;
-
-    protected override void OnInitialized()
-    {
-        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
-    }
+    private string           _subscribedEnv = string.Empty;
+    private bool             _started;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
 
+        // Keep MetricsMonitor (→ HeartbeatMonitor) subscribed so server-side polling stays alive.
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
 
-        // Clear immediately so the previous env's data doesn't linger
-        _treeData = null;
-        _error    = null;
-        _loading  = true;
-        StateHasChanged();
-
-        await LoadAsync();
-        await InvokeAsync(StateHasChanged);
+        if (_started)
+        {
+            // Env changed while mounted — restart the JS poller on the new env.
+            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
+            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_dirty) return;
-        _dirty = false;
-        await RenderAsync();
-    }
-
-    private void OnMetricsUpdated(string env)
-    {
-        if (env != Env) return;
-        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
-    }
-
-    private void OnServicesUpdated(string env)
-    {
-        if (env != Env) return;
-        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
-    }
-
-    private Task LoadAsync()
-    {
-        try
-        {
-            var services = HeartbeatMonitor.GetServices(Env) ?? [];
-
-            var cutoff = DateTime.UtcNow.AddMinutes(-10);
-
-            var hosts = services
-                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
-                .GroupBy(s => s.HostName)
-                .Select(g =>
-                {
-                    var svcs = g
-                        .Select(s =>
-                        {
-                            var m   = MetricsMonitor.GetLatest(Env, s);
-                            double? ram = m != null ? m.CurrentUsageBytes / 1_048_576.0 : null;
-                            return new TreeSvc(s.ServiceName, s.ProcessId, ram);
-                        })
-                        .OrderByDescending(s => s.Ram ?? 0)
-                        .ToList();
-                    return new TreeHost(g.Key, svcs);
-                }).ToList();
-
-            _treeData = hosts.Count > 0 ? new TreeRoot("root", hosts) : null;
-        }
-        catch (Exception ex)
-        {
-            _treeData = null;
-            _error    = ex.Message;
-            _loading  = false;
-            return Task.CompletedTask;
-        }
-
-        _error   = null;
-        _loading = false;
-        if (_treeData is not null) _dirty = true;
-        return Task.CompletedTask;
-    }
-
-    private async Task RetryAsync()
-    {
-        _error   = null;
-        _loading = true;
-        StateHasChanged();
-        await LoadAsync();
-        StateHasChanged();
-    }
-
-    private async Task RenderAsync()
-    {
-        if (_treeData is null) return;
-        try
-        {
-            await JS.InvokeVoidAsync("homeMemoryTreemap.render", _ref, _treeData);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
-        }
+        if (!firstRender || _started) return;
+        _started = true;
+        // JS polls /api/treemap/{env} every 10 s on its own — no SignalR involvement.
+        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
     }
 
     private void OpenServices() =>
@@ -16600,10 +16528,8 @@ LENGTH 5150
 
     public async ValueTask DisposeAsync()
     {
-        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _sub?.Dispose();
-        try { await JS.InvokeVoidAsync("homeMemoryTreemap.destroy", _ref); } catch { }
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
@@ -19743,7 +19669,7 @@ LENGTH 9131
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 14162
+LENGTH 14731
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19991,17 +19917,26 @@ LENGTH 14162
             _enriching = true;   // keep progress bar visible while stats load
             StateHasChanged();
 
-            // Phase 2 — enrich each row with stats in parallel, updating the UI as each completes
+            // Phase 2 — enrich in parallel; update _all directly (each name maps to a unique
+            // index so there is no write contention). Never call InvokeAsync per-item — that
+            // saturates the Blazor circuit and blocks all user input until the queue drains.
             var ct = _cts.Token;
-            await Task.WhenAll(names.Select(async name =>
+            var enrichTask = Task.WhenAll(names.Select(async name =>
             {
                 var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
                 if (stats is null || ct.IsCancellationRequested) return;
                 var idx = _all.FindIndex(c => c.Name == name);
-                if (idx < 0) return;
-                _all[idx] = stats;
-                await InvokeAsync(() => { ApplyFilter(); StateHasChanged(); });
+                if (idx >= 0) _all[idx] = stats;
             }));
+
+            // Refresh UI every 300 ms for visible progress; circuit stays free between ticks
+            // so the user can paginate, filter, or navigate away at any time.
+            while (!enrichTask.IsCompleted)
+            {
+                await Task.WhenAny(enrichTask, Task.Delay(300, ct));
+                if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
+            }
+            await enrichTask; // re-throw any non-cancellation exceptions
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
@@ -20792,7 +20727,7 @@ LENGTH 11162
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28655
+LENGTH 29504
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20939,28 +20874,13 @@ LENGTH 28655
                       RowClassFunc="@((svc, _) => DiscoverySvc.IsSearching(svc, Env) ? "bm-row-searching" : string.Empty)">
                 <HeaderContent>
                     <MudTh Style="width:36px;"></MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ServiceName)">Service</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.HostName)">Host</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ProcessId)">PID</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.UpdatedDateTime)">Last Heartbeat</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.CreatedDateTime)"
-                                           InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.RamMb ?? 0)">RAM (MB)</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.PeakMb ?? 0)">Peak (MB)</MudTableSortLabel>
-                    </MudTh>
+                    <MudTh @onclick='@(() => SetSort("name"))' Style="cursor:pointer">Service@(SortIcon("name"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("host"))' Style="cursor:pointer">Host@(SortIcon("host"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("pid"))' Style="cursor:pointer">PID@(SortIcon("pid"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("updated"))' Style="cursor:pointer">Last Heartbeat@(SortIcon("updated"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("started"))' Style="cursor:pointer">Started (UTC)@(SortIcon("started"))</MudTh>
+                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("ram"))'>RAM (MB)@(SortIcon("ram"))</MudTh>
+                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("peak"))'>Peak (MB)@(SortIcon("peak"))</MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -21089,6 +21009,8 @@ LENGTH 28655
     private List<ServiceStatus> _filtered = new();
     private List<ServiceStatus> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
+    private string _sortField = "";
+    private bool   _sortDesc;
 
     // Keys currently awaiting a path search triggered by the copy/open actions
     private readonly HashSet<string> _copyingFor    = new();
@@ -21293,8 +21215,31 @@ LENGTH 28655
         }
     }
 
+    private void SetSort(string field)
+    {
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = false; }
+        _page = 1;
+        RebuildPage();
+    }
+
+    private string SortIcon(string field) =>
+        _sortField != field ? "" : _sortDesc ? " ▼" : " ▲";
+
+    private IEnumerable<ServiceStatus> ApplySort(IEnumerable<ServiceStatus> src) => _sortField switch
+    {
+        "name"    => _sortDesc ? src.OrderByDescending(s => s.ServiceName)    : src.OrderBy(s => s.ServiceName),
+        "host"    => _sortDesc ? src.OrderByDescending(s => s.HostName)        : src.OrderBy(s => s.HostName),
+        "pid"     => _sortDesc ? src.OrderByDescending(s => s.ProcessId)       : src.OrderBy(s => s.ProcessId),
+        "updated" => _sortDesc ? src.OrderByDescending(s => s.UpdatedDateTime) : src.OrderBy(s => s.UpdatedDateTime),
+        "started" => _sortDesc ? src.OrderByDescending(s => s.CreatedDateTime) : src.OrderBy(s => s.CreatedDateTime),
+        "ram"     => _sortDesc ? src.OrderByDescending(s => s.RamMb  ?? 0)     : src.OrderBy(s => s.RamMb  ?? 0),
+        "peak"    => _sortDesc ? src.OrderByDescending(s => s.PeakMb ?? 0)     : src.OrderBy(s => s.PeakMb ?? 0),
+        _         => src,
+    };
+
     private void RebuildPage() =>
-        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged = ApplySort(_filtered).Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
     private void OnPageChanged(int page)  { _page = page; RebuildPage(); }
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
@@ -22348,7 +22293,7 @@ LENGTH 16875
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=13"></script>
+    <script src="js/d3-home-treemap.js?v=14"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -32301,7 +32246,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 6224
+LENGTH 7038
 window.homeMemoryTreemap = (function () {
 
     const _observers = new WeakMap(); // container → ResizeObserver
@@ -32424,33 +32369,54 @@ window.homeMemoryTreemap = (function () {
         });
     }
 
-    function render(container, data) {
-        // Disconnect previous observer for this container (e.g. on Blazor re-render).
-        if (_observers.has(container)) {
-            _observers.get(container).disconnect();
+    // ── client-side polling (no SignalR for data) ─────────────────────────────
+
+    const _state = new WeakMap(); // container → { aborted, data, ro }
+
+    function start(container, env, intervalMs) {
+        stop(container);
+
+        const s = { aborted: false, data: null, ro: null };
+        _state.set(container, s);
+
+        // ResizeObserver repaints on resize using the last fetched data.
+        s.ro = new ResizeObserver(entries => {
+            const w = entries[0]?.contentRect.width;
+            if (w > 0 && s.data) paint(container, s.data, w);
+        });
+        s.ro.observe(container);
+
+        const interval = intervalMs || 10000;
+        const url      = `/api/treemap/${encodeURIComponent(env)}`;
+
+        async function poll() {
+            while (!s.aborted) {
+                try {
+                    const resp = await fetch(url);
+                    if (!s.aborted && resp.ok) {
+                        s.data = await resp.json();
+                        paint(container, s.data);
+                    }
+                } catch (_) { /* network error — retry next interval */ }
+                // Wait for the interval, but allow abort to cut it short.
+                await new Promise(resolve => { s._wake = resolve; setTimeout(resolve, interval); });
+            }
         }
 
-        // ResizeObserver repaints with the exact measured width from the entry.
-        const ro = new ResizeObserver(entries => {
-            const w = entries[0]?.contentRect.width;
-            if (w > 0) paint(container, data, w);
-        });
-        ro.observe(container);
-        _observers.set(container, ro);
-
-        // Paint immediately (don't wait for the first observer callback).
-        paint(container, data);
+        poll();
     }
 
-    function destroy(container) {
-        if (_observers.has(container)) {
-            _observers.get(container).disconnect();
-            _observers.delete(container);
-        }
+    function stop(container) {
+        if (!_state.has(container)) return;
+        const s = _state.get(container);
+        s.aborted = true;
+        if (s._wake) s._wake();
+        if (s.ro) { s.ro.disconnect(); s.ro = null; }
+        _state.delete(container);
         d3.select(container).selectAll('*').remove();
     }
 
-    return { render, destroy };
+    return { start, stop };
 })();
 FILE src/NxtUI.Web/wwwroot/js/d3-memory-sunburst.js
 LENGTH 10597

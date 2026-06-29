@@ -120,31 +120,52 @@ window.homeMemoryTreemap = (function () {
         });
     }
 
-    function render(container, data) {
-        // Disconnect previous observer for this container (e.g. on Blazor re-render).
-        if (_observers.has(container)) {
-            _observers.get(container).disconnect();
+    // ── client-side polling (no SignalR for data) ─────────────────────────────
+
+    const _state = new WeakMap(); // container → { aborted, data, ro }
+
+    function start(container, env, intervalMs) {
+        stop(container);
+
+        const s = { aborted: false, data: null, ro: null };
+        _state.set(container, s);
+
+        // ResizeObserver repaints on resize using the last fetched data.
+        s.ro = new ResizeObserver(entries => {
+            const w = entries[0]?.contentRect.width;
+            if (w > 0 && s.data) paint(container, s.data, w);
+        });
+        s.ro.observe(container);
+
+        const interval = intervalMs || 10000;
+        const url      = `/api/treemap/${encodeURIComponent(env)}`;
+
+        async function poll() {
+            while (!s.aborted) {
+                try {
+                    const resp = await fetch(url);
+                    if (!s.aborted && resp.ok) {
+                        s.data = await resp.json();
+                        paint(container, s.data);
+                    }
+                } catch (_) { /* network error — retry next interval */ }
+                // Wait for the interval, but allow abort to cut it short.
+                await new Promise(resolve => { s._wake = resolve; setTimeout(resolve, interval); });
+            }
         }
 
-        // ResizeObserver repaints with the exact measured width from the entry.
-        const ro = new ResizeObserver(entries => {
-            const w = entries[0]?.contentRect.width;
-            if (w > 0) paint(container, data, w);
-        });
-        ro.observe(container);
-        _observers.set(container, ro);
-
-        // Paint immediately (don't wait for the first observer callback).
-        paint(container, data);
+        poll();
     }
 
-    function destroy(container) {
-        if (_observers.has(container)) {
-            _observers.get(container).disconnect();
-            _observers.delete(container);
-        }
+    function stop(container) {
+        if (!_state.has(container)) return;
+        const s = _state.get(container);
+        s.aborted = true;
+        if (s._wake) s._wake();
+        if (s.ro) { s.ro.disconnect(); s.ro = null; }
+        _state.delete(container);
         d3.select(container).selectAll('*').remove();
     }
 
-    return { render, destroy };
+    return { start, stop };
 })();

@@ -142,6 +142,42 @@ public class Program
         app.MapBlazorHub();
         app.MapHub<RunHub>("/hubs/run");
         app.MapHub<RunEventsHub>("/hubs/run-events");
+
+        // Lightweight JSON endpoint for the home treemap — JS polls this directly
+        // so the data never travels over SignalR.
+        app.MapGet("/api/treemap/{env}", (
+            string env,
+            HeartbeatMonitor        heartbeat,
+            ServiceMetricsMonitor   metrics) =>
+        {
+            var services = heartbeat.GetServices(env);
+            if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
+
+            var cutoff = DateTime.UtcNow.AddMinutes(-10);
+            var hosts = services
+                .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
+                .GroupBy(s => s.HostName)
+                .Select(g => new
+                {
+                    name     = g.Key,
+                    children = g.Select(s =>
+                    {
+                        var m = metrics.GetLatest(env, s);
+                        return new
+                        {
+                            name = s.ServiceName,
+                            pid  = s.ProcessId,
+                            ram  = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                        };
+                    })
+                    .OrderByDescending(s => s.ram ?? 0)
+                    .ToArray()
+                })
+                .ToArray();
+
+            return Results.Ok(new { name = "root", children = hosts });
+        });
+
         app.MapFallbackToPage("/_Host");
 
         app.Run();

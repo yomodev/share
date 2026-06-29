@@ -144,28 +144,13 @@
                       RowClassFunc="@((svc, _) => DiscoverySvc.IsSearching(svc, Env) ? "bm-row-searching" : string.Empty)">
                 <HeaderContent>
                     <MudTh Style="width:36px;"></MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ServiceName)">Service</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.HostName)">Host</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.ProcessId)">PID</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.UpdatedDateTime)">Last Heartbeat</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh>
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.CreatedDateTime)"
-                                           InitialDirection="SortDirection.Descending">Started (UTC)</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.RamMb ?? 0)">RAM (MB)</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="text-align:right;">
-                        <MudTableSortLabel T="ServiceStatus" SortBy="@(s => s.PeakMb ?? 0)">Peak (MB)</MudTableSortLabel>
-                    </MudTh>
+                    <MudTh @onclick='@(() => SetSort("name"))' Style="cursor:pointer">Service@(SortIcon("name"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("host"))' Style="cursor:pointer">Host@(SortIcon("host"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("pid"))' Style="cursor:pointer">PID@(SortIcon("pid"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("updated"))' Style="cursor:pointer">Last Heartbeat@(SortIcon("updated"))</MudTh>
+                    <MudTh @onclick='@(() => SetSort("started"))' Style="cursor:pointer">Started (UTC)@(SortIcon("started"))</MudTh>
+                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("ram"))'>RAM (MB)@(SortIcon("ram"))</MudTh>
+                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("peak"))'>Peak (MB)@(SortIcon("peak"))</MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -294,6 +279,8 @@
     private List<ServiceStatus> _filtered = new();
     private List<ServiceStatus> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
+    private string _sortField = "";
+    private bool   _sortDesc;
 
     // Keys currently awaiting a path search triggered by the copy/open actions
     private readonly HashSet<string> _copyingFor    = new();
@@ -498,8 +485,31 @@
         }
     }
 
+    private void SetSort(string field)
+    {
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = false; }
+        _page = 1;
+        RebuildPage();
+    }
+
+    private string SortIcon(string field) =>
+        _sortField != field ? "" : _sortDesc ? " ▼" : " ▲";
+
+    private IEnumerable<ServiceStatus> ApplySort(IEnumerable<ServiceStatus> src) => _sortField switch
+    {
+        "name"    => _sortDesc ? src.OrderByDescending(s => s.ServiceName)    : src.OrderBy(s => s.ServiceName),
+        "host"    => _sortDesc ? src.OrderByDescending(s => s.HostName)        : src.OrderBy(s => s.HostName),
+        "pid"     => _sortDesc ? src.OrderByDescending(s => s.ProcessId)       : src.OrderBy(s => s.ProcessId),
+        "updated" => _sortDesc ? src.OrderByDescending(s => s.UpdatedDateTime) : src.OrderBy(s => s.UpdatedDateTime),
+        "started" => _sortDesc ? src.OrderByDescending(s => s.CreatedDateTime) : src.OrderBy(s => s.CreatedDateTime),
+        "ram"     => _sortDesc ? src.OrderByDescending(s => s.RamMb  ?? 0)     : src.OrderBy(s => s.RamMb  ?? 0),
+        "peak"    => _sortDesc ? src.OrderByDescending(s => s.PeakMb ?? 0)     : src.OrderBy(s => s.PeakMb ?? 0),
+        _         => src,
+    };
+
     private void RebuildPage() =>
-        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged = ApplySort(_filtered).Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
     private void OnPageChanged(int page)  { _page = page; RebuildPage(); }
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }

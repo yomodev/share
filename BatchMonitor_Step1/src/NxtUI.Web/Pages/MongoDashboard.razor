@@ -245,17 +245,26 @@
             _enriching = true;   // keep progress bar visible while stats load
             StateHasChanged();
 
-            // Phase 2 — enrich each row with stats in parallel, updating the UI as each completes
+            // Phase 2 — enrich in parallel; update _all directly (each name maps to a unique
+            // index so there is no write contention). Never call InvokeAsync per-item — that
+            // saturates the Blazor circuit and blocks all user input until the queue drains.
             var ct = _cts.Token;
-            await Task.WhenAll(names.Select(async name =>
+            var enrichTask = Task.WhenAll(names.Select(async name =>
             {
                 var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
                 if (stats is null || ct.IsCancellationRequested) return;
                 var idx = _all.FindIndex(c => c.Name == name);
-                if (idx < 0) return;
-                _all[idx] = stats;
-                await InvokeAsync(() => { ApplyFilter(); StateHasChanged(); });
+                if (idx >= 0) _all[idx] = stats;
             }));
+
+            // Refresh UI every 300 ms for visible progress; circuit stays free between ticks
+            // so the user can paginate, filter, or navigate away at any time.
+            while (!enrichTask.IsCompleted)
+            {
+                await Task.WhenAny(enrichTask, Task.Delay(300, ct));
+                if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
+            }
+            await enrichTask; // re-throw any non-cancellation exceptions
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
