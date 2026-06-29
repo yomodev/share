@@ -454,7 +454,7 @@ public sealed class FilterParser
     // ── Date parsing ───────────────────────────────────────────────────────
 
     private static readonly Regex RelativeDate =
-        new(@"^(-?)(\d+)([mhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"^(-?)(\d+)([smhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex TimeOnly =
         new(@"^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -493,6 +493,7 @@ public sealed class FilterParser
             {
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
+                    "s" => DateTime.UtcNow.AddSeconds(-amount),
                     "m" => DateTime.UtcNow.AddMinutes(-amount),
                     "h" => DateTime.UtcNow.AddHours(-amount),
                     "d" => DateTime.UtcNow.AddDays(-amount),
@@ -504,6 +505,7 @@ public sealed class FilterParser
             {
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
+                    "s" => DateTime.UtcNow.Date.AddSeconds(amount),
                     "m" => DateTime.UtcNow.Date.AddMinutes(amount),
                     "h" => DateTime.UtcNow.Date.AddHours(amount),
                     "d" => DateTime.UtcNow.Date.AddDays(amount),

@@ -121,8 +121,8 @@
             <thead><tr><th>Form</th><th>Example</th><th>Meaning</th></tr></thead>
             <tbody>
                 <tr><td>Named</td><td><code>today</code>, <code>yesterday</code>, <code>now</code></td><td>Start of today / yesterday / current instant (UTC)</td></tr>
-                <tr><td>Negative offset</td><td><code>-7d</code>, <code>-2h</code>, <code>-30m</code>, <code>-1w</code></td><td><strong>now − N</strong> — a real point in the past (e.g. for timestamps)</td></tr>
-                <tr><td>Positive offset</td><td><code>7d</code>, <code>2h</code>, <code>30m</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
+                <tr><td>Negative offset</td><td><code>-30s</code>, <code>-30m</code>, <code>-2h</code>, <code>-7d</code>, <code>-1w</code></td><td><strong>now − N</strong> — a real point in the past (e.g. for timestamps). Units: <code>s</code> seconds, <code>m</code> minutes, <code>h</code> hours, <code>d</code> days, <code>w</code> weeks</td></tr>
+                <tr><td>Positive offset</td><td><code>30s</code>, <code>30m</code>, <code>2h</code>, <code>7d</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
                 <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
                 <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
                 <tr><td>Time of day</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>hh:mm:ss</strong> — compares only the time portion of a timestamp, ignoring the date</td></tr>
@@ -203,6 +203,7 @@
         </table>
 
         <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>updated:&gt;-30s</code>  <span>— heartbeat in the last 30 seconds</span></div>
             <div class="bm-help-ex"><code>updated:&gt;-10m</code>  <span>— heartbeat in the last 10 minutes (online)</span></div>
             <div class="bm-help-ex"><code>updated:&lt;-4m</code>   <span>— last heartbeat more than 4 minutes ago (stale)</span></div>
             <div class="bm-help-ex"><code>ram:&gt;500</code>        <span>— services using more than 500 MB</span></div>

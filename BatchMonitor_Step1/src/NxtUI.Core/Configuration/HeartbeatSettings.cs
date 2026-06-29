@@ -12,7 +12,13 @@ public class HeartbeatSettings
     /// A service is considered offline if its last UpdatedDateTime is older than
     /// IntervalSeconds * 2.
     /// </summary>
-    public int IntervalSeconds { get; set; } = 30;
+    public int IntervalSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Only services with a heartbeat within this many minutes are fetched from MongoDB.
+    /// Matches the default filter shown on the services page ("updated:>-Nm").
+    /// </summary>
+    public int RecentWindowMinutes { get; set; } = 30;
 
     /// <summary>
     /// Minutes of inactivity (no subscribers) after which cached service data is released from memory.
