@@ -87,19 +87,13 @@
 
             <!-- Environment selector — badge-only trigger, menu lists all envs -->
             <div class="bm-env-selector @(_drawerOpen ? "" : "bm-env-selector--mini")">
-                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
+                <MudMenu @key="EnvService.SelectedId" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                     <ActivatorContent>
-                        <div class="bm-env-selector-trigger @(_drawerOpen ? "bm-env-selector-trigger--open" : "")"
-                             @onclick="@(async e => await context.ToggleAsync(e))">
-                            <span class="bm-env-badge bm-env-badge-btn"
-                                  style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)">
-                                @EnvService.SelectedId
-                            </span>
-                            @if (_drawerOpen)
-                            {
-                                <span class="bm-env-selector-label">@EnvService.Selected?.Label</span>
-                            }
-                        </div>
+                        <span class="bm-env-badge bm-env-badge-btn"
+                              style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
+                              @onclick="@(async e => await context.ToggleAsync(e))">
+                            @EnvService.SelectedId
+                        </span>
                     </ActivatorContent>
                     <ChildContent>
                         @foreach (var env in EnvService.Environments)

@@ -249,38 +249,12 @@ html, body {
 }
 /* Stretch MudMenu and its activator wrapper to fill available width */
 .bm-env-selector > *,
-.bm-env-selector .mud-menu-activator {
-    width: 100%;
-}
-
-/* Trigger div that wraps badge + label in expanded mode */
-.bm-env-selector-trigger {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    width: 100%;
-}
-.bm-env-selector-trigger--open {
-    gap: 8px;
-}
-
-/* Badge itself fills the row when no label is shown */
+.bm-env-selector .mud-menu-activator { width: 100%; }
+/* Badge itself fills the row, text centered */
 .bm-env-selector .bm-env-badge-btn {
     width: 100%;
     justify-content: center;
 }
-.bm-env-selector-trigger--open .bm-env-badge-btn {
-    width: auto;
-    flex-shrink: 0;
-}
-
-.bm-env-selector-label {
-    font-size: 0.8125rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .bm-env-selector--mini {
     justify-content: center;
     padding: 6px 0;
@@ -288,10 +262,7 @@ html, body {
 /* In mini state badge shrinks back to its natural size */
 .bm-env-selector--mini > *,
 .bm-env-selector--mini .mud-menu-activator,
-.bm-env-selector--mini .bm-env-badge-btn {
-    width: auto;
-    justify-content: center;
-}
+.bm-env-selector--mini .bm-env-badge-btn { width: auto; justify-content: center; }
 
 /* Env menu popover — scrollable when many environments */
 .bm-env-menu-popover .mud-list { max-height: 320px; overflow-y: auto; }
