@@ -147,7 +147,7 @@
                     </div>
                 }
                 <div class="bm-inspector-section-label">Value</div>
-                <pre class="bm-inspector-value">@FormatJson(_selected.Value)</pre>
+                <div @ref="_jsonRef"></div>
             </div>
         </div>
     }
@@ -161,6 +161,8 @@
     private List<KafkaMessage> _messages    = new();
     private List<KafkaMessage> _filtered    = new();
     private KafkaMessage?      _selected    = null;
+    private ElementReference   _jsonRef;
+    private bool               _jsonDirty;
     private bool               _running     = true;
     private bool               _loading     = false;
     private int                _maxMessages = 100;
@@ -262,7 +264,20 @@
     }
 
     private void OnRowSelected(KafkaMessage? msg)
-        => _selected = ReferenceEquals(_selected, msg) ? null : msg;
+    {
+        _selected  = ReferenceEquals(_selected, msg) ? null : msg;
+        _jsonDirty = _selected is not null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_jsonDirty && _selected is not null)
+        {
+            _jsonDirty = false;
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Value); }
+            catch { }
+        }
+    }
 
     private async Task DownloadMessageAsync(KafkaMessage? msg)
     {

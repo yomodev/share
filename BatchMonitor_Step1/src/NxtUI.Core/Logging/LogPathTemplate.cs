@@ -11,7 +11,7 @@ public static class LogPathTemplate
 {
     public static string Expand(string template, ServiceStatus svc, string env, DateTime? date = null)
     {
-        var d = date ?? svc.CreatedDateTime;
+        var d = date ?? svc.UpdatedDateTime;
         return template
             // {date-1} before {date} so the longer token wins.
             .Replace("{date-1}", d.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)

@@ -13,4 +13,9 @@ public class HeartbeatSettings
     /// IntervalSeconds * 2.
     /// </summary>
     public int IntervalSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Minutes of inactivity (no subscribers) after which cached service data is released from memory.
+    /// </summary>
+    public int IdleReleaseMinutes { get; set; } = 10;
 }

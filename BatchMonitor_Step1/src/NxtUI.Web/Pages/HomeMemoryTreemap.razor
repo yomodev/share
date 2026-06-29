@@ -1,7 +1,8 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
-@inject IHeartbeatService HeartbeatSvc
+@using NxtUI.Web.Services
+@inject IHeartbeatMonitor HeartbeatMonitor
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject IJSRuntime JS
@@ -46,7 +47,8 @@
 
     protected override void OnInitialized()
     {
-        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
     }
 
     protected override async Task OnParametersSetAsync()
@@ -80,11 +82,17 @@
         _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
     }
 
-    private async Task LoadAsync()
+    private void OnServicesUpdated(string env)
+    {
+        if (env != Env) return;
+        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+    }
+
+    private Task LoadAsync()
     {
         try
         {
-            var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            var services = HeartbeatMonitor.GetServices(Env) ?? [];
 
             var cutoff = DateTime.UtcNow.AddMinutes(-10);
 
@@ -112,11 +120,13 @@
             _treeData = null;
             _error    = ex.Message;
             _loading  = false;
-            return;
+            return Task.CompletedTask;
         }
 
-        _error = null;
-        _dirty = true;
+        _error   = null;
+        _loading = false;
+        if (_treeData is not null) _dirty = true;
+        return Task.CompletedTask;
     }
 
     private async Task RetryAsync()
@@ -139,10 +149,6 @@
         {
             Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
         }
-        finally
-        {
-            if (_loading) { _loading = false; StateHasChanged(); }
-        }
     }
 
     private void OpenServices() =>
@@ -150,7 +156,8 @@
 
     public async ValueTask DisposeAsync()
     {
-        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _sub?.Dispose();
         try { await JS.InvokeVoidAsync("homeMemoryTreemap.destroy", _ref); } catch { }
     }

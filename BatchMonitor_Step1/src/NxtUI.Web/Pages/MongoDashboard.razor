@@ -85,10 +85,9 @@
                 <MudTh Style="width:120px; text-align:right;">
                     <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.StorageSizeBytes">Storage</MudTableSortLabel>
                 </MudTh>
-                <MudTh Style="width:100px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.AvgDocSizeBytes">Avg Doc</MudTableSortLabel>
+                <MudTh Style="width:80px; text-align:center;">
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.IndexCount">Indexes</MudTableSortLabel>
                 </MudTh>
-                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
                 <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -100,9 +99,6 @@
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
                     <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
-                </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@FormatBytes(context.AvgDocSizeBytes)</span>
                 </MudTd>
                 <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
                     @context.IndexCount
@@ -148,10 +144,12 @@
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
                        Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                       Style="width:68px;">
+                       Style="width:90px;">
                 <MudSelectItem Value="10">10</MudSelectItem>
                 <MudSelectItem Value="25">25</MudSelectItem>
                 <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
             </MudSelect>
         </div>
     </div>
@@ -174,11 +172,24 @@
 
     private static readonly string[] SearchableFields = ["Name"];
     private static readonly FilterParser Parser = new(SearchableFields,
-        new Dictionary<string, string> { ["name"] = "Name", ["collection"] = "Name" });
+        new Dictionary<string, string>
+        {
+            ["name"]       = "Name",
+            ["collection"] = "Name",
+            ["docs"]       = "DocumentCount",
+            ["documents"]  = "DocumentCount",
+            ["storage"]    = "StorageSizeBytes",
+            ["size"]       = "StorageSizeBytes",
+            ["indexes"]    = "IndexCount",
+            ["idx"]        = "IndexCount",
+        });
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
         ("name / collection", "collection name"),
+        ("docs / documents",  "document count (e.g. docs:>1000)"),
+        ("storage / size",    "storage size in bytes (e.g. storage:>1048576)"),
+        ("indexes / idx",     "index count (e.g. indexes:>2)"),
     ];
 
     protected override async Task OnInitializedAsync()

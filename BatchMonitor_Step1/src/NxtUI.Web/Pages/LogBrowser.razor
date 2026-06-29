@@ -58,12 +58,12 @@
         {
             var parts = _selectedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
             var accumulated = "";
-            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">/</span>
+            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">\</span>
             foreach (var part in parts)
             {
                 accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
                 var snap = accumulated;
-                <span class="bm-lb-bc-sep bm-muted">/</span>
+                <span class="bm-lb-bc-sep bm-muted">\</span>
                 <span class="bm-lb-bc-item" @onclick="@(() => NavigateBreadcrumbAsync(snap))">@part</span>
             }
             @if (_isSearchMode)
@@ -522,12 +522,22 @@
 
     private async Task RefreshAsync()
     {
-        var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-        _rootNodes = roots.ToList();
-
         if (_selectedPath is not null)
+        {
+            // Invalidate only the selected node's child cache entry and reload its files.
+            _childCache.Remove(_selectedPath);
+            var children = await BrowserSvc.GetSubfoldersAsync(_servers, _selectedPath, _cts.Token);
+            _childCache[_selectedPath] = children;
             await LoadFilesAsync();
-        else { _lastScan = DateTime.UtcNow; StateHasChanged(); }
+        }
+        else
+        {
+            // Nothing selected — refresh just the root listing.
+            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+            _rootNodes = roots.ToList();
+            _lastScan  = DateTime.UtcNow;
+            StateHasChanged();
+        }
     }
 
     private void StartPolling()
@@ -579,6 +589,7 @@
 
     private async Task CopyPathAsync(string path) =>
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
+
 
     private static string FormatSize(long bytes)
     {

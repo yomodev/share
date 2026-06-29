@@ -2,7 +2,7 @@
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Filtering
-@inject IHeartbeatService HeartbeatSvc
+@inject IHeartbeatMonitor HeartbeatMonitor
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
@@ -236,10 +236,12 @@
                            Dense="true"
                            Variant="Variant.Outlined"
                            Margin="Margin.Dense"
-                           Style="width:68px">
+                           Style="width:90px">
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
                 </MudSelect>
             </div>
@@ -297,8 +299,6 @@
     private readonly HashSet<string> _copyingFor    = new();
     private readonly HashSet<string> _openingLogFor = new();
 
-    private PeriodicTimer? _timer;
-
     // Coalesce path-resolved notifications: discovery can resolve many services in
     // a burst (e.g. on first load), and one StateHasChanged per resolution renders
     // the grid several times while the previous batch is still being applied on the
@@ -313,46 +313,34 @@
 
     protected override async Task OnInitializedAsync()
     {
-        DiscoverySvc.OnPathResolved += OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+        DiscoverySvc.OnPathResolved         += OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated     += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
-        await LoadAsync();
-        _ = StartPollingAsync();
-    }
 
-    private async Task LoadAsync()
-    {
-        _loading = true;
+        // Populate from cache immediately (may be empty on first open; OnServicesUpdated
+        // fires once the background poll completes and fills the cache).
+        LoadFromCache();
         await InvokeAsync(StateHasChanged);
-        try
-        {
-            _all         = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-            _lastUpdated = DateTime.UtcNow;
-            RecomputeFilter();
-
-            // Kick off background path discovery for any service not yet in cache
-            foreach (var svc in _all)
-                DiscoverySvc.EnsureDiscovering(svc, Env);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _loading = false;
-            // Always marshal renders onto the circuit's sync context — the poll
-            // timer continuation may resume off-context, and a background-thread
-            // render races the UI and corrupts the DOM (insertBefore/removeChild null).
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
-    private async Task StartPollingAsync()
+    private void LoadFromCache()
     {
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
-        while (await _timer.WaitForNextTickAsync())
-            await LoadAsync();
+        _all         = HeartbeatMonitor.GetServices(Env)?.ToList() ?? _all;
+        _lastUpdated = DateTime.UtcNow;
+        RecomputeFilter();
+        foreach (var svc in _all)
+            DiscoverySvc.EnsureDiscovering(svc, Env);
+    }
+
+    private void OnServicesUpdated(string env)
+    {
+        if (env != Env) return;
+        _ = InvokeAsync(() =>
+        {
+            LoadFromCache();
+            ScheduleRender();
+        });
     }
 
     // ── Path discovery ───────────────────────────────────────────────────────
@@ -516,12 +504,13 @@
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 
-    private async Task RefreshAsync()
+    private Task RefreshAsync()
     {
         _filterText       = string.Empty;
         _filterParseError = null;
-        await LoadAsync();
+        LoadFromCache();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
+        return Task.CompletedTask;
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
@@ -614,10 +603,10 @@
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
-        DiscoverySvc.OnPathResolved     -= OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        DiscoverySvc.OnPathResolved         -= OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated     -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated  -= OnServicesUpdated;
         _metricsSubscription?.Dispose();
-        _timer?.Dispose();
         await Task.CompletedTask;
     }
 }

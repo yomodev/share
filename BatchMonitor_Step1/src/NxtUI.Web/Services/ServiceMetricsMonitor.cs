@@ -10,39 +10,44 @@ namespace NxtUI.Web.Services;
 /// <summary>
 /// Background metrics monitor. For each subscribed environment it periodically reads
 /// the (already discovered) per-service metrics file incrementally, parses the memory
-/// lines and caches them. Work happens only while an environment has subscribers;
-/// when the last subscriber leaves, that environment's cache is cleared.
+/// lines and caches them.
 ///
-/// Keyed per (env, service) because the metrics file path depends on {env}, so the
-/// same service can be monitored independently under several open tabs.
+/// Polling is paused when an environment has no subscribers, but cached data (file offsets
+/// and sample history) is kept for <c>IdleReleaseMinutes</c> so that re-subscribing resumes
+/// from where it left off — no redundant file re-reads.
+///
+/// Service lists come from <see cref="IHeartbeatMonitor"/> (already cached) so this service
+/// never hits MongoDB directly.
 /// </summary>
 public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMonitor
 {
     private const int MaxHistory = 1000;
 
-    private readonly IHeartbeatService              _heartbeat;
-    private readonly ILogPathDiscoveryService       _discovery;
-    private readonly LogPathSettings                _paths;
-    private readonly ILogger<ServiceMetricsMonitor> _log;
+    private readonly IHeartbeatMonitor               _heartbeatMonitor;
+    private readonly ILogPathDiscoveryService        _discovery;
+    private readonly LogPathSettings                 _paths;
+    private readonly ILogger<ServiceMetricsMonitor>  _log;
 
-    private readonly object                  _subLock  = new();
-    private readonly Dictionary<string, int> _envRefs  = new();           // env -> subscriber count
-    private readonly ConcurrentDictionary<string, Entry>        _entries  = new(); // (env|host|svc|pid) -> data
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new(); // serialise per-env polls
-    private CancellationToken _ct = CancellationToken.None; // set when ExecuteAsync starts
+    private readonly object                             _subLock  = new();
+    private readonly Dictionary<string, int>            _envRefs  = new();   // env -> subscriber count
+    private readonly Dictionary<string, DateTime>       _envIdle  = new();   // env -> idle-since (no subscribers)
+    private readonly Dictionary<string, IDisposable>    _hbSubs   = new();   // env -> HeartbeatMonitor subscription
+    private readonly ConcurrentDictionary<string, Entry>          _entries  = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim>  _envGates = new();
+    private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnMetricsUpdated;
 
     public ServiceMetricsMonitor(
-        IHeartbeatService              heartbeat,
-        ILogPathDiscoveryService       discovery,
-        IOptions<LogPathSettings>      paths,
-        ILogger<ServiceMetricsMonitor> log)
+        IHeartbeatMonitor               heartbeatMonitor,
+        ILogPathDiscoveryService        discovery,
+        IOptions<LogPathSettings>       paths,
+        ILogger<ServiceMetricsMonitor>  log)
     {
-        _heartbeat = heartbeat;
-        _discovery = discovery;
-        _paths     = paths.Value;
-        _log       = log;
+        _heartbeatMonitor = heartbeatMonitor;
+        _discovery        = discovery;
+        _paths            = paths.Value;
+        _log              = log;
 
         // A freshly resolved path means there may be a file to read right away —
         // poll that env immediately instead of waiting for the next interval.
@@ -64,9 +69,9 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private sealed class Entry
     {
-        public readonly object             Sync    = new();
-        public long                        Offset;
-        public MetricsSample?              Latest;
+        public readonly object              Sync    = new();
+        public long                         Offset;
+        public MetricsSample?               Latest;
         public readonly List<MetricsSample> History = new();
     }
 
@@ -75,7 +80,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     public IDisposable Subscribe(string env)
     {
         lock (_subLock)
+        {
             _envRefs[env] = _envRefs.TryGetValue(env, out var n) ? n + 1 : 1;
+            _envIdle.Remove(env); // no longer idle
+            // Keep a HeartbeatMonitor subscription alive for this env so it keeps polling.
+            if (!_hbSubs.ContainsKey(env))
+                _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
+        }
 
         // Poll immediately so a freshly opened tab doesn't wait a full interval.
         _ = PollEnvAsync(env, _ct);
@@ -84,21 +95,23 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private void Release(string env)
     {
-        var clear = false;
         lock (_subLock)
         {
-            if (_envRefs.TryGetValue(env, out var n))
+            if (!_envRefs.TryGetValue(env, out var n)) return;
+            if (n <= 1)
             {
-                if (n <= 1) { _envRefs.Remove(env); clear = true; }
-                else        { _envRefs[env] = n - 1; }
+                _envRefs.Remove(env);
+                _envIdle[env] = DateTime.UtcNow;
+                // Release the HeartbeatMonitor subscription; its own idle window keeps it cached.
+                if (_hbSubs.TryGetValue(env, out var hbSub))
+                {
+                    hbSub.Dispose();
+                    _hbSubs.Remove(env);
+                }
             }
+            else
+                _envRefs[env] = n - 1;
         }
-
-        if (!clear) return;
-
-        // Last subscriber gone: drop cached data for this env.
-        foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
-            _entries.TryRemove(key, out _);
     }
 
     private bool HasSubscribers(string env)
@@ -137,10 +150,33 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
+            {
+                CleanupIdleEnvs();
                 foreach (var env in SubscribedEnvs())
                     await PollEnvAsync(env, ct);
+            }
         }
         catch (OperationCanceledException) { /* shutting down */ }
+    }
+
+    private void CleanupIdleEnvs()
+    {
+        var idleTimeout = TimeSpan.FromMinutes(_paths.IdleReleaseMinutes);
+        var now = DateTime.UtcNow;
+
+        List<string> toRelease;
+        lock (_subLock)
+            toRelease = _envIdle.Where(kv => now - kv.Value > idleTimeout)
+                                .Select(kv => kv.Key).ToList();
+
+        foreach (var env in toRelease)
+        {
+            lock (_subLock) _envIdle.Remove(env);
+            foreach (var key in _entries.Keys
+                         .Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
+                _entries.TryRemove(key, out _);
+            _log.LogInformation("metrics [{Env}]: idle cache released", env);
+        }
     }
 
     private async Task PollEnvAsync(string env, CancellationToken ct)
@@ -153,9 +189,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         if (!await gate.WaitAsync(0, ct)) return;
         try
         {
-            List<ServiceStatus> services;
-            try { services = await _heartbeat.GetServiceStatusesAsync(env, ct); }
-            catch (Exception ex) { _log.LogWarning(ex, "metrics: heartbeat failed for {Env}", env); return; }
+            var services = _heartbeatMonitor.GetServices(env);
+            if (services is null)
+            {
+                _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
+                return;
+            }
 
             _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
 

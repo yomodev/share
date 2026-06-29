@@ -51,7 +51,6 @@
             <HeaderContent>
                 <MudTh Style="width:200px;">_id</MudTh>
                 <MudTh>Preview</MudTh>
-                <MudTh Style="width:170px;">Timestamp (UTC)</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
@@ -59,18 +58,6 @@
                 </MudTd>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
-                    @if (context.Timestamp.HasValue)
-                    {
-                        <span class="bm-kafka-mono bm-muted">
-                            @context.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss")
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="bm-muted">—</span>
-                    }
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -92,10 +79,12 @@
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
                        Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                       Style="width:68px;">
+                       Style="width:90px;">
                 <MudSelectItem Value="10">10</MudSelectItem>
                 <MudSelectItem Value="25">25</MudSelectItem>
                 <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
             </MudSelect>
         </div>
     </div>
@@ -106,7 +95,7 @@
         <div class="bm-inspector-detail">
             <div class="bm-inspector-detail-header">
                 <span class="bm-kafka-mono">
-                    <strong>@_selected.Id</strong>
+                    <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
                     @if (_selected.Timestamp.HasValue)
                     {
                         <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
@@ -124,7 +113,7 @@
                 </div>
             </div>
             <div class="bm-inspector-detail-body">
-                <pre class="bm-inspector-value">@FormatJson(_selected.Json)</pre>
+                <div @ref="_jsonRef"></div>
             </div>
         </div>
     }
@@ -141,6 +130,8 @@
     private List<MongoDocument> _allDocs    = new();
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
+    private ElementReference    _jsonRef;
+    private bool                _jsonDirty;
     private string              _search     = string.Empty;
     private string?             _filterParseError = null;
     private bool                _loading    = true;
@@ -150,7 +141,7 @@
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("text search", "matches anywhere in the document JSON"),
+        ("text search", "matches anywhere in _id or the document JSON"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -204,7 +195,20 @@
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; ApplyFilter(); }
 
     private void OnRowSelected(MongoDocument? doc)
-        => _selected = ReferenceEquals(_selected, doc) ? null : doc;
+    {
+        _selected  = ReferenceEquals(_selected, doc) ? null : doc;
+        _jsonDirty = _selected is not null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_jsonDirty && _selected is not null)
+        {
+            _jsonDirty = false;
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
+            catch { }
+        }
+    }
 
     private async Task SaveDocumentAsync(MongoDocument? doc)
     {

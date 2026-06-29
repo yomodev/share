@@ -45,4 +45,11 @@ public class LogPathSettings
 
     /// <summary>Minimum seconds between two polls of the same folder (throttle on click).</summary>
     public int FolderScanMinIntervalSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Minutes of inactivity (no subscribers) after which cached metrics data (file offsets + history)
+    /// is released from memory. During the idle window polling is paused but data is preserved so
+    /// re-subscribing resumes from where it left off without re-reading files from the start.
+    /// </summary>
+    public int IdleReleaseMinutes { get; set; } = 10;
 }

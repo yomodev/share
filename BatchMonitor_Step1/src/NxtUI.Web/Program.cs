@@ -90,6 +90,12 @@ public class Program
         // Mock: no MongoDB required.  Real: swap comment below.
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
         // builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+
+        // HeartbeatMonitor — shared cache + background poller for heartbeat data.
+        builder.Services.AddSingleton<HeartbeatMonitor>();
+        builder.Services.AddSingleton<IHeartbeatMonitor>(sp => sp.GetRequiredService<HeartbeatMonitor>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatMonitor>());
+
         builder.Services.AddSingleton<IEnvironmentService, MockEnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
@@ -161,10 +167,10 @@ public class Program
 
         string layout =
             T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
-          + TH + "[${threadid:padding=3}]" + R + " "
+          + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
-          + C  + "${callsite:className=false:methodName=true:fileName=false}" + R + " "
-          + "${message} ${exception:format=tostring}";
+          + "${message} ${exception:format=tostring} "
+          + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
         var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
 

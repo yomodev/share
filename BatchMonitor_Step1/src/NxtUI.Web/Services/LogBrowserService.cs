@@ -131,10 +131,11 @@ public class LogBrowserService : ILogBrowserService
                     .OrderByDescending(Directory.GetLastWriteTimeUtc)
                     .Select(d =>
                     {
-                        var name        = Path.GetFileName(d);
-                        var rel         = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
-                        var hasChildren = Directory.EnumerateDirectories(d).Any();
-                        return new LogFolderNode(name, rel, hasChildren);
+                        var name = Path.GetFileName(d);
+                        var rel  = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
+                        // Assume children exist; expand will reveal an empty node.
+                        // Probing each child on a network share is prohibitively slow.
+                        return new LogFolderNode(name, rel, HasChildren: true);
                     })
                     .ToList();
             }
