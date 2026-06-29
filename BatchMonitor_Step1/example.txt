@@ -10279,7 +10279,7 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1727
+LENGTH 1787
 {
   "AllowedHosts": "*",
 
@@ -10297,7 +10297,8 @@ LENGTH 1727
 
   "Heartbeats": {
     "CollectionName": "Heartbeats",
-    "IntervalSeconds": 30
+    "IntervalSeconds": 30,
+    "IdleReleaseMinutes": 10
   },
 
   "Logs": {
@@ -10309,7 +10310,8 @@ LENGTH 1727
     "LogsFolder": "\\\\{server}\\Shared\\bau\\logs",
     "Servers": [],
     "FolderScanIntervalSeconds": 30,
-    "FolderScanMinIntervalSeconds": 10
+    "FolderScanMinIntervalSeconds": 10,
+    "IdleReleaseMinutes": 10
   },
 
   "TestLogGenerator": {
@@ -10409,7 +10411,7 @@ LENGTH 697
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 9826
+LENGTH 10163
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 using NLog;
@@ -10502,6 +10504,12 @@ public class Program
         // Mock: no MongoDB required.  Real: swap comment below.
         builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
         // builder.Services.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
+
+        // HeartbeatMonitor — shared cache + background poller for heartbeat data.
+        builder.Services.AddSingleton<HeartbeatMonitor>();
+        builder.Services.AddSingleton<IHeartbeatMonitor>(sp => sp.GetRequiredService<HeartbeatMonitor>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatMonitor>());
+
         builder.Services.AddSingleton<IEnvironmentService, MockEnvironmentService>();
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
@@ -10573,10 +10581,10 @@ public class Program
 
         string layout =
             T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
-          + TH + "[${threadid:padding=3}]" + R + " "
+          + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
-          + C  + "${callsite:className=false:methodName=true:fileName=false}" + R + " "
-          + "${message} ${exception:format=tostring}";
+          + "${message} ${exception:format=tostring} "
+          + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
         var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
 
@@ -10690,7 +10698,7 @@ public class EnvironmentDefinition
     public List<string> Servers { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/HeartbeatSettings.cs
-LENGTH 534
+LENGTH 730
 namespace NxtUI.Configuration;
 
 public class HeartbeatSettings
@@ -10706,6 +10714,11 @@ public class HeartbeatSettings
     /// IntervalSeconds * 2.
     /// </summary>
     public int IntervalSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Minutes of inactivity (no subscribers) after which cached service data is released from memory.
+    /// </summary>
+    public int IdleReleaseMinutes { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/KafkaSettings.cs
 LENGTH 1376
@@ -10738,7 +10751,7 @@ public class KafkaSettings
     public string? SaslPassword  { get; set; }
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
-LENGTH 2078
+LENGTH 2468
 namespace NxtUI.Configuration;
 
 public class LogPathSettings
@@ -10786,6 +10799,13 @@ public class LogPathSettings
 
     /// <summary>Minimum seconds between two polls of the same folder (throttle on click).</summary>
     public int FolderScanMinIntervalSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Minutes of inactivity (no subscribers) after which cached metrics data (file offsets + history)
+    /// is released from memory. During the idle window polling is paused but data is preserved so
+    /// re-subscribing resumes from where it left off without re-reading files from the start.
+    /// </summary>
+    public int IdleReleaseMinutes { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
 LENGTH 2773
@@ -11883,7 +11903,7 @@ public static class LogPathTemplate
 {
     public static string Expand(string template, ServiceStatus svc, string env, DateTime? date = null)
     {
-        var d = date ?? svc.CreatedDateTime;
+        var d = date ?? svc.UpdatedDateTime;
         return template
             // {date-1} before {date} so the longer token wins.
             .Replace("{date-1}", d.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
@@ -12217,43 +12237,43 @@ public record KafkaTopicSummary
     public long RetentionMs { get; init; }
 }
 FILE src/NxtUI.Core/Models/MongoModels.cs
-LENGTH 1151
+LENGTH 1066
 namespace NxtUI.Core.Models;
 
 public record MongoDatabaseInfo
 {
-    public string Name            { get; init; } = string.Empty;
-    public int    CollectionCount { get; init; }
-    public long   SizeBytes       { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public long CollectionCount { get; init; }
+    public long SizeBytes { get; init; }
 }
 
 public record MongoCollectionSummary
 {
-    public string Name             { get; init; } = string.Empty;
-    public long   DocumentCount    { get; init; }
-    public long   AvgDocSizeBytes  { get; init; }
-    public long   StorageSizeBytes { get; init; }
-    public int    IndexCount       { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public long DocumentCount { get; init; }
+    public long AvgDocSizeBytes { get; init; }
+    public long StorageSizeBytes { get; init; }
+    public int IndexCount { get; init; }
 }
 
 public record MongoDocument
 {
-    public string    Id        { get; init; } = string.Empty;
-    public string    Json      { get; init; } = string.Empty;
+    public string Id { get; init; } = string.Empty;
+    public string Json { get; init; } = string.Empty;
     public DateTime? Timestamp { get; init; }
 }
 
 public record MongoIndexInfo
 {
-    public string Name   { get; init; } = string.Empty;
-    public string Keys   { get; init; } = string.Empty;
-    public bool   Unique { get; init; }
-    public bool   Sparse { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string Keys { get; init; } = string.Empty;
+    public bool Unique { get; init; }
+    public bool Sparse { get; init; }
 }
 
 public record MongoCollectionDetails
 {
-    public MongoCollectionSummary        Summary { get; init; } = new();
+    public MongoCollectionSummary Summary { get; init; } = new();
     public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
 }
 FILE src/NxtUI.Core/Models/PerformanceEvent.cs
@@ -12849,7 +12869,7 @@ public interface IServiceMetricsMonitor
     event Action<string>? OnMetricsUpdated;
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 5204
+LENGTH 5198
 using System.Collections.Concurrent;
 using System.Linq;
 using Microsoft.Extensions.Logging;
@@ -12895,7 +12915,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var added = false;
         _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
         if (added)
-            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            _log.LogTrace("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -12919,12 +12939,12 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
         {
-            _log.LogInformation("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            _log.LogTrace("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            _log.LogTrace("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
         }
         return result;
     }
@@ -12934,7 +12954,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         foreach (var template in _settings.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
-            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
+            _log.LogTrace("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
@@ -16417,11 +16437,12 @@ LENGTH 14979
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 4820
+LENGTH 5150
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Core.Models
-@inject IHeartbeatService HeartbeatSvc
+@using NxtUI.Web.Services
+@inject IHeartbeatMonitor HeartbeatMonitor
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject IJSRuntime JS
@@ -16466,7 +16487,8 @@ LENGTH 4820
 
     protected override void OnInitialized()
     {
-        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
     }
 
     protected override async Task OnParametersSetAsync()
@@ -16500,11 +16522,17 @@ LENGTH 4820
         _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
     }
 
-    private async Task LoadAsync()
+    private void OnServicesUpdated(string env)
+    {
+        if (env != Env) return;
+        _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+    }
+
+    private Task LoadAsync()
     {
         try
         {
-            var services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            var services = HeartbeatMonitor.GetServices(Env) ?? [];
 
             var cutoff = DateTime.UtcNow.AddMinutes(-10);
 
@@ -16532,11 +16560,13 @@ LENGTH 4820
             _treeData = null;
             _error    = ex.Message;
             _loading  = false;
-            return;
+            return Task.CompletedTask;
         }
 
-        _error = null;
-        _dirty = true;
+        _error   = null;
+        _loading = false;
+        if (_treeData is not null) _dirty = true;
+        return Task.CompletedTask;
     }
 
     private async Task RetryAsync()
@@ -16559,10 +16589,6 @@ LENGTH 4820
         {
             Console.Error.WriteLine($"[HomeMemoryTreemap] JS error: {ex.Message}");
         }
-        finally
-        {
-            if (_loading) { _loading = false; StateHasChanged(); }
-        }
     }
 
     private void OpenServices() =>
@@ -16570,13 +16596,14 @@ LENGTH 4820
 
     public async ValueTask DisposeAsync()
     {
-        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _sub?.Dispose();
         try { await JS.InvokeVoidAsync("homeMemoryTreemap.destroy", _ref); } catch { }
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 23713
+LENGTH 23839
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16720,10 +16747,12 @@ LENGTH 23713
                 <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
                 <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
                            Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                           Style="width:68px">
+                           Style="width:90px">
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
                 </MudSelect>
             </div>
@@ -17343,7 +17372,7 @@ LENGTH 9482
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 11160
+LENGTH 11562
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -17493,7 +17522,7 @@ LENGTH 11160
                     </div>
                 }
                 <div class="bm-inspector-section-label">Value</div>
-                <pre class="bm-inspector-value">@FormatJson(_selected.Value)</pre>
+                <div @ref="_jsonRef"></div>
             </div>
         </div>
     }
@@ -17507,6 +17536,8 @@ LENGTH 11160
     private List<KafkaMessage> _messages    = new();
     private List<KafkaMessage> _filtered    = new();
     private KafkaMessage?      _selected    = null;
+    private ElementReference   _jsonRef;
+    private bool               _jsonDirty;
     private bool               _running     = true;
     private bool               _loading     = false;
     private int                _maxMessages = 100;
@@ -17608,7 +17639,20 @@ LENGTH 11160
     }
 
     private void OnRowSelected(KafkaMessage? msg)
-        => _selected = ReferenceEquals(_selected, msg) ? null : msg;
+    {
+        _selected  = ReferenceEquals(_selected, msg) ? null : msg;
+        _jsonDirty = _selected is not null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_jsonDirty && _selected is not null)
+        {
+            _jsonDirty = false;
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Value); }
+            catch { }
+        }
+    }
 
     private async Task DownloadMessageAsync(KafkaMessage? msg)
     {
@@ -17638,7 +17682,7 @@ LENGTH 11160
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 25232
+LENGTH 25658
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17699,12 +17743,12 @@ LENGTH 25232
         {
             var parts = _selectedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
             var accumulated = "";
-            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">/</span>
+            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">\</span>
             foreach (var part in parts)
             {
                 accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
                 var snap = accumulated;
-                <span class="bm-lb-bc-sep bm-muted">/</span>
+                <span class="bm-lb-bc-sep bm-muted">\</span>
                 <span class="bm-lb-bc-item" @onclick="@(() => NavigateBreadcrumbAsync(snap))">@part</span>
             }
             @if (_isSearchMode)
@@ -18163,12 +18207,22 @@ LENGTH 25232
 
     private async Task RefreshAsync()
     {
-        var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-        _rootNodes = roots.ToList();
-
         if (_selectedPath is not null)
+        {
+            // Invalidate only the selected node's child cache entry and reload its files.
+            _childCache.Remove(_selectedPath);
+            var children = await BrowserSvc.GetSubfoldersAsync(_servers, _selectedPath, _cts.Token);
+            _childCache[_selectedPath] = children;
             await LoadFilesAsync();
-        else { _lastScan = DateTime.UtcNow; StateHasChanged(); }
+        }
+        else
+        {
+            // Nothing selected — refresh just the root listing.
+            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+            _rootNodes = roots.ToList();
+            _lastScan  = DateTime.UtcNow;
+            StateHasChanged();
+        }
     }
 
     private void StartPolling()
@@ -18220,6 +18274,7 @@ LENGTH 25232
 
     private async Task CopyPathAsync(string path) =>
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", path);
+
 
     private static string FormatSize(long bytes)
     {
@@ -19445,7 +19500,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 9124
+LENGTH 9131
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19499,7 +19554,6 @@ LENGTH 9124
             <HeaderContent>
                 <MudTh Style="width:200px;">_id</MudTh>
                 <MudTh>Preview</MudTh>
-                <MudTh Style="width:170px;">Timestamp (UTC)</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
@@ -19507,18 +19561,6 @@ LENGTH 9124
                 </MudTd>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
-                    @if (context.Timestamp.HasValue)
-                    {
-                        <span class="bm-kafka-mono bm-muted">
-                            @context.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss")
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="bm-muted">—</span>
-                    }
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -19540,10 +19582,12 @@ LENGTH 9124
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
                        Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                       Style="width:68px;">
+                       Style="width:90px;">
                 <MudSelectItem Value="10">10</MudSelectItem>
                 <MudSelectItem Value="25">25</MudSelectItem>
                 <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
             </MudSelect>
         </div>
     </div>
@@ -19554,7 +19598,7 @@ LENGTH 9124
         <div class="bm-inspector-detail">
             <div class="bm-inspector-detail-header">
                 <span class="bm-kafka-mono">
-                    <strong>@_selected.Id</strong>
+                    <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
                     @if (_selected.Timestamp.HasValue)
                     {
                         <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
@@ -19572,7 +19616,7 @@ LENGTH 9124
                 </div>
             </div>
             <div class="bm-inspector-detail-body">
-                <pre class="bm-inspector-value">@FormatJson(_selected.Json)</pre>
+                <div @ref="_jsonRef"></div>
             </div>
         </div>
     }
@@ -19589,6 +19633,8 @@ LENGTH 9124
     private List<MongoDocument> _allDocs    = new();
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
+    private ElementReference    _jsonRef;
+    private bool                _jsonDirty;
     private string              _search     = string.Empty;
     private string?             _filterParseError = null;
     private bool                _loading    = true;
@@ -19598,7 +19644,7 @@ LENGTH 9124
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("text search", "matches anywhere in the document JSON"),
+        ("text search", "matches anywhere in _id or the document JSON"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -19652,7 +19698,20 @@ LENGTH 9124
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; ApplyFilter(); }
 
     private void OnRowSelected(MongoDocument? doc)
-        => _selected = ReferenceEquals(_selected, doc) ? null : doc;
+    {
+        _selected  = ReferenceEquals(_selected, doc) ? null : doc;
+        _jsonDirty = _selected is not null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_jsonDirty && _selected is not null)
+        {
+            _jsonDirty = false;
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
+            catch { }
+        }
+    }
 
     private async Task SaveDocumentAsync(MongoDocument? doc)
     {
@@ -19682,7 +19741,7 @@ LENGTH 9124
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 12061
+LENGTH 12419
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19770,10 +19829,9 @@ LENGTH 12061
                 <MudTh Style="width:120px; text-align:right;">
                     <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.StorageSizeBytes">Storage</MudTableSortLabel>
                 </MudTh>
-                <MudTh Style="width:100px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.AvgDocSizeBytes">Avg Doc</MudTableSortLabel>
+                <MudTh Style="width:80px; text-align:center;">
+                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.IndexCount">Indexes</MudTableSortLabel>
                 </MudTh>
-                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
                 <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -19785,9 +19843,6 @@ LENGTH 12061
                 </MudTd>
                 <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
                     <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
-                </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
-                    <span class="bm-kafka-mono">@FormatBytes(context.AvgDocSizeBytes)</span>
                 </MudTd>
                 <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
                     @context.IndexCount
@@ -19833,10 +19888,12 @@ LENGTH 12061
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
                        Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                       Style="width:68px;">
+                       Style="width:90px;">
                 <MudSelectItem Value="10">10</MudSelectItem>
                 <MudSelectItem Value="25">25</MudSelectItem>
                 <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
             </MudSelect>
         </div>
     </div>
@@ -19859,11 +19916,24 @@ LENGTH 12061
 
     private static readonly string[] SearchableFields = ["Name"];
     private static readonly FilterParser Parser = new(SearchableFields,
-        new Dictionary<string, string> { ["name"] = "Name", ["collection"] = "Name" });
+        new Dictionary<string, string>
+        {
+            ["name"]       = "Name",
+            ["collection"] = "Name",
+            ["docs"]       = "DocumentCount",
+            ["documents"]  = "DocumentCount",
+            ["storage"]    = "StorageSizeBytes",
+            ["size"]       = "StorageSizeBytes",
+            ["indexes"]    = "IndexCount",
+            ["idx"]        = "IndexCount",
+        });
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
         ("name / collection", "collection name"),
+        ("docs / documents",  "document count (e.g. docs:>1000)"),
+        ("storage / size",    "storage size in bytes (e.g. storage:>1048576)"),
+        ("indexes / idx",     "index count (e.g. indexes:>2)"),
     ];
 
     protected override async Task OnInitializedAsync()
@@ -20412,7 +20482,7 @@ LENGTH 16166
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11036
+LENGTH 11162
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -20558,10 +20628,12 @@ LENGTH 11036
                        Dense="true"
                        Variant="Variant.Outlined"
                        Margin="Margin.Dense"
-                       Style="width:68px">
+                       Style="width:90px">
                 <MudSelectItem Value="10">10</MudSelectItem>
                 <MudSelectItem Value="25">25</MudSelectItem>
                 <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
                 <MudSelectItem Value="100">100</MudSelectItem>
             </MudSelect>
         </div>
@@ -20681,12 +20753,12 @@ LENGTH 11036
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 28827
+LENGTH 28545
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Filtering
-@inject IHeartbeatService HeartbeatSvc
+@inject IHeartbeatMonitor HeartbeatMonitor
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
@@ -20920,10 +20992,12 @@ LENGTH 28827
                            Dense="true"
                            Variant="Variant.Outlined"
                            Margin="Margin.Dense"
-                           Style="width:68px">
+                           Style="width:90px">
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
                 </MudSelect>
             </div>
@@ -20981,8 +21055,6 @@ LENGTH 28827
     private readonly HashSet<string> _copyingFor    = new();
     private readonly HashSet<string> _openingLogFor = new();
 
-    private PeriodicTimer? _timer;
-
     // Coalesce path-resolved notifications: discovery can resolve many services in
     // a burst (e.g. on first load), and one StateHasChanged per resolution renders
     // the grid several times while the previous batch is still being applied on the
@@ -20997,46 +21069,34 @@ LENGTH 28827
 
     protected override async Task OnInitializedAsync()
     {
-        DiscoverySvc.OnPathResolved += OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated += OnMetricsUpdated;
+        DiscoverySvc.OnPathResolved         += OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated     += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
-        await LoadAsync();
-        _ = StartPollingAsync();
-    }
 
-    private async Task LoadAsync()
-    {
-        _loading = true;
+        // Populate from cache immediately (may be empty on first open; OnServicesUpdated
+        // fires once the background poll completes and fills the cache).
+        LoadFromCache();
         await InvokeAsync(StateHasChanged);
-        try
-        {
-            _all         = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-            _lastUpdated = DateTime.UtcNow;
-            RecomputeFilter();
-
-            // Kick off background path discovery for any service not yet in cache
-            foreach (var svc in _all)
-                DiscoverySvc.EnsureDiscovering(svc, Env);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _loading = false;
-            // Always marshal renders onto the circuit's sync context — the poll
-            // timer continuation may resume off-context, and a background-thread
-            // render races the UI and corrupts the DOM (insertBefore/removeChild null).
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
-    private async Task StartPollingAsync()
+    private void LoadFromCache()
     {
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
-        while (await _timer.WaitForNextTickAsync())
-            await LoadAsync();
+        _all         = HeartbeatMonitor.GetServices(Env)?.ToList() ?? _all;
+        _lastUpdated = DateTime.UtcNow;
+        RecomputeFilter();
+        foreach (var svc in _all)
+            DiscoverySvc.EnsureDiscovering(svc, Env);
+    }
+
+    private void OnServicesUpdated(string env)
+    {
+        if (env != Env) return;
+        _ = InvokeAsync(() =>
+        {
+            LoadFromCache();
+            ScheduleRender();
+        });
     }
 
     // ── Path discovery ───────────────────────────────────────────────────────
@@ -21200,12 +21260,13 @@ LENGTH 28827
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 
-    private async Task RefreshAsync()
+    private Task RefreshAsync()
     {
         _filterText       = string.Empty;
         _filterParseError = null;
-        await LoadAsync();
+        LoadFromCache();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
+        return Task.CompletedTask;
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
@@ -21298,10 +21359,10 @@ LENGTH 28827
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
-        DiscoverySvc.OnPathResolved     -= OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
+        DiscoverySvc.OnPathResolved         -= OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated     -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated  -= OnServicesUpdated;
         _metricsSubscription?.Dispose();
-        _timer?.Dispose();
         await Task.CompletedTask;
     }
 }
@@ -22195,7 +22256,7 @@ LENGTH 30904
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 16630
+LENGTH 16723
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22219,7 +22280,7 @@ LENGTH 16630
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=28" rel="stylesheet" />
+    <link href="css/app.css?v=30" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -22244,6 +22305,9 @@ LENGTH 16630
 
     <!-- Home memory treemap -->
     <script src="js/d3-home-treemap.js?v=11"></script>
+
+    <!-- Interactive JSON tree viewer -->
+    <script src="js/json-viewer.js?v=1"></script>
 
     <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
          This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
@@ -22766,6 +22830,195 @@ public class EnvironmentSelectorService
 
     public event Action? OnChange;
 }
+FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
+LENGTH 6162
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Background service that polls <see cref="IHeartbeatService"/> for each subscribed
+/// environment, caches the results, and fires <see cref="OnServicesUpdated"/> after
+/// every successful fetch. Polling runs only while an environment has at least one
+/// subscriber. The cache is kept in memory for <c>IdleReleaseMinutes</c> after the
+/// last subscriber leaves so that re-subscribing (e.g. switching tabs) is instant.
+/// </summary>
+public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
+{
+    private readonly IHeartbeatService         _heartbeat;
+    private readonly HeartbeatSettings         _settings;
+    private readonly ILogger<HeartbeatMonitor> _log;
+
+    private CancellationToken _ct = CancellationToken.None;
+
+    private sealed class EnvState
+    {
+        public readonly object Lock                   = new();
+        public int             Subscribers;
+        public DateTime        IdleSince              = DateTime.MinValue;
+        public volatile IReadOnlyList<ServiceStatus> Services = [];
+    }
+
+    private readonly ConcurrentDictionary<string, EnvState>        _states = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim>   _gates  = new(StringComparer.OrdinalIgnoreCase);
+
+    public event Action<string>? OnServicesUpdated;
+
+    public HeartbeatMonitor(
+        IHeartbeatService         heartbeat,
+        IOptions<HeartbeatSettings> settings,
+        ILogger<HeartbeatMonitor> log)
+    {
+        _heartbeat = heartbeat;
+        _settings  = settings.Value;
+        _log       = log;
+    }
+
+    // ── IHeartbeatMonitor ─────────────────────────────────────────────────────
+
+    public IDisposable Subscribe(string env)
+    {
+        var state = _states.GetOrAdd(env, _ => new EnvState());
+        bool wasIdle;
+        lock (state.Lock)
+        {
+            wasIdle = state.Subscribers == 0;
+            state.Subscribers++;
+            state.IdleSince = DateTime.MinValue;
+        }
+        // Trigger an immediate poll so callers don't wait a full interval for data.
+        if (wasIdle)
+            _ = PollEnvAsync(env, _ct);
+        return new Subscription(this, env);
+    }
+
+    public IReadOnlyList<ServiceStatus>? GetServices(string env) =>
+        _states.TryGetValue(env, out var s) ? (s.Services.Count > 0 ? s.Services : null) : null;
+
+    // ── BackgroundService ─────────────────────────────────────────────────────
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        _ct = ct;
+        var interval = TimeSpan.FromSeconds(Math.Max(5, _settings.IntervalSeconds));
+        using var timer = new PeriodicTimer(interval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var idleTimeout = TimeSpan.FromMinutes(_settings.IdleReleaseMinutes);
+                var now         = DateTime.UtcNow;
+
+                foreach (var (env, state) in _states)
+                {
+                    bool shouldRelease, shouldPoll;
+                    lock (state.Lock)
+                    {
+                        shouldRelease = state.Subscribers == 0 &&
+                                        state.IdleSince   != DateTime.MinValue &&
+                                        (now - state.IdleSince) > idleTimeout;
+                        shouldPoll    = !shouldRelease && state.Subscribers > 0;
+                    }
+
+                    if (shouldRelease)
+                    {
+                        if (_states.TryRemove(env, out _))
+                        {
+                            _gates.TryRemove(env, out _);
+                            _log.LogInformation("heartbeat-monitor [{Env}]: idle cache released", env);
+                        }
+                        continue;
+                    }
+
+                    if (shouldPoll)
+                        await PollEnvAsync(env, ct);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // ── private ───────────────────────────────────────────────────────────────
+
+    private async Task PollEnvAsync(string env, CancellationToken ct)
+    {
+        if (!_states.ContainsKey(env)) return;
+
+        // Prevent concurrent polls for the same env (timer vs. immediate-subscribe race).
+        var gate = _gates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, ct)) return;
+        try
+        {
+            var services = await _heartbeat.GetServiceStatusesAsync(env, ct);
+            if (_states.TryGetValue(env, out var state))
+            {
+                state.Services = services;
+                OnServicesUpdated?.Invoke(env);
+                _log.LogDebug("heartbeat-monitor [{Env}]: {Count} services cached", env, services.Count);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "heartbeat-monitor [{Env}]: poll failed", env);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private void Release(string env)
+    {
+        if (!_states.TryGetValue(env, out var state)) return;
+        lock (state.Lock)
+        {
+            state.Subscribers = Math.Max(0, state.Subscribers - 1);
+            if (state.Subscribers == 0)
+                state.IdleSince = DateTime.UtcNow;
+        }
+    }
+
+    private sealed class Subscription(HeartbeatMonitor owner, string env) : IDisposable
+    {
+        private HeartbeatMonitor? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release(env);
+    }
+}
+FILE src/NxtUI.Web/Services/IHeartbeatMonitor.cs
+LENGTH 1132
+using NxtUI.Core.Models;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Server-side heartbeat cache. A single instance polls MongoDB (via IHeartbeatService)
+/// for each subscribed environment; polling stops and memory is released after
+/// <c>IdleReleaseMinutes</c> of no subscribers.
+/// </summary>
+public interface IHeartbeatMonitor
+{
+    /// <summary>
+    /// Register interest in <paramref name="env"/>. Disposes releases the subscription.
+    /// Polling starts on the first subscriber; an immediate poll is triggered so the
+    /// cache is warm before the first <see cref="OnServicesUpdated"/> event fires.
+    /// </summary>
+    IDisposable Subscribe(string env);
+
+    /// <summary>
+    /// Returns the most recently fetched service list for <paramref name="env"/>,
+    /// or <c>null</c> if no data has been received yet.
+    /// Always returns from an in-memory cache — never blocks.
+    /// </summary>
+    IReadOnlyList<ServiceStatus>? GetServices(string env);
+
+    /// <summary>Fired (on a thread-pool thread) after every successful poll for the given env.</summary>
+    event Action<string>? OnServicesUpdated;
+}
 FILE src/NxtUI.Web/Services/InfraHealthCache.cs
 LENGTH 4683
 using Microsoft.Extensions.Options;
@@ -22893,7 +23146,7 @@ public sealed class InfraHealthCache : BackgroundService
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 11094
+LENGTH 11175
 using NxtUI.Core.Services;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -23027,10 +23280,11 @@ public class LogBrowserService : ILogBrowserService
                     .OrderByDescending(Directory.GetLastWriteTimeUtc)
                     .Select(d =>
                     {
-                        var name        = Path.GetFileName(d);
-                        var rel         = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
-                        var hasChildren = Directory.EnumerateDirectories(d).Any();
-                        return new LogFolderNode(name, rel, hasChildren);
+                        var name = Path.GetFileName(d);
+                        var rel  = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
+                        // Assume children exist; expand will reveal an empty node.
+                        // Probing each child on a network share is prohibitively slow.
+                        return new LogFolderNode(name, rel, HasChildren: true);
                     })
                     .ToList();
             }
@@ -23778,7 +24032,7 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 9086
+LENGTH 10513
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
@@ -23791,39 +24045,44 @@ namespace NxtUI.Web.Services;
 /// <summary>
 /// Background metrics monitor. For each subscribed environment it periodically reads
 /// the (already discovered) per-service metrics file incrementally, parses the memory
-/// lines and caches them. Work happens only while an environment has subscribers;
-/// when the last subscriber leaves, that environment's cache is cleared.
+/// lines and caches them.
 ///
-/// Keyed per (env, service) because the metrics file path depends on {env}, so the
-/// same service can be monitored independently under several open tabs.
+/// Polling is paused when an environment has no subscribers, but cached data (file offsets
+/// and sample history) is kept for <c>IdleReleaseMinutes</c> so that re-subscribing resumes
+/// from where it left off — no redundant file re-reads.
+///
+/// Service lists come from <see cref="IHeartbeatMonitor"/> (already cached) so this service
+/// never hits MongoDB directly.
 /// </summary>
 public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMonitor
 {
     private const int MaxHistory = 1000;
 
-    private readonly IHeartbeatService              _heartbeat;
-    private readonly ILogPathDiscoveryService       _discovery;
-    private readonly LogPathSettings                _paths;
-    private readonly ILogger<ServiceMetricsMonitor> _log;
+    private readonly IHeartbeatMonitor               _heartbeatMonitor;
+    private readonly ILogPathDiscoveryService        _discovery;
+    private readonly LogPathSettings                 _paths;
+    private readonly ILogger<ServiceMetricsMonitor>  _log;
 
-    private readonly object                  _subLock  = new();
-    private readonly Dictionary<string, int> _envRefs  = new();           // env -> subscriber count
-    private readonly ConcurrentDictionary<string, Entry>        _entries  = new(); // (env|host|svc|pid) -> data
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new(); // serialise per-env polls
-    private CancellationToken _ct = CancellationToken.None; // set when ExecuteAsync starts
+    private readonly object                             _subLock  = new();
+    private readonly Dictionary<string, int>            _envRefs  = new();   // env -> subscriber count
+    private readonly Dictionary<string, DateTime>       _envIdle  = new();   // env -> idle-since (no subscribers)
+    private readonly Dictionary<string, IDisposable>    _hbSubs   = new();   // env -> HeartbeatMonitor subscription
+    private readonly ConcurrentDictionary<string, Entry>          _entries  = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim>  _envGates = new();
+    private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnMetricsUpdated;
 
     public ServiceMetricsMonitor(
-        IHeartbeatService              heartbeat,
-        ILogPathDiscoveryService       discovery,
-        IOptions<LogPathSettings>      paths,
-        ILogger<ServiceMetricsMonitor> log)
+        IHeartbeatMonitor               heartbeatMonitor,
+        ILogPathDiscoveryService        discovery,
+        IOptions<LogPathSettings>       paths,
+        ILogger<ServiceMetricsMonitor>  log)
     {
-        _heartbeat = heartbeat;
-        _discovery = discovery;
-        _paths     = paths.Value;
-        _log       = log;
+        _heartbeatMonitor = heartbeatMonitor;
+        _discovery        = discovery;
+        _paths            = paths.Value;
+        _log              = log;
 
         // A freshly resolved path means there may be a file to read right away —
         // poll that env immediately instead of waiting for the next interval.
@@ -23845,9 +24104,9 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private sealed class Entry
     {
-        public readonly object             Sync    = new();
-        public long                        Offset;
-        public MetricsSample?              Latest;
+        public readonly object              Sync    = new();
+        public long                         Offset;
+        public MetricsSample?               Latest;
         public readonly List<MetricsSample> History = new();
     }
 
@@ -23856,7 +24115,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     public IDisposable Subscribe(string env)
     {
         lock (_subLock)
+        {
             _envRefs[env] = _envRefs.TryGetValue(env, out var n) ? n + 1 : 1;
+            _envIdle.Remove(env); // no longer idle
+            // Keep a HeartbeatMonitor subscription alive for this env so it keeps polling.
+            if (!_hbSubs.ContainsKey(env))
+                _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
+        }
 
         // Poll immediately so a freshly opened tab doesn't wait a full interval.
         _ = PollEnvAsync(env, _ct);
@@ -23865,21 +24130,23 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private void Release(string env)
     {
-        var clear = false;
         lock (_subLock)
         {
-            if (_envRefs.TryGetValue(env, out var n))
+            if (!_envRefs.TryGetValue(env, out var n)) return;
+            if (n <= 1)
             {
-                if (n <= 1) { _envRefs.Remove(env); clear = true; }
-                else        { _envRefs[env] = n - 1; }
+                _envRefs.Remove(env);
+                _envIdle[env] = DateTime.UtcNow;
+                // Release the HeartbeatMonitor subscription; its own idle window keeps it cached.
+                if (_hbSubs.TryGetValue(env, out var hbSub))
+                {
+                    hbSub.Dispose();
+                    _hbSubs.Remove(env);
+                }
             }
+            else
+                _envRefs[env] = n - 1;
         }
-
-        if (!clear) return;
-
-        // Last subscriber gone: drop cached data for this env.
-        foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
-            _entries.TryRemove(key, out _);
     }
 
     private bool HasSubscribers(string env)
@@ -23918,10 +24185,33 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
+            {
+                CleanupIdleEnvs();
                 foreach (var env in SubscribedEnvs())
                     await PollEnvAsync(env, ct);
+            }
         }
         catch (OperationCanceledException) { /* shutting down */ }
+    }
+
+    private void CleanupIdleEnvs()
+    {
+        var idleTimeout = TimeSpan.FromMinutes(_paths.IdleReleaseMinutes);
+        var now = DateTime.UtcNow;
+
+        List<string> toRelease;
+        lock (_subLock)
+            toRelease = _envIdle.Where(kv => now - kv.Value > idleTimeout)
+                                .Select(kv => kv.Key).ToList();
+
+        foreach (var env in toRelease)
+        {
+            lock (_subLock) _envIdle.Remove(env);
+            foreach (var key in _entries.Keys
+                         .Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
+                _entries.TryRemove(key, out _);
+            _log.LogInformation("metrics [{Env}]: idle cache released", env);
+        }
     }
 
     private async Task PollEnvAsync(string env, CancellationToken ct)
@@ -23934,9 +24224,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         if (!await gate.WaitAsync(0, ct)) return;
         try
         {
-            List<ServiceStatus> services;
-            try { services = await _heartbeat.GetServiceStatusesAsync(env, ct); }
-            catch (Exception ex) { _log.LogWarning(ex, "metrics: heartbeat failed for {Env}", env); return; }
+            var services = _heartbeatMonitor.GetServices(env);
+            if (services is null)
+            {
+                _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
+                return;
+            }
 
             _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
 
@@ -26863,7 +27156,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 7385
+LENGTH 8044
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -26902,7 +27195,7 @@ public class MongoService : IMongoService
                 result.Add(new MongoDatabaseInfo
                 {
                     Name            = name,
-                    CollectionCount = stats.GetValue("collections", 0).AsInt32,
+                    CollectionCount = stats.GetValue("collections", 0).ToInt64(),
                     SizeBytes       = stats.GetValue("storageSize", 0).ToInt64(),
                 });
             }
@@ -26920,34 +27213,45 @@ public class MongoService : IMongoService
         string env, string database, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing collections in '{Db}'", env, database);
-        var db      = _connection.Client.GetDatabase(database);
-        var names   = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
-        var result  = new List<MongoCollectionSummary>(names.Count);
+        var db    = _connection.Client.GetDatabase(database);
+        var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
 
-        foreach (var name in names)
+        // Run one $collStats aggregation per collection in parallel — much faster than sequential collStats commands.
+        var tasks = names.Select(async name =>
         {
             try
             {
-                var stats = await db.RunCommandAsync<BsonDocument>(
-                    new BsonDocument { { "collStats", name }, { "scale", 1 } }, cancellationToken: ct);
-
-                result.Add(new MongoCollectionSummary
+                var col      = db.GetCollection<BsonDocument>(name);
+                var pipeline = new[]
+                {
+                    new BsonDocument("$collStats",
+                        new BsonDocument("storageStats", new BsonDocument("scale", 1)))
+                };
+                using var cursor = await col.AggregateAsync<BsonDocument>(
+                    PipelineDefinition<BsonDocument, BsonDocument>.Create(pipeline),
+                    cancellationToken: ct);
+                var doc = await cursor.FirstOrDefaultAsync(ct);
+                if (doc is null) return new MongoCollectionSummary { Name = name };
+                var ss = doc["storageStats"].AsBsonDocument;
+                return new MongoCollectionSummary
                 {
                     Name             = name,
-                    DocumentCount    = stats.GetValue("count",       0).ToInt64(),
-                    AvgDocSizeBytes  = stats.GetValue("avgObjSize",  0).ToInt64(),
-                    StorageSizeBytes = stats.GetValue("storageSize", 0).ToInt64(),
-                    IndexCount       = stats.GetValue("nindexes",    0).AsInt32,
-                });
+                    DocumentCount    = ss.GetValue("count",      0).ToInt64(),
+                    AvgDocSizeBytes  = ss.GetValue("avgObjSize", 0).ToInt64(),
+                    StorageSizeBytes = ss.GetValue("storageSize",0).ToInt64(),
+                    IndexCount       = ss.GetValue("nindexes",   0).AsInt32,
+                };
             }
             catch (Exception ex)
             {
-                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for collection '{Db}/{Col}'", env, database, name);
-                result.Add(new MongoCollectionSummary { Name = name });
+                _log.LogWarning(ex, "mongo [{Env}]: failed to get stats for '{Db}/{Col}'", env, database, name);
+                return new MongoCollectionSummary { Name = name };
             }
-        }
+        });
 
-        return result;
+        return (await Task.WhenAll(tasks))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public async Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
@@ -27038,7 +27342,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 68273
+LENGTH 70854
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -28347,6 +28651,64 @@ html, body {
     color: var(--mud-palette-text-primary);
 }
 
+/* ── JSON tree viewer ─────────────────────────────────────────────────── */
+
+/* Dark theme tokens (default) */
+:root {
+    --bm-jv-key:     #79C0FF;   /* blue    — object keys            */
+    --bm-jv-str:     #A5D6A7;   /* green   — string values          */
+    --bm-jv-num:     #FFA657;   /* amber   — number values          */
+    --bm-jv-bool:    #E89FFB;   /* purple  — true / false           */
+    --bm-jv-null:    #8B949E;   /* grey    — null                   */
+    --bm-jv-bracket: #E6EDF3;   /* light   — { } [ ]               */
+    --bm-jv-punct:   #8B949E;   /* grey    — commas                 */
+    --bm-jv-toggle:  #58A6FF;   /* bright blue — ▾ ▸ chevron       */
+    --bm-jv-summary: #8B949E;   /* grey    — collapsed placeholder  */
+}
+/* Light theme overrides */
+[data-theme="light"] {
+    --bm-jv-key:     #0550AE;
+    --bm-jv-str:     #116329;
+    --bm-jv-num:     #953800;
+    --bm-jv-bool:    #8250DF;
+    --bm-jv-null:    #6E7781;
+    --bm-jv-bracket: #1F2328;
+    --bm-jv-punct:   #6E7781;
+    --bm-jv-toggle:  #0969DA;
+    --bm-jv-summary: #6E7781;
+}
+
+.bm-jv {
+    font-family: var(--bm-font-mono);
+    font-size: 11.5px;
+    line-height: 1.65;
+    padding: 6px 4px;
+}
+.bm-jv-raw       { white-space: pre-wrap; word-break: break-all; color: var(--mud-palette-text-primary); }
+.bm-jv-key       { color: var(--bm-jv-key); }
+.bm-jv-str       { color: var(--bm-jv-str); }
+.bm-jv-num       { color: var(--bm-jv-num); }
+.bm-jv-bool      { color: var(--bm-jv-bool); }
+.bm-jv-null      { color: var(--bm-jv-null); }
+.bm-jv-bracket   { color: var(--bm-jv-bracket); }
+.bm-jv-punct     { color: var(--bm-jv-punct); }
+.bm-jv-summary   { color: var(--bm-jv-summary); font-style: italic; margin-left: 2px; }
+.bm-jv-body      { display: block; padding-left: 18px; }
+.bm-jv-row       { display: block; }
+.bm-jv-coll      { display: inline; }
+.bm-jv-toggle {
+    color: var(--bm-jv-toggle);
+    cursor: pointer;
+    user-select: none;
+    display: inline-block;
+    width: 12px;
+    font-size: 9px;
+    margin-right: 3px;
+    transition: transform 0.1s;
+    vertical-align: middle;
+}
+.bm-jv-toggle:hover { opacity: 0.75; }
+
 /* ═══════════════════════════════════════════════════════════════════════
    KAFKA CONSUMER GROUPS
    ═══════════════════════════════════════════════════════════════════════ */
@@ -28881,7 +29243,7 @@ html, body {
 }
 
 .bm-svc-card {
-    width: 220px;
+    width: 240px;
     padding: 8px 10px;
     border-radius: var(--bm-radius);
     border: 1px solid var(--mud-palette-divider);
@@ -29030,7 +29392,6 @@ tr.bm-row-searching td:first-child {
 .bm-lb-bc-item:hover { text-decoration: underline; }
 .bm-lb-bc-item.bm-lb-bc-root { color: var(--mud-palette-text-secondary); font-weight: 600; }
 .bm-lb-bc-sep   { color: var(--mud-palette-text-secondary); margin: 0 1px; user-select: none; }
-
 .bm-lb-body {
     flex: 1 1 0;
     display: flex;
@@ -29054,8 +29415,12 @@ tr.bm-row-searching td:first-child {
 }
 .bm-lb-resizer:hover { background: var(--mud-palette-primary-hover); }
 
-.bm-lb-tree { height: 100%; font-size: 12px; user-select: none; min-width: max-content; }
-.bm-lb-tree .mud-treeview-item-label { font-size: 12px; }
+/* height: auto so content overflows the panel and triggers the scrollbar */
+.bm-lb-tree { font-size: 11px; user-select: none; min-width: max-content; }
+.bm-lb-tree .mud-treeview-item-label { font-size: 11px; }
+/* tighten vertical spacing between tree nodes */
+.bm-lb-tree .mud-treeview-item-content { min-height: 22px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
+.bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;
@@ -34229,6 +34594,128 @@ describe('parse — positive relative offset still produces date type', () => {
         expect(node?.value?.type).toBe('date')
     })
 })
+FILE src/NxtUI.Web/wwwroot/js/json-viewer.js
+LENGTH 4534
+/**
+ * Lightweight interactive JSON tree viewer.
+ * Usage: bmJsonViewer.render(domElement, jsonString)
+ * Clicking the ▾/▸ chevron collapses or expands any object or array.
+ */
+window.bmJsonViewer = (() => {
+
+    function render(el, json) {
+        el.innerHTML = '';
+        el.className = 'bm-jv';
+
+        let parsed;
+        try { parsed = JSON.parse(json); }
+        catch { el.classList.add('bm-jv-raw'); el.textContent = json; return; }
+
+        el.appendChild(buildNode(parsed, true));
+    }
+
+    // ── node builders ─────────────────────────────────────────────────────────
+
+    function buildNode(val, isRoot) {
+        if (val === null)              return tok('bm-jv-null', 'null');
+        if (typeof val === 'boolean')  return tok('bm-jv-bool', String(val));
+        if (typeof val === 'number')   return tok('bm-jv-num',  String(val));
+        if (typeof val === 'string')   return tok('bm-jv-str',  JSON.stringify(val));
+        if (Array.isArray(val))        return buildArray(val, isRoot);
+        if (typeof val === 'object')   return buildObject(val, isRoot);
+        return tok('', String(val));
+    }
+
+    function buildObject(obj, isRoot) {
+        const entries = Object.entries(obj);
+        const wrap    = document.createElement('span');
+        wrap.className = 'bm-jv-coll';
+
+        if (entries.length === 0) {
+            wrap.appendChild(tok('bm-jv-bracket', '{ }'));
+            return wrap;
+        }
+
+        const { toggle, body, summary } = buildShell('{', '}', `{…${entries.length}}`, isRoot);
+        entries.forEach(([k, v], i) => {
+            const row = document.createElement('div');
+            row.className = 'bm-jv-row';
+            row.appendChild(tok('bm-jv-key', JSON.stringify(k) + ': '));
+            row.appendChild(buildNode(v, false));
+            if (i < entries.length - 1) row.appendChild(tok('bm-jv-punct', ','));
+            body.appendChild(row);
+        });
+
+        wrap.appendChild(toggle);
+        wrap.appendChild(tok('bm-jv-bracket', '{'));
+        wrap.appendChild(summary);
+        wrap.appendChild(body);
+        wrap.appendChild(tok('bm-jv-bracket', '}'));
+        return wrap;
+    }
+
+    function buildArray(arr, isRoot) {
+        const wrap = document.createElement('span');
+        wrap.className = 'bm-jv-coll';
+
+        if (arr.length === 0) {
+            wrap.appendChild(tok('bm-jv-bracket', '[]'));
+            return wrap;
+        }
+
+        const { toggle, body, summary } = buildShell('[', ']', `[…${arr.length}]`, isRoot);
+        arr.forEach((v, i) => {
+            const row = document.createElement('div');
+            row.className = 'bm-jv-row';
+            row.appendChild(buildNode(v, false));
+            if (i < arr.length - 1) row.appendChild(tok('bm-jv-punct', ','));
+            body.appendChild(row);
+        });
+
+        wrap.appendChild(toggle);
+        wrap.appendChild(tok('bm-jv-bracket', '['));
+        wrap.appendChild(summary);
+        wrap.appendChild(body);
+        wrap.appendChild(tok('bm-jv-bracket', ']'));
+        return wrap;
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    function buildShell(open, close, summaryText, isRoot) {
+        const body    = document.createElement('div');
+        body.className = 'bm-jv-body';
+
+        const summary  = document.createElement('span');
+        summary.className = 'bm-jv-summary';
+        summary.textContent = summaryText;
+        summary.style.display = 'none';
+
+        const toggle   = document.createElement('span');
+        toggle.className = 'bm-jv-toggle';
+        toggle.textContent = '▾';
+
+        // Root nodes start expanded; nested nodes can be toggled.
+        toggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const collapsed = body.style.display === 'none';
+            body.style.display    = collapsed ? ''     : 'none';
+            summary.style.display = collapsed ? 'none' : 'inline';
+            toggle.textContent    = collapsed ? '▾'    : '▸';
+        });
+
+        return { toggle, body, summary };
+    }
+
+    function tok(cls, text) {
+        const s = document.createElement('span');
+        if (cls) s.className = cls;
+        s.textContent = text;
+        return s;
+    }
+
+    return { render };
+})();
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.js
 LENGTH 5733
 // log-viewer-parser.js — ES module
