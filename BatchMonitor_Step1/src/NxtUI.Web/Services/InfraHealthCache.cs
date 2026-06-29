@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NxtUI.Configuration;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
+using NxtUI.Core.Services.Mongo;
 
 namespace NxtUI.Web.Services;
 
@@ -14,8 +16,8 @@ public sealed class InfraHealthCache : BackgroundService
 {
     private const int PollIntervalSeconds = 30;
 
-    private readonly IKafkaMonitor _kafka;
-    private readonly IMongoReader  _mongo;
+    private readonly IKafkaMonitor    _kafka;
+    private readonly MongoConnection  _mongoConnection;
     private readonly ILogger<InfraHealthCache> _log;
 
     private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
@@ -24,11 +26,11 @@ public sealed class InfraHealthCache : BackgroundService
 
     public event Action<string>? OnHealthUpdated;
 
-    public InfraHealthCache(IKafkaMonitor kafka, IMongoReader mongo, ILogger<InfraHealthCache> log)
+    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log)
     {
-        _kafka = kafka;
-        _mongo = mongo;
-        _log   = log;
+        _kafka           = kafka;
+        _mongoConnection = mongo;
+        _log             = log;
     }
 
     public KafkaHealth GetKafka(string env)
@@ -104,14 +106,16 @@ public sealed class InfraHealthCache : BackgroundService
         MongoHealth result;
         try
         {
-            var dbs = await _mongo.GetDatabasesAsync(env, ct);
+            // Use a cheap ping instead of GetDatabasesAsync (which runs dbStats for every
+            // database sequentially and is far too expensive for a connectivity check).
+            var db  = _mongoConnection.GetDatabase(env);
+            var cmd = new MongoDB.Bson.BsonDocument("ping", 1);
+            await db.RunCommandAsync<MongoDB.Bson.BsonDocument>(cmd, cancellationToken: ct);
             result = new MongoHealth
             {
                 Status    = HealthStatus.Healthy,
                 CheckedAt = DateTime.UtcNow,
-                Nodes = dbs.Count > 0
-                    ? [new MongoNodeHealth { Host = $"{env}-mongo", Role = "PRIMARY", IsOnline = true }]
-                    : [],
+                Nodes     = [new MongoNodeHealth { Host = $"{env}-mongo", Role = "PRIMARY", IsOnline = true }],
             };
         }
         catch (Exception ex)
