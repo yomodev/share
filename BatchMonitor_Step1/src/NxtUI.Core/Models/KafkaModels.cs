@@ -72,4 +72,7 @@ public record KafkaTopicSummary
 
     /// <summary>retention.ms value. -1 means infinite.</summary>
     public long RetentionMs { get; init; }
+
+    /// <summary>False until per-topic config has been loaded from the broker.</summary>
+    public bool ConfigLoaded { get; init; }
 }

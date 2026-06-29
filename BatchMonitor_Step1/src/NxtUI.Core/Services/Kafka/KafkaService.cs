@@ -59,6 +59,7 @@ public class KafkaService : IKafkaService
                 MessageCount      = 0,
                 CleanupPolicy     = "delete",
                 RetentionMs       = 604_800_000,
+                ConfigLoaded      = false,
             })
             .OrderBy(t => t.Name)
             .ToList();

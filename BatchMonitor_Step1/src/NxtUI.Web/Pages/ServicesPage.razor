@@ -65,11 +65,11 @@
 
     <!-- ── Content ───────────────────────────────────────────────────── -->
     <div class="bm-table-wrap">
-        @if (_loading && _all.Count == 0)
+        @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-        else if (_graphView)
+        @if (_graphView)
         {
             <!-- Card view — grouping supported (pure Blazor, no JS conflict).
                  The container is @key'd by the grouping mode: switching grouping
@@ -225,9 +225,8 @@
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
+                    <MudSelectItem Value="200">200</MudSelectItem>
                 </MudSelect>
             </div>
         }

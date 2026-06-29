@@ -130,6 +130,13 @@ window.homeMemoryTreemap = (function () {
         const s = { aborted: false, data: null, ro: null };
         _state.set(container, s);
 
+        // Show a spinner while the first fetch is in flight.
+        container.innerHTML =
+            '<div class="bm-treemap-loading">' +
+              '<div class="bm-treemap-spinner"></div>' +
+              '<span class="bm-treemap-loading-label">Loading memory data…</span>' +
+            '</div>';
+
         // ResizeObserver repaints on resize using the last fetched data.
         s.ro = new ResizeObserver(entries => {
             const w = entries[0]?.contentRect.width;

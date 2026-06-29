@@ -12196,7 +12196,7 @@ public class HeartbeatDocument
     public string HostName { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Core/Models/KafkaModels.cs
-LENGTH 2492
+LENGTH 2626
 namespace NxtUI.Core.Models;
 
 public record KafkaTopicConfig
@@ -12271,6 +12271,9 @@ public record KafkaTopicSummary
 
     /// <summary>retention.ms value. -1 means infinite.</summary>
     public long RetentionMs { get; init; }
+
+    /// <summary>False until per-topic config has been loaded from the broker.</summary>
+    public bool ConfigLoaded { get; init; }
 }
 FILE src/NxtUI.Core/Models/MongoModels.cs
 LENGTH 1190
@@ -16533,7 +16536,7 @@ LENGTH 1764
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 23839
+LENGTH 26531
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16604,7 +16607,7 @@ LENGTH 23839
     @if (_viewMode == KafkaView.Topics)
     {
         <div class="bm-table-wrap">
-            @if (_loading)
+            @if (_loading || _enriching)
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
             }
@@ -16623,6 +16626,7 @@ LENGTH 23839
                     <MudTh>
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
                     </MudTh>
+                    <MudTh Style="width:90px;">Policy</MudTh>
                     <MudTh Style="width:140px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -16630,10 +16634,21 @@ LENGTH 23839
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        @context.PartitionCount
+                        @if (context.ConfigLoaded) { <span>@context.PartitionCount</span> }
+                        else { <span class="bm-muted">—</span> }
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        <span class="bm-kafka-mono">@FormatMessages(context)</span>
+                        @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
+                        else { <span class="bm-muted">—</span> }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.ConfigLoaded)
+                        {
+                            <span class="bm-kafka-policy @(context.CleanupPolicy.Contains("compact") ? "bm-kafka-policy-compact" : "bm-kafka-policy-delete")">
+                                @context.CleanupPolicy
+                            </span>
+                        }
+                        else { <span class="bm-muted">—</span> }
                     </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
@@ -16681,9 +16696,8 @@ LENGTH 23839
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
+                    <MudSelectItem Value="200">200</MudSelectItem>
                 </MudSelect>
             </div>
         </div>
@@ -16822,6 +16836,7 @@ LENGTH 23839
     private KafkaClusterInfo? _cluster  = null;
     private KafkaView         _viewMode = KafkaView.Topics;
     private bool              _loading  = true;
+    private bool              _enriching = false;
     private string            _filterText       = string.Empty;
     private string?           _filterParseError = null;
     private CancellationTokenSource _cts = new();
@@ -16873,32 +16888,76 @@ LENGTH 23839
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading   = true;
+        _enriching = false;
         StateHasChanged();
         try
         {
+            var ct = _cts.Token;
+
             if (_viewMode == KafkaView.Topics)
             {
-                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
-                var t2 = KafkaSvc.GetTopicsAsync(Environment, _cts.Token);
-                await Task.WhenAll(t1, t2);
-                _cluster   = t1.Result;
-                _allTopics = t2.Result.ToList();
+                // Phase 1 — cluster info and topic list in parallel; render cluster bar as
+                // soon as GetClusterInfoAsync resolves (don't block on topics).
+                var clusterTask = KafkaSvc.GetClusterInfoAsync(Environment, ct);
+                var topicsTask  = KafkaSvc.GetTopicsAsync(Environment, ct);
+
+                _cluster = await clusterTask;
+                StateHasChanged(); // show cluster bar immediately
+
+                _allTopics = (await topicsTask).ToList();
+                ApplyFilter();
+                _loading   = false;
+                _enriching = true;
+                StateHasChanged(); // show topic table while config enriches
+
+                // Phase 2 — per-topic config: cleanup policy + retention.
+                // Skip topics whose config is already known (e.g. mock service).
+                var needsConfig = _allTopics
+                    .Select((t, i) => (t, i))
+                    .Where(x => !x.t.ConfigLoaded)
+                    .ToList();
+
+                if (needsConfig.Count > 0)
+                {
+                    var enrichTask = Task.WhenAll(needsConfig.Select(async x =>
+                    {
+                        var cfg = await KafkaSvc.GetTopicConfigAsync(Environment, x.t.Name, ct);
+                        if (ct.IsCancellationRequested) return;
+                        _allTopics[x.i] = _allTopics[x.i] with
+                        {
+                            CleanupPolicy = cfg.CleanupPolicy,
+                            RetentionMs   = cfg.RetentionMs,
+                            ConfigLoaded  = true,
+                        };
+                    }));
+
+                    while (!enrichTask.IsCompleted)
+                    {
+                        await Task.WhenAny(enrichTask, Task.Delay(300, ct));
+                        if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
+                    }
+                    await enrichTask;
+                    ApplyFilter();
+                }
             }
             else
             {
-                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
-                var t2 = KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
-                await Task.WhenAll(t1, t2);
-                _cluster       = t1.Result;
-                _allGroups     = t2.Result.ToList();
+                // Consumers: cluster info and group list in parallel; render cluster bar first.
+                var clusterTask = KafkaSvc.GetClusterInfoAsync(Environment, ct);
+                var groupsTask  = KafkaSvc.GetAllConsumerGroupsAsync(Environment, ct);
+
+                _cluster = await clusterTask;
+                StateHasChanged();
+
+                _allGroups     = (await groupsTask).ToList();
                 _selectedGroup = null;
                 _topicLags     = null;
+                ApplyFilter();
             }
-            ApplyFilter();
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        finally { _loading = false; _enriching = false; StateHasChanged(); }
     }
 
     private void SwitchView(KafkaView view)
@@ -20727,7 +20786,7 @@ LENGTH 11162
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 29504
+LENGTH 29422
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20795,11 +20854,11 @@ LENGTH 29504
 
     <!-- ── Content ───────────────────────────────────────────────────── -->
     <div class="bm-table-wrap">
-        @if (_loading && _all.Count == 0)
+        @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-        else if (_graphView)
+        @if (_graphView)
         {
             <!-- Card view — grouping supported (pure Blazor, no JS conflict).
                  The container is @key'd by the grouping mode: switching grouping
@@ -20955,9 +21014,8 @@ LENGTH 29504
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
+                    <MudSelectItem Value="200">200</MudSelectItem>
                 </MudSelect>
             </div>
         }
@@ -22269,7 +22327,7 @@ LENGTH 16875
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=30" rel="stylesheet" />
+    <link href="css/app.css?v=32" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -22293,7 +22351,7 @@ LENGTH 16875
     <script src="js/d3-memory-sunburst.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=14"></script>
+    <script src="js/d3-home-treemap.js?v=15"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -25987,7 +26045,7 @@ public sealed class KafkaConnection
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 13737
+LENGTH 13780
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -26049,6 +26107,7 @@ public class KafkaService : IKafkaService
                 MessageCount      = 0,
                 CleanupPolicy     = "delete",
                 RetentionMs       = 604_800_000,
+                ConfigLoaded      = false,
             })
             .OrderBy(t => t.Name)
             .ToList();
@@ -26435,7 +26494,7 @@ public class MockHeartbeatService : IHeartbeatService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockKafkaService.cs
-LENGTH 12432
+LENGTH 12810
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -26460,24 +26519,24 @@ public class MockKafkaService : IKafkaService
 
     private static readonly IReadOnlyList<KafkaTopicSummary> _topics =
     [
-        new() { Name = "bm.orders",           PartitionCount = 12, ReplicationFactor = 3, MessageCount = 1_842_301, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L },
-        new() { Name = "bm.invoices",         PartitionCount =  6, ReplicationFactor = 3, MessageCount =   422_018, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L },
-        new() { Name = "bm.shipments",        PartitionCount =  6, ReplicationFactor = 3, MessageCount =   310_452, CleanupPolicy = "delete",          RetentionMs = 14 * 86_400_000L },
-        new() { Name = "bm.payments",         PartitionCount = 12, ReplicationFactor = 3, MessageCount =   956_712, CleanupPolicy = "delete",          RetentionMs = 30 * 86_400_000L },
-        new() { Name = "bm.returns",          PartitionCount =  3, ReplicationFactor = 3, MessageCount =    45_230, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L },
-        new() { Name = "bm.orders.dlq",       PartitionCount =  3, ReplicationFactor = 3, MessageCount =       127, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L },
-        new() { Name = "bm.invoices.dlq",     PartitionCount =  3, ReplicationFactor = 3, MessageCount =         8, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L },
-        new() { Name = "bm.payments.dlq",     PartitionCount =  3, ReplicationFactor = 3, MessageCount =        42, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L },
-        new() { Name = "bm.audit",            PartitionCount =  6, ReplicationFactor = 3, MessageCount = 4_201_887, CleanupPolicy = "compact",         RetentionMs = -1               },
-        new() { Name = "bm.notifications",    PartitionCount =  6, ReplicationFactor = 3, MessageCount =   892_340, CleanupPolicy = "delete",          RetentionMs =      86_400_000L },
-        new() { Name = "bm.events.raw",       PartitionCount = 24, ReplicationFactor = 3, MessageCount = 8_741_002, CleanupPolicy = "delete",          RetentionMs =  2 * 86_400_000L },
-        new() { Name = "bm.events.enriched",  PartitionCount = 12, ReplicationFactor = 3, MessageCount = 8_736_451, CleanupPolicy = "delete",          RetentionMs =  2 * 86_400_000L },
-        new() { Name = "bm.reports",          PartitionCount =  3, ReplicationFactor = 3, MessageCount =    12_018, CleanupPolicy = "delete",          RetentionMs = 30 * 86_400_000L },
-        new() { Name = "bm.analytics",        PartitionCount =  6, ReplicationFactor = 3, MessageCount =   234_109, CleanupPolicy = "compact",         RetentionMs = -1               },
-        new() { Name = "bm.metrics",          PartitionCount = 12, ReplicationFactor = 3, MessageCount =15_302_441, CleanupPolicy = "delete",          RetentionMs =      86_400_000L },
-        new() { Name = "bm.alerts",           PartitionCount =  3, ReplicationFactor = 3, MessageCount =       891, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L },
-        new() { Name = "bm.config",           PartitionCount =  1, ReplicationFactor = 3, MessageCount =        45, CleanupPolicy = "compact",         RetentionMs = -1               },
-        new() { Name = "bm.customer-profiles",PartitionCount =  6, ReplicationFactor = 3, MessageCount =    78_334, CleanupPolicy = "compact,delete",  RetentionMs = 90 * 86_400_000L },
+        new() { Name = "bm.orders",           PartitionCount = 12, ReplicationFactor = 3, MessageCount = 1_842_301, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.invoices",         PartitionCount =  6, ReplicationFactor = 3, MessageCount =   422_018, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.shipments",        PartitionCount =  6, ReplicationFactor = 3, MessageCount =   310_452, CleanupPolicy = "delete",          RetentionMs = 14 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.payments",         PartitionCount = 12, ReplicationFactor = 3, MessageCount =   956_712, CleanupPolicy = "delete",          RetentionMs = 30 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.returns",          PartitionCount =  3, ReplicationFactor = 3, MessageCount =    45_230, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.orders.dlq",       PartitionCount =  3, ReplicationFactor = 3, MessageCount =       127, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.invoices.dlq",     PartitionCount =  3, ReplicationFactor = 3, MessageCount =         8, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.payments.dlq",     PartitionCount =  3, ReplicationFactor = 3, MessageCount =        42, CleanupPolicy = "delete",          RetentionMs =  3 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.audit",            PartitionCount =  6, ReplicationFactor = 3, MessageCount = 4_201_887, CleanupPolicy = "compact",         RetentionMs = -1,               ConfigLoaded = true },
+        new() { Name = "bm.notifications",    PartitionCount =  6, ReplicationFactor = 3, MessageCount =   892_340, CleanupPolicy = "delete",          RetentionMs =      86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.events.raw",       PartitionCount = 24, ReplicationFactor = 3, MessageCount = 8_741_002, CleanupPolicy = "delete",          RetentionMs =  2 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.events.enriched",  PartitionCount = 12, ReplicationFactor = 3, MessageCount = 8_736_451, CleanupPolicy = "delete",          RetentionMs =  2 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.reports",          PartitionCount =  3, ReplicationFactor = 3, MessageCount =    12_018, CleanupPolicy = "delete",          RetentionMs = 30 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.analytics",        PartitionCount =  6, ReplicationFactor = 3, MessageCount =   234_109, CleanupPolicy = "compact",         RetentionMs = -1,               ConfigLoaded = true },
+        new() { Name = "bm.metrics",          PartitionCount = 12, ReplicationFactor = 3, MessageCount =15_302_441, CleanupPolicy = "delete",          RetentionMs =      86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.alerts",           PartitionCount =  3, ReplicationFactor = 3, MessageCount =       891, CleanupPolicy = "delete",          RetentionMs =  7 * 86_400_000L, ConfigLoaded = true },
+        new() { Name = "bm.config",           PartitionCount =  1, ReplicationFactor = 3, MessageCount =        45, CleanupPolicy = "compact",         RetentionMs = -1,               ConfigLoaded = true },
+        new() { Name = "bm.customer-profiles",PartitionCount =  6, ReplicationFactor = 3, MessageCount =    78_334, CleanupPolicy = "compact,delete",  RetentionMs = 90 * 86_400_000L, ConfigLoaded = true },
     ];
 
     public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
@@ -27385,7 +27444,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 70854
+LENGTH 71863
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -29024,6 +29083,54 @@ html, body {
     height: 100%;
     cursor: pointer;
     border-radius: var(--mud-default-borderradius);
+}
+
+.bm-kafka-policy {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-family: var(--bm-font-mono, monospace);
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.bm-kafka-policy-delete {
+    background: rgba(128,128,128,0.15);
+    color: var(--mud-palette-text-secondary);
+}
+
+.bm-kafka-policy-compact {
+    background: rgba(59,130,246,0.15);
+    color: #60a5fa;
+}
+
+.bm-treemap-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    height: 100%;
+}
+
+.bm-treemap-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid rgba(128,128,128,0.2);
+    border-top-color: var(--mud-palette-primary);
+    border-radius: 50%;
+    animation: bm-spin 0.75s linear infinite;
+}
+
+@keyframes bm-spin {
+    to { transform: rotate(360deg); }
+}
+
+.bm-treemap-loading-label {
+    font-size: 0.75rem;
+    color: var(--mud-palette-text-secondary);
+    font-family: var(--bm-font-ui, sans-serif);
 }
 
 .bm-treemap-loading {
@@ -32246,7 +32353,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 7038
+LENGTH 7346
 window.homeMemoryTreemap = (function () {
 
     const _observers = new WeakMap(); // container → ResizeObserver
@@ -32378,6 +32485,13 @@ window.homeMemoryTreemap = (function () {
 
         const s = { aborted: false, data: null, ro: null };
         _state.set(container, s);
+
+        // Show a spinner while the first fetch is in flight.
+        container.innerHTML =
+            '<div class="bm-treemap-loading">' +
+              '<div class="bm-treemap-spinner"></div>' +
+              '<span class="bm-treemap-loading-label">Loading memory data…</span>' +
+            '</div>';
 
         // ResizeObserver repaints on resize using the last fetched data.
         s.ro = new ResizeObserver(entries => {

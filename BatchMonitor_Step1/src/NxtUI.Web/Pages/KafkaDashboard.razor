@@ -68,7 +68,7 @@
     @if (_viewMode == KafkaView.Topics)
     {
         <div class="bm-table-wrap">
-            @if (_loading)
+            @if (_loading || _enriching)
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
             }
@@ -87,6 +87,7 @@
                     <MudTh>
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
                     </MudTh>
+                    <MudTh Style="width:90px;">Policy</MudTh>
                     <MudTh Style="width:140px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -94,10 +95,21 @@
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        @context.PartitionCount
+                        @if (context.ConfigLoaded) { <span>@context.PartitionCount</span> }
+                        else { <span class="bm-muted">—</span> }
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        <span class="bm-kafka-mono">@FormatMessages(context)</span>
+                        @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
+                        else { <span class="bm-muted">—</span> }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.ConfigLoaded)
+                        {
+                            <span class="bm-kafka-policy @(context.CleanupPolicy.Contains("compact") ? "bm-kafka-policy-compact" : "bm-kafka-policy-delete")">
+                                @context.CleanupPolicy
+                            </span>
+                        }
+                        else { <span class="bm-muted">—</span> }
                     </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
@@ -145,9 +157,8 @@
                     <MudSelectItem Value="10">10</MudSelectItem>
                     <MudSelectItem Value="25">25</MudSelectItem>
                     <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
                     <MudSelectItem Value="100">100</MudSelectItem>
+                    <MudSelectItem Value="200">200</MudSelectItem>
                 </MudSelect>
             </div>
         </div>
@@ -286,6 +297,7 @@
     private KafkaClusterInfo? _cluster  = null;
     private KafkaView         _viewMode = KafkaView.Topics;
     private bool              _loading  = true;
+    private bool              _enriching = false;
     private string            _filterText       = string.Empty;
     private string?           _filterParseError = null;
     private CancellationTokenSource _cts = new();
@@ -337,32 +349,76 @@
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading   = true;
+        _enriching = false;
         StateHasChanged();
         try
         {
+            var ct = _cts.Token;
+
             if (_viewMode == KafkaView.Topics)
             {
-                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
-                var t2 = KafkaSvc.GetTopicsAsync(Environment, _cts.Token);
-                await Task.WhenAll(t1, t2);
-                _cluster   = t1.Result;
-                _allTopics = t2.Result.ToList();
+                // Phase 1 — cluster info and topic list in parallel; render cluster bar as
+                // soon as GetClusterInfoAsync resolves (don't block on topics).
+                var clusterTask = KafkaSvc.GetClusterInfoAsync(Environment, ct);
+                var topicsTask  = KafkaSvc.GetTopicsAsync(Environment, ct);
+
+                _cluster = await clusterTask;
+                StateHasChanged(); // show cluster bar immediately
+
+                _allTopics = (await topicsTask).ToList();
+                ApplyFilter();
+                _loading   = false;
+                _enriching = true;
+                StateHasChanged(); // show topic table while config enriches
+
+                // Phase 2 — per-topic config: cleanup policy + retention.
+                // Skip topics whose config is already known (e.g. mock service).
+                var needsConfig = _allTopics
+                    .Select((t, i) => (t, i))
+                    .Where(x => !x.t.ConfigLoaded)
+                    .ToList();
+
+                if (needsConfig.Count > 0)
+                {
+                    var enrichTask = Task.WhenAll(needsConfig.Select(async x =>
+                    {
+                        var cfg = await KafkaSvc.GetTopicConfigAsync(Environment, x.t.Name, ct);
+                        if (ct.IsCancellationRequested) return;
+                        _allTopics[x.i] = _allTopics[x.i] with
+                        {
+                            CleanupPolicy = cfg.CleanupPolicy,
+                            RetentionMs   = cfg.RetentionMs,
+                            ConfigLoaded  = true,
+                        };
+                    }));
+
+                    while (!enrichTask.IsCompleted)
+                    {
+                        await Task.WhenAny(enrichTask, Task.Delay(300, ct));
+                        if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
+                    }
+                    await enrichTask;
+                    ApplyFilter();
+                }
             }
             else
             {
-                var t1 = KafkaSvc.GetClusterInfoAsync(Environment, _cts.Token);
-                var t2 = KafkaSvc.GetAllConsumerGroupsAsync(Environment, _cts.Token);
-                await Task.WhenAll(t1, t2);
-                _cluster       = t1.Result;
-                _allGroups     = t2.Result.ToList();
+                // Consumers: cluster info and group list in parallel; render cluster bar first.
+                var clusterTask = KafkaSvc.GetClusterInfoAsync(Environment, ct);
+                var groupsTask  = KafkaSvc.GetAllConsumerGroupsAsync(Environment, ct);
+
+                _cluster = await clusterTask;
+                StateHasChanged();
+
+                _allGroups     = (await groupsTask).ToList();
                 _selectedGroup = null;
                 _topicLags     = null;
+                ApplyFilter();
             }
-            ApplyFilter();
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; }
+        finally { _loading = false; _enriching = false; StateHasChanged(); }
     }
 
     private void SwitchView(KafkaView view)
