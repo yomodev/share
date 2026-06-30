@@ -79,17 +79,17 @@
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh>
+                    <MudTh Style="width:100%;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
                     </MudTh>
-                    <MudTh>
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
                     </MudTh>
-                    <MudTh>
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:90px;">Policy</MudTh>
-                    <MudTh Style="width:140px; text-align:center;">Actions</MudTh>
+                    <MudTh Style="white-space:nowrap;">Policy</MudTh>
+                    <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
@@ -182,19 +182,19 @@
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh>
+                    <MudTh Style="width:100%;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.GroupId">Group ID</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:120px;">
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.State">State</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:90px; text-align:right;">
+                    <MudTh Style="white-space:nowrap; text-align:right;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TopicCount">Topics</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:110px; text-align:right;">
+                    <MudTh Style="white-space:nowrap; text-align:right;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TotalLag">Total Lag</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
+                    <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => OnGroupSelected(context))">

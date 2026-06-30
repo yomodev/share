@@ -51,14 +51,14 @@
                       SelectedItemChanged="OnRowSelected"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
+                    <MudTh Style="white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
                     <MudTh Style="width:100%;">Preview</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => SaveDocumentAsync(context))">
                         <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                     </MudTd>
-                    <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="width:100%; max-width:0;" @ondblclick="@(() => SaveDocumentAsync(context))">
                         <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                     </MudTd>
                 </RowTemplate>

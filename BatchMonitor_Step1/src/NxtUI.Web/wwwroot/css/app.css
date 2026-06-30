@@ -1261,8 +1261,8 @@ html, body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 500px;
     display: block;
+    width: 100%;
 }
 
 /* Detail panel — right side */

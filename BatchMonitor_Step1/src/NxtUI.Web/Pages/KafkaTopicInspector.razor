@@ -89,11 +89,11 @@
                       SelectedItemChanged="OnRowSelected"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="width:90px;">Offset</MudTh>
-                    <MudTh Style="width:55px;">Part</MudTh>
-                    <MudTh Style="width:180px;">Key</MudTh>
-                    <MudTh>Value</MudTh>
-                    <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="white-space:nowrap;">Offset</MudTh>
+                    <MudTh Style="white-space:nowrap;">Part</MudTh>
+                    <MudTh Style="white-space:nowrap;">Key</MudTh>
+                    <MudTh Style="width:100%;">Value</MudTh>
+                    <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
@@ -102,7 +102,7 @@
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-mono">@context.Partition</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
