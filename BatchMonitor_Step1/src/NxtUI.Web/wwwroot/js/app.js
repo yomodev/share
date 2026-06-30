@@ -265,6 +265,38 @@ export function scrollTabIntoView(tabId) {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 }
 
+// ── Inspector detail panel resizer (right side) ───────────────────────────
+window.bmInspectorResizer = (function () {
+    let dotnet = null, panelEl = null, startX = 0, startW = 0;
+
+    function onMove(e) {
+        const dx = e.clientX - startX;
+        const w  = Math.max(250, Math.min(900, startW - dx));
+        panelEl.style.width = w + 'px';
+        dotnet.invokeMethodAsync('SetDetailWidth', w);
+    }
+
+    function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+        document.body.style.cursor     = '';
+        document.body.style.userSelect = '';
+    }
+
+    return {
+        start(clientX, dotnetRef, panel) {
+            dotnet  = dotnetRef;
+            panelEl = panel;
+            startX  = clientX;
+            startW  = panel.getBoundingClientRect().width;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+            document.body.style.cursor     = 'col-resize';
+            document.body.style.userSelect = 'none';
+        }
+    };
+})();
+
 // ── Log Browser panel resizer ─────────────────────────────────────────────
 window.logBrowserResizer = (function () {
     let dotnet = null, bodyEl = null, panelEl = null, startX = 0, startW = 0;

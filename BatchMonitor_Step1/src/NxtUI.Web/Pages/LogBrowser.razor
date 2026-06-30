@@ -122,7 +122,7 @@
                 }
                 else if (_files.Count > 0)
                 {
-                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
+                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="true"
                               Class="bm-lb-file-table" FixedHeader="true" Height="100%"
                               RowClass="bm-lb-file-row"
                               SortLabel="Sort by">
@@ -372,10 +372,14 @@
 
     private async Task SelectPathAsync(string relativePath)
     {
+        var isNewPath = relativePath != _selectedPath;
         _selectedPath = relativePath;
 
-        // Clear stale files and show the progress bar immediately.
-        _files.Clear();
+        // When navigating to a different folder, clear old rows immediately so
+        // the wrong folder's files aren't shown. On refresh (same folder) keep
+        // existing rows visible — the progress bar is enough feedback.
+        if (isNewPath) _files = [];
+
         _loadingFiles = true;
         StateHasChanged();
         await Task.Yield();
@@ -443,31 +447,32 @@
     {
         if (_selectedPath is null) return;
 
-        var path = _selectedPath; // capture — user may change selection while awaiting
-        _files.Clear();
+        var path    = _selectedPath; // capture — user may change selection while awaiting
+        var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
         try
         {
-            var serverTasks = _servers.Select(async server =>
+            // Collect all servers in parallel without touching _files mid-flight.
+            await Task.WhenAll(_servers.Select(async server =>
             {
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
-                await InvokeAsync(() =>
-                {
-                    // Discard if the user already navigated elsewhere.
-                    if (_selectedPath != path) return;
-                    _files.AddRange(results);
-                    StateHasChanged();
-                });
-            });
+                foreach (var r in results) pending.Add(r);
+            }));
 
-            await Task.WhenAll(serverTasks);
-            _lastScan = DateTime.UtcNow;
+            // Swap in the new list atomically — no intermediate empty-table flash.
+            await InvokeAsync(() =>
+            {
+                if (_selectedPath != path) return;
+                _files    = [.. pending];
+                _lastScan = DateTime.UtcNow;
+                StateHasChanged();
+            });
         }
         finally
         {
             if (_selectedPath == path)
             {
                 _loadingFiles = _loadingNodes.Count > 0;
-                StateHasChanged();
+                await InvokeAsync(StateHasChanged);
             }
         }
     }

@@ -1221,11 +1221,30 @@ html, body {
     50%       { opacity: 0.2; }
 }
 
-/* When detail panel is open, table area shrinks */
-.bm-inspector-split-top {
-    flex: 1 1 0;
+/* Table + detail side-by-side body */
+.bm-inspector-body {
+    flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
 }
+
+.bm-inspector-body .bm-table-wrap {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Drag handle between table and detail panel */
+.bm-inspector-resizer {
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--mud-palette-divider);
+    transition: background 0.15s;
+}
+.bm-inspector-resizer:hover { background: var(--mud-palette-primary); }
 
 .bm-inspector-table tbody tr { cursor: pointer; }
 
@@ -1246,14 +1265,15 @@ html, body {
     display: block;
 }
 
-/* Detail panel */
+/* Detail panel — right side */
 .bm-inspector-detail {
     flex-shrink: 0;
-    height: 260px;
-    border-top: 2px solid var(--mud-palette-primary);
+    width: 380px;
+    border-left: 2px solid var(--mud-palette-primary);
     display: flex;
     flex-direction: column;
     background: var(--mud-palette-surface);
+    overflow: hidden;
 }
 
 .bm-inspector-detail-header {

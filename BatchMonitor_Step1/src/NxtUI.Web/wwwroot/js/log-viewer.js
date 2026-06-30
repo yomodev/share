@@ -307,6 +307,7 @@ function renderRows(vp) {
         const levelCss  = LEVEL_CSS[levelKey] || 'info';
 
         let cls = 'lv-row';
+        if (i % 2 === 0) cls += ' lv-row-even';
         if (isMatch)   cls += ' lv-match';
         if (isCurrent) cls += ' lv-match-current';
         if (bookmark)  cls += ' lv-bookmarked';

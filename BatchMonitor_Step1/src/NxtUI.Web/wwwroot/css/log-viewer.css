@@ -178,6 +178,10 @@ html[data-theme="light"] .lv-scrollmap { background: #f0f0f0; }
     box-sizing: border-box;
 }
 
+.lv-row-even {
+    background: rgba(128, 128, 128, 0.04);
+}
+
 .lv-row:hover {
     background: var(--mud-palette-action-default-hover);
 }

@@ -721,7 +721,7 @@
                 <MudDataGrid T="RunSummary" Items="@_dialogBatches"
                              RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
                              RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
-                             Dense="true" Hover="true" Striped="false" Bordered="false">
+                             Dense="true" Hover="true" Striped="true" Bordered="false">
                     <Columns>
                         <PropertyColumn Property="x => x.RunId" Title="RunId" />
                         <PropertyColumn Property="x => x.Name" Title="Name" />

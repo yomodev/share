@@ -69,88 +69,91 @@
         </span>
     </div>
 
-    <!-- Message table -->
-    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        @if (_loading && _messages.Count == 0)
+    <!-- Message table + detail side by side -->
+    <div class="bm-inspector-body">
+        <div class="bm-table-wrap">
+            @if (_loading && _messages.Count == 0)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+            }
+
+            <MudTable T="KafkaMessage"
+                      Items="_filtered"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Striped="true"
+                      FixedHeader="true"
+                      Height="100%"
+                      SelectedItem="_selected"
+                      SelectedItemChanged="OnRowSelected"
+                      Class="bm-batch-table bm-inspector-table">
+                <HeaderContent>
+                    <MudTh Style="width:90px;">Offset</MudTh>
+                    <MudTh Style="width:55px;">Part</MudTh>
+                    <MudTh Style="width:180px;">Key</MudTh>
+                    <MudTh>Value</MudTh>
+                    <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono">@context.Offset</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono">@context.Partition</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </div>
+
+        @if (_selected is not null)
         {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
-        <MudTable T="KafkaMessage"
-                  Items="_filtered"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  FixedHeader="true"
-                  Height="100%"
-                  SelectedItem="_selected"
-                  SelectedItemChanged="OnRowSelected"
-                  Class="bm-batch-table bm-inspector-table">
-            <HeaderContent>
-                <MudTh Style="width:90px;">Offset</MudTh>
-                <MudTh Style="width:55px;">Part</MudTh>
-                <MudTh Style="width:180px;">Key</MudTh>
-                <MudTh>Value</MudTh>
-                <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono">@context.Offset</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono">@context.Partition</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </div>
-
-    <!-- Detail panel -->
-    @if (_selected is not null)
-    {
-        <div class="bm-inspector-detail">
-            <div class="bm-inspector-detail-header">
-                <span class="bm-kafka-mono">
-                    offset <strong>@_selected.Offset</strong>
-                    &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
-                    &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
-                </span>
-                <div style="display:flex; align-items:center; gap:4px;">
-                    <MudTooltip Text="Save as JSON">
-                        <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+            <div class="bm-inspector-resizer" @onmousedown="OnResizerMouseDown"></div>
+            <div class="bm-inspector-detail" style="width:@(_detailWidth)px" @ref="_detailRef">
+                <div class="bm-inspector-detail-header">
+                    <span class="bm-kafka-mono">
+                        offset <strong>@_selected.Offset</strong>
+                        &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
+                        &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
+                    </span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <MudTooltip Text="Save as JSON">
+                            <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                                           Size="Size.Small"
+                                           OnClick="@(() => DownloadMessageAsync(_selected))" />
+                        </MudTooltip>
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                        Size="Size.Small"
-                                       OnClick="@(() => DownloadMessageAsync(_selected))" />
-                    </MudTooltip>
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small"
-                                   OnClick="@(() => _selected = null)" />
+                                       OnClick="@(() => _selected = null)" />
+                    </div>
+                </div>
+                <div class="bm-inspector-detail-body">
+                    @if (_selected.Headers.Count > 0)
+                    {
+                        <div class="bm-inspector-section-label">Headers</div>
+                        <div class="bm-inspector-headers">
+                            @foreach (var h in _selected.Headers)
+                            {
+                                <span class="bm-inspector-header-key">@h.Key</span>
+                                <span class="bm-kafka-mono bm-inspector-header-val">@h.Value</span>
+                            }
+                        </div>
+                    }
+                    <div class="bm-inspector-section-label">Value</div>
+                    <div @ref="_jsonRef"></div>
                 </div>
             </div>
-            <div class="bm-inspector-detail-body">
-                @if (_selected.Headers.Count > 0)
-                {
-                    <div class="bm-inspector-section-label">Headers</div>
-                    <div class="bm-inspector-headers">
-                        @foreach (var h in _selected.Headers)
-                        {
-                            <span class="bm-inspector-header-key">@h.Key</span>
-                            <span class="bm-kafka-mono bm-inspector-header-val">@h.Value</span>
-                        }
-                    </div>
-                }
-                <div class="bm-inspector-section-label">Value</div>
-                <div @ref="_jsonRef"></div>
-            </div>
-        </div>
-    }
+        }
+    </div>
 
 </div>
 
@@ -162,6 +165,9 @@
     private List<KafkaMessage> _filtered    = new();
     private KafkaMessage?      _selected    = null;
     private ElementReference   _jsonRef;
+    private ElementReference   _detailRef;
+    private DotNetObjectReference<KafkaTopicInspector>? _selfRef;
+    private double             _detailWidth = 380;
     private bool               _jsonDirty;
     private bool               _running     = true;
     private bool               _loading     = false;
@@ -269,6 +275,15 @@
         _jsonDirty = _selected is not null;
     }
 
+    private async Task OnResizerMouseDown(MouseEventArgs e)
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmInspectorResizer.start", e.ClientX, _selfRef, _detailRef);
+    }
+
+    [JSInvokable]
+    public void SetDetailWidth(double w) => _detailWidth = Math.Clamp(w, 250, 900);
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_jsonDirty && _selected is not null)
@@ -304,5 +319,9 @@
         catch { return raw; }
     }
 
-    public void Dispose() => _cts.Cancel();
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _selfRef?.Dispose();
+    }
 }
