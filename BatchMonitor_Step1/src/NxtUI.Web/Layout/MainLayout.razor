@@ -30,22 +30,24 @@
 
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
     <MudMainContent Style="padding:0; padding-top:var(--bm-tabbar-h); overflow:hidden; display:flex; flex-direction:column;">
-        <div class="bm-content-area">
-            <!-- Home pane: always rendered, hidden when a tab is focused. -->
-            <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
-                <Home />
-            </div>
-
-            <!-- One persistent pane per open tab — kept alive in the DOM so
-                 polling loops, event stores, and D3 graph state survive
-                 focus changes (§4 tab lifecycle). -->
-            @foreach (var tab in TabService.Tabs)
-            {
-                <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
-                    <TabContent Tab="@tab" />
+        <GlobalErrorBoundary>
+            <div class="bm-content-area">
+                <!-- Home pane: always rendered, hidden when a tab is focused. -->
+                <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
+                    <Home />
                 </div>
-            }
-        </div>
+
+                <!-- One persistent pane per open tab — kept alive in the DOM so
+                     polling loops, event stores, and D3 graph state survive
+                     focus changes (§4 tab lifecycle). -->
+                @foreach (var tab in TabService.Tabs)
+                {
+                    <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
+                        <TabContent Tab="@tab" />
+                    </div>
+                }
+            </div>
+        </GlobalErrorBoundary>
     </MudMainContent>
 
 </MudLayout>

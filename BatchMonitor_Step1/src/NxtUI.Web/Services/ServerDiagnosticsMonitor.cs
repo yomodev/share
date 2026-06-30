@@ -6,9 +6,12 @@ namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Debugging aid: periodically samples server-side health indicators and logs them.
+/// When timer lag is detected, also reports in-flight operations from OperationTracker.
 /// Disable via appsettings: "Diagnostics": { "Enabled": false }
 /// </summary>
-public sealed class ServerDiagnosticsMonitor(ILogger<ServerDiagnosticsMonitor> logger) : BackgroundService
+public sealed class ServerDiagnosticsMonitor(
+    ILogger<ServerDiagnosticsMonitor> logger,
+    OperationTracker tracker) : BackgroundService
 {
     // How often to sample. Larger interval = less log noise.
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
@@ -64,6 +67,16 @@ public sealed class ServerDiagnosticsMonitor(ILogger<ServerDiagnosticsMonitor> l
                 logger.Log(level,
                     "diag | lag={Lag:F0}ms | cpu={Cpu:F1}% | ws={WS:F0}MB | threads={Threads} | pool worker={WorkerUsed}/{WorkerMax} io={IoUsed}/{IoMax}",
                     lag.TotalMilliseconds, cpuPct, wsMb, threads, workerUsed, workerMax, ioUsed, ioMax);
+
+                // When lagging, report what was in-flight at sample time.
+                if (lag.TotalMilliseconds > LagInfoMs)
+                {
+                    var active = tracker.ActiveOperations;
+                    if (active.Count > 0)
+                        logger.Log(level,
+                            "diag | in-flight operations: {Ops}",
+                            string.Join(" | ", active));
+                }
             }
             catch (Exception ex)
             {

@@ -42,8 +42,16 @@
 
         Logger.Log(level, "client-diag | event-loop lag={Lag}ms | fps={Fps}", lagMs, fps);
 
-        if (fps < WarnFps && fps > 0)
-            Logger.LogWarning("client-diag | low frame rate fps={Fps} — UI may be unresponsive", fps);
+        if (fps is > 0 and < WarnFps)
+            Logger.LogWarning("client-diag | low frame rate fps={Fps} — UI thread may be blocked", fps);
+    }
+
+    [JSInvokable]
+    public void OnLongTask(int durationMs, string attribution)
+    {
+        Logger.LogWarning(
+            "client-diag | long-task blocked={Duration}ms | script={Attribution}",
+            durationMs, attribution);
     }
 
     public async ValueTask DisposeAsync()

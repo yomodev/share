@@ -344,20 +344,21 @@ export function initTabWheelScroll(containerEl) {
 }
 
 // ── Client diagnostics monitor ────────────────────────────────────────────
-// Measures JS event-loop lag and frame rate. Call bmClientDiag.start(dotnetRef)
-// to begin; call bmClientDiag.stop() to end. dotnetRef must expose OnClientMetrics.
+// Measures JS event-loop lag, frame rate, and Long Tasks (browser blocks >50ms).
+// Call bmClientDiag.start(dotnetRef) / .stop(). dotnetRef exposes:
+//   OnClientMetrics(lagMs, fps)
+//   OnLongTask(durationMs, attribution)
 window.bmClientDiag = (function () {
-    const TICK_MS  = 5000;   // how often to fire a setInterval ping
-    const WARN_LAG = 200;    // ms — log if timer lag exceeds this
+    const TICK_MS = 5000;   // setInterval ping interval
 
-    let _dotnet  = null;
-    let _timerId = null;
-    let _rafId   = null;
+    let _dotnet     = null;
+    let _timerId    = null;
+    let _rafId      = null;
+    let _observer   = null;
     let _frameCount = 0;
-    let _lastRafTs  = performance.now();
     let _lastTickTs = performance.now();
 
-    function rafLoop(ts) {
+    function rafLoop() {
         _frameCount++;
         _rafId = requestAnimationFrame(rafLoop);
     }
@@ -367,13 +368,24 @@ window.bmClientDiag = (function () {
         const elapsed = now - _lastTickTs;
         const lag     = elapsed - TICK_MS;
         _lastTickTs   = now;
+        const fps     = Math.round(_frameCount / (elapsed / 1000));
+        _frameCount   = 0;
+        if (_dotnet) _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), fps);
+    }
 
-        const fps = _frameCount / (elapsed / 1000);
-        _frameCount = 0;
-
-        if (_dotnet) {
-            _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), Math.round(fps));
-        }
+    function startLongTaskObserver() {
+        if (!window.PerformanceObserver) return;
+        try {
+            _observer = new PerformanceObserver(list => {
+                for (const entry of list.getEntries()) {
+                    const attr = entry.attribution?.[0];
+                    const src  = attr?.name || attr?.containerSrc || 'unknown';
+                    if (_dotnet)
+                        _dotnet.invokeMethodAsync('OnLongTask', Math.round(entry.duration), src);
+                }
+            });
+            _observer.observe({ type: 'longtask', buffered: false });
+        } catch (e) { /* browser may not support longtask */ }
     }
 
     return {
@@ -383,10 +395,12 @@ window.bmClientDiag = (function () {
             _lastTickTs = performance.now();
             _rafId      = requestAnimationFrame(rafLoop);
             _timerId    = setInterval(tick, TICK_MS);
+            startLongTaskObserver();
         },
         stop() {
-            if (_timerId) { clearInterval(_timerId); _timerId = null; }
-            if (_rafId)   { cancelAnimationFrame(_rafId); _rafId = null; }
+            if (_timerId)  { clearInterval(_timerId); _timerId = null; }
+            if (_rafId)    { cancelAnimationFrame(_rafId); _rafId = null; }
+            if (_observer) { _observer.disconnect(); _observer = null; }
             _dotnet = null;
         }
     };

@@ -29,11 +29,96 @@
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
 
-    <div id="blazor-error-ui">
-        An unhandled error has occurred.
-        <a href="" class="reload">Reload</a>
-        <a class="dismiss">🗙</a>
+    <!-- Custom Blazor reconnect / error overlay — replaces the default banner. -->
+    <div id="blazor-error-ui" style="display:none;">
+        <div class="bm-reconnect-overlay">
+            <div class="bm-reconnect-dialog">
+                <div class="bm-reconnect-icon">⚡</div>
+                <div class="bm-reconnect-title" id="bm-reconnect-title">Connection lost</div>
+                <div class="bm-reconnect-msg"  id="bm-reconnect-msg">Reconnecting…</div>
+                <div class="bm-reconnect-actions">
+                    <a href="javascript:location.reload()" class="bm-reconnect-btn">Reload page</a>
+                    <a class="bm-reconnect-dismiss" onclick="document.getElementById('blazor-error-ui').style.display='none'">Dismiss</a>
+                </div>
+            </div>
+        </div>
     </div>
+    <style>
+        .bm-reconnect-overlay {
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0,0,0,.55); display: flex;
+            align-items: center; justify-content: center;
+        }
+        .bm-reconnect-dialog {
+            background: #1e1e2e; color: #cdd6f4; border-radius: 12px;
+            padding: 32px 40px; max-width: 400px; width: 90%;
+            box-shadow: 0 8px 32px rgba(0,0,0,.5); text-align: center;
+            border: 1px solid #313244;
+        }
+        .bm-reconnect-icon  { font-size: 2.5rem; margin-bottom: 12px; }
+        .bm-reconnect-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 8px; }
+        .bm-reconnect-msg   { font-size: .9rem; color: #a6adc8; margin-bottom: 24px; }
+        .bm-reconnect-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .bm-reconnect-btn {
+            background: #89b4fa; color: #1e1e2e; padding: 8px 20px;
+            border-radius: 6px; text-decoration: none; font-weight: 600;
+            font-size: .9rem;
+        }
+        .bm-reconnect-dismiss { color: #a6adc8; font-size: .85rem; align-self: center; cursor: pointer; }
+    </style>
+    <script>
+    (function () {
+        // Blazor calls these functions on the window object during reconnect attempts.
+        var _attempt = 0;
+        window.Blazor = window.Blazor || {};
+
+        // Override default reconnect UI handlers so we control the dialog.
+        document.addEventListener('DOMContentLoaded', function () {
+            var ui   = document.getElementById('blazor-error-ui');
+            var title = document.getElementById('bm-reconnect-title');
+            var msg   = document.getElementById('bm-reconnect-msg');
+            if (!ui) return;
+
+            // Blazor exposes reconnection handlers via blazor.reconnection
+            // We patch them after Blazor loads.
+            var patch = function () {
+                if (!window.Blazor?._internal?.navigationManager) {
+                    setTimeout(patch, 200);
+                    return;
+                }
+                var orig = window.Blazor._internal.reconnectionDisplay || {};
+                window.Blazor.reconnect = window.Blazor.reconnect || {};
+
+                // Called when reconnection starts
+                window.Blazor._internal.reconnectionDisplay = {
+                    show: function () {
+                        _attempt = 0;
+                        title.textContent = 'Connection lost';
+                        msg.textContent   = 'Reconnecting…';
+                        ui.style.display  = '';
+                    },
+                    update: function (attempt) {
+                        _attempt = attempt;
+                        title.textContent = 'Reconnecting…';
+                        msg.textContent   = 'Attempt ' + attempt + ' of 3 — if this persists, reload the page.';
+                    },
+                    hide: function () {
+                        ui.style.display = 'none';
+                    },
+                    failed: function () {
+                        title.textContent = 'Unable to reconnect';
+                        msg.textContent   = 'The server connection was lost and could not be restored. Reload to continue.';
+                    },
+                    rejected: function () {
+                        title.textContent = 'Session expired';
+                        msg.textContent   = 'This session is no longer valid. Reload to start a new session.';
+                    }
+                };
+            };
+            patch();
+        });
+    })();
+    </script>
 
     <!-- D3 v7 library -->
     <script src="https://d3js.org/d3.v7.min.js"></script>

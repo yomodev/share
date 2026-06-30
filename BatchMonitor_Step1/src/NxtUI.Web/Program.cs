@@ -55,8 +55,12 @@ public class Program
 
         builder.Services.AddMudServices();
 
+        // ── Operation tracker (singleton — used by background services + diagnostics monitor) ──
+        builder.Services.AddSingleton<OperationTracker>();
+
         // ── SignalR ──────────────────────────────────────────────────────────
-        builder.Services.AddSignalR();
+        // BlazorCircuitFilter is conditionally added below after config is read.
+        var signalRBuilder = builder.Services.AddSignalR();
 
         // ── Batch / Run service ──────────────────────────────────────────────
         // Mock: fast demo without MongoDB.  Real: swap comment below.
@@ -115,7 +119,12 @@ public class Program
             builder.Services.AddHostedService<TestLogGenerator>();
 
         if (builder.Configuration.GetValue<bool>("Diagnostics:Enabled"))
+        {
             builder.Services.AddHostedService<ServerDiagnosticsMonitor>();
+            builder.Services.AddSingleton<BlazorCircuitFilter>();
+            signalRBuilder.AddHubOptions<Microsoft.AspNetCore.SignalR.Hub>(o =>
+                o.AddFilter<BlazorCircuitFilter>());
+        }
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();

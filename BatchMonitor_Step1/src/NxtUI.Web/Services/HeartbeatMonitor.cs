@@ -18,6 +18,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
     private readonly IHeartbeatService         _heartbeat;
     private readonly HeartbeatSettings         _settings;
     private readonly ILogger<HeartbeatMonitor> _log;
+    private readonly OperationTracker          _ops;
 
     private CancellationToken _ct = CancellationToken.None;
 
@@ -35,13 +36,15 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
     public event Action<string>? OnServicesUpdated;
 
     public HeartbeatMonitor(
-        IHeartbeatService         heartbeat,
+        IHeartbeatService           heartbeat,
         IOptions<HeartbeatSettings> settings,
-        ILogger<HeartbeatMonitor> log)
+        ILogger<HeartbeatMonitor>   log,
+        OperationTracker            ops)
     {
         _heartbeat = heartbeat;
         _settings  = settings.Value;
         _log       = log;
+        _ops       = ops;
     }
 
     // ── IHeartbeatMonitor ─────────────────────────────────────────────────────
@@ -117,6 +120,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         // Prevent concurrent polls for the same env (timer vs. immediate-subscribe race).
         var gate = _gates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0, ct)) return;
+        using var op = _ops.Track($"HeartbeatMonitor.Poll({env})");
         try
         {
             var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);

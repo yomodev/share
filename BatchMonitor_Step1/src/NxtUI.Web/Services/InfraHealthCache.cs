@@ -19,6 +19,7 @@ public sealed class InfraHealthCache : BackgroundService
     private readonly IKafkaMonitor    _kafka;
     private readonly MongoConnection  _mongoConnection;
     private readonly ILogger<InfraHealthCache> _log;
+    private readonly OperationTracker _ops;
 
     private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MongoHealth>  _mongoCache = new(StringComparer.OrdinalIgnoreCase);
@@ -27,11 +28,12 @@ public sealed class InfraHealthCache : BackgroundService
 
     public event Action<string>? OnHealthUpdated;
 
-    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log)
+    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log, OperationTracker ops)
     {
         _kafka           = kafka;
         _mongoConnection = mongo;
         _log             = log;
+        _ops             = ops;
     }
 
     public KafkaHealth GetKafka(string env)
@@ -88,6 +90,7 @@ public sealed class InfraHealthCache : BackgroundService
     private async Task PollKafkaAsync(string env, CancellationToken ct)
     {
         KafkaHealth result;
+        using var op = _ops.Track($"InfraHealthCache.Kafka({env})");
         try
         {
             var info = await _kafka.GetClusterInfoAsync(env, ct);
@@ -121,9 +124,9 @@ public sealed class InfraHealthCache : BackgroundService
     private async Task PollMongoAllAsync(string[] envs, CancellationToken ct)
     {
         if (!_mongoConnection.IsConfigured || envs.Length == 0)
-        {
             return;
-        }
+
+        using var op = _ops.Track($"InfraHealthCache.Mongo(ping)");
 
         MongoHealth result;
         try
