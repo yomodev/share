@@ -1,0 +1,55 @@
+@* Debugging aid: monitors JS event-loop lag and frame rate.
+   Disable via appsettings: "Diagnostics": { "Enabled": false } *@
+@inject IJSRuntime JS
+@inject ILogger<DiagnosticsMonitor> Logger
+@implements IAsyncDisposable
+
+@code {
+    // How much JS event-loop lag (ms) triggers a Warning vs Info log entry.
+    private const int WarnLagMs = 200;
+    private const int InfoLagMs = 50;
+
+    // Minimum FPS below which we warn.
+    private const int WarnFps = 20;
+
+    private DotNetObjectReference<DiagnosticsMonitor>? _selfRef;
+    private bool _started;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _started) return;
+        _started = true;
+        try
+        {
+            // Importing app.js ensures bmClientDiag is defined before we call it.
+            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            _selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("bmClientDiag.start", _selfRef);
+            Logger.LogInformation("Client diagnostics monitor started");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Client diagnostics monitor failed to start");
+        }
+    }
+
+    [JSInvokable]
+    public void OnClientMetrics(int lagMs, int fps)
+    {
+        var level = lagMs > WarnLagMs ? LogLevel.Warning
+                  : lagMs > InfoLagMs ? LogLevel.Information
+                  : LogLevel.Debug;
+
+        Logger.Log(level, "client-diag | event-loop lag={Lag}ms | fps={Fps}", lagMs, fps);
+
+        if (fps < WarnFps && fps > 0)
+            Logger.LogWarning("client-diag | low frame rate fps={Fps} — UI may be unresponsive", fps);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("bmClientDiag.stop"); }
+        catch (Exception) { }
+        _selfRef?.Dispose();
+    }
+}

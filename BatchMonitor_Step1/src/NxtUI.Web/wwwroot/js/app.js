@@ -342,3 +342,52 @@ export function initTabWheelScroll(containerEl) {
         containerEl.scrollLeft += e.deltaY * 0.8;
     }, { passive: false });
 }
+
+// ── Client diagnostics monitor ────────────────────────────────────────────
+// Measures JS event-loop lag and frame rate. Call bmClientDiag.start(dotnetRef)
+// to begin; call bmClientDiag.stop() to end. dotnetRef must expose OnClientMetrics.
+window.bmClientDiag = (function () {
+    const TICK_MS  = 5000;   // how often to fire a setInterval ping
+    const WARN_LAG = 200;    // ms — log if timer lag exceeds this
+
+    let _dotnet  = null;
+    let _timerId = null;
+    let _rafId   = null;
+    let _frameCount = 0;
+    let _lastRafTs  = performance.now();
+    let _lastTickTs = performance.now();
+
+    function rafLoop(ts) {
+        _frameCount++;
+        _rafId = requestAnimationFrame(rafLoop);
+    }
+
+    function tick() {
+        const now     = performance.now();
+        const elapsed = now - _lastTickTs;
+        const lag     = elapsed - TICK_MS;
+        _lastTickTs   = now;
+
+        const fps = _frameCount / (elapsed / 1000);
+        _frameCount = 0;
+
+        if (_dotnet) {
+            _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), Math.round(fps));
+        }
+    }
+
+    return {
+        start(dotnetRef) {
+            _dotnet     = dotnetRef;
+            _frameCount = 0;
+            _lastTickTs = performance.now();
+            _rafId      = requestAnimationFrame(rafLoop);
+            _timerId    = setInterval(tick, TICK_MS);
+        },
+        stop() {
+            if (_timerId) { clearInterval(_timerId); _timerId = null; }
+            if (_rafId)   { cancelAnimationFrame(_rafId); _rafId = null; }
+            _dotnet = null;
+        }
+    };
+})();

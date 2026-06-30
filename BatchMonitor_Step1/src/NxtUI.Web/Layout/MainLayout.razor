@@ -5,9 +5,14 @@
 @inject EnvironmentSelectorService EnvService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IConfiguration Config
 @implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
+@if (Config.GetValue<bool>("Diagnostics:Enabled"))
+{
+    <DiagnosticsMonitor />
+}
 <MudDialogProvider />
 <MudSnackbarProvider />
 <MudPopoverProvider />

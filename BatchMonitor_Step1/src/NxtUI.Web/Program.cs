@@ -114,6 +114,9 @@ public class Program
         if (builder.Configuration.GetValue<bool>($"{TestLogGeneratorSettings.SectionName}:Enabled"))
             builder.Services.AddHostedService<TestLogGenerator>();
 
+        if (builder.Configuration.GetValue<bool>("Diagnostics:Enabled"))
+            builder.Services.AddHostedService<ServerDiagnosticsMonitor>();
+
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
         builder.Services.AddScoped<EnvironmentSelectorService>();
@@ -202,28 +205,55 @@ public class Program
           + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
           + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
 
-        string layout =
+        string consoleLayout =
             T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
           + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
           + "${message} ${exception:format=tostring} "
           + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
-        var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
+        var console = new NLog.Targets.ConsoleTarget("console") { Layout = consoleLayout };
+
+        // ── File target — per-class files, one folder per process run ─────────
+        // Stamp GDC once so the folder name is fixed for the lifetime of this process.
+        var startStamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+        var pid        = System.Diagnostics.Process.GetCurrentProcess().Id;
+        NLog.GlobalDiagnosticsContext.Set("startStamp", startStamp);
+        NLog.GlobalDiagnosticsContext.Set("pid",        pid.ToString());
+
+        // Format: datetime_utc | threadid | level | message | exception | callsite
+        const string fileLayout =
+            "${date:format=yyyy-MM-dd HH\\:mm\\:ss.fff:universalTime=true}"
+          + " | ${threadid:padding=4}"
+          + " | ${pad:padding=-5:inner=${level:uppercase=true}}"
+          + " | ${message} ${exception:format=tostring}"
+          + " | ${callsite:className=true:methodName=true:fileName=false}";
+
+        var file = new NLog.Targets.FileTarget("file")
+        {
+            FileName         = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
+            Layout           = fileLayout,
+            KeepFileOpen     = true,
+            ConcurrentWrites = false,
+            Encoding         = System.Text.Encoding.UTF8,
+            CreateDirs       = true,
+        };
 
         var cfg = new NLog.Config.LoggingConfiguration();
         cfg.AddTarget(console);
+        cfg.AddTarget(file);
 
-        // suppress noisy framework internals
+        // ── Console rules ─────────────────────────────────────────────────────
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
-
-        // app code at Debug and above
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
-
-        // everything else at Info and above
         cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+
+        // ── File rules (NxtUI app code + ASP.NET warnings) ───────────────────
+        cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, file, "NxtUI.*");
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
 
         LogManager.Configuration = cfg;
     }
