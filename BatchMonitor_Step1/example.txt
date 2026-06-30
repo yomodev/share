@@ -14641,7 +14641,7 @@ LENGTH 4886
         await JS.InvokeVoidAsync("bmSetTheme", ThemeService.IsDark);
 
         if (!firstRender) return;
-        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
         _dotnetRef  = DotNetObjectReference.Create(this);
         // Always register watcher — SetSystemDark is a no-op when Mode != System
         var isDark  = await _appModule.InvokeAsync<bool>("watchSystemTheme", _dotnetRef);
@@ -14863,7 +14863,7 @@ LENGTH 8297
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
         var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
         if (stored is not null)
         {
@@ -14964,7 +14964,7 @@ LENGTH 4281
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
             try
             {
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
@@ -15118,7 +15118,7 @@ LENGTH 5013
         if (firstRender && _field is not null)
         {
             // Use requestAnimationFrame so focus runs after the dialog open animation.
-            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
             await appModule.InvokeVoidAsync("focusAfterFrame", _fieldRef);
             try { await appModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
@@ -17390,7 +17390,7 @@ LENGTH 9515
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 11562
+LENGTH 12568
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -17462,88 +17462,91 @@ LENGTH 11562
         </span>
     </div>
 
-    <!-- Message table -->
-    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        @if (_loading && _messages.Count == 0)
+    <!-- Message table + detail side by side -->
+    <div class="bm-inspector-body">
+        <div class="bm-table-wrap">
+            @if (_loading && _messages.Count == 0)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+            }
+
+            <MudTable T="KafkaMessage"
+                      Items="_filtered"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Striped="true"
+                      FixedHeader="true"
+                      Height="100%"
+                      SelectedItem="_selected"
+                      SelectedItemChanged="OnRowSelected"
+                      Class="bm-batch-table bm-inspector-table">
+                <HeaderContent>
+                    <MudTh Style="width:90px;">Offset</MudTh>
+                    <MudTh Style="width:55px;">Part</MudTh>
+                    <MudTh Style="width:180px;">Key</MudTh>
+                    <MudTh>Value</MudTh>
+                    <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono">@context.Offset</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono">@context.Partition</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </div>
+
+        @if (_selected is not null)
         {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
-
-        <MudTable T="KafkaMessage"
-                  Items="_filtered"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  FixedHeader="true"
-                  Height="100%"
-                  SelectedItem="_selected"
-                  SelectedItemChanged="OnRowSelected"
-                  Class="bm-batch-table bm-inspector-table">
-            <HeaderContent>
-                <MudTh Style="width:90px;">Offset</MudTh>
-                <MudTh Style="width:55px;">Part</MudTh>
-                <MudTh Style="width:180px;">Key</MudTh>
-                <MudTh>Value</MudTh>
-                <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono">@context.Offset</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono">@context.Partition</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
-                </MudTd>
-                <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                    <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </div>
-
-    <!-- Detail panel -->
-    @if (_selected is not null)
-    {
-        <div class="bm-inspector-detail">
-            <div class="bm-inspector-detail-header">
-                <span class="bm-kafka-mono">
-                    offset <strong>@_selected.Offset</strong>
-                    &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
-                    &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
-                </span>
-                <div style="display:flex; align-items:center; gap:4px;">
-                    <MudTooltip Text="Save as JSON">
-                        <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+            <div class="bm-inspector-resizer" @onmousedown="OnResizerMouseDown"></div>
+            <div class="bm-inspector-detail" style="width:@(_detailWidth)px" @ref="_detailRef">
+                <div class="bm-inspector-detail-header">
+                    <span class="bm-kafka-mono">
+                        offset <strong>@_selected.Offset</strong>
+                        &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
+                        &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
+                    </span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <MudTooltip Text="Save as JSON">
+                            <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                                           Size="Size.Small"
+                                           OnClick="@(() => DownloadMessageAsync(_selected))" />
+                        </MudTooltip>
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                        Size="Size.Small"
-                                       OnClick="@(() => DownloadMessageAsync(_selected))" />
-                    </MudTooltip>
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small"
-                                   OnClick="@(() => _selected = null)" />
+                                       OnClick="@(() => _selected = null)" />
+                    </div>
+                </div>
+                <div class="bm-inspector-detail-body">
+                    @if (_selected.Headers.Count > 0)
+                    {
+                        <div class="bm-inspector-section-label">Headers</div>
+                        <div class="bm-inspector-headers">
+                            @foreach (var h in _selected.Headers)
+                            {
+                                <span class="bm-inspector-header-key">@h.Key</span>
+                                <span class="bm-kafka-mono bm-inspector-header-val">@h.Value</span>
+                            }
+                        </div>
+                    }
+                    <div class="bm-inspector-section-label">Value</div>
+                    <div @ref="_jsonRef"></div>
                 </div>
             </div>
-            <div class="bm-inspector-detail-body">
-                @if (_selected.Headers.Count > 0)
-                {
-                    <div class="bm-inspector-section-label">Headers</div>
-                    <div class="bm-inspector-headers">
-                        @foreach (var h in _selected.Headers)
-                        {
-                            <span class="bm-inspector-header-key">@h.Key</span>
-                            <span class="bm-kafka-mono bm-inspector-header-val">@h.Value</span>
-                        }
-                    </div>
-                }
-                <div class="bm-inspector-section-label">Value</div>
-                <div @ref="_jsonRef"></div>
-            </div>
-        </div>
-    }
+        }
+    </div>
 
 </div>
 
@@ -17555,6 +17558,9 @@ LENGTH 11562
     private List<KafkaMessage> _filtered    = new();
     private KafkaMessage?      _selected    = null;
     private ElementReference   _jsonRef;
+    private ElementReference   _detailRef;
+    private DotNetObjectReference<KafkaTopicInspector>? _selfRef;
+    private double             _detailWidth = 380;
     private bool               _jsonDirty;
     private bool               _running     = true;
     private bool               _loading     = false;
@@ -17662,6 +17668,15 @@ LENGTH 11562
         _jsonDirty = _selected is not null;
     }
 
+    private async Task OnResizerMouseDown(MouseEventArgs e)
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmInspectorResizer.start", e.ClientX, _selfRef, _detailRef);
+    }
+
+    [JSInvokable]
+    public void SetDetailWidth(double w) => _detailWidth = Math.Clamp(w, 250, 900);
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_jsonDirty && _selected is not null)
@@ -17697,10 +17712,14 @@ LENGTH 11562
         catch { return raw; }
     }
 
-    public void Dispose() => _cts.Cancel();
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _selfRef?.Dispose();
+    }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 25665
+LENGTH 26074
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17825,7 +17844,7 @@ LENGTH 25665
                 }
                 else if (_files.Count > 0)
                 {
-                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="false"
+                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="true"
                               Class="bm-lb-file-table" FixedHeader="true" Height="100%"
                               RowClass="bm-lb-file-row"
                               SortLabel="Sort by">
@@ -18075,10 +18094,14 @@ LENGTH 25665
 
     private async Task SelectPathAsync(string relativePath)
     {
+        var isNewPath = relativePath != _selectedPath;
         _selectedPath = relativePath;
 
-        // Clear stale files and show the progress bar immediately.
-        _files.Clear();
+        // When navigating to a different folder, clear old rows immediately so
+        // the wrong folder's files aren't shown. On refresh (same folder) keep
+        // existing rows visible — the progress bar is enough feedback.
+        if (isNewPath) _files = [];
+
         _loadingFiles = true;
         StateHasChanged();
         await Task.Yield();
@@ -18146,31 +18169,32 @@ LENGTH 25665
     {
         if (_selectedPath is null) return;
 
-        var path = _selectedPath; // capture — user may change selection while awaiting
-        _files.Clear();
+        var path    = _selectedPath; // capture — user may change selection while awaiting
+        var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
         try
         {
-            var serverTasks = _servers.Select(async server =>
+            // Collect all servers in parallel without touching _files mid-flight.
+            await Task.WhenAll(_servers.Select(async server =>
             {
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
-                await InvokeAsync(() =>
-                {
-                    // Discard if the user already navigated elsewhere.
-                    if (_selectedPath != path) return;
-                    _files.AddRange(results);
-                    StateHasChanged();
-                });
-            });
+                foreach (var r in results) pending.Add(r);
+            }));
 
-            await Task.WhenAll(serverTasks);
-            _lastScan = DateTime.UtcNow;
+            // Swap in the new list atomically — no intermediate empty-table flash.
+            await InvokeAsync(() =>
+            {
+                if (_selectedPath != path) return;
+                _files    = [.. pending];
+                _lastScan = DateTime.UtcNow;
+                StateHasChanged();
+            });
         }
         finally
         {
             if (_selectedPath == path)
             {
                 _loadingFiles = _loadingNodes.Count > 0;
-                StateHasChanged();
+                await InvokeAsync(StateHasChanged);
             }
         }
     }
@@ -19516,7 +19540,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 9751
+LENGTH 10676
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19550,36 +19574,68 @@ LENGTH 9751
         </MudTooltip>
     </div>
 
-    <!-- Table -->
-    <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        @if (_loading)
-        {
-            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
-        }
+    <!-- Table + detail side by side -->
+    <div class="bm-inspector-body">
+        <div class="bm-table-wrap">
+            @if (_loading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+            }
 
-        <MudTable T="MongoDocument"
-                  Items="_docs"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  FixedHeader="true"
-                  Height="100%"
-                  SelectedItem="_selected"
-                  SelectedItemChanged="OnRowSelected"
-                  Class="bm-batch-table bm-inspector-table">
-            <HeaderContent>
-                <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
-                <MudTh Style="width:100%;">Preview</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
-                    <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
-                </MudTd>
-                <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
-                    <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
+            <MudTable T="MongoDocument"
+                      Items="_docs"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Striped="true"
+                      FixedHeader="true"
+                      Height="100%"
+                      SelectedItem="_selected"
+                      SelectedItemChanged="OnRowSelected"
+                      Class="bm-batch-table bm-inspector-table">
+                <HeaderContent>
+                    <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
+                    <MudTh Style="width:100%;">Preview</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
+                        <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
+                    </MudTd>
+                    <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                        <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </div>
+
+        @if (_selected is not null)
+        {
+            <div class="bm-inspector-resizer" @onmousedown="OnResizerMouseDown"></div>
+            <div class="bm-inspector-detail" style="width:@(_detailWidth)px" @ref="_detailRef">
+                <div class="bm-inspector-detail-header">
+                    <span class="bm-kafka-mono">
+                        <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
+                        @if (_selected.Timestamp.HasValue)
+                        {
+                            <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                        }
+                    </span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <MudTooltip Text="Save as JSON">
+                            <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SaveDocumentAsync(_selected))" />
+                        </MudTooltip>
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                       Size="Size.Small"
+                                       OnClick="@(() => _selected = null)" />
+                    </div>
+                </div>
+                <div class="bm-inspector-detail-body">
+                    <div @ref="_jsonRef"></div>
+                </div>
+            </div>
+        }
     </div>
 
     <!-- Footer -->
@@ -19608,35 +19664,6 @@ LENGTH 9751
         </div>
     </div>
 
-    <!-- Detail panel -->
-    @if (_selected is not null)
-    {
-        <div class="bm-inspector-detail">
-            <div class="bm-inspector-detail-header">
-                <span class="bm-kafka-mono">
-                    <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
-                    @if (_selected.Timestamp.HasValue)
-                    {
-                        <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
-                    }
-                </span>
-                <div style="display:flex; align-items:center; gap:4px;">
-                    <MudTooltip Text="Save as JSON">
-                        <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
-                                       Size="Size.Small"
-                                       OnClick="@(() => SaveDocumentAsync(_selected))" />
-                    </MudTooltip>
-                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
-                                   Size="Size.Small"
-                                   OnClick="@(() => _selected = null)" />
-                </div>
-            </div>
-            <div class="bm-inspector-detail-body">
-                <div @ref="_jsonRef"></div>
-            </div>
-        </div>
-    }
-
 </div>
 
 @code {
@@ -19649,6 +19676,9 @@ LENGTH 9751
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
     private ElementReference    _jsonRef;
+    private ElementReference    _detailRef;
+    private DotNetObjectReference<MongoCollectionInspector>? _selfRef;
+    private double              _detailWidth = 380;
     private bool                _jsonDirty;
     private string              _search     = string.Empty;
     private string?             _filterParseError = null;
@@ -19730,6 +19760,15 @@ LENGTH 9751
         _jsonDirty = _selected is not null;
     }
 
+    private async Task OnResizerMouseDown(MouseEventArgs e)
+    {
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("bmInspectorResizer.start", e.ClientX, _selfRef, _detailRef);
+    }
+
+    [JSInvokable]
+    public void SetDetailWidth(double w) => _detailWidth = Math.Clamp(w, 250, 900);
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_jsonDirty && _selected is not null)
@@ -19765,7 +19804,11 @@ LENGTH 9751
         catch { return raw; }
     }
 
-    public void Dispose() => _cts.Cancel();
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _selfRef?.Dispose();
+    }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
 LENGTH 11377
@@ -21525,7 +21568,7 @@ LENGTH 4288
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
     }
 
     private void SetMode(ThemeMode mode)
@@ -21558,7 +21601,7 @@ LENGTH 4288
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 30904
+LENGTH 30903
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -21649,7 +21692,7 @@ LENGTH 30904
         {
             try
             {
-                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
                 _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=6");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
@@ -22282,7 +22325,7 @@ LENGTH 30904
                 <MudDataGrid T="RunSummary" Items="@_dialogBatches"
                              RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
                              RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
-                             Dense="true" Hover="true" Striped="false" Bordered="false">
+                             Dense="true" Hover="true" Striped="true" Bordered="false">
                     <Columns>
                         <PropertyColumn Property="x => x.RunId" Title="RunId" />
                         <PropertyColumn Property="x => x.Name" Title="Name" />
@@ -22675,7 +22718,7 @@ LENGTH 16875
     <script src="js/workspace.js"></script>
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
-    <link rel="modulepreload" href="js/app.js?v=4" />
+    <link rel="modulepreload" href="js/app.js?v=5" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
 </html>
@@ -29361,7 +29404,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 71846
+LENGTH 72305
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -30585,11 +30628,30 @@ html, body {
     50%       { opacity: 0.2; }
 }
 
-/* When detail panel is open, table area shrinks */
-.bm-inspector-split-top {
-    flex: 1 1 0;
+/* Table + detail side-by-side body */
+.bm-inspector-body {
+    flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
 }
+
+.bm-inspector-body .bm-table-wrap {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Drag handle between table and detail panel */
+.bm-inspector-resizer {
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--mud-palette-divider);
+    transition: background 0.15s;
+}
+.bm-inspector-resizer:hover { background: var(--mud-palette-primary); }
 
 .bm-inspector-table tbody tr { cursor: pointer; }
 
@@ -30610,14 +30672,15 @@ html, body {
     display: block;
 }
 
-/* Detail panel */
+/* Detail panel — right side */
 .bm-inspector-detail {
     flex-shrink: 0;
-    height: 260px;
-    border-top: 2px solid var(--mud-palette-primary);
+    width: 380px;
+    border-left: 2px solid var(--mud-palette-primary);
     display: flex;
     flex-direction: column;
     background: var(--mud-palette-surface);
+    overflow: hidden;
 }
 
 .bm-inspector-detail-header {
@@ -32345,7 +32408,7 @@ LENGTH 7870
 
 .bm-tl-dialog-selected { background: rgba(56,139,253,0.10) !important; }
 FILE src/NxtUI.Web/wwwroot/css/log-viewer.css
-LENGTH 9641
+LENGTH 9702
 /* ── Log Viewer ─────────────────────────────────────────────────────────────── */
 
 /* Outer page layout */
@@ -32524,6 +32587,10 @@ html[data-theme="light"] .lv-scrollmap { background: #f0f0f0; }
 .lv-row {
     border-bottom: 1px solid var(--mud-palette-divider);
     box-sizing: border-box;
+}
+
+.lv-row-even {
+    background: rgba(128, 128, 128, 0.04);
 }
 
 .lv-row:hover {
@@ -33144,7 +33211,7 @@ FILE src/NxtUI.Web/wwwroot/js/.gitignore
 LENGTH 14
 node_modules/
 FILE src/NxtUI.Web/wwwroot/js/app.js
-LENGTH 12184
+LENGTH 13352
 // Batch Monitor — client-side utilities
 
 // ── localStorage helpers ──────────────────────────────────────────────────
@@ -33411,6 +33478,38 @@ export function scrollTabIntoView(tabId) {
     const el = document.querySelector(`[data-tab-id="${tabId}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 }
+
+// ── Inspector detail panel resizer (right side) ───────────────────────────
+window.bmInspectorResizer = (function () {
+    let dotnet = null, panelEl = null, startX = 0, startW = 0;
+
+    function onMove(e) {
+        const dx = e.clientX - startX;
+        const w  = Math.max(250, Math.min(900, startW - dx));
+        panelEl.style.width = w + 'px';
+        dotnet.invokeMethodAsync('SetDetailWidth', w);
+    }
+
+    function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+        document.body.style.cursor     = '';
+        document.body.style.userSelect = '';
+    }
+
+    return {
+        start(clientX, dotnetRef, panel) {
+            dotnet  = dotnetRef;
+            panelEl = panel;
+            startX  = clientX;
+            startW  = panel.getBoundingClientRect().width;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+            document.body.style.cursor     = 'col-resize';
+            document.body.style.userSelect = 'none';
+        }
+    };
+})();
 
 // ── Log Browser panel resizer ─────────────────────────────────────────────
 window.logBrowserResizer = (function () {
@@ -37212,7 +37311,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 32582
+LENGTH 32630
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -37522,6 +37621,7 @@ function renderRows(vp) {
         const levelCss  = LEVEL_CSS[levelKey] || 'info';
 
         let cls = 'lv-row';
+        if (i % 2 === 0) cls += ' lv-row-even';
         if (isMatch)   cls += ' lv-match';
         if (isCurrent) cls += ' lv-match-current';
         if (bookmark)  cls += ' lv-bookmarked';

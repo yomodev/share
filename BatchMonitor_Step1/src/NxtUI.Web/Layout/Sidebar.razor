@@ -145,7 +145,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=4");
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
         var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
         if (stored is not null)
         {
