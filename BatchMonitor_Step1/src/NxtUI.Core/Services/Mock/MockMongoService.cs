@@ -186,6 +186,31 @@ public class MockMongoService : IMongoService
         ],
     };
 
+    public Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default)
+    {
+        IReadOnlyList<string> names = _databases.Select(d => d.Name).ToList();
+        return Task.FromResult(names);
+    }
+
+    public Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
+        string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
+    {
+        var all = _collections.TryGetValue(database, out var cols)
+            ? cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).ToList()
+            : [];
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            all = all.Where(c => c.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        all = all.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var total = (long)all.Count;
+        IReadOnlyList<MongoCollectionSummary> page = all.Skip(skip).Take(limit)
+            .Select(c => c with { StatsLoaded = true }).ToList();
+        return Task.FromResult((page, total));
+    }
+
     public Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
         => Task.FromResult(_databases);
 
@@ -231,7 +256,9 @@ public class MockMongoService : IMongoService
 
     public Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
-        string? search, int skip, int limit, CancellationToken ct = default)
+        string? search, int skip, int limit,
+        string? sortField = null, bool sortDesc = false,
+        CancellationToken ct = default)
     {
         var colMeta  = _collections.TryGetValue(database, out var cols)
             ? cols.FirstOrDefault(c => c.Name == collection) : null;

@@ -24,6 +24,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Check if cache is already warm (page shows immediately in this case).
         var cached = heartbeat.GetServices(env);
@@ -38,7 +39,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
             ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
 
             using var sub = heartbeat.Subscribe(env);
-            await Task.WhenAny(tcs.Task, Task.Delay(30_000));
+            await Task.WhenAny(tcs.Task, Task.Delay(30_000, ct));
             out_.WriteLine($"[{sw.Elapsed:c}] First heartbeat poll done: {heartbeat.GetServices(env)?.Count ?? 0} services");
         }
 
@@ -66,7 +67,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
             out_.WriteLine($"[{sw.Elapsed:c}] Waiting up to 10s for metrics to fill in…");
             var metricsFired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             metrics.OnMetricsUpdated += e => { if (e == env) metricsFired.TrySetResult(true); };
-            await Task.WhenAny(metricsFired.Task, Task.Delay(10_000));
+            await Task.WhenAny(metricsFired.Task, Task.Delay(10_000, ct));
             withRam = services.Count(s => metrics.GetLatest(env, s) is not null);
             out_.WriteLine($"[{sw.Elapsed:c}] RAM data after wait: {withRam}/{services.Count} services");
         }
@@ -82,9 +83,10 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         var heartbeatSvc = fix.Services.GetRequiredService<IHeartbeatService>();
         var env          = fix.DefaultEnv;
         var sw           = Stopwatch.StartNew();
+        var ct           = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Calling IHeartbeatService.GetServiceStatusesAsync('{env}')…");
-        var services = await heartbeatSvc.GetServiceStatusesAsync(env);
+        var services = await heartbeatSvc.GetServiceStatusesAsync(env, ct: ct);
         out_.WriteLine($"[{sw.Elapsed:c}] Result: {services.Count} services");
 
         foreach (var g in services.GroupBy(s => s.HostName).OrderBy(g => g.Key))

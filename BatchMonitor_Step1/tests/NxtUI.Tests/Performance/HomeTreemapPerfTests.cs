@@ -26,6 +26,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Subscribing to env '{env}'…");
 
@@ -40,7 +41,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var sub = heartbeat.Subscribe(env);
         out_.WriteLine($"[{sw.Elapsed:c}] Subscribe() returned — waiting for first OnServicesUpdated…");
 
-        var notified = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+        var notified = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30), ct));
         out_.WriteLine($"[{sw.Elapsed:c}] OnServicesUpdated fired: {notified == tcs.Task}");
 
         // Read the cache exactly as the API endpoint does.
@@ -83,12 +84,13 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Ensure heartbeat is filled.
         var hbDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) hbDone.TrySetResult(true); };
         using var hbSub = heartbeat.Subscribe(env);
-        await Task.WhenAny(hbDone.Task, Task.Delay(30_000));
+        await Task.WhenAny(hbDone.Task, Task.Delay(30_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat ready — {heartbeat.GetServices(env)?.Count ?? 0} services");
 
         // Subscribe to metrics (same as the ServicesPage + HomeMemoryTreemap do).
@@ -98,7 +100,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var mSub = metrics.Subscribe(env);
         out_.WriteLine($"[{sw.Elapsed:c}] MetricsMonitor subscribed — waiting for first OnMetricsUpdated…");
 
-        var got = await Task.WhenAny(metricsFired.Task, Task.Delay(TimeSpan.FromMinutes(2)));
+        var got = await Task.WhenAny(metricsFired.Task, Task.Delay(TimeSpan.FromMinutes(2), ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {got == metricsFired.Task}");
 
         // Sample how many services have RAM data.

@@ -10279,7 +10279,7 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1787
+LENGTH 1818
 {
   "AllowedHosts": "*",
 
@@ -10297,7 +10297,8 @@ LENGTH 1787
 
   "Heartbeats": {
     "CollectionName": "Heartbeats",
-    "IntervalSeconds": 30,
+    "IntervalSeconds": 15,
+    "RecentWindowMinutes": 30,
     "IdleReleaseMinutes": 10
   },
 
@@ -10742,7 +10743,7 @@ public class EnvironmentDefinition
     public List<string> Servers { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/HeartbeatSettings.cs
-LENGTH 730
+LENGTH 993
 namespace NxtUI.Configuration;
 
 public class HeartbeatSettings
@@ -10757,7 +10758,13 @@ public class HeartbeatSettings
     /// A service is considered offline if its last UpdatedDateTime is older than
     /// IntervalSeconds * 2.
     /// </summary>
-    public int IntervalSeconds { get; set; } = 30;
+    public int IntervalSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Only services with a heartbeat within this many minutes are fetched from MongoDB.
+    /// Matches the default filter shown on the services page ("updated:>-Nm").
+    /// </summary>
+    public int RecentWindowMinutes { get; set; } = 30;
 
     /// <summary>
     /// Minutes of inactivity (no subscribers) after which cached service data is released from memory.
@@ -11162,7 +11169,7 @@ public static class FilterEvaluator
     }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 21144
+LENGTH 21277
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -11619,7 +11626,7 @@ public sealed class FilterParser
     // ── Date parsing ───────────────────────────────────────────────────────
 
     private static readonly Regex RelativeDate =
-        new(@"^(-?)(\d+)([mhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"^(-?)(\d+)([smhdw])$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex TimeOnly =
         new(@"^(\d{1,2}):(\d{2})(?::(\d{2}))?z?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -11658,6 +11665,7 @@ public sealed class FilterParser
             {
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
+                    "s" => DateTime.UtcNow.AddSeconds(-amount),
                     "m" => DateTime.UtcNow.AddMinutes(-amount),
                     "h" => DateTime.UtcNow.AddHours(-amount),
                     "d" => DateTime.UtcNow.AddDays(-amount),
@@ -11669,6 +11677,7 @@ public sealed class FilterParser
             {
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
+                    "s" => DateTime.UtcNow.Date.AddSeconds(amount),
                     "m" => DateTime.UtcNow.Date.AddMinutes(amount),
                     "h" => DateTime.UtcNow.Date.AddHours(amount),
                     "d" => DateTime.UtcNow.Date.AddDays(amount),
@@ -12665,14 +12674,14 @@ public interface IEnvironmentService
     IReadOnlyList<string>          GetServers(string environmentId);
 }
 FILE src/NxtUI.Core/Services/IHeartbeatService.cs
-LENGTH 196
+LENGTH 220
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
 public interface IHeartbeatService
 {
-    Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default);
+    Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IKafkaService.cs
 LENGTH 1818
@@ -12799,7 +12808,7 @@ public interface ILogViewerService
     (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
-LENGTH 1479
+LENGTH 2167
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -12807,13 +12816,23 @@ namespace NxtUI.Core.Services;
 /// <summary>Read-only Mongo browsing operations. Safe to inject in any component.</summary>
 public interface IMongoReader
 {
+    /// <summary>Returns database names only — no stats. Fast even with 100+ databases.</summary>
+    Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<string>>                 GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
     Task<MongoCollectionSummary?>               GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);
     Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default);
+    /// <summary>
+    /// Returns one page of collections matching an optional name filter, with stats
+    /// loaded only for the returned page. Suitable for large databases (50k+ collections).
+    /// </summary>
+    Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
+        string env, string database, string? search, int skip, int limit, CancellationToken ct = default);
     Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
-        string? search, int skip, int limit, CancellationToken ct = default);
+        string? search, int skip, int limit,
+        string? sortField = null, bool sortDesc = false,
+        CancellationToken ct = default);
     Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default);
 }
 
@@ -12927,7 +12946,7 @@ public interface IServiceMetricsMonitor
     event Action<string>? OnMetricsUpdated;
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 5198
+LENGTH 4960
 using System.Collections.Concurrent;
 using System.Linq;
 using Microsoft.Extensions.Logging;
@@ -12938,21 +12957,12 @@ using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
-public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
+public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log) : ILogPathDiscoveryService
 {
-    private readonly LogPathSettings                 _settings;
-    private readonly ILogger<LogPathDiscoveryService> _log;
-
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
     public event Action<string>? OnPathResolved;
-
-    public LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log)
-    {
-        _settings = options.Value;
-        _log      = log;
-    }
 
     public static string CacheKey(ServiceStatus svc, string env) =>
         $"{env}|{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
@@ -12973,7 +12983,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var added = false;
         _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
         if (added)
-            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -12997,22 +13007,22 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
         {
-            _log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
         }
         return result;
     }
 
     private string? SearchSync(ServiceStatus svc, string env)
     {
-        foreach (var template in _settings.ServiceTemplates)
+        foreach (var template in options.Value.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
-            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
+            log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
@@ -13058,7 +13068,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 
         // Pick the most-recently-modified directory first so active log sessions
         // win over stale folders from previous runs that sort earlier alphabetically.
-        matches = matches.OrderByDescending(Directory.GetLastWriteTimeUtc).ToArray();
+        matches = [.. matches.OrderByDescending(Directory.GetLastWriteTimeUtc)];
 
         foreach (var match in matches)
         {
@@ -14705,7 +14715,7 @@ LENGTH 4886
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 8268
+LENGTH 8297
 @namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
@@ -14795,7 +14805,7 @@ LENGTH 8268
 
             <!-- Environment selector — badge-only trigger, menu lists all envs -->
             <div class="bm-env-selector @(_drawerOpen ? "" : "bm-env-selector--mini")">
-                <MudMenu AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
+                <MudMenu @key="EnvService.SelectedId" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                     <ActivatorContent>
                         <span class="bm-env-badge bm-env-badge-btn"
                               style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
@@ -15869,14 +15879,14 @@ LENGTH 155
 @page "/"
 @page "/{**path}"
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
-LENGTH 17485
+LENGTH 17757
 @namespace NxtUI.Web.Pages
 <div class="bm-help-page bm-help-page--tab">
 
     <div class="bm-help-header">
         <h1 class="bm-help-title">Filter syntax</h1>
         <p class="bm-help-lead">
-            Every filter box in Batch Monitor speaks the same language.
+            Every filter box in NxtUI speaks the same language.
             Type one or many terms, use operators to combine them, and prefix a
             term with a field name to narrow down where it looks.
         </p>
@@ -15993,8 +16003,8 @@ LENGTH 17485
             <thead><tr><th>Form</th><th>Example</th><th>Meaning</th></tr></thead>
             <tbody>
                 <tr><td>Named</td><td><code>today</code>, <code>yesterday</code>, <code>now</code></td><td>Start of today / yesterday / current instant (UTC)</td></tr>
-                <tr><td>Negative offset</td><td><code>-7d</code>, <code>-2h</code>, <code>-30m</code>, <code>-1w</code></td><td><strong>now − N</strong> — a real point in the past (e.g. for timestamps)</td></tr>
-                <tr><td>Positive offset</td><td><code>7d</code>, <code>2h</code>, <code>30m</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
+                <tr><td>Negative offset</td><td><code>-30s</code>, <code>-30m</code>, <code>-2h</code>, <code>-7d</code>, <code>-1w</code></td><td><strong>now − N</strong> — a real point in the past (e.g. for timestamps). Units: <code>s</code> seconds, <code>m</code> minutes, <code>h</code> hours, <code>d</code> days, <code>w</code> weeks</td></tr>
+                <tr><td>Positive offset</td><td><code>30s</code>, <code>30m</code>, <code>2h</code>, <code>7d</code>, <code>1w</code></td><td><strong>today + N</strong> — midnight plus the interval (e.g. for age/duration fields)</td></tr>
                 <tr><td>Absolute date</td><td><code>2024-06-15</code></td><td>Midnight UTC on that date</td></tr>
                 <tr><td>Absolute datetime</td><td><code>2024-06-15T09:30</code></td><td>Specific UTC date and time</td></tr>
                 <tr><td>Time of day</td><td><code>09:30</code>, <code>00:10:00</code></td><td><strong>hh:mm:ss</strong> — compares only the time portion of a timestamp, ignoring the date</td></tr>
@@ -16075,6 +16085,7 @@ LENGTH 17485
         </table>
 
         <div class="bm-help-examples">
+            <div class="bm-help-ex"><code>updated:&gt;-30s</code>  <span>— heartbeat in the last 30 seconds</span></div>
             <div class="bm-help-ex"><code>updated:&gt;-10m</code>  <span>— heartbeat in the last 10 minutes (online)</span></div>
             <div class="bm-help-ex"><code>updated:&lt;-4m</code>   <span>— last heartbeat more than 4 minutes ago (stale)</span></div>
             <div class="bm-help-ex"><code>ram:&gt;500</code>        <span>— services using more than 500 MB</span></div>
@@ -16551,7 +16562,7 @@ LENGTH 1764
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26531
+LENGTH 26605
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16630,6 +16641,7 @@ LENGTH 26531
                       Items="_paged"
                       Dense="true" Hover="true" Elevation="0"
                       FixedHeader="true" Height="100%"
+                      Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
                     <MudTh>
@@ -16732,6 +16744,7 @@ LENGTH 26531
                       FixedHeader="true" Height="100%"
                       SelectedItem="_selectedGroup"
                       SelectedItemChanged="OnGroupSelected"
+                      Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
                     <MudTh>
@@ -17144,7 +17157,7 @@ LENGTH 26531
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9482
+LENGTH 9515
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -17184,6 +17197,7 @@ LENGTH 9482
                   Height="100%"
                   SelectedItem="_selected"
                   SelectedItemChanged="OnRowSelected"
+                  Striped="true"
                   Class="bm-batch-table">
             <HeaderContent>
                 <MudTh>
@@ -19502,7 +19516,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 9131
+LENGTH 9751
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19531,7 +19545,7 @@ LENGTH 9131
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
                            Disabled="_loading"
-                           OnClick="LoadAsync"
+                           OnClick="@(() => LoadAsync())"
                            Class="bm-refresh-btn" />
         </MudTooltip>
     </div>
@@ -19554,14 +19568,14 @@ LENGTH 9131
                   SelectedItemChanged="OnRowSelected"
                   Class="bm-batch-table bm-inspector-table">
             <HeaderContent>
-                <MudTh Style="width:200px;">_id</MudTh>
-                <MudTh>Preview</MudTh>
+                <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
+                <MudTh Style="width:100%;">Preview</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
+                <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
                     <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                 </MudTd>
             </RowTemplate>
@@ -19632,7 +19646,6 @@ LENGTH 9131
     private string _database   = string.Empty;
     private string _collection = string.Empty;
 
-    private List<MongoDocument> _allDocs    = new();
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
     private ElementReference    _jsonRef;
@@ -19642,11 +19655,16 @@ LENGTH 9131
     private bool                _loading    = true;
     private long                _totalCount = 0;
     private int                 _page = 1, _pageSize = 25, _totalPages = 1;
+    private string              _sortField  = "_id";
+    private bool                _sortDesc   = false;
     private CancellationTokenSource _cts = new();
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("text search", "matches anywhere in _id or the document JSON"),
+        ("plain text",   "searches _id (e.g. abc123)"),
+        ("field:value",  "case-insensitive regex on any field (e.g. status:active, name:foo*)"),
+        ("field:>100",   "numeric or date comparison (e.g. amount:>100, createdAt:>-7d, price:10..50)"),
+        ("{ … }",        "raw MongoDB query — any operator works: $gt, $in, $exists, $elemMatch, $or, aggregation expressions, etc. (e.g. {\"status\":{\"$in\":[\"A\",\"B\"]},\"n\":{\"$gt\":5}})"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -19654,24 +19672,34 @@ LENGTH 9131
         var parts   = EntityId.Split('/', 2);
         _database   = parts.Length > 0 ? parts[0] : string.Empty;
         _collection = parts.Length > 1 ? parts[1] : string.Empty;
+        _page       = 1;
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
         _loading = true;
         StateHasChanged();
         try
         {
-            // Fetch full page from service (passes search to real backend; mock returns up to 500)
+            var skip = (_page - 1) * _pageSize;
             var (docs, total) = await MongoSvc.GetDocumentsAsync(
-                Environment, _database, _collection, null, 0, 500, _cts.Token);
-            _allDocs    = docs.ToList();
+                Environment, _database, _collection,
+                string.IsNullOrWhiteSpace(_search) ? null : _search,
+                skip, _pageSize, _sortField, _sortDesc, ct);
+            _docs       = docs.ToList();
             _totalCount = total;
-            ApplyFilter();
+            _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+            _page       = Math.Clamp(_page, 1, _totalPages);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { return; }
         finally { _loading = false; }
+
+        StateHasChanged();
     }
 
     private void OnSearchChanged(string s)
@@ -19679,25 +19707,22 @@ LENGTH 9131
         _search = s;
         _filterParseError = null;
         _page = 1;
-        ApplyFilter();
+        _ = LoadAsync();
     }
 
-    private void ApplyFilter()
+    private void SetSort(string field)
     {
-        var filtered = string.IsNullOrWhiteSpace(_search)
-            ? _allDocs
-            : _allDocs.Where(d =>
-                d.Json.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-                d.Id.Contains(_search,   StringComparison.OrdinalIgnoreCase))
-              .ToList();
-        _totalCount = filtered.Count;
-        _totalPages = Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)_pageSize));
-        _page       = Math.Clamp(_page, 1, _totalPages);
-        _docs       = filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = false; }
+        _page = 1;
+        _ = LoadAsync();
     }
 
-    private void OnPageChanged(int p) { _page = p; ApplyFilter(); }
-    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; ApplyFilter(); }
+    private string SortIcon(string field) =>
+        _sortField != field ? "" : _sortDesc ? " ▼" : " ▲";
+
+    private void OnPageChanged(int p) { _page = p; _ = LoadAsync(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; _ = LoadAsync(); }
 
     private void OnRowSelected(MongoDocument? doc)
     {
@@ -19743,11 +19768,10 @@ LENGTH 9131
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 14731
+LENGTH 11377
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@using NxtUI.Filtering
 @inject IMongoService MongoSvc
 @inject TabService TabService
 @inject IDialogService DialogService
@@ -19756,25 +19780,20 @@ LENGTH 14731
 
 <div class="bm-page bm-page-fill">
 
-    <!-- DB info bar -->
-    @if (_databases.Count > 0)
+    @if (_databaseNames.Count > 0)
     {
-        var db = _databases.FirstOrDefault(d => d.Name == _selectedDb);
         <div class="bm-kafka-cluster-bar">
             <span class="bm-kafka-stat">
                 <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-kafka-stat-icon" />
                 Databases
-                <strong>@_databases.Count</strong>
+                <strong>@_databaseNames.Count</strong>
             </span>
-            @if (db is not null)
+            @if (_totalCount > 0 || !string.IsNullOrWhiteSpace(_filterText))
             {
                 <span class="bm-kafka-stat">
                     <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" Class="bm-kafka-stat-icon" />
                     Collections
-                    <strong>@db.CollectionCount</strong>
-                </span>
-                <span class="bm-kafka-stat-label">
-                    <code>@db.Name</code>&nbsp;·&nbsp;@FormatBytes(db.SizeBytes)
+                    <strong>@_totalCount.ToString("N0")</strong>
                 </span>
             }
         </div>
@@ -19787,9 +19806,9 @@ LENGTH 14731
             <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
                        Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                        Class="bm-mongo-db-select" PopoverClass="bm-mongo-db-popover">
-                @foreach (var db in _databases)
+                @foreach (var name in _databaseNames)
                 {
-                    <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
+                    <MudSelectItem Value="@name">@name</MudSelectItem>
                 }
             </MudSelect>
         </div>
@@ -19804,7 +19823,7 @@ LENGTH 14731
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="@_result.IsLoading"
+                           Disabled="@_loading"
                            OnClick="LoadCollectionsAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -19812,32 +19831,24 @@ LENGTH 14731
 
     <!-- Table -->
     <div class="bm-table-wrap">
-        @if (_enriching)
+        @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-        <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
+                  Striped="true"
                   FixedHeader="true"
                   Height="100%"
                   Class="bm-batch-table">
             <HeaderContent>
-                <MudTh>
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.Name">Collection</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:130px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.DocumentCount">Documents</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:120px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.StorageSizeBytes">Storage</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:80px; text-align:center;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.IndexCount">Indexes</MudTableSortLabel>
-                </MudTh>
+                <MudTh>Collection</MudTh>
+                <MudTh Style="width:130px; text-align:right;">Documents</MudTh>
+                <MudTh Style="width:120px; text-align:right;">Storage</MudTh>
+                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
                 <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -19890,13 +19901,12 @@ LENGTH 14731
                 </MudTd>
             </RowTemplate>
         </MudTable>
-        </AsyncData>
     </div>
 
     <!-- Footer -->
     <div class="bm-batch-footer">
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_filtered.Count collection@(_filtered.Count == 1 ? "" : "s")
+            @_totalCount.ToString("N0") collection@(_totalCount == 1 ? "" : "s")
         </MudText>
         <MudPagination Count="_totalPages"
                        Selected="_page"
@@ -19924,127 +19934,83 @@ LENGTH 14731
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
 
-    private List<MongoDatabaseInfo>      _databases = new();
-    private List<MongoCollectionSummary> _all       = new();
-    private List<MongoCollectionSummary> _filtered  = new();
-    private List<MongoCollectionSummary> _paged     = new();
+    private List<string>                 _databaseNames = new();
+    private List<MongoCollectionSummary> _paged         = new();
     private string  _selectedDb       = string.Empty;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
-    private Result<List<MongoCollectionSummary>> _result;
-    private bool    _enriching = false;
+    private bool    _loading          = false;
+    private long    _totalCount       = 0;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
-    private static readonly string[] SearchableFields = ["Name"];
-    private static readonly FilterParser Parser = new(SearchableFields,
-        new Dictionary<string, string>
-        {
-            ["name"]       = "Name",
-            ["collection"] = "Name",
-            ["docs"]       = "DocumentCount",
-            ["documents"]  = "DocumentCount",
-            ["storage"]    = "StorageSizeBytes",
-            ["size"]       = "StorageSizeBytes",
-            ["indexes"]    = "IndexCount",
-            ["idx"]        = "IndexCount",
-        });
-
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("name / collection", "collection name"),
-        ("docs / documents",  "document count (e.g. docs:>1000)"),
-        ("storage / size",    "storage size in bytes (e.g. storage:>1048576)"),
-        ("indexes / idx",     "index count (e.g. indexes:>2)"),
+        ("name / collection", "filter by collection name (e.g. batch*)"),
     ];
 
     protected override async Task OnInitializedAsync()
     {
-        _databases = (await MongoSvc.GetDatabasesAsync(Environment, _cts.Token)).ToList();
-        if (_databases.Count > 0)
+        // Load database names only — fast even with 100+ databases (no dbStats).
+        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+        if (_databaseNames.Count > 0)
         {
-            _selectedDb = _databases[0].Name;
+            _selectedDb = _databaseNames[0];
             await LoadCollectionsAsync();
         }
-        // empty env: leave result in loading state with empty list
-        else { _result = Result<List<MongoCollectionSummary>>.Ok([]); }
     }
 
     private async Task OnDbChanged(string db)
     {
         _selectedDb = db;
+        _filterText = string.Empty;
+        _page       = 1;
         await LoadCollectionsAsync();
     }
 
     private async Task LoadCollectionsAsync()
     {
-        _result    = default; // loading state — progress bar visible via _result.IsLoading || _enriching
-        _enriching = false;
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _loading = true;
         StateHasChanged();
         try
         {
-            // Phase 1 — names only: instant, renders the table immediately
-            var names = await MongoSvc.GetCollectionNamesAsync(Environment, _selectedDb, _cts.Token);
-            _all = names.Select(n => new MongoCollectionSummary { Name = n }).ToList();
-            ApplyFilter();
-            _result    = Result<List<MongoCollectionSummary>>.Ok(_all);
-            _enriching = true;   // keep progress bar visible while stats load
-            StateHasChanged();
+            var skip = (_page - 1) * _pageSize;
+            var (collections, total) = await MongoSvc.GetCollectionPageAsync(
+                Environment, _selectedDb,
+                string.IsNullOrWhiteSpace(_filterText) ? null : _filterText,
+                skip, _pageSize, ct);
 
-            // Phase 2 — enrich in parallel; update _all directly (each name maps to a unique
-            // index so there is no write contention). Never call InvokeAsync per-item — that
-            // saturates the Blazor circuit and blocks all user input until the queue drains.
-            var ct = _cts.Token;
-            var enrichTask = Task.WhenAll(names.Select(async name =>
-            {
-                var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
-                if (stats is null || ct.IsCancellationRequested) return;
-                var idx = _all.FindIndex(c => c.Name == name);
-                if (idx >= 0) _all[idx] = stats;
-            }));
-
-            // Refresh UI every 300 ms for visible progress; circuit stays free between ticks
-            // so the user can paginate, filter, or navigate away at any time.
-            while (!enrichTask.IsCompleted)
-            {
-                await Task.WhenAny(enrichTask, Task.Delay(300, ct));
-                if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
-            }
-            await enrichTask; // re-throw any non-cancellation exceptions
+            _paged      = collections.ToList();
+            _totalCount = total;
+            _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+            _page       = Math.Clamp(_page, 1, _totalPages);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
-        finally { _enriching = false; StateHasChanged(); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load collections: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+        StateHasChanged();
     }
 
     private void OnFilterChanged(string text)
     {
-        _filterText = text;
+        _filterText       = text;
         _filterParseError = null;
-        FilterNode? node = null;
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            try   { node = Parser.Parse(text); }
-            catch (FilterParseException ex) { _filterParseError = ex.Message; }
-        }
-        _filtered = node is null
-            ? _all
-            : _all.Where(c => FilterEvaluator.Evaluate(node, c)).ToList();
-        _page = 1;
-        RebuildPage();
+        _page             = 1;
+        _ = LoadCollectionsAsync();
     }
 
-    private void ApplyFilter() => OnFilterChanged(_filterText);
-
-    private void RebuildPage()
-    {
-        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
-        _page       = Math.Clamp(_page, 1, _totalPages);
-        _paged      = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
-    }
-
-    private void OnPageChanged(int p) { _page = p; RebuildPage(); }
-    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
+    private void OnPageChanged(int p) { _page = p; _ = LoadCollectionsAsync(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; _ = LoadCollectionsAsync(); }
 
     private void OpenInspector(string collection)
         => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));
@@ -20530,7 +20496,7 @@ LENGTH 16166
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11162
+LENGTH 11195
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -20565,6 +20531,7 @@ LENGTH 11162
                   Dense="true"
                   Hover="true"
                   Elevation="0"
+                  Striped="true"
                   Class="bm-batch-table"
                   FixedHeader="true"
                   Height="100%">
@@ -20801,12 +20768,15 @@ LENGTH 11162
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 29422
+LENGTH 30985
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Filtering
+@using NxtUI.Core.Services
+@using System.Text.RegularExpressions
 @inject IHeartbeatMonitor HeartbeatMonitor
+@inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
@@ -20942,6 +20912,7 @@ LENGTH 29422
                       Dense="true"
                       Hover="true"
                       Elevation="0"
+                      Striped="true"
                       Class="bm-batch-table"
                       FixedHeader="true"
                       Height="100%"
@@ -21100,43 +21071,83 @@ LENGTH 29422
     // Held for the lifetime of this tab; disposing it tells the monitor this env
     // has one fewer subscriber (monitoring stops when the last tab for env closes).
     private IDisposable? _metricsSubscription;
+    private CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
-        DiscoverySvc.OnPathResolved         += OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated     += OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
+        DiscoverySvc.OnPathResolved        += OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
 
-        var cached = HeartbeatMonitor.GetServices(Env);
-        if (cached is not null)
-            LoadFromCache(cached);
-        else
-            _loading = true;   // show spinner until the first poll completes
+        _loading = true;
+        await InvokeAsync(StateHasChanged);
+        await LoadFromMongoAsync();
+    }
+
+    private async Task LoadFromMongoAsync()
+    {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _loading = true;
+
+        try
+        {
+            var since   = ExtractSince(_filterText);
+            var results = await HeartbeatSvc.GetServiceStatusesAsync(Env, since, ct);
+            _all         = results;
+            _lastUpdated = DateTime.UtcNow;
+            foreach (var svc in _all)
+            {
+                DiscoverySvc.EnsureDiscovering(svc, Env);
+            }
+            RecomputeFilter();
+        }
+        catch (OperationCanceledException) { return; }
+        finally
+        {
+            _loading = false;
+        }
 
         await InvokeAsync(StateHasChanged);
     }
 
-    private void LoadFromCache(IReadOnlyList<ServiceStatus>? services = null)
+    // Extracts the earliest "since" cutoff from updated:>-X filter terms.
+    // Returns null if no updated constraint is found (caller uses the config default).
+    private static readonly Regex _sinceRegex =
+        new(@"updated:>-(\d+)([smhdw])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static DateTime? ExtractSince(string filter)
     {
-        services ??= HeartbeatMonitor.GetServices(Env);
-        if (services is null) return;
-        _all         = services.ToList();
-        _lastUpdated = DateTime.UtcNow;
-        RecomputeFilter();
-        foreach (var svc in _all)
-            DiscoverySvc.EnsureDiscovering(svc, Env);
+        DateTime? earliest = null;
+        foreach (Match m in _sinceRegex.Matches(filter))
+        {
+            var amount = int.Parse(m.Groups[1].Value);
+            var since  = m.Groups[2].Value.ToLowerInvariant() switch
+            {
+                "s" => DateTime.UtcNow.AddSeconds(-amount),
+                "m" => DateTime.UtcNow.AddMinutes(-amount),
+                "h" => DateTime.UtcNow.AddHours(-amount),
+                "d" => DateTime.UtcNow.AddDays(-amount),
+                "w" => DateTime.UtcNow.AddDays(-amount * 7),
+                _   => (DateTime?)null,
+            };
+            if (since is not null && (earliest is null || since < earliest))
+            {
+                earliest = since;
+            }
+        }
+        return earliest;
     }
 
+    // HeartbeatMonitor fires this when it completes its own poll — use it as a
+    // timing signal to refresh the page's own MongoDB query.
     private void OnServicesUpdated(string env)
     {
         if (env != Env) return;
-        _ = InvokeAsync(() =>
-        {
-            LoadFromCache();
-            _loading = false;
-            ScheduleRender();
-        });
+        _ = LoadFromMongoAsync();
     }
 
     // ── Path discovery ───────────────────────────────────────────────────────
@@ -21247,8 +21258,7 @@ LENGTH 29422
     private void OnFilterChanged(string text)
     {
         _filterText = text;
-        RecomputeFilter();
-        StateHasChanged();
+        _ = LoadFromMongoAsync();
     }
 
     // Pure computation, no render — callable from the poll path without forcing
@@ -21322,13 +21332,12 @@ LENGTH 29422
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 
-    private Task RefreshAsync()
+    private async Task RefreshAsync()
     {
         _filterText       = string.Empty;
         _filterParseError = null;
-        LoadFromCache();
+        await LoadFromMongoAsync();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
-        return Task.CompletedTask;
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
@@ -21421,9 +21430,10 @@ LENGTH 29422
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
-        DiscoverySvc.OnPathResolved         -= OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated     -= OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated  -= OnServicesUpdated;
+        _cts.Cancel();
+        DiscoverySvc.OnPathResolved        -= OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _metricsSubscription?.Dispose();
         await Task.CompletedTask;
     }
@@ -22894,7 +22904,7 @@ public class EnvironmentSelectorService
     public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
-LENGTH 6162
+LENGTH 6166
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -23016,7 +23026,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         if (!await gate.WaitAsync(0, ct)) return;
         try
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env, ct);
+            var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);
             if (_states.TryGetValue(env, out var state))
             {
                 state.Services = services;
@@ -23083,7 +23093,7 @@ public interface IHeartbeatMonitor
     event Action<string>? OnServicesUpdated;
 }
 FILE src/NxtUI.Web/Services/InfraHealthCache.cs
-LENGTH 5059
+LENGTH 5221
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using NxtUI.Configuration;
@@ -23132,7 +23142,7 @@ public sealed class InfraHealthCache : BackgroundService
     }
 
     /// <summary>Force an immediate poll for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) => _ = PollEnvAsync(env, CancellationToken.None);
+    public void RequestRefresh(string env) => _ = PollAllAsync([env], CancellationToken.None);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -23142,18 +23152,23 @@ public sealed class InfraHealthCache : BackgroundService
             while (await timer.WaitForNextTickAsync(ct))
             {
                 string[] envs;
-                lock (_lock) envs = [.._kafkaCache.Keys.Union(_mongoCache.Keys)];
-                foreach (var env in envs)
-                    await PollEnvAsync(env, ct);
+                lock (_lock) envs = [.. _kafkaCache.Keys.Union(_mongoCache.Keys)];
+                await PollAllAsync(envs, ct);
             }
         }
         catch (OperationCanceledException) { }
     }
 
-    private async Task PollEnvAsync(string env, CancellationToken ct)
+    private async Task PollAllAsync(string[] envs, CancellationToken ct)
     {
-        await Task.WhenAll(PollKafkaAsync(env, ct), PollMongoAsync(env, ct));
-        OnHealthUpdated?.Invoke(env);
+        // Kafka: each env may be a different cluster — poll in parallel.
+        // Mongo: all envs share one server — ping once, fan result out to all envs.
+        await Task.WhenAll(
+            Task.WhenAll(envs.Select(env => PollKafkaAsync(env, ct))),
+            PollMongoAllAsync(envs, ct));
+
+        foreach (var env in envs)
+            OnHealthUpdated?.Invoke(env);
     }
 
     private async Task PollKafkaAsync(string env, CancellationToken ct)
@@ -23162,21 +23177,21 @@ public sealed class InfraHealthCache : BackgroundService
         try
         {
             var info = await _kafka.GetClusterInfoAsync(env, ct);
-            var onlineBrokers  = info.Brokers.Count(b => b.IsOnline);
-            var totalBrokers   = info.Brokers.Count;
+            var onlineBrokers = info.Brokers.Count(b => b.IsOnline);
+            var totalBrokers  = info.Brokers.Count;
             result = new KafkaHealth
             {
-                Status     = onlineBrokers == totalBrokers ? HealthStatus.Healthy
-                           : onlineBrokers == 0            ? HealthStatus.Down
-                                                           : HealthStatus.Degraded,
-                Brokers    = info.Brokers.Select(b => new BrokerHealth
-                             {
-                                 Id       = b.Id,
-                                 Host     = b.Host,
-                                 Port     = b.Port,
-                                 IsOnline = b.IsOnline,
-                             }).ToList(),
-                CheckedAt  = DateTime.UtcNow,
+                Status    = onlineBrokers == totalBrokers ? HealthStatus.Healthy
+                          : onlineBrokers == 0            ? HealthStatus.Down
+                                                         : HealthStatus.Degraded,
+                Brokers   = info.Brokers.Select(b => new BrokerHealth
+                            {
+                                Id       = b.Id,
+                                Host     = b.Host,
+                                Port     = b.Port,
+                                IsOnline = b.IsOnline,
+                            }).ToList(),
+                CheckedAt = DateTime.UtcNow,
             };
         }
         catch (Exception ex)
@@ -23187,29 +23202,35 @@ public sealed class InfraHealthCache : BackgroundService
         lock (_lock) _kafkaCache[env] = result;
     }
 
-    private async Task PollMongoAsync(string env, CancellationToken ct)
+    // All envs share the same MongoDB server — one ping is enough.
+    // Skipped entirely when no real connection string has been configured.
+    private async Task PollMongoAllAsync(string[] envs, CancellationToken ct)
     {
+        if (!_mongoConnection.IsConfigured || envs.Length == 0)
+        {
+            return;
+        }
+
         MongoHealth result;
         try
         {
-            // Use a cheap ping instead of GetDatabasesAsync (which runs dbStats for every
-            // database sequentially and is far too expensive for a connectivity check).
-            var db  = _mongoConnection.GetDatabase(env);
-            var cmd = new MongoDB.Bson.BsonDocument("ping", 1);
-            await db.RunCommandAsync<MongoDB.Bson.BsonDocument>(cmd, cancellationToken: ct);
-            result = new MongoHealth
-            {
-                Status    = HealthStatus.Healthy,
-                CheckedAt = DateTime.UtcNow,
-                Nodes     = [new MongoNodeHealth { Host = $"{env}-mongo", Role = "PRIMARY", IsOnline = true }],
-            };
+            var db = _mongoConnection.Client.GetDatabase("admin");
+            await db.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: ct);
+            result = new MongoHealth { Status = HealthStatus.Healthy, CheckedAt = DateTime.UtcNow };
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed for {Env}", env);
+            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed");
             result = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
         }
-        lock (_lock) _mongoCache[env] = result;
+
+        lock (_lock)
+        {
+            foreach (var env in envs)
+            {
+                _mongoCache[env] = result;
+            }
+        }
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
@@ -24099,7 +24120,7 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 11651
+LENGTH 12144
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
@@ -24373,6 +24394,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
             if (parsed > 0)
                 _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
+
+            // Prune entries for services no longer reported by heartbeat.
+            var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
+            foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+            {
+                _entries.TryRemove(key, out _);
+                _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
+            }
 
             if (changed > 0) OnMetricsUpdated?.Invoke(env);
         }
@@ -24706,7 +24735,7 @@ public class TabService
     private void Notify() => OnChange?.Invoke();
 }
 FILE src/NxtUI.Web/Services/TestLogGenerator.cs
-LENGTH 17405
+LENGTH 17409
 using NxtUI.Core.Services;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -24877,7 +24906,7 @@ public sealed class TestLogGenerator : BackgroundService
         foreach (var env in envs)
         {
             List<ServiceStatus> services;
-            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct); }
+            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct: ct); }
             catch (Exception ex)
             {
                 _log.LogWarning("TestLogGenerator: skipping env {Env} — {Error}", env.Id, ex.Message);
@@ -25120,7 +25149,7 @@ public sealed class TestLogGenerator : BackgroundService
     }
 }
 FILE src/NxtUI.Web/Services/ThemeService.cs
-LENGTH 4339
+LENGTH 4439
 using Microsoft.AspNetCore.Http;
 using MudBlazor;
 
@@ -25219,6 +25248,8 @@ public class ThemeService
             Divider                  = "#30363D",
             DividerLight             = "#21262D",
             TableLines               = "#30363D",
+            TableStriped             = "#1C2128",
+            TableHover               = "#2D333B",
             TextPrimary              = "#E6EDF3",
             TextSecondary            = "#8B949E",
             TextDisabled             = "#484F58",
@@ -26516,7 +26547,7 @@ public class FilterParserTests
     }
 }
 FILE tests/NxtUI.Tests/Performance/ConcurrencyPerfTests.cs
-LENGTH 7305
+LENGTH 7644
 using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -26539,6 +26570,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
         const int count = 5;
 
         var received  = new int[count];
@@ -26560,7 +26592,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         // Subscribe after all handlers are registered.
         var subs = Enumerable.Range(0, count).Select(_ => heartbeat.Subscribe(env)).ToArray();
 
-        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(15_000))));
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(15_000, ct))));
 
         foreach (var sub in subs) sub.Dispose();
 
@@ -26578,6 +26610,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         for (int i = 0; i < 30; i++)
             heartbeat.Subscribe(env).Dispose();   // subscribe then immediately release
@@ -26588,7 +26621,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         heartbeat.OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
         using var finalSub = heartbeat.Subscribe(env);
-        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000, ct));
 
         out_.WriteLine($"[{sw.Elapsed:c}] Monitor still responsive: {tcs.Task.IsCompletedSuccessfully}");
         tcs.Task.IsCompletedSuccessfully.Should().BeTrue(
@@ -26602,6 +26635,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         var hbTcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var metTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -26612,13 +26646,13 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var hbSub  = heartbeat.Subscribe(env);
         using var metSub = metrics.Subscribe(env);
 
-        await Task.WhenAny(hbTcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(hbTcs.Task, Task.Delay(15_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat fired: {hbTcs.Task.IsCompletedSuccessfully}");
         hbTcs.Task.IsCompletedSuccessfully.Should().BeTrue(because: "heartbeat should fire within 15s");
 
         // Metrics fire after heartbeat has data + log files have been read.
         // Allow extra time for the metrics polling cycle.
-        await Task.WhenAny(metTcs.Task, Task.Delay(30_000));
+        await Task.WhenAny(metTcs.Task, Task.Delay(30_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {metTcs.Task.IsCompletedSuccessfully}");
 
         var services = heartbeat.GetServices(env) ?? [];
@@ -26632,6 +26666,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var envs      = fix.Environments;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         if (envs.Length == 0) { out_.WriteLine("No environments configured."); return; }
 
@@ -26645,7 +26680,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
             subs[i] = heartbeat.Subscribe(envs[i]);
         }
 
-        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(20_000))));
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(20_000, ct))));
         foreach (var sub in subs) sub.Dispose();
 
         for (int i = 0; i < envs.Length; i++)
@@ -26662,6 +26697,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Hold three subscriptions, wait for at least one update, then release all.
         var tcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -26671,7 +26707,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var sub2 = heartbeat.Subscribe(env);
         var sub3 = heartbeat.Subscribe(env);
 
-        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Received update with 3 subs open");
 
         sub1.Dispose();
@@ -26685,7 +26721,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     }
 }
 FILE tests/NxtUI.Tests/Performance/HomeTreemapPerfTests.cs
-LENGTH 5229
+LENGTH 5367
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
@@ -26714,6 +26750,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Subscribing to env '{env}'…");
 
@@ -26728,7 +26765,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var sub = heartbeat.Subscribe(env);
         out_.WriteLine($"[{sw.Elapsed:c}] Subscribe() returned — waiting for first OnServicesUpdated…");
 
-        var notified = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+        var notified = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30), ct));
         out_.WriteLine($"[{sw.Elapsed:c}] OnServicesUpdated fired: {notified == tcs.Task}");
 
         // Read the cache exactly as the API endpoint does.
@@ -26771,12 +26808,13 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Ensure heartbeat is filled.
         var hbDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) hbDone.TrySetResult(true); };
         using var hbSub = heartbeat.Subscribe(env);
-        await Task.WhenAny(hbDone.Task, Task.Delay(30_000));
+        await Task.WhenAny(hbDone.Task, Task.Delay(30_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat ready — {heartbeat.GetServices(env)?.Count ?? 0} services");
 
         // Subscribe to metrics (same as the ServicesPage + HomeMemoryTreemap do).
@@ -26786,7 +26824,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var mSub = metrics.Subscribe(env);
         out_.WriteLine($"[{sw.Elapsed:c}] MetricsMonitor subscribed — waiting for first OnMetricsUpdated…");
 
-        var got = await Task.WhenAny(metricsFired.Task, Task.Delay(TimeSpan.FromMinutes(2)));
+        var got = await Task.WhenAny(metricsFired.Task, Task.Delay(TimeSpan.FromMinutes(2), ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {got == metricsFired.Task}");
 
         // Sample how many services have RAM data.
@@ -26796,7 +26834,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
     }
 }
 FILE tests/NxtUI.Tests/Performance/KafkaPerfTests.cs
-LENGTH 7929
+LENGTH 8248
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Models;
@@ -26818,10 +26856,11 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
         // Phase 1a — cluster info (renders the cluster bar in the UI).
-        var clusterTask = kafka.GetClusterInfoAsync(env);
-        var topicsTask  = kafka.GetTopicsAsync(env);
+        var clusterTask = kafka.GetClusterInfoAsync(env, ct);
+        var topicsTask  = kafka.GetTopicsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers, " +
@@ -26836,8 +26875,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var enriched = 0;
         await Task.WhenAll(topics.Select(async t =>
         {
-            var tSw  = Stopwatch.StartNew();
-            var cfg  = await kafka.GetTopicConfigAsync(env, t.Name);
+            var tSw = Stopwatch.StartNew();
+            var cfg = await kafka.GetTopicConfigAsync(env, t.Name, ct);
             Interlocked.Increment(ref enriched);
             out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: policy={cfg.CleanupPolicy}, retention={FormatRetention(cfg.RetentionMs)}");
         }));
@@ -26851,9 +26890,10 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var clusterTask = kafka.GetClusterInfoAsync(env);
-        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env);
+        var clusterTask = kafka.GetClusterInfoAsync(env, ct);
+        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers");
@@ -26864,7 +26904,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         // Per-group lag detail (triggered when user selects a group in the UI).
         foreach (var g in groups.Take(3))
         {
-            var lags = await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+            var lags = await kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct);
             out_.WriteLine($"  [{sw.Elapsed:c}] {g.GroupId}: {lags.Count} topics, totalLag={lags.Sum(l => l.Lag)}");
         }
 
@@ -26877,7 +26917,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+        var topics = (await kafka.GetTopicsAsync(env, TestContext.Current.CancellationToken)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {topics.Count} topics available");
 
         if (topics.Count == 0) { out_.WriteLine("No topics — skipping tail test."); return; }
@@ -26910,7 +26950,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var groups = (await kafka.GetAllConsumerGroupsAsync(env)).ToList();
+        var ct     = TestContext.Current.CancellationToken;
+        var groups = (await kafka.GetAllConsumerGroupsAsync(env, ct)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {groups.Count} consumer groups");
 
         if (groups.Count == 0) { out_.WriteLine("No groups — skipping."); return; }
@@ -26918,12 +26959,12 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         // Sequential
         var seqSw = Stopwatch.StartNew();
         foreach (var g in groups)
-            await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+            await kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct);
         out_.WriteLine($"[{sw.Elapsed:c}] Sequential: {seqSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
 
         // Parallel (same as the page would do on group selection change)
         var parSw = Stopwatch.StartNew();
-        await Task.WhenAll(groups.Select(g => kafka.GetGroupTopicLagsAsync(env, g.GroupId)));
+        await Task.WhenAll(groups.Select(g => kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct)));
         out_.WriteLine($"[{sw.Elapsed:c}] Parallel:   {parSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
 
         if (parSw.Elapsed.TotalMilliseconds > 0)
@@ -26936,7 +26977,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+        var ct     = TestContext.Current.CancellationToken;
+        var topics = (await kafka.GetTopicsAsync(env, ct)).ToList();
 
         if (topics.Count == 0) { out_.WriteLine("No topics."); return; }
 
@@ -26944,7 +26986,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         await Task.WhenAll(topics.Take(5).Select(async t =>
         {
             var tSw    = Stopwatch.StartNew();
-            var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name);
+            var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name, ct);
             out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: {groups.Count} consumer groups, " +
                            $"totalLag={groups.Sum(g => g.TotalLag):N0}");
         }));
@@ -27079,7 +27121,7 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
         b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
 }
 FILE tests/NxtUI.Tests/Performance/LogViewerPerfTests.cs
-LENGTH 7145
+LENGTH 7513
 using System.Diagnostics;
 using FluentAssertions;
 using NxtUI.Web.Services;
@@ -27100,15 +27142,16 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_returns_full_content_and_correct_offset()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
             var lines = Enumerable.Range(1, 1_000)
                 .Select(i => $"2024-01-01 00:{i / 60:D2}:{i % 60:D2}|INFO|Svc|{i}|1|line {i}|Caller")
                 .ToArray();
-            await File.WriteAllLinesAsync(path, lines);
+            await File.WriteAllLinesAsync(path, lines, ct);
 
-            var (text, offset) = await Viewer.ReadAllAsync(path);
+            var (text, offset) = await Viewer.ReadAllAsync(path, ct);
 
             text.Should().Contain("line 1");
             text.Should().Contain("line 1000");
@@ -27121,11 +27164,12 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_empty_file_returns_empty_string_at_offset_zero()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
-            File.WriteAllText(path, string.Empty);
-            var (text, offset) = await Viewer.ReadAllAsync(path);
+            await File.WriteAllTextAsync(path, string.Empty, ct);
+            var (text, offset) = await Viewer.ReadAllAsync(path, ct);
             text.Should().BeEmpty();
             offset.Should().Be(0);
         }
@@ -27135,17 +27179,18 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_large_file_timing()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
             var lines = Enumerable.Range(1, 50_000)
                 .Select(i => $"2024-01-01 {i / 3600 % 24:D2}:{i / 60 % 60:D2}:{i % 60:D2}|INFO|Svc-{i % 8}|{i}|{i % 20}|Payload text line {i}|Method.Call")
                 .ToArray();
-            await File.WriteAllLinesAsync(path, lines);
+            await File.WriteAllLinesAsync(path, lines, ct);
 
             var fileMb = new FileInfo(path).Length / 1_048_576.0;
             var sw     = Stopwatch.StartNew();
-            var (text, offset) = await Viewer.ReadAllAsync(path);
+            var (text, offset) = await Viewer.ReadAllAsync(path, ct);
             sw.Stop();
 
             text.Length.Should().BeGreaterThan(0);
@@ -27177,11 +27222,12 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_after_ReadAll_returns_empty()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(path, "line1\nline2\nline3\n");
-            var (_, offset) = await Viewer.ReadAllAsync(path);
+            await File.WriteAllTextAsync(path, "line1\nline2\nline3\n", ct);
+            var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
             var (delta, newOffset) = Viewer.ReadDelta(path, offset);
             delta.Should().BeEmpty();
@@ -27193,13 +27239,14 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_detects_appended_lines()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(path, "line1\nline2\n");
-            var (_, offset) = await Viewer.ReadAllAsync(path);
+            await File.WriteAllTextAsync(path, "line1\nline2\n", ct);
+            var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
-            await File.AppendAllTextAsync(path, "line3\nline4\n");
+            await File.AppendAllTextAsync(path, "line3\nline4\n", ct);
             var (delta, newOffset) = Viewer.ReadDelta(path, offset);
 
             delta.Should().Contain("line3").And.Contain("line4");
@@ -27212,19 +27259,20 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_repeated_calls_are_incremental()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
             // Simulate a live log file being tailed with three successive appends.
-            await File.WriteAllTextAsync(path, "batch1-line1\n");
-            var (_, off1) = await Viewer.ReadAllAsync(path);
+            await File.WriteAllTextAsync(path, "batch1-line1\n", ct);
+            var (_, off1) = await Viewer.ReadAllAsync(path, ct);
 
-            await File.AppendAllTextAsync(path, "batch2-line1\nbatch2-line2\n");
+            await File.AppendAllTextAsync(path, "batch2-line1\nbatch2-line2\n", ct);
             var (delta2, off2) = Viewer.ReadDelta(path, off1);
             delta2.Should().Contain("batch2-line1").And.Contain("batch2-line2");
             delta2.Should().NotContain("batch1");
 
-            await File.AppendAllTextAsync(path, "batch3-line1\n", TestContext.Current.CancellationToken);
+            await File.AppendAllTextAsync(path, "batch3-line1\n", ct);
             var (delta3, off3) = Viewer.ReadDelta(path, off2);
             delta3.Should().Contain("batch3-line1");
             delta3.Should().NotContain("batch2");
@@ -27249,16 +27297,17 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ParseLine_throughput_for_1k_lines()
     {
+        var ct   = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
             var lines = Enumerable.Range(1, 1_000)
                 .Select(i => $"2024-06-01 {i / 3600 % 24:D2}:{i / 60 % 60:D2}:{i % 60:D2}.{i % 1000:D3}|WARN|Svc|{i}|42|Message text {i}|Ns.Class.Method")
                 .ToArray();
-            await File.WriteAllLinesAsync(path, lines, TestContext.Current.CancellationToken);
+            await File.WriteAllLinesAsync(path, lines, ct);
 
             var sw = Stopwatch.StartNew();
-            var (_, offset) = await Viewer.ReadAllAsync(path, TestContext.Current.CancellationToken);
+            var (_, offset) = await Viewer.ReadAllAsync(path, ct);
             sw.Stop();
 
             offset.Should().BeGreaterThan(0);
@@ -27269,7 +27318,7 @@ public sealed class LogViewerPerfTests
     }
 }
 FILE tests/NxtUI.Tests/Performance/MongoPerfTests.cs
-LENGTH 8605
+LENGTH 8241
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
@@ -27278,73 +27327,59 @@ namespace NxtUI.Tests.Performance;
 
 /// <summary>
 /// Reproduces the MongoDashboard load sequence:
-///   OnInitializedAsync — GetDatabasesAsync
-///   Phase 1            — GetCollectionNamesAsync (fast — renders table immediately)
-///   Phase 2            — GetCollectionStatsAsync per collection (enriches docs/size/indexes)
+///   OnInitializedAsync — GetDatabaseNamesAsync (names only, no dbStats)
+///   On DB select       — GetCollectionPageAsync (server-side filter + page + stats for page rows only)
 /// </summary>
 public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     : IClassFixture<ServiceFixture>
 {
     [Fact]
-    public async Task DatabasesAndCollections_TwoPhase_Timing()
+    public async Task DatabaseNames_Fast_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        // OnInitializedAsync — list databases.
-        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
-        out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync: {databases.Count} databases");
-        foreach (var db in databases)
-            out_.WriteLine($"  {db.Name}: {db.CollectionCount} collections, {FormatBytes(db.SizeBytes)}");
-
-        if (databases.Count == 0) { out_.WriteLine("No databases — skipping collection tests."); return; }
-
-        var firstDb = databases[0].Name;
-        out_.WriteLine($"[{sw.Elapsed:c}] Loading collections for '{firstDb}'…");
-
-        // Phase 1 — collection names (fast, renders table rows immediately).
-        var names = (await mongo.GetCollectionNamesAsync(env, firstDb)).ToList();
-        out_.WriteLine($"[{sw.Elapsed:c}] GetCollectionNamesAsync: {names.Count} collections");
-
-        // Phase 2 — per-collection stats enrichment (parallel, same pattern as the page).
-        out_.WriteLine($"[{sw.Elapsed:c}] Enriching {names.Count} collections in parallel…");
-        var enriched = 0;
-        await Task.WhenAll(names.Select(async name =>
-        {
-            var tSw  = Stopwatch.StartNew();
-            var stats = await mongo.GetCollectionStatsAsync(env, firstDb, name);
-            Interlocked.Increment(ref enriched);
-            if (stats is not null)
-                out_.WriteLine($"  [{tSw.Elapsed:c}] {name}: {stats.DocumentCount:N0} docs, {FormatBytes(stats.StorageSizeBytes)}, {stats.IndexCount} indexes");
-            else
-                out_.WriteLine($"  [{tSw.Elapsed:c}] {name}: stats unavailable");
-        }));
-
-        out_.WriteLine($"[{sw.Elapsed:c}] All {enriched} collections enriched.");
+        var names = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
+        out_.WriteLine($"[{sw.Elapsed:c}] GetDatabaseNamesAsync: {names.Count} databases");
+        foreach (var n in names)
+            out_.WriteLine($"  {n}");
     }
 
     [Fact]
-    public async Task AllDatabases_CollectionStats_Timing()
+    public async Task CollectionPage_WithStats_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
-        out_.WriteLine($"[{sw.Elapsed:c}] {databases.Count} databases");
+        var dbNames = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
+        if (dbNames.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        foreach (var db in databases)
+        var firstDb = dbNames[0];
+        out_.WriteLine($"[{sw.Elapsed:c}] Loading first page of collections for '{firstDb}'…");
+
+        // Page 1 — filter=null, page size 25. Stats fetched only for this page.
+        var (page1, total) = await mongo.GetCollectionPageAsync(env, firstDb, null, skip: 0, limit: 25, ct);
+        out_.WriteLine($"[{sw.Elapsed:c}] Page 1: {page1.Count}/{total:N0} collections");
+        foreach (var c in page1)
+            out_.WriteLine($"  {c.Name}: {c.DocumentCount:N0} docs, {FormatBytes(c.StorageSizeBytes)}, {c.IndexCount} indexes");
+
+        // Page 2 — verify paging works.
+        if (total > 25)
         {
-            var names = (await mongo.GetCollectionNamesAsync(env, db.Name)).ToList();
-            out_.WriteLine($"[{sw.Elapsed:c}] {db.Name}: {names.Count} collections");
-
-            var enrichTask = Task.WhenAll(names.Select(n => mongo.GetCollectionStatsAsync(env, db.Name, n)));
-            await enrichTask;
-            out_.WriteLine($"[{sw.Elapsed:c}] {db.Name} enrichment done");
+            var (page2, _) = await mongo.GetCollectionPageAsync(env, firstDb, null, skip: 25, limit: 25, ct);
+            out_.WriteLine($"[{sw.Elapsed:c}] Page 2: {page2.Count} collections");
         }
 
-        out_.WriteLine($"[{sw.Elapsed:c}] Total time for all databases.");
+        // Filtered — simulate user typing in the filter box.
+        var prefix = page1.Count > 0 ? page1[0].Name[..Math.Min(3, page1[0].Name.Length)] : "a";
+        var (filtered, filteredTotal) = await mongo.GetCollectionPageAsync(env, firstDb, prefix, skip: 0, limit: 25, ct);
+        out_.WriteLine($"[{sw.Elapsed:c}] Filter '{prefix}': {filteredTotal:N0} matches, showing {filtered.Count}");
+
+        out_.WriteLine($"[{sw.Elapsed:c}] Done.");
     }
 
     [Fact]
@@ -27353,32 +27388,33 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        var db    = databases[0].Name;
-        var names = (await mongo.GetCollectionNamesAsync(env, db)).ToList();
+        var db    = databases[0];
+        var names = (await mongo.GetCollectionNamesAsync(env, db, ct)).ToList();
         if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
 
         var col = names[0];
         out_.WriteLine($"[{sw.Elapsed:c}] Paginating '{db}.{col}'…");
 
         var pg1Sw = Stopwatch.StartNew();
-        var (docs1, total) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 0, limit: 25);
+        var (docs1, total) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 0, limit: 25, ct: ct);
         out_.WriteLine($"[{sw.Elapsed:c}] Page 1 (skip=0):    {docs1.Count} docs in {pg1Sw.Elapsed.TotalMilliseconds:F0}ms, total={total:N0}");
 
         if (total > 25)
         {
             var pg2Sw = Stopwatch.StartNew();
-            var (docs2, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 25, limit: 25);
+            var (docs2, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 25, limit: 25, ct: ct);
             out_.WriteLine($"[{sw.Elapsed:c}] Page 2 (skip=25):   {docs2.Count} docs in {pg2Sw.Elapsed.TotalMilliseconds:F0}ms");
         }
 
         if (total > 1000)
         {
             var deepSw = Stopwatch.StartNew();
-            var (docs3, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 1000, limit: 25);
+            var (docs3, _) = await mongo.GetDocumentsAsync(env, db, col, null, skip: 1000, limit: 25, ct: ct);
             out_.WriteLine($"[{sw.Elapsed:c}] Deep page (skip=1000): {docs3.Count} docs in {deepSw.Elapsed.TotalMilliseconds:F0}ms");
         }
     }
@@ -27389,19 +27425,20 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        var db    = databases[0].Name;
-        var names = (await mongo.GetCollectionNamesAsync(env, db)).ToList();
+        var db    = databases[0];
+        var names = (await mongo.GetCollectionNamesAsync(env, db, ct)).ToList();
         if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
 
         var col = names[0];
         foreach (var search in new[] { (string?)null, "error", "2024", "_id" })
         {
             var sSw = Stopwatch.StartNew();
-            var (docs, total) = await mongo.GetDocumentsAsync(env, db, col, search, skip: 0, limit: 25);
+            var (docs, total) = await mongo.GetDocumentsAsync(env, db, col, search, skip: 0, limit: 25, ct: ct);
             out_.WriteLine($"[{sw.Elapsed:c}] search={search ?? "(none)",-10}: " +
                            $"{docs.Count}/{total:N0} in {sSw.Elapsed.TotalMilliseconds:F0}ms");
         }
@@ -27413,19 +27450,20 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var databases = (await mongo.GetDatabasesAsync(env)).ToList();
+        var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        foreach (var dbInfo in databases.Take(2))
+        foreach (var dbName in databases.Take(2))
         {
-            var names = (await mongo.GetCollectionNamesAsync(env, dbInfo.Name)).ToList();
-            out_.WriteLine($"[{sw.Elapsed:c}] {dbInfo.Name}: {names.Count} collections");
+            var names = (await mongo.GetCollectionNamesAsync(env, dbName, ct)).ToList();
+            out_.WriteLine($"[{sw.Elapsed:c}] {dbName}: {names.Count} collections");
 
             await Task.WhenAll(names.Take(5).Select(async col =>
             {
                 var dSw     = Stopwatch.StartNew();
-                var details = await mongo.GetCollectionDetailsAsync(env, dbInfo.Name, col);
+                var details = await mongo.GetCollectionDetailsAsync(env, dbName, col, ct);
                 out_.WriteLine($"  [{dSw.Elapsed:c}] {col}: {details.Summary.DocumentCount:N0} docs, " +
                                $"{details.Indexes.Count} indexes");
                 foreach (var idx in details.Indexes)
@@ -27446,14 +27484,14 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
         {
-            var databases = (await mongo.GetDatabasesAsync(env, cts.Token)).ToList();
-            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync: {databases.Count} databases");
+            var databases = (await mongo.GetDatabaseNamesAsync(env, cts.Token)).ToList();
+            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabaseNamesAsync: {databases.Count} databases");
             if (databases.Count == 0)
                 out_.WriteLine("  WARNING: No databases returned — connection may be degraded.");
         }
         catch (OperationCanceledException)
         {
-            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabasesAsync timed out after 5s — MongoDB may be unreachable.");
+            out_.WriteLine($"[{sw.Elapsed:c}] GetDatabaseNamesAsync timed out after 5s — MongoDB may be unreachable.");
         }
         catch (Exception ex)
         {
@@ -27627,7 +27665,7 @@ public sealed class ServiceFixture : IAsyncLifetime
     }
 }
 FILE tests/NxtUI.Tests/Performance/ServicesPerfTests.cs
-LENGTH 4647
+LENGTH 4792
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
@@ -27654,6 +27692,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Check if cache is already warm (page shows immediately in this case).
         var cached = heartbeat.GetServices(env);
@@ -27668,7 +27707,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
             ((HeartbeatMonitor)heartbeat).OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
 
             using var sub = heartbeat.Subscribe(env);
-            await Task.WhenAny(tcs.Task, Task.Delay(30_000));
+            await Task.WhenAny(tcs.Task, Task.Delay(30_000, ct));
             out_.WriteLine($"[{sw.Elapsed:c}] First heartbeat poll done: {heartbeat.GetServices(env)?.Count ?? 0} services");
         }
 
@@ -27696,7 +27735,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
             out_.WriteLine($"[{sw.Elapsed:c}] Waiting up to 10s for metrics to fill in…");
             var metricsFired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             metrics.OnMetricsUpdated += e => { if (e == env) metricsFired.TrySetResult(true); };
-            await Task.WhenAny(metricsFired.Task, Task.Delay(10_000));
+            await Task.WhenAny(metricsFired.Task, Task.Delay(10_000, ct));
             withRam = services.Count(s => metrics.GetLatest(env, s) is not null);
             out_.WriteLine($"[{sw.Elapsed:c}] RAM data after wait: {withRam}/{services.Count} services");
         }
@@ -27712,9 +27751,10 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         var heartbeatSvc = fix.Services.GetRequiredService<IHeartbeatService>();
         var env          = fix.DefaultEnv;
         var sw           = Stopwatch.StartNew();
+        var ct           = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Calling IHeartbeatService.GetServiceStatusesAsync('{env}')…");
-        var services = await heartbeatSvc.GetServiceStatusesAsync(env);
+        var services = await heartbeatSvc.GetServiceStatusesAsync(env, ct: ct);
         out_.WriteLine($"[{sw.Elapsed:c}] Result: {services.Count} services");
 
         foreach (var g in services.GroupBy(s => s.HostName).OrderBy(g => g.Key))
@@ -28198,7 +28238,7 @@ public sealed class MockEnvironmentService : IEnvironmentService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockHeartbeatService.cs
-LENGTH 1666
+LENGTH 1690
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mock;
@@ -28221,7 +28261,7 @@ public class MockHeartbeatService : IHeartbeatService
     // Simulate Notifier on dev1-srv-02 going stale after a while
     private static readonly DateTime _notifierLastSeen = DateTime.UtcNow.AddSeconds(-90);
 
-    public Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
+    public Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default)
     {
         var now     = DateTime.UtcNow;
         var statuses = _instances.Select((inst, i) =>
@@ -28459,7 +28499,7 @@ public class MockKafkaService : IKafkaService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockMongoService.cs
-LENGTH 15777
+LENGTH 16969
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -28648,6 +28688,31 @@ public class MockMongoService : IMongoService
         ],
     };
 
+    public Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default)
+    {
+        IReadOnlyList<string> names = _databases.Select(d => d.Name).ToList();
+        return Task.FromResult(names);
+    }
+
+    public Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
+        string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
+    {
+        var all = _collections.TryGetValue(database, out var cols)
+            ? cols.Where(c => !_dropped.Contains($"{database}/{c.Name}")).ToList()
+            : [];
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            all = all.Where(c => c.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        all = all.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var total = (long)all.Count;
+        IReadOnlyList<MongoCollectionSummary> page = all.Skip(skip).Take(limit)
+            .Select(c => c with { StatsLoaded = true }).ToList();
+        return Task.FromResult((page, total));
+    }
+
     public Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
         => Task.FromResult(_databases);
 
@@ -28693,7 +28758,9 @@ public class MockMongoService : IMongoService
 
     public Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
-        string? search, int skip, int limit, CancellationToken ct = default)
+        string? search, int skip, int limit,
+        string? sortField = null, bool sortDesc = false,
+        CancellationToken ct = default)
     {
         var colMeta  = _collections.TryGetValue(database, out var cols)
             ? cols.FirstOrDefault(c => c.Name == collection) : null;
@@ -28718,7 +28785,7 @@ public class MockMongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoConnection.cs
-LENGTH 3196
+LENGTH 3673
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
@@ -28753,6 +28820,14 @@ public sealed class MongoConnection
 
     public IMongoClient Client => _client;
 
+    /// <summary>
+    /// False when the connection string is the default localhost placeholder,
+    /// meaning no real MongoDB has been configured. Polling is skipped in that case.
+    /// </summary>
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_settings.ConnectionString) &&
+        !_settings.ConnectionString.Equals("mongodb://localhost:27017", StringComparison.OrdinalIgnoreCase);
+
     public IMongoDatabase GetDatabase(string environmentId) =>
         _client.GetDatabase(_settings.GetDatabaseName(environmentId));
 
@@ -28765,6 +28840,7 @@ public sealed class MongoConnection
     {
         var url = new MongoUrl(InjectCredentials(s.ConnectionString, s.Username, s.Password));
         var settings = MongoClientSettings.FromUrl(url);
+        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(5);
 
         if (s.TlsEnabled)
         {
@@ -28803,7 +28879,8 @@ public sealed class MongoConnection
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1858
+LENGTH 1873
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
@@ -28812,45 +28889,44 @@ using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mongo;
 
-public class MongoHeartbeatService : IHeartbeatService
+public class MongoHeartbeatService(
+    MongoConnection connection,
+    IOptions<HeartbeatSettings> heartbeat,
+    ILogger<MongoHeartbeatService> log) : IHeartbeatService
 {
-    private readonly HeartbeatSettings             _heartbeat;
-    private readonly MongoConnection               _connection;
-    private readonly ILogger<MongoHeartbeatService> _log;
+    private readonly HeartbeatSettings _heartbeat = heartbeat.Value;
 
-    public MongoHeartbeatService(MongoConnection connection, IOptions<HeartbeatSettings> heartbeat, ILogger<MongoHeartbeatService> log)
+    public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default)
     {
-        _connection = connection;
-        _heartbeat  = heartbeat.Value;
-        _log        = log;
-    }
+        since ??= DateTime.UtcNow.AddMinutes(-_heartbeat.RecentWindowMinutes);
+        var filter = Builders<HeartbeatDocument>.Filter.Gte(d => d.UpdatedDateTime, since.Value);
 
-    public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
-    {
-        _log.LogDebug("heartbeat [{Env}]: querying collection '{Col}'", env, _heartbeat.CollectionName);
+        log.LogDebug("heartbeat [{Env}]: querying '{Col}' updated since {Since:HH:mm:ss}",
+            env, _heartbeat.CollectionName, since.Value);
 
-        var db         = _connection.GetHeartbeatsDatabase(env);
+        var db = connection.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
+        var sw = Stopwatch.StartNew();
         var docs = await collection
-            .Find(Builders<HeartbeatDocument>.Filter.Empty)
+            .Find(filter)
             .SortByDescending(d => d.UpdatedDateTime)
-            .Limit(5000)
             .ToListAsync(ct);
+        sw.Stop();
 
         var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
-        var now       = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
 
-        _log.LogDebug("heartbeat [{Env}]: {Count} documents returned", env, docs.Count);
+        log.LogDebug("heartbeat [{Env}]: {Count} services returned in {Ms}ms", env, docs.Count, sw.ElapsedMilliseconds);
 
         return docs.Select(d => new ServiceStatus
         {
-            ServiceName     = d.ServiceName,
-            HostName        = d.HostName,
-            ProcessId       = d.ProcessId,
+            ServiceName = d.ServiceName,
+            HostName = d.HostName,
+            ProcessId = d.ProcessId,
             UpdatedDateTime = d.UpdatedDateTime,
             CreatedDateTime = d.CreatedDateTime,
-            IsOnline        = (now - d.UpdatedDateTime) <= threshold,
+            IsOnline = (now - d.UpdatedDateTime) <= threshold,
         }).ToList();
     }
 }
@@ -28998,18 +29074,25 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 8633
+LENGTH 12468
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NxtUI.Configuration;
 using NxtUI.Core.Models;
+using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services.Mongo;
 
 public class MongoService : IMongoService
 {
+    // Plain-text terms (no field prefix) search only _id. Field-prefixed terms map
+    // directly to the MongoDB document field name — no alias translation needed.
+    private static readonly FilterParser DocFilterParser = new(
+        searchableFields: ["_id"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
     private readonly MongoConnection               _connection;
     private readonly ILogger<MongoService>         _log;
 
@@ -29049,6 +29132,45 @@ public class MongoService : IMongoService
         }
 
         return result;
+    }
+
+    public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing database names", env);
+        var names = await (await _connection.Client.ListDatabaseNamesAsync(ct)).ToListAsync(ct);
+        return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
+        string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing collections in '{Db}' search={Search} skip={Skip} limit={Limit}",
+            env, database, search, skip, limit);
+
+        var db = _connection.Client.GetDatabase(database);
+
+        // Build optional name filter using a case-insensitive regex.
+        // ListCollectionsAsync (not ListCollectionNamesAsync) supports a filter document.
+        var options = new ListCollectionsOptions();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            options.Filter = new BsonDocument("name",
+                new BsonDocument("$regex", new BsonRegularExpression(search.Trim(), "i")));
+        }
+
+        // Fetch all matching names to get the total count, then slice the page.
+        // nameOnly:true makes this metadata-only — fast even with 50k collections.
+        var cursor   = await db.ListCollectionsAsync(options, ct);
+        var allDocs  = await cursor.ToListAsync(ct);
+        var allNames = allDocs.Select(d => d["name"].AsString).ToList();
+        allNames.Sort(StringComparer.OrdinalIgnoreCase);
+        var total     = (long)allNames.Count;
+        var pageNames = allNames.Skip(skip).Take(limit).ToList();
+
+        // Enrich only the page rows with $collStats — parallel, bounded to page size.
+        var summaries = await Task.WhenAll(pageNames.Select(name => GetCollectionStatsAsync(env, database, name, ct)));
+
+        return (summaries.OfType<MongoCollectionSummary>().ToList(), total);
     }
 
     public async Task<IReadOnlyList<string>> GetCollectionNamesAsync(
@@ -29109,25 +29231,29 @@ public class MongoService : IMongoService
 
     public async Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
-        string? search, int skip, int limit, CancellationToken ct = default)
+        string? search, int skip, int limit,
+        string? sortField = null, bool sortDesc = false,
+        CancellationToken ct = default)
     {
-        _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search}",
-            env, database, collection, skip, limit, search);
+        _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search} sort={Sort}{Desc}",
+            env, database, collection, skip, limit, search, sortField, sortDesc ? " desc" : "");
 
         var db  = _connection.Client.GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
-        FilterDefinition<BsonDocument> filter = FilterDefinition<BsonDocument>.Empty;
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            // Try to match as JSON fragment or as a text search
-            filter = Builders<BsonDocument>.Filter.Or(
-                Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(search.Trim(), "i")),
-                Builders<BsonDocument>.Filter.Text(search.Trim()));
-        }
+        var filter = BuildDocumentFilter(search);
 
         var total = await col.CountDocumentsAsync(filter, cancellationToken: ct);
-        var docs  = await col.Find(filter).Skip(skip).Limit(limit).ToListAsync(ct);
+
+        var cursor = col.Find(filter);
+        if (!string.IsNullOrWhiteSpace(sortField))
+        {
+            var sortDef = sortDesc
+                ? Builders<BsonDocument>.Sort.Descending(sortField)
+                : Builders<BsonDocument>.Sort.Ascending(sortField);
+            cursor = cursor.Sort(sortDef);
+        }
+        var docs = await cursor.Skip(skip).Limit(limit).ToListAsync(ct);
 
         var result = docs.Select(d =>
         {
@@ -29140,12 +29266,52 @@ public class MongoService : IMongoService
             return new MongoDocument
             {
                 Id        = id,
-                Json      = d.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { Indent = false }),
+                Json      = d.ToJson(new MongoDB.Bson.IO.JsonWriterSettings
+                {
+                    OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson,
+                }),
                 Timestamp = ts,
             };
         }).ToList();
 
         return (result, total);
+    }
+
+    // ── Filter builder ─────────────────────────────────────────────────────────
+
+    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return FilterDefinition<BsonDocument>.Empty;
+        }
+
+        var s = search.Trim();
+
+        // Raw MongoDB JSON filter: { "field": "value", ... }
+        if (s.StartsWith('{'))
+        {
+            try
+            {
+                return new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+            }
+            catch
+            {
+                // Fall through to field:value parser if JSON is malformed
+            }
+        }
+
+        // Field:value filter language → AST → MongoDB filter
+        try
+        {
+            var node = DocFilterParser.Parse(s);
+            return MongoFilterBuilder.Build(node);
+        }
+        catch
+        {
+            // Unparseable input: fall back to _id regex so the user sees partial results
+            return Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+        }
     }
 
     public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(
@@ -29195,7 +29361,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 71863
+LENGTH 71846
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -30620,7 +30786,7 @@ html, body {
 
 .bm-mongo-id {
     font-size: 11px;
-    color: var(--mud-palette-text-secondary);
+    color: var(--bm-jv-key);
     letter-spacing: .02em;
 }
 

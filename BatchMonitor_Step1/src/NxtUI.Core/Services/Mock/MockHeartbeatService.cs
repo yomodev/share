@@ -20,7 +20,7 @@ public class MockHeartbeatService : IHeartbeatService
     // Simulate Notifier on dev1-srv-02 going stale after a while
     private static readonly DateTime _notifierLastSeen = DateTime.UtcNow.AddSeconds(-90);
 
-    public Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
+    public Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default)
     {
         var now     = DateTime.UtcNow;
         var statuses = _instances.Select((inst, i) =>

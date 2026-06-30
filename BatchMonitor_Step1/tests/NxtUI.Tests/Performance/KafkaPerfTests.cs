@@ -19,10 +19,11 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
         // Phase 1a — cluster info (renders the cluster bar in the UI).
-        var clusterTask = kafka.GetClusterInfoAsync(env);
-        var topicsTask  = kafka.GetTopicsAsync(env);
+        var clusterTask = kafka.GetClusterInfoAsync(env, ct);
+        var topicsTask  = kafka.GetTopicsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers, " +
@@ -37,8 +38,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var enriched = 0;
         await Task.WhenAll(topics.Select(async t =>
         {
-            var tSw  = Stopwatch.StartNew();
-            var cfg  = await kafka.GetTopicConfigAsync(env, t.Name);
+            var tSw = Stopwatch.StartNew();
+            var cfg = await kafka.GetTopicConfigAsync(env, t.Name, ct);
             Interlocked.Increment(ref enriched);
             out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: policy={cfg.CleanupPolicy}, retention={FormatRetention(cfg.RetentionMs)}");
         }));
@@ -52,9 +53,10 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env   = fix.DefaultEnv;
         var sw    = Stopwatch.StartNew();
+        var ct    = TestContext.Current.CancellationToken;
 
-        var clusterTask = kafka.GetClusterInfoAsync(env);
-        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env);
+        var clusterTask = kafka.GetClusterInfoAsync(env, ct);
+        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers");
@@ -65,7 +67,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         // Per-group lag detail (triggered when user selects a group in the UI).
         foreach (var g in groups.Take(3))
         {
-            var lags = await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+            var lags = await kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct);
             out_.WriteLine($"  [{sw.Elapsed:c}] {g.GroupId}: {lags.Count} topics, totalLag={lags.Sum(l => l.Lag)}");
         }
 
@@ -78,7 +80,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+        var topics = (await kafka.GetTopicsAsync(env, TestContext.Current.CancellationToken)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {topics.Count} topics available");
 
         if (topics.Count == 0) { out_.WriteLine("No topics — skipping tail test."); return; }
@@ -111,7 +113,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var groups = (await kafka.GetAllConsumerGroupsAsync(env)).ToList();
+        var ct     = TestContext.Current.CancellationToken;
+        var groups = (await kafka.GetAllConsumerGroupsAsync(env, ct)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {groups.Count} consumer groups");
 
         if (groups.Count == 0) { out_.WriteLine("No groups — skipping."); return; }
@@ -119,12 +122,12 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         // Sequential
         var seqSw = Stopwatch.StartNew();
         foreach (var g in groups)
-            await kafka.GetGroupTopicLagsAsync(env, g.GroupId);
+            await kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct);
         out_.WriteLine($"[{sw.Elapsed:c}] Sequential: {seqSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
 
         // Parallel (same as the page would do on group selection change)
         var parSw = Stopwatch.StartNew();
-        await Task.WhenAll(groups.Select(g => kafka.GetGroupTopicLagsAsync(env, g.GroupId)));
+        await Task.WhenAll(groups.Select(g => kafka.GetGroupTopicLagsAsync(env, g.GroupId, ct)));
         out_.WriteLine($"[{sw.Elapsed:c}] Parallel:   {parSw.Elapsed.TotalMilliseconds:F0}ms for {groups.Count} groups");
 
         if (parSw.Elapsed.TotalMilliseconds > 0)
@@ -137,7 +140,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
         var env    = fix.DefaultEnv;
         var sw     = Stopwatch.StartNew();
-        var topics = (await kafka.GetTopicsAsync(env)).ToList();
+        var ct     = TestContext.Current.CancellationToken;
+        var topics = (await kafka.GetTopicsAsync(env, ct)).ToList();
 
         if (topics.Count == 0) { out_.WriteLine("No topics."); return; }
 
@@ -145,7 +149,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         await Task.WhenAll(topics.Take(5).Select(async t =>
         {
             var tSw    = Stopwatch.StartNew();
-            var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name);
+            var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name, ct);
             out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: {groups.Count} consumer groups, " +
                            $"totalLag={groups.Sum(g => g.TotalLag):N0}");
         }));

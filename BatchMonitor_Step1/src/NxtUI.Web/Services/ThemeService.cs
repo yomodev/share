@@ -96,6 +96,8 @@ public class ThemeService
             Divider                  = "#30363D",
             DividerLight             = "#21262D",
             TableLines               = "#30363D",
+            TableStriped             = "#1C2128",
+            TableHover               = "#2D333B",
             TextPrimary              = "#E6EDF3",
             TextSecondary            = "#8B949E",
             TextDisabled             = "#484F58",

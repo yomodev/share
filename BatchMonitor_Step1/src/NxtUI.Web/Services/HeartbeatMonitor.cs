@@ -119,7 +119,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         if (!await gate.WaitAsync(0, ct)) return;
         try
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env, ct);
+            var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);
             if (_states.TryGetValue(env, out var state))
             {
                 state.Services = services;

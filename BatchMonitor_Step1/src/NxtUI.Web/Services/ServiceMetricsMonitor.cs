@@ -272,6 +272,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             if (parsed > 0)
                 _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
 
+            // Prune entries for services no longer reported by heartbeat.
+            var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
+            foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+            {
+                _entries.TryRemove(key, out _);
+                _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
+            }
+
             if (changed > 0) OnMetricsUpdated?.Invoke(env);
         }
         finally

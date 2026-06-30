@@ -8,21 +8,12 @@ using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
-public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
+public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log) : ILogPathDiscoveryService
 {
-    private readonly LogPathSettings                 _settings;
-    private readonly ILogger<LogPathDiscoveryService> _log;
-
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
     public event Action<string>? OnPathResolved;
-
-    public LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log)
-    {
-        _settings = options.Value;
-        _log      = log;
-    }
 
     public static string CacheKey(ServiceStatus svc, string env) =>
         $"{env}|{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
@@ -43,7 +34,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var added = false;
         _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
         if (added)
-            _log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -67,22 +58,22 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
         var result = await Task.Run(() => SearchSync(svc, env));
         if (result is not null)
         {
-            _log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            _log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
         }
         return result;
     }
 
     private string? SearchSync(ServiceStatus svc, string env)
     {
-        foreach (var template in _settings.ServiceTemplates)
+        foreach (var template in options.Value.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
-            _log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
+            log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }
@@ -128,7 +119,7 @@ public sealed class LogPathDiscoveryService : ILogPathDiscoveryService
 
         // Pick the most-recently-modified directory first so active log sessions
         // win over stale folders from previous runs that sort earlier alphabetically.
-        matches = matches.OrderByDescending(Directory.GetLastWriteTimeUtc).ToArray();
+        matches = [.. matches.OrderByDescending(Directory.GetLastWriteTimeUtc)];
 
         foreach (var match in matches)
         {

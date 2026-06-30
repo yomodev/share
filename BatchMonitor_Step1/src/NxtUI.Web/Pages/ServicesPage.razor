@@ -2,7 +2,10 @@
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Filtering
+@using NxtUI.Core.Services
+@using System.Text.RegularExpressions
 @inject IHeartbeatMonitor HeartbeatMonitor
+@inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
@@ -138,6 +141,7 @@
                       Dense="true"
                       Hover="true"
                       Elevation="0"
+                      Striped="true"
                       Class="bm-batch-table"
                       FixedHeader="true"
                       Height="100%"
@@ -296,43 +300,83 @@
     // Held for the lifetime of this tab; disposing it tells the monitor this env
     // has one fewer subscriber (monitoring stops when the last tab for env closes).
     private IDisposable? _metricsSubscription;
+    private CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
-        DiscoverySvc.OnPathResolved         += OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated     += OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated  += OnServicesUpdated;
+        DiscoverySvc.OnPathResolved        += OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
         _metricsSubscription = MetricsMonitor.Subscribe(Env);
 
-        var cached = HeartbeatMonitor.GetServices(Env);
-        if (cached is not null)
-            LoadFromCache(cached);
-        else
-            _loading = true;   // show spinner until the first poll completes
+        _loading = true;
+        await InvokeAsync(StateHasChanged);
+        await LoadFromMongoAsync();
+    }
+
+    private async Task LoadFromMongoAsync()
+    {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _loading = true;
+
+        try
+        {
+            var since   = ExtractSince(_filterText);
+            var results = await HeartbeatSvc.GetServiceStatusesAsync(Env, since, ct);
+            _all         = results;
+            _lastUpdated = DateTime.UtcNow;
+            foreach (var svc in _all)
+            {
+                DiscoverySvc.EnsureDiscovering(svc, Env);
+            }
+            RecomputeFilter();
+        }
+        catch (OperationCanceledException) { return; }
+        finally
+        {
+            _loading = false;
+        }
 
         await InvokeAsync(StateHasChanged);
     }
 
-    private void LoadFromCache(IReadOnlyList<ServiceStatus>? services = null)
+    // Extracts the earliest "since" cutoff from updated:>-X filter terms.
+    // Returns null if no updated constraint is found (caller uses the config default).
+    private static readonly Regex _sinceRegex =
+        new(@"updated:>-(\d+)([smhdw])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static DateTime? ExtractSince(string filter)
     {
-        services ??= HeartbeatMonitor.GetServices(Env);
-        if (services is null) return;
-        _all         = services.ToList();
-        _lastUpdated = DateTime.UtcNow;
-        RecomputeFilter();
-        foreach (var svc in _all)
-            DiscoverySvc.EnsureDiscovering(svc, Env);
+        DateTime? earliest = null;
+        foreach (Match m in _sinceRegex.Matches(filter))
+        {
+            var amount = int.Parse(m.Groups[1].Value);
+            var since  = m.Groups[2].Value.ToLowerInvariant() switch
+            {
+                "s" => DateTime.UtcNow.AddSeconds(-amount),
+                "m" => DateTime.UtcNow.AddMinutes(-amount),
+                "h" => DateTime.UtcNow.AddHours(-amount),
+                "d" => DateTime.UtcNow.AddDays(-amount),
+                "w" => DateTime.UtcNow.AddDays(-amount * 7),
+                _   => (DateTime?)null,
+            };
+            if (since is not null && (earliest is null || since < earliest))
+            {
+                earliest = since;
+            }
+        }
+        return earliest;
     }
 
+    // HeartbeatMonitor fires this when it completes its own poll — use it as a
+    // timing signal to refresh the page's own MongoDB query.
     private void OnServicesUpdated(string env)
     {
         if (env != Env) return;
-        _ = InvokeAsync(() =>
-        {
-            LoadFromCache();
-            _loading = false;
-            ScheduleRender();
-        });
+        _ = LoadFromMongoAsync();
     }
 
     // ── Path discovery ───────────────────────────────────────────────────────
@@ -443,8 +487,7 @@
     private void OnFilterChanged(string text)
     {
         _filterText = text;
-        RecomputeFilter();
-        StateHasChanged();
+        _ = LoadFromMongoAsync();
     }
 
     // Pure computation, no render — callable from the poll path without forcing
@@ -518,13 +561,12 @@
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 
-    private Task RefreshAsync()
+    private async Task RefreshAsync()
     {
         _filterText       = string.Empty;
         _filterParseError = null;
-        LoadFromCache();
+        await LoadFromMongoAsync();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
-        return Task.CompletedTask;
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
@@ -617,9 +659,10 @@
     public async ValueTask DisposeAsync()
     {
         lock (_renderGate) { _disposed = true; }
-        DiscoverySvc.OnPathResolved         -= OnPathResolved;
-        MetricsMonitor.OnMetricsUpdated     -= OnMetricsUpdated;
-        HeartbeatMonitor.OnServicesUpdated  -= OnServicesUpdated;
+        _cts.Cancel();
+        DiscoverySvc.OnPathResolved        -= OnPathResolved;
+        MetricsMonitor.OnMetricsUpdated    -= OnMetricsUpdated;
+        HeartbeatMonitor.OnServicesUpdated -= OnServicesUpdated;
         _metricsSubscription?.Dispose();
         await Task.CompletedTask;
     }

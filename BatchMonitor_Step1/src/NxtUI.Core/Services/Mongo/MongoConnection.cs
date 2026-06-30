@@ -32,6 +32,14 @@ public sealed class MongoConnection
 
     public IMongoClient Client => _client;
 
+    /// <summary>
+    /// False when the connection string is the default localhost placeholder,
+    /// meaning no real MongoDB has been configured. Polling is skipped in that case.
+    /// </summary>
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_settings.ConnectionString) &&
+        !_settings.ConnectionString.Equals("mongodb://localhost:27017", StringComparison.OrdinalIgnoreCase);
+
     public IMongoDatabase GetDatabase(string environmentId) =>
         _client.GetDatabase(_settings.GetDatabaseName(environmentId));
 
@@ -44,6 +52,7 @@ public sealed class MongoConnection
     {
         var url = new MongoUrl(InjectCredentials(s.ConnectionString, s.Username, s.Password));
         var settings = MongoClientSettings.FromUrl(url);
+        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(5);
 
         if (s.TlsEnabled)
         {

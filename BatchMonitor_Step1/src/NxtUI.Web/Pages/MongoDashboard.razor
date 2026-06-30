@@ -1,7 +1,6 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@using NxtUI.Filtering
 @inject IMongoService MongoSvc
 @inject TabService TabService
 @inject IDialogService DialogService
@@ -10,25 +9,20 @@
 
 <div class="bm-page bm-page-fill">
 
-    <!-- DB info bar -->
-    @if (_databases.Count > 0)
+    @if (_databaseNames.Count > 0)
     {
-        var db = _databases.FirstOrDefault(d => d.Name == _selectedDb);
         <div class="bm-kafka-cluster-bar">
             <span class="bm-kafka-stat">
                 <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-kafka-stat-icon" />
                 Databases
-                <strong>@_databases.Count</strong>
+                <strong>@_databaseNames.Count</strong>
             </span>
-            @if (db is not null)
+            @if (_totalCount > 0 || !string.IsNullOrWhiteSpace(_filterText))
             {
                 <span class="bm-kafka-stat">
                     <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" Class="bm-kafka-stat-icon" />
                     Collections
-                    <strong>@db.CollectionCount</strong>
-                </span>
-                <span class="bm-kafka-stat-label">
-                    <code>@db.Name</code>&nbsp;·&nbsp;@FormatBytes(db.SizeBytes)
+                    <strong>@_totalCount.ToString("N0")</strong>
                 </span>
             }
         </div>
@@ -41,9 +35,9 @@
             <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
                        Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                        Class="bm-mongo-db-select" PopoverClass="bm-mongo-db-popover">
-                @foreach (var db in _databases)
+                @foreach (var name in _databaseNames)
                 {
-                    <MudSelectItem Value="@db.Name">@db.Name</MudSelectItem>
+                    <MudSelectItem Value="@name">@name</MudSelectItem>
                 }
             </MudSelect>
         </div>
@@ -58,7 +52,7 @@
         <MudTooltip Text="Refresh">
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
-                           Disabled="@_result.IsLoading"
+                           Disabled="@_loading"
                            OnClick="LoadCollectionsAsync"
                            Class="bm-refresh-btn" />
         </MudTooltip>
@@ -66,32 +60,24 @@
 
     <!-- Table -->
     <div class="bm-table-wrap">
-        @if (_enriching)
+        @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
         }
-        <AsyncData Result="_result" Context="_">
         <MudTable T="MongoCollectionSummary"
                   Items="_paged"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
+                  Striped="true"
                   FixedHeader="true"
                   Height="100%"
                   Class="bm-batch-table">
             <HeaderContent>
-                <MudTh>
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.Name">Collection</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:130px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.DocumentCount">Documents</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:120px; text-align:right;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.StorageSizeBytes">Storage</MudTableSortLabel>
-                </MudTh>
-                <MudTh Style="width:80px; text-align:center;">
-                    <MudTableSortLabel T="MongoCollectionSummary" SortBy="x => x.IndexCount">Indexes</MudTableSortLabel>
-                </MudTh>
+                <MudTh>Collection</MudTh>
+                <MudTh Style="width:130px; text-align:right;">Documents</MudTh>
+                <MudTh Style="width:120px; text-align:right;">Storage</MudTh>
+                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
                 <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -144,13 +130,12 @@
                 </MudTd>
             </RowTemplate>
         </MudTable>
-        </AsyncData>
     </div>
 
     <!-- Footer -->
     <div class="bm-batch-footer">
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_filtered.Count collection@(_filtered.Count == 1 ? "" : "s")
+            @_totalCount.ToString("N0") collection@(_totalCount == 1 ? "" : "s")
         </MudText>
         <MudPagination Count="_totalPages"
                        Selected="_page"
@@ -178,127 +163,83 @@
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
 
-    private List<MongoDatabaseInfo>      _databases = new();
-    private List<MongoCollectionSummary> _all       = new();
-    private List<MongoCollectionSummary> _filtered  = new();
-    private List<MongoCollectionSummary> _paged     = new();
+    private List<string>                 _databaseNames = new();
+    private List<MongoCollectionSummary> _paged         = new();
     private string  _selectedDb       = string.Empty;
     private string  _filterText       = string.Empty;
     private string? _filterParseError = null;
-    private Result<List<MongoCollectionSummary>> _result;
-    private bool    _enriching = false;
+    private bool    _loading          = false;
+    private long    _totalCount       = 0;
     private int     _page = 1, _pageSize = 25, _totalPages = 1;
     private CancellationTokenSource _cts = new();
 
-    private static readonly string[] SearchableFields = ["Name"];
-    private static readonly FilterParser Parser = new(SearchableFields,
-        new Dictionary<string, string>
-        {
-            ["name"]       = "Name",
-            ["collection"] = "Name",
-            ["docs"]       = "DocumentCount",
-            ["documents"]  = "DocumentCount",
-            ["storage"]    = "StorageSizeBytes",
-            ["size"]       = "StorageSizeBytes",
-            ["indexes"]    = "IndexCount",
-            ["idx"]        = "IndexCount",
-        });
-
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("name / collection", "collection name"),
-        ("docs / documents",  "document count (e.g. docs:>1000)"),
-        ("storage / size",    "storage size in bytes (e.g. storage:>1048576)"),
-        ("indexes / idx",     "index count (e.g. indexes:>2)"),
+        ("name / collection", "filter by collection name (e.g. batch*)"),
     ];
 
     protected override async Task OnInitializedAsync()
     {
-        _databases = (await MongoSvc.GetDatabasesAsync(Environment, _cts.Token)).ToList();
-        if (_databases.Count > 0)
+        // Load database names only — fast even with 100+ databases (no dbStats).
+        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+        if (_databaseNames.Count > 0)
         {
-            _selectedDb = _databases[0].Name;
+            _selectedDb = _databaseNames[0];
             await LoadCollectionsAsync();
         }
-        // empty env: leave result in loading state with empty list
-        else { _result = Result<List<MongoCollectionSummary>>.Ok([]); }
     }
 
     private async Task OnDbChanged(string db)
     {
         _selectedDb = db;
+        _filterText = string.Empty;
+        _page       = 1;
         await LoadCollectionsAsync();
     }
 
     private async Task LoadCollectionsAsync()
     {
-        _result    = default; // loading state — progress bar visible via _result.IsLoading || _enriching
-        _enriching = false;
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _loading = true;
         StateHasChanged();
         try
         {
-            // Phase 1 — names only: instant, renders the table immediately
-            var names = await MongoSvc.GetCollectionNamesAsync(Environment, _selectedDb, _cts.Token);
-            _all = names.Select(n => new MongoCollectionSummary { Name = n }).ToList();
-            ApplyFilter();
-            _result    = Result<List<MongoCollectionSummary>>.Ok(_all);
-            _enriching = true;   // keep progress bar visible while stats load
-            StateHasChanged();
+            var skip = (_page - 1) * _pageSize;
+            var (collections, total) = await MongoSvc.GetCollectionPageAsync(
+                Environment, _selectedDb,
+                string.IsNullOrWhiteSpace(_filterText) ? null : _filterText,
+                skip, _pageSize, ct);
 
-            // Phase 2 — enrich in parallel; update _all directly (each name maps to a unique
-            // index so there is no write contention). Never call InvokeAsync per-item — that
-            // saturates the Blazor circuit and blocks all user input until the queue drains.
-            var ct = _cts.Token;
-            var enrichTask = Task.WhenAll(names.Select(async name =>
-            {
-                var stats = await MongoSvc.GetCollectionStatsAsync(Environment, _selectedDb, name, ct);
-                if (stats is null || ct.IsCancellationRequested) return;
-                var idx = _all.FindIndex(c => c.Name == name);
-                if (idx >= 0) _all[idx] = stats;
-            }));
-
-            // Refresh UI every 300 ms for visible progress; circuit stays free between ticks
-            // so the user can paginate, filter, or navigate away at any time.
-            while (!enrichTask.IsCompleted)
-            {
-                await Task.WhenAny(enrichTask, Task.Delay(300, ct));
-                if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
-            }
-            await enrichTask; // re-throw any non-cancellation exceptions
+            _paged      = collections.ToList();
+            _totalCount = total;
+            _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+            _page       = Math.Clamp(_page, 1, _totalPages);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { _result = Result<List<MongoCollectionSummary>>.Fail(ex.Message); }
-        finally { _enriching = false; StateHasChanged(); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load collections: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+        StateHasChanged();
     }
 
     private void OnFilterChanged(string text)
     {
-        _filterText = text;
+        _filterText       = text;
         _filterParseError = null;
-        FilterNode? node = null;
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            try   { node = Parser.Parse(text); }
-            catch (FilterParseException ex) { _filterParseError = ex.Message; }
-        }
-        _filtered = node is null
-            ? _all
-            : _all.Where(c => FilterEvaluator.Evaluate(node, c)).ToList();
-        _page = 1;
-        RebuildPage();
+        _page             = 1;
+        _ = LoadCollectionsAsync();
     }
 
-    private void ApplyFilter() => OnFilterChanged(_filterText);
-
-    private void RebuildPage()
-    {
-        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
-        _page       = Math.Clamp(_page, 1, _totalPages);
-        _paged      = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
-    }
-
-    private void OnPageChanged(int p) { _page = p; RebuildPage(); }
-    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; RebuildPage(); }
+    private void OnPageChanged(int p) { _page = p; _ = LoadCollectionsAsync(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; _ = LoadCollectionsAsync(); }
 
     private void OpenInspector(string collection)
         => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));

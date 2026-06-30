@@ -20,6 +20,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
         const int count = 5;
 
         var received  = new int[count];
@@ -41,7 +42,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         // Subscribe after all handlers are registered.
         var subs = Enumerable.Range(0, count).Select(_ => heartbeat.Subscribe(env)).ToArray();
 
-        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(15_000))));
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(15_000, ct))));
 
         foreach (var sub in subs) sub.Dispose();
 
@@ -59,6 +60,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         for (int i = 0; i < 30; i++)
             heartbeat.Subscribe(env).Dispose();   // subscribe then immediately release
@@ -69,7 +71,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         heartbeat.OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
         using var finalSub = heartbeat.Subscribe(env);
-        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000, ct));
 
         out_.WriteLine($"[{sw.Elapsed:c}] Monitor still responsive: {tcs.Task.IsCompletedSuccessfully}");
         tcs.Task.IsCompletedSuccessfully.Should().BeTrue(
@@ -83,6 +85,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         var hbTcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var metTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -93,13 +96,13 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         using var hbSub  = heartbeat.Subscribe(env);
         using var metSub = metrics.Subscribe(env);
 
-        await Task.WhenAny(hbTcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(hbTcs.Task, Task.Delay(15_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Heartbeat fired: {hbTcs.Task.IsCompletedSuccessfully}");
         hbTcs.Task.IsCompletedSuccessfully.Should().BeTrue(because: "heartbeat should fire within 15s");
 
         // Metrics fire after heartbeat has data + log files have been read.
         // Allow extra time for the metrics polling cycle.
-        await Task.WhenAny(metTcs.Task, Task.Delay(30_000));
+        await Task.WhenAny(metTcs.Task, Task.Delay(30_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Metrics fired: {metTcs.Task.IsCompletedSuccessfully}");
 
         var services = heartbeat.GetServices(env) ?? [];
@@ -113,6 +116,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var envs      = fix.Environments;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         if (envs.Length == 0) { out_.WriteLine("No environments configured."); return; }
 
@@ -126,7 +130,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
             subs[i] = heartbeat.Subscribe(envs[i]);
         }
 
-        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(20_000))));
+        await Task.WhenAll(tcss.Select(t => Task.WhenAny(t.Task, Task.Delay(20_000, ct))));
         foreach (var sub in subs) sub.Dispose();
 
         for (int i = 0; i < envs.Length; i++)
@@ -143,6 +147,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
         var env       = fix.DefaultEnv;
         var sw        = Stopwatch.StartNew();
+        var ct        = TestContext.Current.CancellationToken;
 
         // Hold three subscriptions, wait for at least one update, then release all.
         var tcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -152,7 +157,7 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         var sub2 = heartbeat.Subscribe(env);
         var sub3 = heartbeat.Subscribe(env);
 
-        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000, ct));
         out_.WriteLine($"[{sw.Elapsed:c}] Received update with 3 subs open");
 
         sub1.Dispose();

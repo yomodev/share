@@ -26,7 +26,7 @@
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
                            Disabled="_loading"
-                           OnClick="LoadAsync"
+                           OnClick="@(() => LoadAsync())"
                            Class="bm-refresh-btn" />
         </MudTooltip>
     </div>
@@ -49,7 +49,7 @@
                   SelectedItemChanged="OnRowSelected"
                   Class="bm-batch-table bm-inspector-table">
             <HeaderContent>
-                <MudTh Style="width:200px; white-space:nowrap;">_id</MudTh>
+                <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
                 <MudTh Style="width:100%;">Preview</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -127,7 +127,6 @@
     private string _database   = string.Empty;
     private string _collection = string.Empty;
 
-    private List<MongoDocument> _allDocs    = new();
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
     private ElementReference    _jsonRef;
@@ -137,11 +136,16 @@
     private bool                _loading    = true;
     private long                _totalCount = 0;
     private int                 _page = 1, _pageSize = 25, _totalPages = 1;
+    private string              _sortField  = "_id";
+    private bool                _sortDesc   = false;
     private CancellationTokenSource _cts = new();
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("(plain text)", "searched against _id and the full document JSON — no field prefix needed"),
+        ("plain text",   "searches _id (e.g. abc123)"),
+        ("field:value",  "case-insensitive regex on any field (e.g. status:active, name:foo*)"),
+        ("field:>100",   "numeric or date comparison (e.g. amount:>100, createdAt:>-7d, price:10..50)"),
+        ("{ … }",        "raw MongoDB query — any operator works: $gt, $in, $exists, $elemMatch, $or, aggregation expressions, etc. (e.g. {\"status\":{\"$in\":[\"A\",\"B\"]},\"n\":{\"$gt\":5}})"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -149,24 +153,34 @@
         var parts   = EntityId.Split('/', 2);
         _database   = parts.Length > 0 ? parts[0] : string.Empty;
         _collection = parts.Length > 1 ? parts[1] : string.Empty;
+        _page       = 1;
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
         _loading = true;
         StateHasChanged();
         try
         {
-            // Fetch full page from service (passes search to real backend; mock returns up to 500)
+            var skip = (_page - 1) * _pageSize;
             var (docs, total) = await MongoSvc.GetDocumentsAsync(
-                Environment, _database, _collection, null, 0, 500, _cts.Token);
-            _allDocs    = docs.ToList();
+                Environment, _database, _collection,
+                string.IsNullOrWhiteSpace(_search) ? null : _search,
+                skip, _pageSize, _sortField, _sortDesc, ct);
+            _docs       = docs.ToList();
             _totalCount = total;
-            ApplyFilter();
+            _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+            _page       = Math.Clamp(_page, 1, _totalPages);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { return; }
         finally { _loading = false; }
+
+        StateHasChanged();
     }
 
     private void OnSearchChanged(string s)
@@ -174,25 +188,22 @@
         _search = s;
         _filterParseError = null;
         _page = 1;
-        ApplyFilter();
+        _ = LoadAsync();
     }
 
-    private void ApplyFilter()
+    private void SetSort(string field)
     {
-        var filtered = string.IsNullOrWhiteSpace(_search)
-            ? _allDocs
-            : _allDocs.Where(d =>
-                d.Json.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-                d.Id.Contains(_search,   StringComparison.OrdinalIgnoreCase))
-              .ToList();
-        _totalCount = filtered.Count;
-        _totalPages = Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)_pageSize));
-        _page       = Math.Clamp(_page, 1, _totalPages);
-        _docs       = filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = false; }
+        _page = 1;
+        _ = LoadAsync();
     }
 
-    private void OnPageChanged(int p) { _page = p; ApplyFilter(); }
-    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; ApplyFilter(); }
+    private string SortIcon(string field) =>
+        _sortField != field ? "" : _sortDesc ? " ▼" : " ▲";
+
+    private void OnPageChanged(int p) { _page = p; _ = LoadAsync(); }
+    private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; _ = LoadAsync(); }
 
     private void OnRowSelected(MongoDocument? doc)
     {

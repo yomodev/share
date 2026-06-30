@@ -4,11 +4,18 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using NxtUI.Configuration;
 using NxtUI.Core.Models;
+using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services.Mongo;
 
 public class MongoService : IMongoService
 {
+    // Plain-text terms (no field prefix) search only _id. Field-prefixed terms map
+    // directly to the MongoDB document field name — no alias translation needed.
+    private static readonly FilterParser DocFilterParser = new(
+        searchableFields: ["_id"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
     private readonly MongoConnection               _connection;
     private readonly ILogger<MongoService>         _log;
 
@@ -48,6 +55,45 @@ public class MongoService : IMongoService
         }
 
         return result;
+    }
+
+    public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing database names", env);
+        var names = await (await _connection.Client.ListDatabaseNamesAsync(ct)).ToListAsync(ct);
+        return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
+        string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
+    {
+        _log.LogDebug("mongo [{Env}]: listing collections in '{Db}' search={Search} skip={Skip} limit={Limit}",
+            env, database, search, skip, limit);
+
+        var db = _connection.Client.GetDatabase(database);
+
+        // Build optional name filter using a case-insensitive regex.
+        // ListCollectionsAsync (not ListCollectionNamesAsync) supports a filter document.
+        var options = new ListCollectionsOptions();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            options.Filter = new BsonDocument("name",
+                new BsonDocument("$regex", new BsonRegularExpression(search.Trim(), "i")));
+        }
+
+        // Fetch all matching names to get the total count, then slice the page.
+        // nameOnly:true makes this metadata-only — fast even with 50k collections.
+        var cursor   = await db.ListCollectionsAsync(options, ct);
+        var allDocs  = await cursor.ToListAsync(ct);
+        var allNames = allDocs.Select(d => d["name"].AsString).ToList();
+        allNames.Sort(StringComparer.OrdinalIgnoreCase);
+        var total     = (long)allNames.Count;
+        var pageNames = allNames.Skip(skip).Take(limit).ToList();
+
+        // Enrich only the page rows with $collStats — parallel, bounded to page size.
+        var summaries = await Task.WhenAll(pageNames.Select(name => GetCollectionStatsAsync(env, database, name, ct)));
+
+        return (summaries.OfType<MongoCollectionSummary>().ToList(), total);
     }
 
     public async Task<IReadOnlyList<string>> GetCollectionNamesAsync(
@@ -108,25 +154,29 @@ public class MongoService : IMongoService
 
     public async Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
-        string? search, int skip, int limit, CancellationToken ct = default)
+        string? search, int skip, int limit,
+        string? sortField = null, bool sortDesc = false,
+        CancellationToken ct = default)
     {
-        _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search}",
-            env, database, collection, skip, limit, search);
+        _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search} sort={Sort}{Desc}",
+            env, database, collection, skip, limit, search, sortField, sortDesc ? " desc" : "");
 
         var db  = _connection.Client.GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
-        FilterDefinition<BsonDocument> filter = FilterDefinition<BsonDocument>.Empty;
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            // Try to match as JSON fragment or as a text search
-            filter = Builders<BsonDocument>.Filter.Or(
-                Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(search.Trim(), "i")),
-                Builders<BsonDocument>.Filter.Text(search.Trim()));
-        }
+        var filter = BuildDocumentFilter(search);
 
         var total = await col.CountDocumentsAsync(filter, cancellationToken: ct);
-        var docs  = await col.Find(filter).Skip(skip).Limit(limit).ToListAsync(ct);
+
+        var cursor = col.Find(filter);
+        if (!string.IsNullOrWhiteSpace(sortField))
+        {
+            var sortDef = sortDesc
+                ? Builders<BsonDocument>.Sort.Descending(sortField)
+                : Builders<BsonDocument>.Sort.Ascending(sortField);
+            cursor = cursor.Sort(sortDef);
+        }
+        var docs = await cursor.Skip(skip).Limit(limit).ToListAsync(ct);
 
         var result = docs.Select(d =>
         {
@@ -148,6 +198,43 @@ public class MongoService : IMongoService
         }).ToList();
 
         return (result, total);
+    }
+
+    // ── Filter builder ─────────────────────────────────────────────────────────
+
+    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return FilterDefinition<BsonDocument>.Empty;
+        }
+
+        var s = search.Trim();
+
+        // Raw MongoDB JSON filter: { "field": "value", ... }
+        if (s.StartsWith('{'))
+        {
+            try
+            {
+                return new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+            }
+            catch
+            {
+                // Fall through to field:value parser if JSON is malformed
+            }
+        }
+
+        // Field:value filter language → AST → MongoDB filter
+        try
+        {
+            var node = DocFilterParser.Parse(s);
+            return MongoFilterBuilder.Build(node);
+        }
+        catch
+        {
+            // Unparseable input: fall back to _id regex so the user sees partial results
+            return Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+        }
     }
 
     public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(

@@ -14,13 +14,13 @@ public class MongoHeartbeatService(
 {
     private readonly HeartbeatSettings _heartbeat = heartbeat.Value;
 
-    public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, CancellationToken ct = default)
+    public async Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default)
     {
-        var since = DateTime.UtcNow.AddMinutes(-_heartbeat.RecentWindowMinutes);
-        var filter = Builders<HeartbeatDocument>.Filter.Gte(d => d.UpdatedDateTime, since);
+        since ??= DateTime.UtcNow.AddMinutes(-_heartbeat.RecentWindowMinutes);
+        var filter = Builders<HeartbeatDocument>.Filter.Gte(d => d.UpdatedDateTime, since.Value);
 
-        log.LogDebug("heartbeat [{Env}]: querying '{Col}' updated since {Since:HH:mm:ss} (-{Window}m)",
-            env, _heartbeat.CollectionName, since, _heartbeat.RecentWindowMinutes);
+        log.LogDebug("heartbeat [{Env}]: querying '{Col}' updated since {Since:HH:mm:ss}",
+            env, _heartbeat.CollectionName, since.Value);
 
         var db = connection.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);

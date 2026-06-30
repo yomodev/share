@@ -168,7 +168,7 @@ public sealed class TestLogGenerator : BackgroundService
         foreach (var env in envs)
         {
             List<ServiceStatus> services;
-            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct); }
+            try { services = await _heartbeat.GetServiceStatusesAsync(env.Id, ct: ct); }
             catch (Exception ex)
             {
                 _log.LogWarning("TestLogGenerator: skipping env {Env} — {Error}", env.Id, ex.Message);

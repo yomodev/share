@@ -46,7 +46,7 @@ public sealed class InfraHealthCache : BackgroundService
     }
 
     /// <summary>Force an immediate poll for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) => _ = PollEnvAsync(env, CancellationToken.None);
+    public void RequestRefresh(string env) => _ = PollAllAsync([env], CancellationToken.None);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -56,18 +56,23 @@ public sealed class InfraHealthCache : BackgroundService
             while (await timer.WaitForNextTickAsync(ct))
             {
                 string[] envs;
-                lock (_lock) envs = [.._kafkaCache.Keys.Union(_mongoCache.Keys)];
-                foreach (var env in envs)
-                    await PollEnvAsync(env, ct);
+                lock (_lock) envs = [.. _kafkaCache.Keys.Union(_mongoCache.Keys)];
+                await PollAllAsync(envs, ct);
             }
         }
         catch (OperationCanceledException) { }
     }
 
-    private async Task PollEnvAsync(string env, CancellationToken ct)
+    private async Task PollAllAsync(string[] envs, CancellationToken ct)
     {
-        await Task.WhenAll(PollKafkaAsync(env, ct), PollMongoAsync(env, ct));
-        OnHealthUpdated?.Invoke(env);
+        // Kafka: each env may be a different cluster — poll in parallel.
+        // Mongo: all envs share one server — ping once, fan result out to all envs.
+        await Task.WhenAll(
+            Task.WhenAll(envs.Select(env => PollKafkaAsync(env, ct))),
+            PollMongoAllAsync(envs, ct));
+
+        foreach (var env in envs)
+            OnHealthUpdated?.Invoke(env);
     }
 
     private async Task PollKafkaAsync(string env, CancellationToken ct)
@@ -76,21 +81,21 @@ public sealed class InfraHealthCache : BackgroundService
         try
         {
             var info = await _kafka.GetClusterInfoAsync(env, ct);
-            var onlineBrokers  = info.Brokers.Count(b => b.IsOnline);
-            var totalBrokers   = info.Brokers.Count;
+            var onlineBrokers = info.Brokers.Count(b => b.IsOnline);
+            var totalBrokers  = info.Brokers.Count;
             result = new KafkaHealth
             {
-                Status     = onlineBrokers == totalBrokers ? HealthStatus.Healthy
-                           : onlineBrokers == 0            ? HealthStatus.Down
-                                                           : HealthStatus.Degraded,
-                Brokers    = info.Brokers.Select(b => new BrokerHealth
-                             {
-                                 Id       = b.Id,
-                                 Host     = b.Host,
-                                 Port     = b.Port,
-                                 IsOnline = b.IsOnline,
-                             }).ToList(),
-                CheckedAt  = DateTime.UtcNow,
+                Status    = onlineBrokers == totalBrokers ? HealthStatus.Healthy
+                          : onlineBrokers == 0            ? HealthStatus.Down
+                                                         : HealthStatus.Degraded,
+                Brokers   = info.Brokers.Select(b => new BrokerHealth
+                            {
+                                Id       = b.Id,
+                                Host     = b.Host,
+                                Port     = b.Port,
+                                IsOnline = b.IsOnline,
+                            }).ToList(),
+                CheckedAt = DateTime.UtcNow,
             };
         }
         catch (Exception ex)
@@ -101,28 +106,34 @@ public sealed class InfraHealthCache : BackgroundService
         lock (_lock) _kafkaCache[env] = result;
     }
 
-    private async Task PollMongoAsync(string env, CancellationToken ct)
+    // All envs share the same MongoDB server — one ping is enough.
+    // Skipped entirely when no real connection string has been configured.
+    private async Task PollMongoAllAsync(string[] envs, CancellationToken ct)
     {
+        if (!_mongoConnection.IsConfigured || envs.Length == 0)
+        {
+            return;
+        }
+
         MongoHealth result;
         try
         {
-            // Use a cheap ping instead of GetDatabasesAsync (which runs dbStats for every
-            // database sequentially and is far too expensive for a connectivity check).
-            var db  = _mongoConnection.GetDatabase(env);
-            var cmd = new MongoDB.Bson.BsonDocument("ping", 1);
-            await db.RunCommandAsync<MongoDB.Bson.BsonDocument>(cmd, cancellationToken: ct);
-            result = new MongoHealth
-            {
-                Status    = HealthStatus.Healthy,
-                CheckedAt = DateTime.UtcNow,
-                Nodes     = [new MongoNodeHealth { Host = $"{env}-mongo", Role = "PRIMARY", IsOnline = true }],
-            };
+            var db = _mongoConnection.Client.GetDatabase("admin");
+            await db.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: ct);
+            result = new MongoHealth { Status = HealthStatus.Healthy, CheckedAt = DateTime.UtcNow };
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed for {Env}", env);
+            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed");
             result = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
         }
-        lock (_lock) _mongoCache[env] = result;
+
+        lock (_lock)
+        {
+            foreach (var env in envs)
+            {
+                _mongoCache[env] = result;
+            }
+        }
     }
 }
