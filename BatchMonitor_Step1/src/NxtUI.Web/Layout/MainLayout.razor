@@ -2,6 +2,7 @@
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 @inject TabService TabService
+@inject EnvironmentSelectorService EnvService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -56,6 +57,7 @@
         ThemeService.OnChange += StateHasChanged;
         TabService.OnChange   += OnTabsChanged;
         Nav.LocationChanged   += OnLocationChanged;
+        EnvService.OnChange   += OnEnvChanged;
 
         // Open the tab that matches the initial URL (e.g. shared link / browser refresh).
         SyncTabFromUrl(Nav.Uri);
@@ -89,7 +91,7 @@
         if (_syncingFromUrl) return;
         if (TabService.ActiveTab?.NoNavigate == true) return;
 
-        var targetUrl = TabService.ActiveTab?.GetUrl() ?? "/";
+        var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
         var currentPath = new Uri(Nav.Uri).AbsolutePath;
         if (targetUrl != currentPath)
             Nav.NavigateTo(targetUrl);
@@ -103,13 +105,35 @@
         StateHasChanged();
     }
 
+    private string HomeUrl() =>
+        $"/home/{Uri.EscapeDataString(EnvService.SelectedId)}";
+
+    private void OnEnvChanged()
+    {
+        // When home is visible and the env changes, push the env into the URL.
+        if (TabService.ActiveTab is not null) return;
+        var targetUrl   = HomeUrl();
+        var currentPath = new Uri(Nav.Uri).AbsolutePath;
+        if (targetUrl != currentPath)
+            Nav.NavigateTo(targetUrl);
+    }
+
     private void SyncTabFromUrl(string uri)
     {
         var path = new Uri(uri).AbsolutePath;
         _syncingFromUrl = true;
         try
         {
-            if (path == "/")
+            var parts = path.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            // /home/{env} → go home and restore that env
+            if (parts.Length >= 1 && parts[0].Equals("home", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Length >= 2)
+                    EnvService.SelectedId = Uri.UnescapeDataString(parts[1]);
+                TabService.GoHome();
+            }
+            else if (path == "/")
             {
                 TabService.GoHome();
             }
@@ -131,6 +155,7 @@
         ThemeService.OnChange -= StateHasChanged;
         TabService.OnChange   -= OnTabsChanged;
         Nav.LocationChanged   -= OnLocationChanged;
+        EnvService.OnChange   -= OnEnvChanged;
         _dotnetRef?.Dispose();
         if (_appModule is not null)
         {

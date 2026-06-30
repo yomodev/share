@@ -7,6 +7,12 @@
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
+    @if (!_started || _switching)
+    {
+        <div class="bm-treemap-loading">
+            <div class="bm-treemap-spinner"></div>
+        </div>
+    }
     <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
 </div>
 
@@ -17,30 +23,34 @@
     private IDisposable?     _sub;
     private string           _subscribedEnv = string.Empty;
     private bool             _started;
+    private bool             _switching;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
 
-        // Keep MetricsMonitor (→ HeartbeatMonitor) subscribed so server-side polling stays alive.
+        _switching = true;
+
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
 
         if (_started)
         {
-            // Env changed while mounted — restart the JS poller on the new env.
+            // Env changed — overlay is now visible (set above), clear old tree and start new.
             try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
             await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
         }
+
+        _switching = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender || _started) return;
         _started = true;
-        // JS polls /api/treemap/{env} every 10 s on its own — no SignalR involvement.
         await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+        await InvokeAsync(StateHasChanged); // remove the Blazor overlay now JS controls the div
     }
 
     private void OpenServices() =>
