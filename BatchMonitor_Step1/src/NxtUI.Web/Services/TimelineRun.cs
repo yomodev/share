@@ -135,7 +135,7 @@ public class TimelineRun(
         if (IsLive)
         {
             try { await signalR.UnsubscribeFromRunAsync(Env, RunId); }
-            catch { }
+            catch (Exception) { }
         }
     }
 }

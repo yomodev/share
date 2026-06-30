@@ -64,7 +64,7 @@ public class SignalRConnectionService(
         if (_connection?.State == HubConnectionState.Connected)
         {
             try { await _connection.InvokeAsync("UnsubscribeFromRun", env, runId); }
-            catch { }
+            catch (Exception ex) { logger.LogWarning(ex, "SignalR UnsubscribeFromRun failed for {Env}/{RunId}", env, runId); }
         }
     }
 
@@ -114,7 +114,7 @@ public class SignalRConnectionService(
                 if (parts.Length == 2)
                 {
                     try { await _connection.InvokeAsync("SubscribeToRun", parts[0], parts[1]); }
-                    catch { }
+                    catch (Exception ex) { logger.LogError(ex, "SignalR re-subscribe failed for {Key}", k); }
                 }
             }
         };
@@ -155,7 +155,7 @@ public class SignalRConnectionService(
         if (_connection is not null)
         {
             try { await _connection.DisposeAsync(); }
-            catch { }
+            catch (Exception ex) { logger.LogDebug(ex, "SignalR connection dispose failed"); }
         }
     }
 

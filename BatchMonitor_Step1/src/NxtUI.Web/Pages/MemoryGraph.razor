@@ -287,7 +287,7 @@
     private async Task RenderLineAsync()
     {
         try { await JS.InvokeVoidAsync("memoryLineChart.render", _chartRef, _lineSeries); }
-        catch { }
+        catch (Exception) { }
     }
 
     private async Task RenderSunburstAsync()
@@ -297,7 +297,7 @@
             var data = BuildSunburstData();
             await JS.InvokeVoidAsync("memorySunburst.render", _chartRef, data, new { });
         }
-        catch { }
+        catch (Exception) { }
     }
 
     private object BuildSunburstData()
@@ -453,6 +453,6 @@
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
         try { await JS.InvokeVoidAsync("memorySunburst.destroy", _chartRef); }
-        catch { }
+        catch (Exception) { }
     }
 }

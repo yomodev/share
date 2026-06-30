@@ -38,7 +38,7 @@
         if (_started)
         {
             // Env changed — overlay is now visible (set above), clear old tree and start new.
-            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
+            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
             await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
         }
 
@@ -59,6 +59,6 @@
     public async ValueTask DisposeAsync()
     {
         _sub?.Dispose();
-        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
     }
 }

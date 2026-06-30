@@ -5,6 +5,7 @@
 @inject TabService TabService
 @inject IRunService RunService
 @inject InfraHealthCache HealthCache
+@inject ILogger<Home> Logger
 @implements IDisposable
 
 <div class="bm-home">
@@ -289,21 +290,32 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    private async void OnHealthUpdated(string env)
+    private void OnHealthUpdated(string env)
     {
         if (env != EnvService.SelectedId) return;
-        await CheckHealthAsync();
+        _ = InvokeAsync(async () =>
+        {
+            try { await CheckHealthAsync(); }
+            catch (Exception ex) { Logger.LogError(ex, "Health update failed"); }
+        });
     }
 
     // ── Env change ────────────────────────────────────────────────────────
 
-    private async void OnEnvExternalChange()
+    private void OnEnvExternalChange()
     {
-        _recent = [];
-        await InvokeAsync(StateHasChanged);
-        HealthCache.RequestRefresh(EnvService.SelectedId);
-        await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-        await InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                _recent = [];
+                StateHasChanged();
+                HealthCache.RequestRefresh(EnvService.SelectedId);
+                await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+                StateHasChanged();
+            }
+            catch (Exception ex) { Logger.LogError(ex, "Env change update failed"); }
+        });
     }
 
     private async Task OnEnvChanged(string newId)

@@ -23,6 +23,7 @@ public sealed class InfraHealthCache : BackgroundService
     private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MongoHealth>  _mongoCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnHealthUpdated;
 
@@ -46,10 +47,16 @@ public sealed class InfraHealthCache : BackgroundService
     }
 
     /// <summary>Force an immediate poll for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) => _ = PollAllAsync([env], CancellationToken.None);
+    public void RequestRefresh(string env) =>
+        _ = PollAllAsync([env], _ct).ContinueWith(
+            t => _log.LogWarning(t.Exception, "InfraHealthCache: RequestRefresh faulted for {Env}", env),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        _ct = ct;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(PollIntervalSeconds));
         try
         {
@@ -72,7 +79,10 @@ public sealed class InfraHealthCache : BackgroundService
             PollMongoAllAsync(envs, ct));
 
         foreach (var env in envs)
-            OnHealthUpdated?.Invoke(env);
+        {
+            try { OnHealthUpdated?.Invoke(env); }
+            catch (Exception ex) { _log.LogWarning(ex, "InfraHealthCache: OnHealthUpdated subscriber threw for {Env}", env); }
+        }
     }
 
     private async Task PollKafkaAsync(string env, CancellationToken ct)

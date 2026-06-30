@@ -142,7 +142,7 @@ public sealed class BatchCatalogService : IBatchCatalogService
                 if (doc.RootElement.TryGetProperty(name, out var el))
                     return el.GetString();
         }
-        catch { }
+        catch (JsonException) { }
         return null;
     }
 }

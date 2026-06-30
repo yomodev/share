@@ -130,6 +130,6 @@
     {
         _dotNetRef?.Dispose();
         try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
-        catch { }
+        catch (Exception) { }
     }
 }

@@ -10,6 +10,7 @@
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
+@inject ILogger<LogBrowser> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -557,9 +558,14 @@
         try
         {
             while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
+            {
                 // Skip auto-refresh while a search is running.
                 if (_selectedPath is not null && !_isSearching && !_isSearchMode)
-                    await InvokeAsync(LoadFilesAsync);
+                {
+                    try { await InvokeAsync(LoadFilesAsync); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser auto-refresh failed"); }
+                }
+            }
         }
         catch (OperationCanceledException) { }
     }

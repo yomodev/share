@@ -3,6 +3,7 @@
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
+@inject ILogger<KafkaGroupsDashboard> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -196,7 +197,7 @@
 
     private void ApplyFilter() => OnFilterChanged(_filterText);
 
-    private async void OnRowSelected(KafkaConsumerGroupOverview? group)
+    private async Task OnRowSelected(KafkaConsumerGroupOverview? group)
     {
         if (group is null || ReferenceEquals(_selected, group))
         {
@@ -214,7 +215,11 @@
             _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+            _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
+        }
         StateHasChanged();
     }
 

@@ -4,6 +4,7 @@
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
+@inject ILogger<KafkaTopicInspector> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -219,6 +220,7 @@
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName); }
         finally { _loading = false; StateHasChanged(); }
     }
 
@@ -290,7 +292,8 @@
         {
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Value); }
-            catch { }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for topic {Topic}", TopicName); }
         }
     }
 

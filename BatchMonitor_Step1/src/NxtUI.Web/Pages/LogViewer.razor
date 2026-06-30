@@ -3,6 +3,7 @@
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject ILogger<LogViewer> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -468,7 +469,10 @@
         try
         {
             while (_tailTimer is not null && await _tailTimer.WaitForNextTickAsync(_cts.Token))
-                await InvokeAsync(TailTickAsync);
+            {
+                try { await InvokeAsync(TailTickAsync); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Log viewer tail tick failed"); }
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -484,7 +488,7 @@
             await _viewport.AppendRawAsync(text);
         }
         catch (JSDisconnectedException) { }
-        catch { }
+        catch (Exception ex) { Logger.LogWarning(ex, "Log tail tick failed"); }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

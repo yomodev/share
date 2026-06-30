@@ -11,6 +11,7 @@
 @inject TabService TabService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject ILogger<ServicesPage> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -335,6 +336,11 @@
             RecomputeFilter();
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load services for env {Env}", Env);
+            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading = false;

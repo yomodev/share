@@ -6,6 +6,7 @@
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<KafkaDashboard> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
@@ -476,7 +477,7 @@
     private void OnPageChanged(int page)   { _page = page;  RebuildPage(); }
     private void OnPageSizeChanged(int sz) { _pageSize = sz; _page = 1; RebuildPage(); }
 
-    private async void OnGroupSelected(KafkaConsumerGroupOverview? group)
+    private async Task OnGroupSelected(KafkaConsumerGroupOverview? group)
     {
         if (group is null || ReferenceEquals(_selectedGroup, group))
         {
@@ -495,6 +496,7 @@
             _topicLags = lags.ToList();
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId); }
         finally { _loadingDetail = false; StateHasChanged(); }
     }
 

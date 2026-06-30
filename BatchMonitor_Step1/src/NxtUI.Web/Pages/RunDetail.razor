@@ -4,6 +4,7 @@
 @inject TabService TabService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
+@inject ILogger<RunDetail> Logger
 @implements IDisposable
 
 @code {
@@ -54,7 +55,7 @@
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", LocalStorageKey);
             _detailsExpanded = stored == "true";
         }
-        catch { }
+        catch (Exception) { }
 
         await LoadAsync();
     }
@@ -140,7 +141,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[RunDetail] Topology compute error: {ex.Message}");
+                Logger.LogError(ex, "Topology compute failed");
             }
         }, TaskScheduler.Default);
     }
@@ -222,7 +223,7 @@
     {
         _detailsExpanded = !_detailsExpanded;
         try { await JS.InvokeVoidAsync("localStorage.setItem", LocalStorageKey, _detailsExpanded.ToString().ToLower()); }
-        catch { }
+        catch (Exception) { }
     }
 
     private async Task CancelRunAsync()

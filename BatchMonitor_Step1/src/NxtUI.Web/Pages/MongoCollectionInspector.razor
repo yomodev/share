@@ -4,6 +4,7 @@
 @using NxtUI.Filtering
 @inject IMongoReader MongoSvc
 @inject IJSRuntime JS
+@inject ILogger<MongoCollectionInspector> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -232,7 +233,8 @@
         {
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
-            catch { }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection); }
         }
     }
 

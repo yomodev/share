@@ -503,7 +503,7 @@
         if (_tlModule is not null)
         {
             try { await _tlModule.InvokeVoidAsync("dispose", _instanceKey); }
-            catch { }
+            catch (Exception) { }
             try { await _tlModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
         }
