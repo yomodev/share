@@ -32,6 +32,21 @@ window.homeMemoryTreemap = (function () {
             .sum(d => d.children ? 0 : Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
 
+        // Give every host column equal width regardless of their RAM totals.
+        // We must also rescale leaf values within each host by the same factor so
+        // they still sum to the new host value — otherwise squarify advances rows by
+        // sumValue/parentValue which overflows the allocated rectangle.
+        if (root.children && root.children.length > 1) {
+            const eq = root.value / root.children.length;
+            root.children.forEach(h => {
+                if (h.value > 0 && h.children) {
+                    const scale = eq / h.value;
+                    h.children.forEach(c => { c.value *= scale; });
+                }
+                h.value = eq;
+            });
+        }
+
         // Two-level tiling: hosts are diced into vertical columns (side-by-side),
         // services within each host are squarified.
         d3.treemap()
@@ -101,6 +116,13 @@ window.homeMemoryTreemap = (function () {
                 .attr('opacity', leafOpacity(d))
                 .attr('rx', 2)
                 .style('cursor', 'pointer')
+                .on('click', event => {
+                    event.stopPropagation();
+                    tip.style('display', 'none');
+                    const st = _state.get(container);
+                    if (st?.leafClickRef && d.pid != null)
+                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.pid).catch(() => {});
+                })
                 .on('mousemove', event => {
                     const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';
                     const status = d.online ? '' : ' <span style="color:#f87171">offline</span>';
@@ -151,10 +173,16 @@ window.homeMemoryTreemap = (function () {
 
     const _state = new WeakMap(); // container → { aborted, data, ro, _wake }
 
-    function start(container, env, intervalMs) {
+    function allOnlineLeavesHaveRam(node) {
+        if (!node.children || node.children.length === 0)
+            return !node.online || node.ram != null;  // offline leaves don't need RAM
+        return node.children.every(allOnlineLeavesHaveRam);
+    }
+
+    function start(container, env, intervalMs, dotnetRef, leafClickRef) {
         stop(container);
 
-        const s = { aborted: false, data: null, ro: null, _wake: null };
+        const s = { aborted: false, data: null, ro: null, _wake: null, dotnetRef: dotnetRef || null, leafClickRef: leafClickRef || null };
         _state.set(container, s);
 
         // Show a spinner immediately — cleared by paint() on first successful data.
@@ -190,6 +218,11 @@ window.homeMemoryTreemap = (function () {
                             s.data     = json;
                             emptyCount = 0;
                             paint(container, s.data);
+                            // Notify .NET when every service leaf has a RAM value.
+                            if (s.dotnetRef && allOnlineLeavesHaveRam(json)) {
+                                s.dotnetRef.invokeMethodAsync('NotifyDataLoaded').catch(() => {});
+                                s.dotnetRef = null;
+                            }
                         }
                     }
                 } catch (_) { /* network error — retry */ }

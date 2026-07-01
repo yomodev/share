@@ -29,6 +29,20 @@
             <MudButton Class="@(_chartType == ChartType.Sunburst ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Sunburst))">Sunburst</MudButton>
         </MudButtonGroup>
 
+        @if (_chartType == ChartType.Line)
+        {
+            <div class="bm-mg-toolbar-sep"></div>
+
+            <!-- Time range -->
+            <span class="bm-svc-grouping-label">Range</span>
+            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
+                <MudButton Class="@(_windowHours == 1    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1))">1h</MudButton>
+                <MudButton Class="@(_windowHours == 6    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6))">6h</MudButton>
+                <MudButton Class="@(_windowHours == 24   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24))">24h</MudButton>
+                <MudButton Class="@(_windowHours == null ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(null))">All</MudButton>
+            </MudButtonGroup>
+        }
+
         <div class="bm-mg-toolbar-spacer"></div>
 
         @if (_lastUpdated.HasValue)
@@ -63,13 +77,18 @@
             {
                 <div class="bm-mg-empty">No data yet.</div>
             }
+            @if (_chartType == ChartType.Line)
+            {
+                <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+            }
         </div>
 
     </div>
 </div>
 
 @code {
-    [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public string  Env            { get; set; } = string.Empty;
+    [Parameter] public string? NavigationHint { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
     private enum GroupBy   { None, Service, Host }
@@ -78,6 +97,8 @@
     // ── state ────────────────────────────────────────────────────────────
     private GroupBy   _groupBy   = GroupBy.Service;
     private ChartType _chartType = ChartType.Line;
+    private string?   _lastHint;
+    private int?      _windowHours = 1;   // null = show all; default to last 1 h
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -85,7 +106,7 @@
 
     private sealed class LegendItem
     {
-        public string  Key       { get; init; } = "";   // grouping key
+        public string  Key       { get; init; } = "";
         public string  Name      { get; init; } = "";
         public string  Color     { get; init; } = "#888";
         public bool    Visible   { get; set;  } = true;
@@ -95,9 +116,11 @@
     private List<LegendItem>    _legendItems = [];
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
+    private ElementReference    _brushRef;
     private bool                _chartDirty  = true;
 
-    private sealed record LineSeriesDto(string Name, string Color, double[] Data, string[] Labels);
+    // Raw samples sent to JS; JS handles bucketing + brush-driven zoom.
+    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values);
 
     // 16-color palette
     private static readonly string[] Palette =
@@ -119,6 +142,34 @@
     {
         _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
         Rebuild();
+        ApplyNavigationHint();
+    }
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (NavigationHint != _lastHint)
+            ApplyNavigationHint();
+        return Task.CompletedTask;
+    }
+
+    private void ApplyNavigationHint()
+    {
+        _lastHint = NavigationHint;
+        if (!int.TryParse(NavigationHint, out var pid)) return;
+
+        // Switch to per-process grouping so each PID is an individual legend entry.
+        _groupBy = GroupBy.None;
+        Rebuild();
+
+        // Uncheck every entry except the one matching the pid.
+        foreach (var item in _legendItems)
+        {
+            // None-group key = "ServiceName|ProcessId" — match the trailing |pid segment.
+            item.Visible = item.Key.EndsWith("|" + pid, StringComparison.Ordinal);
+        }
+
+        BuildChartData();
+        _chartDirty = true;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -231,62 +282,40 @@
         Dictionary<string, string> colorMap,
         HashSet<string> visible)
     {
-        // Collect all histories to find the global time range
-        var allSamples = new List<(string key, MetricsSample sample)>();
-        foreach (var (key, svcs) in groups)
-        {
-            if (!visible.Contains(key)) continue;
-            foreach (var svc in svcs)
-            {
-                var hist = MetricsMonitor.GetHistory(Env, svc);
-                allSamples.AddRange(hist.Select(s => (key, s)));
-            }
-        }
-
-        if (allSamples.Count == 0) { _lineSeries = []; return; }
-
-        // Shared time axis — up to 120 buckets
-        var minTime  = allSamples.Min(x => x.sample.Timestamp);
-        var maxTime  = allSamples.Max(x => x.sample.Timestamp);
-        var span     = maxTime - minTime;
-        int buckets  = Math.Clamp((int)span.TotalMinutes + 1, 2, 120);
-        var interval = span.TotalSeconds / (buckets - 1);
-        if (interval < 1) interval = 1;
-
-        var times = Enumerable.Range(0, buckets)
-            .Select(i => minTime.AddSeconds(i * interval))
-            .ToArray();
-
-        var labels = times.Select((t, i) =>
-            i % Math.Max(1, buckets / 10) == 0
-                ? t.ToLocalTime().ToString("HH:mm")
-                : "").ToArray();
-
         _lineSeries = [];
         foreach (var (key, svcs) in groups)
         {
             if (!visible.Contains(key)) continue;
-            var history = svcs.SelectMany(svc => MetricsMonitor.GetHistory(Env, svc)).ToList();
-            if (history.Count == 0) continue;
 
-            var data = new double[buckets];
-            for (int i = 0; i < buckets; i++)
-            {
-                var t    = times[i];
-                var prev = history.Where(s => s.Timestamp <= t).MaxBy(s => s.Timestamp);
-                data[i]  = prev is not null ? prev.TotalCurrentBytes / 1e6 : 0;
-            }
+            // Merge and sort all samples for this group, dedup by timestamp.
+            var samples = svcs
+                .SelectMany(svc => MetricsMonitor.GetHistory(Env, svc))
+                .GroupBy(s => s.Timestamp)
+                .Select(g => (Timestamp: g.Key, Bytes: g.Sum(s => s.TotalCurrentBytes)))
+                .OrderBy(s => s.Timestamp)
+                .ToList();
 
-            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
-            _lineSeries.Add(new LineSeriesDto(key, color, data, labels));
+            if (samples.Count == 0) continue;
+
+            var color      = colorMap.TryGetValue(key, out var c) ? c : "#888";
+            var timestamps = samples.Select(s => new DateTimeOffset(s.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds()).ToArray();
+            var values     = samples.Select(s => s.Bytes / 1e6).ToArray();
+            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, values));
         }
+    }
+
+    private void SetWindow(int? hours)
+    {
+        _windowHours = hours;
+        _chartDirty  = true;
+        StateHasChanged();
     }
 
     // ── sunburst ─────────────────────────────────────────────────────────
 
     private async Task RenderLineAsync()
     {
-        try { await JS.InvokeVoidAsync("memoryLineChart.render", _chartRef, _lineSeries); }
+        try { await JS.InvokeVoidAsync("memoryLineChart.render", _chartRef, _brushRef, _lineSeries, _windowHours); }
         catch (Exception) { }
     }
 

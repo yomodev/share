@@ -649,11 +649,22 @@
         var svg = new System.Text.StringBuilder();
         svg.Append($"<svg class=\"bm-svc-spark\" viewBox=\"0 0 100 40\" preserveAspectRatio=\"none\" data-spark=\"{tooltip}\" xmlns=\"http://www.w3.org/2000/svg\">");
         svg.Append($"<defs><linearGradient id=\"{gradId}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">");
-        svg.Append("<stop offset=\"0%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.18\"/>");
-        svg.Append("<stop offset=\"100%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.01\"/>");
+        svg.Append("<stop offset=\"0%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.40\"/>");
+        svg.Append("<stop offset=\"100%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.04\"/>");
         svg.Append("</linearGradient></defs>");
         svg.Append(lines);
         svg.Append($"<path d=\"{path}\" fill=\"url(#{gradId})\"/>");
+        // Add a visible stroke line on top of the fill area
+        var strokePath = path.ToString();
+        var firstL = strokePath.IndexOf(" L", StringComparison.Ordinal);
+        if (firstL >= 0)
+        {
+            var open = strokePath[firstL..];
+            var closingL = open.LastIndexOf(" L100,40", StringComparison.Ordinal);
+            if (closingL >= 0) open = open[..closingL];
+            svg.Append(System.FormattableString.Invariant(
+                $"<path d=\"M{open.TrimStart()}\" fill=\"none\" stroke=\"var(--mud-palette-primary)\" stroke-width=\"1.2\" stroke-opacity=\"0.60\" vector-effect=\"non-scaling-stroke\"/>"));
+        }
         svg.Append("</svg>");
         return new SparkData(new MarkupString(svg.ToString()));
     }

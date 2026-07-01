@@ -10279,7 +10279,7 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1818
+LENGTH 1863
 {
   "AllowedHosts": "*",
 
@@ -10315,6 +10315,10 @@ LENGTH 1818
     "IdleReleaseMinutes": 10
   },
 
+  "Diagnostics": {
+    "Enabled": true
+  },
+
   "TestLogGenerator": {
     "Enabled": false,
     "WriteIntervalSeconds": 15,
@@ -10336,7 +10340,7 @@ LENGTH 1818
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 2170
+LENGTH 2942
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
   ANSI color codes used below (&#27; = ESC):
@@ -10368,6 +10372,18 @@ LENGTH 2170
   <targets>
     <target xsi:type="Console" name="console"
             layout="${clr_time}${date:format=HH\:mm\:ss.fff}${clr_reset} ${clr_tid}[${threadid:padding=3}]${clr_reset} ${clr_level}${pad:padding=-5:inner=${level:uppercase=true}}${clr_reset} ${clr_caller}${callsite:className=false:methodName=true:fileName=false}${clr_reset} ${message} ${exception:format=tostring}" />
+
+    <!-- Diagnostics monitor: plain-text rolling file, one per day, kept 14 days -->
+    <target xsi:type="File" name="diag-file"
+            fileName="${basedir}/logs/diagnostics.log"
+            archiveFileName="${basedir}/logs/diagnostics.{#}.log"
+            archiveEvery="Day"
+            archiveNumbering="Date"
+            archiveDateFormat="yyyy-MM-dd"
+            maxArchiveFiles="14"
+            concurrentWrites="false"
+            keepFileOpen="true"
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${message} ${exception:format=tostring}" />
   </targets>
 
   <rules>
@@ -10375,6 +10391,9 @@ LENGTH 2170
     <logger name="Microsoft.*"                         maxlevel="Info" final="true" />
     <logger name="System.*"                            maxlevel="Info" final="true" />
     <logger name="Microsoft.Extensions.Localization.*" maxlevel="Warn" final="true" />
+
+    <!-- diagnostics monitor → console + file -->
+    <logger name="NxtUI.Web.Services.ServerDiagnosticsMonitor" minlevel="Debug" writeTo="console,diag-file" final="true" />
 
     <!-- app code at Debug and above -->
     <logger name="NxtUI.*" minlevel="Debug" writeTo="console" />
@@ -10412,7 +10431,7 @@ LENGTH 697
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 11711
+LENGTH 14176
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 using NLog;
@@ -10470,8 +10489,12 @@ public class Program
 
         builder.Services.AddMudServices();
 
+        // ── Operation tracker (singleton — used by background services + diagnostics monitor) ──
+        builder.Services.AddSingleton<OperationTracker>();
+
         // ── SignalR ──────────────────────────────────────────────────────────
-        builder.Services.AddSignalR();
+        // BlazorCircuitFilter is conditionally added below after config is read.
+        var signalRBuilder = builder.Services.AddSignalR();
 
         // ── Batch / Run service ──────────────────────────────────────────────
         // Mock: fast demo without MongoDB.  Real: swap comment below.
@@ -10528,6 +10551,14 @@ public class Program
 
         if (builder.Configuration.GetValue<bool>($"{TestLogGeneratorSettings.SectionName}:Enabled"))
             builder.Services.AddHostedService<TestLogGenerator>();
+
+        if (builder.Configuration.GetValue<bool>("Diagnostics:Enabled"))
+        {
+            builder.Services.AddHostedService<ServerDiagnosticsMonitor>();
+            builder.Services.AddSingleton<BlazorCircuitFilter>();
+            signalRBuilder.AddHubOptions<Microsoft.AspNetCore.SignalR.Hub>(o =>
+                o.AddFilter<BlazorCircuitFilter>());
+        }
 
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
@@ -10617,28 +10648,55 @@ public class Program
           + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
           + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
 
-        string layout =
+        string consoleLayout =
             T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
           + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
           + "${message} ${exception:format=tostring} "
           + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
-        var console = new NLog.Targets.ConsoleTarget("console") { Layout = layout };
+        var console = new NLog.Targets.ConsoleTarget("console") { Layout = consoleLayout };
+
+        // ── File target — per-class files, one folder per process run ─────────
+        // Stamp GDC once so the folder name is fixed for the lifetime of this process.
+        var startStamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+        var pid        = System.Diagnostics.Process.GetCurrentProcess().Id;
+        NLog.GlobalDiagnosticsContext.Set("startStamp", startStamp);
+        NLog.GlobalDiagnosticsContext.Set("pid",        pid.ToString());
+
+        // Format: datetime_utc | threadid | level | message | exception | callsite
+        const string fileLayout =
+            "${date:format=yyyy-MM-dd HH\\:mm\\:ss.fff:universalTime=true}"
+          + " | ${threadid:padding=4}"
+          + " | ${pad:padding=-5:inner=${level:uppercase=true}}"
+          + " | ${message} ${exception:format=tostring}"
+          + " | ${callsite:className=true:methodName=true:fileName=false}";
+
+        var file = new NLog.Targets.FileTarget("file")
+        {
+            FileName         = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
+            Layout           = fileLayout,
+            KeepFileOpen     = true,
+            ConcurrentWrites = false,
+            Encoding         = System.Text.Encoding.UTF8,
+            CreateDirs       = true,
+        };
 
         var cfg = new NLog.Config.LoggingConfiguration();
         cfg.AddTarget(console);
+        cfg.AddTarget(file);
 
-        // suppress noisy framework internals
+        // ── Console rules ─────────────────────────────────────────────────────
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
         cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
-
-        // app code at Debug and above
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
-
-        // everything else at Info and above
         cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+
+        // ── File rules (NxtUI app code + ASP.NET warnings) ───────────────────
+        cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, file, "NxtUI.*");
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
+        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
 
         LogManager.Configuration = cfg;
     }
@@ -13437,7 +13495,7 @@ else if (Result.IsOk)
     [Parameter, EditorRequired] public RenderFragment<T> ChildContent { get; set; } = null!;
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 3098
+LENGTH 3122
 @namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -13525,7 +13583,7 @@ LENGTH 3098
         {
             await _module.InvokeVoidAsync("fitToView", GetHandleKey());
         }
-        catch { }
+        catch (Exception) { }
     }
 
     public async ValueTask DisposeAsync()
@@ -13533,10 +13591,75 @@ LENGTH 3098
         if (_module is not null)
         {
             try { await _module.InvokeVoidAsync("dispose", GetHandleKey()); }
-            catch { }
+            catch (Exception) { }
             try { await _module.DisposeAsync(); }
             catch (JSDisconnectedException) { }
         }
+    }
+}
+FILE src/NxtUI.Web/Components/DiagnosticsMonitor.razor
+LENGTH 2136
+@* Debugging aid: monitors JS event-loop lag and frame rate.
+   Disable via appsettings: "Diagnostics": { "Enabled": false } *@
+@inject IJSRuntime JS
+@inject ILogger<DiagnosticsMonitor> Logger
+@implements IAsyncDisposable
+
+@code {
+    // How much JS event-loop lag (ms) triggers a Warning vs Info log entry.
+    private const int WarnLagMs = 200;
+    private const int InfoLagMs = 50;
+
+    // Minimum FPS below which we warn.
+    private const int WarnFps = 20;
+
+    private DotNetObjectReference<DiagnosticsMonitor>? _selfRef;
+    private bool _started;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _started) return;
+        _started = true;
+        try
+        {
+            // Importing app.js ensures bmClientDiag is defined before we call it.
+            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            _selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("bmClientDiag.start", _selfRef);
+            Logger.LogInformation("Client diagnostics monitor started");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Client diagnostics monitor failed to start");
+        }
+    }
+
+    [JSInvokable]
+    public void OnClientMetrics(int lagMs, int fps)
+    {
+        var level = lagMs > WarnLagMs ? LogLevel.Warning
+                  : lagMs > InfoLagMs ? LogLevel.Information
+                  : LogLevel.Debug;
+
+        Logger.Log(level, "client-diag | event-loop lag={Lag}ms | fps={Fps}", lagMs, fps);
+
+        if (fps is > 0 and < WarnFps)
+            Logger.LogWarning("client-diag | low frame rate fps={Fps} — UI thread may be blocked", fps);
+    }
+
+    [JSInvokable]
+    public void OnLongTask(int durationMs, string attribution)
+    {
+        Logger.LogWarning(
+            "client-diag | long-task blocked={Duration}ms | script={Attribution}",
+            durationMs, attribution);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("bmClientDiag.stop"); }
+        catch (Exception) { }
+        _selfRef?.Dispose();
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
@@ -13678,6 +13801,50 @@ LENGTH 6521
     {
         Value = string.Empty;
         await OnFilterChanged.InvokeAsync(string.Empty);
+    }
+}
+FILE src/NxtUI.Web/Components/GlobalErrorBoundary.cs
+LENGTH 1414
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.Logging;
+using MudBlazor;
+
+namespace NxtUI.Web.Components;
+
+/// <summary>
+/// Wraps the main content area. When a component throws an unhandled exception:
+///   1. Logs it with full stack trace.
+///   2. Shows a MudBlazor error snackbar.
+///   3. Auto-recovers so the rest of the UI continues working.
+///
+/// Usage in Razor: <GlobalErrorBoundary>...content...</GlobalErrorBoundary>
+/// </summary>
+public sealed class GlobalErrorBoundary : ErrorBoundary
+{
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+    [Inject] private ILogger<GlobalErrorBoundary> Logger { get; set; } = default!;
+
+    protected override async Task OnErrorAsync(Exception exception)
+    {
+        Logger.LogError(exception, "Unhandled component exception — recovering");
+
+        var msg = exception.Message.Length > 150
+            ? exception.Message[..150] + "…"
+            : exception.Message;
+
+        Snackbar.Add(
+            $"An error occurred and was recovered automatically.\n{msg}",
+            Severity.Error,
+            cfg =>
+            {
+                cfg.ShowCloseIcon        = true;
+                cfg.VisibleStateDuration = 10_000;
+            });
+
+        // Yield so the current render frame completes, then reset the boundary.
+        await Task.Yield();
+        Recover();
     }
 }
 FILE src/NxtUI.Web/Components/KafkaConsumerGroupsDialog.razor
@@ -14110,7 +14277,7 @@ LENGTH 7203
     }
 }
 FILE src/NxtUI.Web/Components/LogViewport.razor
-LENGTH 5726
+LENGTH 5738
 @namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -14243,7 +14410,7 @@ LENGTH 5726
     {
         _dotNetRef?.Dispose();
         try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
-        catch { }
+        catch (Exception) { }
     }
 }
 FILE src/NxtUI.Web/Components/OpenLogFileDialog.razor
@@ -14572,16 +14739,22 @@ LENGTH 393
     // without the main tab-bar and sidebar chrome.
 }
 FILE src/NxtUI.Web/Layout/MainLayout.razor
-LENGTH 4886
+LENGTH 6153
 @namespace NxtUI.Web.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
 @inject TabService TabService
+@inject EnvironmentSelectorService EnvService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IConfiguration Config
 @implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
+@if (Config.GetValue<bool>("Diagnostics:Enabled"))
+{
+    <DiagnosticsMonitor />
+}
 <MudDialogProvider />
 <MudSnackbarProvider />
 <MudPopoverProvider />
@@ -14599,22 +14772,24 @@ LENGTH 4886
 
     <!-- Keep main content flexible; restore top offset for the fixed appbar -->
     <MudMainContent Style="padding:0; padding-top:var(--bm-tabbar-h); overflow:hidden; display:flex; flex-direction:column;">
-        <div class="bm-content-area">
-            <!-- Home pane: always rendered, hidden when a tab is focused. -->
-            <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
-                <Home />
-            </div>
-
-            <!-- One persistent pane per open tab — kept alive in the DOM so
-                 polling loops, event stores, and D3 graph state survive
-                 focus changes (§4 tab lifecycle). -->
-            @foreach (var tab in TabService.Tabs)
-            {
-                <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
-                    <TabContent Tab="@tab" />
+        <GlobalErrorBoundary>
+            <div class="bm-content-area">
+                <!-- Home pane: always rendered, hidden when a tab is focused. -->
+                <div class="bm-content-pane @(TabService.ActiveTab is null ? "" : "bm-pane-hidden")">
+                    <Home />
                 </div>
-            }
-        </div>
+
+                <!-- One persistent pane per open tab — kept alive in the DOM so
+                     polling loops, event stores, and D3 graph state survive
+                     focus changes (§4 tab lifecycle). -->
+                @foreach (var tab in TabService.Tabs)
+                {
+                    <div class="bm-content-pane @(tab.IsActive ? "" : "bm-pane-hidden")" @key="tab.Id">
+                        <TabContent Tab="@tab" />
+                    </div>
+                }
+            </div>
+        </GlobalErrorBoundary>
     </MudMainContent>
 
 </MudLayout>
@@ -14631,6 +14806,7 @@ LENGTH 4886
         ThemeService.OnChange += StateHasChanged;
         TabService.OnChange   += OnTabsChanged;
         Nav.LocationChanged   += OnLocationChanged;
+        EnvService.OnChange   += OnEnvChanged;
 
         // Open the tab that matches the initial URL (e.g. shared link / browser refresh).
         SyncTabFromUrl(Nav.Uri);
@@ -14664,7 +14840,7 @@ LENGTH 4886
         if (_syncingFromUrl) return;
         if (TabService.ActiveTab?.NoNavigate == true) return;
 
-        var targetUrl = TabService.ActiveTab?.GetUrl() ?? "/";
+        var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
         var currentPath = new Uri(Nav.Uri).AbsolutePath;
         if (targetUrl != currentPath)
             Nav.NavigateTo(targetUrl);
@@ -14678,13 +14854,35 @@ LENGTH 4886
         StateHasChanged();
     }
 
+    private string HomeUrl() =>
+        $"/home/{Uri.EscapeDataString(EnvService.SelectedId)}";
+
+    private void OnEnvChanged()
+    {
+        // When home is visible and the env changes, push the env into the URL.
+        if (TabService.ActiveTab is not null) return;
+        var targetUrl   = HomeUrl();
+        var currentPath = new Uri(Nav.Uri).AbsolutePath;
+        if (targetUrl != currentPath)
+            Nav.NavigateTo(targetUrl);
+    }
+
     private void SyncTabFromUrl(string uri)
     {
         var path = new Uri(uri).AbsolutePath;
         _syncingFromUrl = true;
         try
         {
-            if (path == "/")
+            var parts = path.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            // /home/{env} → go home and restore that env
+            if (parts.Length >= 1 && parts[0].Equals("home", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Length >= 2)
+                    EnvService.SelectedId = Uri.UnescapeDataString(parts[1]);
+                TabService.GoHome();
+            }
+            else if (path == "/")
             {
                 TabService.GoHome();
             }
@@ -14706,6 +14904,7 @@ LENGTH 4886
         ThemeService.OnChange -= StateHasChanged;
         TabService.OnChange   -= OnTabsChanged;
         Nav.LocationChanged   -= OnLocationChanged;
+        EnvService.OnChange   -= OnEnvChanged;
         _dotnetRef?.Dispose();
         if (_appModule is not null)
         {
@@ -14897,7 +15096,7 @@ LENGTH 8297
     }
 }
 FILE src/NxtUI.Web/Layout/TabBar.razor
-LENGTH 4281
+LENGTH 4305
 @namespace NxtUI.Web.Layout
 @using NxtUI.Web.Models
 @inject TabService TabService
@@ -14970,7 +15169,7 @@ LENGTH 4281
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
                 await _appModule.InvokeVoidAsync("initTabWheelScroll", _stripRef);
             }
-            catch { }
+            catch (Exception) { }
         }
 
         // Scroll active tab into view after every render that changes tabs.
@@ -14980,7 +15179,7 @@ LENGTH 4281
             {
                 await _appModule.InvokeVoidAsync("scrollTabIntoView", TabService.ActiveTab.Id);
             }
-            catch { }
+            catch (Exception) { }
         }
     }
 
@@ -16157,7 +16356,7 @@ LENGTH 17757
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 14979
+LENGTH 14381
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16165,22 +16364,19 @@ LENGTH 14979
 @inject TabService TabService
 @inject IRunService RunService
 @inject InfraHealthCache HealthCache
+@inject ILogger<Home> Logger
 @implements IDisposable
 
 <div class="bm-home">
 
     <!-- ── Header ────────────────────────────────────────────────────────── -->
     <div class="bm-home-header">
-        <div>
-            <MudText Typo="Typo.h5" Class="bm-home-title">System dashboard</MudText>
-            <MudText Typo="Typo.body2" Class="bm-home-subtitle">
-                Real-time system monitor
-            </MudText>
-        </div>
-        <div class="bm-home-env">
-            <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" PopoverClass="bm-env-menu-popover">
+
+        <div class="bm-home-header-left">
+            <!-- Env selector (left of title) -->
+            <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                 <ActivatorContent>
-                    <span class="bm-env-badge bm-env-badge-btn"
+                    <span class="bm-env-badge bm-env-badge-btn bm-env-badge-home"
                           style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
                           @onclick="@(async e => await context.ToggleAsync(e))">
                         @EnvService.SelectedId
@@ -16202,163 +16398,124 @@ LENGTH 14979
                     }
                 </ChildContent>
             </MudMenu>
+
+            <div class="bm-home-title-block">
+                <MudText Typo="Typo.h5" Class="bm-home-title">System dashboard</MudText>
+                <MudText Typo="Typo.body2" Class="bm-home-subtitle">
+                    Real-time system monitor
+                </MudText>
+            </div>
         </div>
+
+        <!-- Infra health strip (right) -->
+        <div class="bm-infra-strip">
+
+            <!-- Kafka -->
+            <div class="bm-infra-svc">
+                <MudIcon Icon="@Icons.Material.Outlined.Stream" Class="bm-infra-svc-icon" />
+                <span class="bm-infra-svc-name">Kafka</span>
+                <div class="bm-infra-dots">
+                    @if (_kafkaHealth is null)
+                    {
+                        <span class="bm-infra-dot bm-infra-dot-unknown bm-infra-dot-pulse"></span>
+                    }
+                    else
+                    {
+                        @foreach (var b in _kafkaHealth.Brokers)
+                        {
+                            var bLabel = $"broker {b.Id} · {b.Host}:{b.Port} · {(b.IsOnline ? (b.LatencyMs.HasValue ? $"{b.LatencyMs} ms" : "online") : "offline")}";
+                            <MudTooltip Text="@bLabel" Placement="Placement.Bottom" Arrow="true">
+                                <span class="bm-infra-dot @(b.IsOnline ? "bm-infra-dot-ok" : "bm-infra-dot-err")"></span>
+                            </MudTooltip>
+                        }
+                    }
+                </div>
+                <span class="bm-infra-label bm-infra-label-@StatusCss(_kafkaHealth?.Status)">
+                    @(_kafkaHealth?.Status.ToString().ToUpper() ?? "…")
+                </span>
+            </div>
+
+            <div class="bm-infra-sep"></div>
+
+            <!-- Mongo -->
+            <div class="bm-infra-svc">
+                <MudIcon Icon="@Icons.Material.Outlined.Storage" Class="bm-infra-svc-icon" />
+                <span class="bm-infra-svc-name">Mongo</span>
+                <div class="bm-infra-dots">
+                    @if (_mongoHealth is null)
+                    {
+                        <span class="bm-infra-dot bm-infra-dot-unknown bm-infra-dot-pulse"></span>
+                    }
+                    else if (_mongoHealth.Nodes.Count == 0)
+                    {
+                        var singleTip = _mongoHealth.Status == HealthStatus.Healthy ? "ping ok" : (_mongoHealth.Error ?? "down");
+                        <MudTooltip Text="@singleTip" Placement="Placement.Bottom" Arrow="true">
+                            <span class="bm-infra-dot @(_mongoHealth.Status == HealthStatus.Healthy ? "bm-infra-dot-ok" : "bm-infra-dot-err")"></span>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        @foreach (var n in _mongoHealth.Nodes)
+                        {
+                            var nLabel = $"{n.Host} · {n.Role} · {(n.IsOnline ? (n.LatencyMs.HasValue ? $"{n.LatencyMs} ms" : "online") : "offline")}";
+                            <MudTooltip Text="@nLabel" Placement="Placement.Bottom" Arrow="true">
+                                <span class="bm-infra-dot @(n.IsOnline ? "bm-infra-dot-ok" : "bm-infra-dot-err")
+                                    @(n.Role == "PRIMARY" ? " bm-infra-dot-primary" : "")"></span>
+                            </MudTooltip>
+                        }
+                    }
+                </div>
+                <span class="bm-infra-label bm-infra-label-@StatusCss(_mongoHealth?.Status)">
+                    @(_mongoHealth?.Status.ToString().ToUpper() ?? "…")
+                </span>
+            </div>
+
+            <div class="bm-infra-sep"></div>
+
+            <MudTooltip Text="@($"last checked {_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--"} UTC")" Placement="Placement.Bottom">
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">Last update</span>
+                    <span class="bm-infra-time bm-muted">@(_kafkaHealth?.CheckedAt.ToString("HH:mm") ?? "--:--")</span>
+                </div>
+            </MudTooltip>
+
+        </div>
+
     </div>
 
     <!-- ── Memory treemap ──────────────────────────────────────────────────── -->
-    <div style="display:flex;flex-direction:column;gap:6px;">
-        <div class="bm-section-header">
+    <div class="bm-section-header" style="margin:0;">
+        <div class="bm-memory-header-left">
+            <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
-            <span class="bm-muted" style="font-size:12px;">online services only · click to open services</span>
-        </div>
-        <HomeMemoryTreemap Env="@EnvService.SelectedId" />
-    </div>
-
-    <!-- ── Infrastructure health ─────────────────────────────────────────── -->
-    <div class="bm-section-header">
-        <MudText Typo="Typo.subtitle2" Class="bm-section-title">Infrastructure Health</MudText>
-        <span class="bm-muted" style="font-size:12px;">auto-refresh every 10 s</span>
-    </div>
-
-    <div class="bm-infra-grid">
-
-        <!-- Kafka card -->
-        <div class="bm-health-card bm-health-@StatusCss(_kafkaHealth?.Status)">
-            <div class="bm-health-card-header">
-                <MudIcon Icon="@Icons.Material.Outlined.Stream" Size="Size.Small" Class="bm-health-svc-icon" />
-                <span class="bm-health-name">Kafka</span>
-                @if (_kafkaChecking)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
-                }
-                else if (_kafkaHealth is not null)
-                {
-                    <span class="bm-health-pill bm-health-pill-@StatusCss(_kafkaHealth.Status)">
-                        @_kafkaHealth.Status.ToString().ToUpper()
-                    </span>
-                }
-                <span class="bm-health-time bm-muted">
-                    @(_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
-                </span>
-            </div>
-
-            <div class="bm-health-nodes">
-                @if (_kafkaHealth is not null)
-                {
-                    @foreach (var b in _kafkaHealth.Brokers)
-                    {
-                        <div class="bm-health-node">
-                            <span class="bm-health-dot @(b.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
-                            <span class="bm-health-host">@b.Host:@b.Port</span>
-                            @if (b.IsOnline && b.LatencyMs.HasValue)
-                            {
-                                <span class="bm-health-latency">@b.LatencyMs ms</span>
-                            }
-                            else if (!b.IsOnline)
-                            {
-                                <span class="bm-health-offline">offline</span>
-                            }
-                            <span class="bm-health-role bm-muted">broker @b.Id</span>
-                        </div>
-                    }
-                }
-                else
-                {
-                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
-                        Connecting…
-                    </div>
-                }
-            </div>
-
-            @if (_kafkaHealth is not null)
+            @if (!_memoryLoaded)
             {
-                var onlineKafka = _kafkaHealth.Brokers.Count(b => b.IsOnline);
-                var totalKafka  = _kafkaHealth.Brokers.Count;
-                <div class="bm-health-footer">
-                    <span>@onlineKafka / @totalKafka brokers online</span>
-                    @if (_kafkaHealth.Error is not null)
-                    {
-                        <span class="bm-health-err-text">@_kafkaHealth.Error</span>
-                    }
-                </div>
+                <MudProgressCircular Indeterminate="true" Class="bm-memory-spinner" />
             }
         </div>
-
-        <!-- MongoDB card -->
-        <div class="bm-health-card bm-health-@StatusCss(_mongoHealth?.Status)">
-            <div class="bm-health-card-header">
-                <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-health-svc-icon" />
-                <span class="bm-health-name">MongoDB</span>
-                @if (_mongoChecking)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
-                }
-                else if (_mongoHealth is not null)
-                {
-                    <span class="bm-health-pill bm-health-pill-@StatusCss(_mongoHealth.Status)">
-                        @_mongoHealth.Status.ToString().ToUpper()
-                    </span>
-                }
-                <span class="bm-health-time bm-muted">
-                    @(_mongoHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
-                </span>
-            </div>
-
-            <div class="bm-health-nodes">
-                @if (_mongoHealth is not null)
-                {
-                    @foreach (var n in _mongoHealth.Nodes)
-                    {
-                        <div class="bm-health-node">
-                            <span class="bm-health-dot @(n.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
-                            <span class="bm-health-host">@n.Host</span>
-                            @if (n.IsOnline && n.LatencyMs.HasValue)
-                            {
-                                <span class="bm-health-latency">@n.LatencyMs ms</span>
-                            }
-                            else if (!n.IsOnline)
-                            {
-                                <span class="bm-health-offline">offline</span>
-                            }
-                            <span class="bm-health-role @(n.Role == "PRIMARY" ? "bm-health-role-primary" : "bm-muted")">
-                                @n.Role
-                            </span>
-                        </div>
-                    }
-                }
-                else
-                {
-                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
-                        Connecting…
-                    </div>
-                }
-            </div>
-
-            @if (_mongoHealth is not null)
-            {
-                <div class="bm-health-footer">
-                    <span>@_mongoHealth.DatabaseCount databases · replica set</span>
-                    @if (_mongoHealth.Error is not null)
-                    {
-                        <span class="bm-health-err-text">@_mongoHealth.Error</span>
-                    }
-                </div>
-            }
-        </div>
-
+        <MudButton Variant="Variant.Text" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.OpenInNew"
+                   OnClick="OpenServices"
+                   Class="bm-view-all-btn">
+            View All
+        </MudButton>
     </div>
+    <HomeMemoryTreemap Env="@EnvService.SelectedId" OnDataLoaded="OnMemoryDataLoaded" OnPidClicked="OnTreemapPidClicked" />
 
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
-    <MudPaper Elevation="0" Class="bm-mini-summary">
-        <div class="bm-mini-summary-header">
+    <div class="bm-section-header" style="margin:4px 0 0;">
+        <div class="bm-memory-header-left">
+            <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       StartIcon="@Icons.Material.Outlined.ViewList"
-                       OnClick="OpenRunsDashboard"
-                       Class="bm-view-all-btn">
-                View All
-            </MudButton>
         </div>
+        <MudButton Variant="Variant.Text" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.OpenInNew"
+                   OnClick="OpenRunsDashboard"
+                   Class="bm-view-all-btn">
+            View All
+        </MudButton>
+    </div>
+    <MudPaper Elevation="0" Class="bm-mini-summary">
 
         <MudTable T="RunSummary"
                   Items="@_recent"
@@ -16410,10 +16567,9 @@ LENGTH 14979
     private List<RunSummary> _recent = new();
 
     // Health state
-    private KafkaHealth? _kafkaHealth   = null;
-    private MongoHealth? _mongoHealth   = null;
-    private bool         _kafkaChecking = false;
-    private bool         _mongoChecking = false;
+    private KafkaHealth? _kafkaHealth = null;
+    private MongoHealth? _mongoHealth = null;
+    private bool         _memoryLoaded = false;
 
     private CancellationTokenSource _cts = new();
 
@@ -16442,34 +16598,45 @@ LENGTH 14979
     private async Task CheckHealthAsync()
     {
         var env = EnvService.SelectedId;
-        _kafkaHealth   = HealthCache.GetKafka(env);
-        _mongoHealth   = HealthCache.GetMongo(env);
-        _kafkaChecking = false;
-        _mongoChecking = false;
+        _kafkaHealth = HealthCache.GetKafka(env);
+        _mongoHealth = HealthCache.GetMongo(env);
         await InvokeAsync(StateHasChanged);
     }
 
-    private async void OnHealthUpdated(string env)
+    private void OnHealthUpdated(string env)
     {
         if (env != EnvService.SelectedId) return;
-        await CheckHealthAsync();
+        _ = InvokeAsync(async () =>
+        {
+            try { await CheckHealthAsync(); }
+            catch (Exception ex) { Logger.LogError(ex, "Health update failed"); }
+        });
     }
 
     // ── Env change ────────────────────────────────────────────────────────
 
-    private async void OnEnvExternalChange()
+    private void OnEnvExternalChange()
     {
-        _recent = [];
-        await InvokeAsync(StateHasChanged);
-        HealthCache.RequestRefresh(EnvService.SelectedId);
-        await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-        await InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                _recent       = [];
+                _memoryLoaded = false;
+                StateHasChanged();
+                HealthCache.RequestRefresh(EnvService.SelectedId);
+                await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+                StateHasChanged();
+            }
+            catch (Exception ex) { Logger.LogError(ex, "Env change update failed"); }
+        });
     }
 
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
-        _recent = [];
+        _recent               = [];
+        _memoryLoaded         = false;
         HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
@@ -16478,6 +16645,22 @@ LENGTH 14979
 
     private void OpenRunsDashboard() =>
         TabService.OpenOrFocus(TabModel.CreateRunsDashboard(EnvService.SelectedId));
+
+    private void OpenServices() =>
+        TabService.OpenOrFocus(TabModel.CreateServicesDashboard(EnvService.SelectedId));
+
+    private void OnMemoryDataLoaded()
+    {
+        _memoryLoaded = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnTreemapPidClicked(int pid)
+    {
+        var tab = TabModel.CreateMemoryGraph(EnvService.SelectedId);
+        tab.NavigationHint = pid.ToString();
+        TabService.OpenOrFocus(tab);
+    }
 
     private void OpenDetail(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, EnvService.SelectedId));
@@ -16506,7 +16689,7 @@ LENGTH 14979
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 1764
+LENGTH 2608
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Web.Services
@@ -16516,41 +16699,62 @@ LENGTH 1764
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
-    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
+    @if (!_started || _switching)
+    {
+        <div class="bm-treemap-loading">
+            <div class="bm-treemap-spinner"></div>
+        </div>
+    }
+    <div class="bm-home-treemap" @ref="_ref"></div>
 </div>
 
 @code {
-    [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public string            Env            { get; set; } = string.Empty;
+    [Parameter] public EventCallback     OnDataLoaded   { get; set; }
+    [Parameter] public EventCallback<int> OnPidClicked  { get; set; }
 
-    private ElementReference _ref;
-    private IDisposable?     _sub;
-    private string           _subscribedEnv = string.Empty;
-    private bool             _started;
+    private ElementReference                        _ref;
+    private IDisposable?                            _sub;
+    private DotNetObjectReference<HomeMemoryTreemap>? _selfRef;
+    private string                                  _subscribedEnv = string.Empty;
+    private bool                                    _started;
+    private bool                                    _switching;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
 
-        // Keep MetricsMonitor (→ HeartbeatMonitor) subscribed so server-side polling stays alive.
+        _switching = true;
+
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
         _subscribedEnv = Env;
 
         if (_started)
         {
-            // Env changed while mounted — restart the JS poller on the new env.
-            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
-            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+            // Env changed — overlay is now visible (set above), clear old tree and start new.
+            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
         }
+
+        _switching = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender || _started) return;
         _started = true;
-        // JS polls /api/treemap/{env} every 10 s on its own — no SignalR involvement.
-        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+        await InvokeAsync(StateHasChanged);
     }
+
+    [JSInvokable]
+    public void NotifyDataLoaded() => _ = OnDataLoaded.InvokeAsync();
+
+    [JSInvokable]
+    public void OnLeafClicked(int pid) => _ = OnPidClicked.InvokeAsync(pid);
 
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));
@@ -16558,11 +16762,12 @@ LENGTH 1764
     public async ValueTask DisposeAsync()
     {
         _sub?.Dispose();
-        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch { }
+        _selfRef?.Dispose();
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26605
+LENGTH 26897
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16571,6 +16776,7 @@ LENGTH 26605
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<KafkaDashboard> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
@@ -16644,17 +16850,17 @@ LENGTH 26605
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh>
+                    <MudTh Style="width:100%;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
                     </MudTh>
-                    <MudTh>
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
                     </MudTh>
-                    <MudTh>
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:90px;">Policy</MudTh>
-                    <MudTh Style="width:140px; text-align:center;">Actions</MudTh>
+                    <MudTh Style="white-space:nowrap;">Policy</MudTh>
+                    <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
@@ -16747,19 +16953,19 @@ LENGTH 26605
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh>
+                    <MudTh Style="width:100%;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.GroupId">Group ID</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:120px;">
+                    <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.State">State</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:90px; text-align:right;">
+                    <MudTh Style="white-space:nowrap; text-align:right;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TopicCount">Topics</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:110px; text-align:right;">
+                    <MudTh Style="white-space:nowrap; text-align:right;">
                         <MudTableSortLabel T="KafkaConsumerGroupOverview" SortBy="x => x.TotalLag">Total Lag</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
+                    <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => OnGroupSelected(context))">
@@ -17041,7 +17247,7 @@ LENGTH 26605
     private void OnPageChanged(int page)   { _page = page;  RebuildPage(); }
     private void OnPageSizeChanged(int sz) { _pageSize = sz; _page = 1; RebuildPage(); }
 
-    private async void OnGroupSelected(KafkaConsumerGroupOverview? group)
+    private async Task OnGroupSelected(KafkaConsumerGroupOverview? group)
     {
         if (group is null || ReferenceEquals(_selectedGroup, group))
         {
@@ -17060,6 +17266,7 @@ LENGTH 26605
             _topicLags = lags.ToList();
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId); }
         finally { _loadingDetail = false; StateHasChanged(); }
     }
 
@@ -17157,12 +17364,13 @@ LENGTH 26605
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9515
+LENGTH 9679
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
+@inject ILogger<KafkaGroupsDashboard> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -17356,7 +17564,7 @@ LENGTH 9515
 
     private void ApplyFilter() => OnFilterChanged(_filterText);
 
-    private async void OnRowSelected(KafkaConsumerGroupOverview? group)
+    private async Task OnRowSelected(KafkaConsumerGroupOverview? group)
     {
         if (group is null || ReferenceEquals(_selected, group))
         {
@@ -17374,7 +17582,11 @@ LENGTH 9515
             _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+            _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
+        }
         StateHasChanged();
     }
 
@@ -17390,13 +17602,14 @@ LENGTH 9515
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 12568
+LENGTH 12940
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
+@inject ILogger<KafkaTopicInspector> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -17482,11 +17695,11 @@ LENGTH 12568
                       SelectedItemChanged="OnRowSelected"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="width:90px;">Offset</MudTh>
-                    <MudTh Style="width:55px;">Part</MudTh>
-                    <MudTh Style="width:180px;">Key</MudTh>
-                    <MudTh>Value</MudTh>
-                    <MudTh Style="width:140px;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="white-space:nowrap;">Offset</MudTh>
+                    <MudTh Style="white-space:nowrap;">Part</MudTh>
+                    <MudTh Style="white-space:nowrap;">Key</MudTh>
+                    <MudTh Style="width:100%;">Value</MudTh>
+                    <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
@@ -17495,7 +17708,7 @@ LENGTH 12568
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-mono">@context.Partition</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
@@ -17612,6 +17825,7 @@ LENGTH 12568
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName); }
         finally { _loading = false; StateHasChanged(); }
     }
 
@@ -17683,7 +17897,8 @@ LENGTH 12568
         {
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Value); }
-            catch { }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for topic {Topic}", TopicName); }
         }
     }
 
@@ -17719,7 +17934,7 @@ LENGTH 12568
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 26074
+LENGTH 26284
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17732,6 +17947,7 @@ LENGTH 26074
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
+@inject ILogger<LogBrowser> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -18279,9 +18495,14 @@ LENGTH 26074
         try
         {
             while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
+            {
                 // Skip auto-refresh while a search is running.
                 if (_selectedPath is not null && !_isSearching && !_isSearchMode)
-                    await InvokeAsync(LoadFilesAsync);
+                {
+                    try { await InvokeAsync(LoadFilesAsync); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser auto-refresh failed"); }
+                }
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -18335,12 +18556,13 @@ LENGTH 26074
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 20172
+LENGTH 20399
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject ILogger<LogViewer> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -18806,7 +19028,10 @@ LENGTH 20172
         try
         {
             while (_tailTimer is not null && await _tailTimer.WaitForNextTickAsync(_cts.Token))
-                await InvokeAsync(TailTickAsync);
+            {
+                try { await InvokeAsync(TailTickAsync); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Log viewer tail tick failed"); }
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -18822,7 +19047,7 @@ LENGTH 20172
             await _viewport.AppendRawAsync(text);
         }
         catch (JSDisconnectedException) { }
-        catch { }
+        catch (Exception ex) { Logger.LogWarning(ex, "Log tail tick failed"); }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -18964,7 +19189,7 @@ LENGTH 3964
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 18142
+LENGTH 19568
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -18995,6 +19220,20 @@ LENGTH 18142
             <MudButton Class="@(_chartType == ChartType.Line     ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Line))">Line</MudButton>
             <MudButton Class="@(_chartType == ChartType.Sunburst ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Sunburst))">Sunburst</MudButton>
         </MudButtonGroup>
+
+        @if (_chartType == ChartType.Line)
+        {
+            <div class="bm-mg-toolbar-sep"></div>
+
+            <!-- Time range -->
+            <span class="bm-svc-grouping-label">Range</span>
+            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
+                <MudButton Class="@(_windowHours == 1    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1))">1h</MudButton>
+                <MudButton Class="@(_windowHours == 6    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6))">6h</MudButton>
+                <MudButton Class="@(_windowHours == 24   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24))">24h</MudButton>
+                <MudButton Class="@(_windowHours == null ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(null))">All</MudButton>
+            </MudButtonGroup>
+        }
 
         <div class="bm-mg-toolbar-spacer"></div>
 
@@ -19030,13 +19269,18 @@ LENGTH 18142
             {
                 <div class="bm-mg-empty">No data yet.</div>
             }
+            @if (_chartType == ChartType.Line)
+            {
+                <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+            }
         </div>
 
     </div>
 </div>
 
 @code {
-    [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public string  Env            { get; set; } = string.Empty;
+    [Parameter] public string? NavigationHint { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
     private enum GroupBy   { None, Service, Host }
@@ -19045,6 +19289,8 @@ LENGTH 18142
     // ── state ────────────────────────────────────────────────────────────
     private GroupBy   _groupBy   = GroupBy.Service;
     private ChartType _chartType = ChartType.Line;
+    private string?   _lastHint;
+    private int?      _windowHours = 1;   // null = show all; default to last 1 h
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -19052,7 +19298,7 @@ LENGTH 18142
 
     private sealed class LegendItem
     {
-        public string  Key       { get; init; } = "";   // grouping key
+        public string  Key       { get; init; } = "";
         public string  Name      { get; init; } = "";
         public string  Color     { get; init; } = "#888";
         public bool    Visible   { get; set;  } = true;
@@ -19062,9 +19308,11 @@ LENGTH 18142
     private List<LegendItem>    _legendItems = [];
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
+    private ElementReference    _brushRef;
     private bool                _chartDirty  = true;
 
-    private sealed record LineSeriesDto(string Name, string Color, double[] Data, string[] Labels);
+    // Raw samples sent to JS; JS handles bucketing + brush-driven zoom.
+    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values);
 
     // 16-color palette
     private static readonly string[] Palette =
@@ -19086,6 +19334,34 @@ LENGTH 18142
     {
         _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
         Rebuild();
+        ApplyNavigationHint();
+    }
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (NavigationHint != _lastHint)
+            ApplyNavigationHint();
+        return Task.CompletedTask;
+    }
+
+    private void ApplyNavigationHint()
+    {
+        _lastHint = NavigationHint;
+        if (!int.TryParse(NavigationHint, out var pid)) return;
+
+        // Switch to per-process grouping so each PID is an individual legend entry.
+        _groupBy = GroupBy.None;
+        Rebuild();
+
+        // Uncheck every entry except the one matching the pid.
+        foreach (var item in _legendItems)
+        {
+            // None-group key = "ServiceName|ProcessId" — match the trailing |pid segment.
+            item.Visible = item.Key.EndsWith("|" + pid, StringComparison.Ordinal);
+        }
+
+        BuildChartData();
+        _chartDirty = true;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -19198,63 +19474,41 @@ LENGTH 18142
         Dictionary<string, string> colorMap,
         HashSet<string> visible)
     {
-        // Collect all histories to find the global time range
-        var allSamples = new List<(string key, MetricsSample sample)>();
-        foreach (var (key, svcs) in groups)
-        {
-            if (!visible.Contains(key)) continue;
-            foreach (var svc in svcs)
-            {
-                var hist = MetricsMonitor.GetHistory(Env, svc);
-                allSamples.AddRange(hist.Select(s => (key, s)));
-            }
-        }
-
-        if (allSamples.Count == 0) { _lineSeries = []; return; }
-
-        // Shared time axis — up to 120 buckets
-        var minTime  = allSamples.Min(x => x.sample.Timestamp);
-        var maxTime  = allSamples.Max(x => x.sample.Timestamp);
-        var span     = maxTime - minTime;
-        int buckets  = Math.Clamp((int)span.TotalMinutes + 1, 2, 120);
-        var interval = span.TotalSeconds / (buckets - 1);
-        if (interval < 1) interval = 1;
-
-        var times = Enumerable.Range(0, buckets)
-            .Select(i => minTime.AddSeconds(i * interval))
-            .ToArray();
-
-        var labels = times.Select((t, i) =>
-            i % Math.Max(1, buckets / 10) == 0
-                ? t.ToLocalTime().ToString("HH:mm")
-                : "").ToArray();
-
         _lineSeries = [];
         foreach (var (key, svcs) in groups)
         {
             if (!visible.Contains(key)) continue;
-            var history = svcs.SelectMany(svc => MetricsMonitor.GetHistory(Env, svc)).ToList();
-            if (history.Count == 0) continue;
 
-            var data = new double[buckets];
-            for (int i = 0; i < buckets; i++)
-            {
-                var t    = times[i];
-                var prev = history.Where(s => s.Timestamp <= t).MaxBy(s => s.Timestamp);
-                data[i]  = prev is not null ? prev.TotalCurrentBytes / 1e6 : 0;
-            }
+            // Merge and sort all samples for this group, dedup by timestamp.
+            var samples = svcs
+                .SelectMany(svc => MetricsMonitor.GetHistory(Env, svc))
+                .GroupBy(s => s.Timestamp)
+                .Select(g => (Timestamp: g.Key, Bytes: g.Sum(s => s.TotalCurrentBytes)))
+                .OrderBy(s => s.Timestamp)
+                .ToList();
 
-            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
-            _lineSeries.Add(new LineSeriesDto(key, color, data, labels));
+            if (samples.Count == 0) continue;
+
+            var color      = colorMap.TryGetValue(key, out var c) ? c : "#888";
+            var timestamps = samples.Select(s => new DateTimeOffset(s.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds()).ToArray();
+            var values     = samples.Select(s => s.Bytes / 1e6).ToArray();
+            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, values));
         }
+    }
+
+    private void SetWindow(int? hours)
+    {
+        _windowHours = hours;
+        _chartDirty  = true;
+        StateHasChanged();
     }
 
     // ── sunburst ─────────────────────────────────────────────────────────
 
     private async Task RenderLineAsync()
     {
-        try { await JS.InvokeVoidAsync("memoryLineChart.render", _chartRef, _lineSeries); }
-        catch { }
+        try { await JS.InvokeVoidAsync("memoryLineChart.render", _chartRef, _brushRef, _lineSeries, _windowHours); }
+        catch (Exception) { }
     }
 
     private async Task RenderSunburstAsync()
@@ -19264,7 +19518,7 @@ LENGTH 18142
             var data = BuildSunburstData();
             await JS.InvokeVoidAsync("memorySunburst.render", _chartRef, data, new { });
         }
-        catch { }
+        catch (Exception) { }
     }
 
     private object BuildSunburstData()
@@ -19420,7 +19674,7 @@ LENGTH 18142
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
         try { await JS.InvokeVoidAsync("memorySunburst.destroy", _chartRef); }
-        catch { }
+        catch (Exception) { }
     }
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor
@@ -19540,13 +19794,14 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 10676
+LENGTH 10898
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
 @inject IMongoReader MongoSvc
 @inject IJSRuntime JS
+@inject ILogger<MongoCollectionInspector> Logger
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -19594,14 +19849,14 @@ LENGTH 10676
                       SelectedItemChanged="OnRowSelected"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="width:200px; white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
+                    <MudTh Style="white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
                     <MudTh Style="width:100%;">Preview</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => SaveDocumentAsync(context))">
                         <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                     </MudTd>
-                    <MudTd Style="width:100%;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="width:100%; max-width:0;" @ondblclick="@(() => SaveDocumentAsync(context))">
                         <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                     </MudTd>
                 </RowTemplate>
@@ -19775,7 +20030,8 @@ LENGTH 10676
         {
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
-            catch { }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection); }
         }
     }
 
@@ -19811,7 +20067,7 @@ LENGTH 10676
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11377
+LENGTH 11427
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19888,11 +20144,11 @@ LENGTH 11377
                   Height="100%"
                   Class="bm-batch-table">
             <HeaderContent>
-                <MudTh>Collection</MudTh>
-                <MudTh Style="width:130px; text-align:right;">Documents</MudTh>
-                <MudTh Style="width:120px; text-align:right;">Storage</MudTh>
-                <MudTh Style="width:80px; text-align:center;">Indexes</MudTh>
-                <MudTh Style="width:90px; text-align:center;">Actions</MudTh>
+                <MudTh Style="width:100%;">Collection</MudTh>
+                <MudTh Style="white-space:nowrap; text-align:right;">Documents</MudTh>
+                <MudTh Style="white-space:nowrap; text-align:right;">Storage</MudTh>
+                <MudTh Style="white-space:nowrap; text-align:center;">Indexes</MudTh>
+                <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
@@ -20130,13 +20386,14 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16166
+LENGTH 16200
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
 @inject TabService TabService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
+@inject ILogger<RunDetail> Logger
 @implements IDisposable
 
 @code {
@@ -20187,7 +20444,7 @@ LENGTH 16166
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", LocalStorageKey);
             _detailsExpanded = stored == "true";
         }
-        catch { }
+        catch (Exception) { }
 
         await LoadAsync();
     }
@@ -20273,7 +20530,7 @@ LENGTH 16166
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[RunDetail] Topology compute error: {ex.Message}");
+                Logger.LogError(ex, "Topology compute failed");
             }
         }, TaskScheduler.Default);
     }
@@ -20355,7 +20612,7 @@ LENGTH 16166
     {
         _detailsExpanded = !_detailsExpanded;
         try { await JS.InvokeVoidAsync("localStorage.setItem", LocalStorageKey, _detailsExpanded.ToString().ToLower()); }
-        catch { }
+        catch (Exception) { }
     }
 
     private async Task CancelRunAsync()
@@ -20811,7 +21068,7 @@ LENGTH 11195
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 30985
+LENGTH 31888
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20825,6 +21082,7 @@ LENGTH 30985
 @inject TabService TabService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject ILogger<ServicesPage> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -21149,6 +21407,11 @@ LENGTH 30985
             RecomputeFilter();
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load services for env {Env}", Env);
+            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading = false;
@@ -21457,11 +21720,22 @@ LENGTH 30985
         var svg = new System.Text.StringBuilder();
         svg.Append($"<svg class=\"bm-svc-spark\" viewBox=\"0 0 100 40\" preserveAspectRatio=\"none\" data-spark=\"{tooltip}\" xmlns=\"http://www.w3.org/2000/svg\">");
         svg.Append($"<defs><linearGradient id=\"{gradId}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">");
-        svg.Append("<stop offset=\"0%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.18\"/>");
-        svg.Append("<stop offset=\"100%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.01\"/>");
+        svg.Append("<stop offset=\"0%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.40\"/>");
+        svg.Append("<stop offset=\"100%\" stop-color=\"var(--mud-palette-primary)\" stop-opacity=\"0.04\"/>");
         svg.Append("</linearGradient></defs>");
         svg.Append(lines);
         svg.Append($"<path d=\"{path}\" fill=\"url(#{gradId})\"/>");
+        // Add a visible stroke line on top of the fill area
+        var strokePath = path.ToString();
+        var firstL = strokePath.IndexOf(" L", StringComparison.Ordinal);
+        if (firstL >= 0)
+        {
+            var open = strokePath[firstL..];
+            var closingL = open.LastIndexOf(" L100,40", StringComparison.Ordinal);
+            if (closingL >= 0) open = open[..closingL];
+            svg.Append(System.FormattableString.Invariant(
+                $"<path d=\"M{open.TrimStart()}\" fill=\"none\" stroke=\"var(--mud-palette-primary)\" stroke-width=\"1.2\" stroke-opacity=\"0.60\" vector-effect=\"non-scaling-stroke\"/>"));
+        }
         svg.Append("</svg>");
         return new SparkData(new MarkupString(svg.ToString()));
     }
@@ -21601,7 +21875,7 @@ LENGTH 4288
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 30903
+LENGTH 30915
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -22107,7 +22381,7 @@ LENGTH 30903
         if (_tlModule is not null)
         {
             try { await _tlModule.InvokeVoidAsync("dispose", _instanceKey); }
-            catch { }
+            catch (Exception) { }
             try { await _tlModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
         }
@@ -22371,7 +22645,7 @@ LENGTH 30903
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 16875
+LENGTH 21155
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22403,11 +22677,96 @@ LENGTH 16875
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
 
-    <div id="blazor-error-ui">
-        An unhandled error has occurred.
-        <a href="" class="reload">Reload</a>
-        <a class="dismiss">🗙</a>
+    <!-- Custom Blazor reconnect / error overlay — replaces the default banner. -->
+    <div id="blazor-error-ui" style="display:none;">
+        <div class="bm-reconnect-overlay">
+            <div class="bm-reconnect-dialog">
+                <div class="bm-reconnect-icon">⚡</div>
+                <div class="bm-reconnect-title" id="bm-reconnect-title">Connection lost</div>
+                <div class="bm-reconnect-msg"  id="bm-reconnect-msg">Reconnecting…</div>
+                <div class="bm-reconnect-actions">
+                    <a href="javascript:location.reload()" class="bm-reconnect-btn">Reload page</a>
+                    <a class="bm-reconnect-dismiss" onclick="document.getElementById('blazor-error-ui').style.display='none'">Dismiss</a>
+                </div>
+            </div>
+        </div>
     </div>
+    <style>
+        .bm-reconnect-overlay {
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0,0,0,.55); display: flex;
+            align-items: center; justify-content: center;
+        }
+        .bm-reconnect-dialog {
+            background: #1e1e2e; color: #cdd6f4; border-radius: 12px;
+            padding: 32px 40px; max-width: 400px; width: 90%;
+            box-shadow: 0 8px 32px rgba(0,0,0,.5); text-align: center;
+            border: 1px solid #313244;
+        }
+        .bm-reconnect-icon  { font-size: 2.5rem; margin-bottom: 12px; }
+        .bm-reconnect-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 8px; }
+        .bm-reconnect-msg   { font-size: .9rem; color: #a6adc8; margin-bottom: 24px; }
+        .bm-reconnect-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .bm-reconnect-btn {
+            background: #89b4fa; color: #1e1e2e; padding: 8px 20px;
+            border-radius: 6px; text-decoration: none; font-weight: 600;
+            font-size: .9rem;
+        }
+        .bm-reconnect-dismiss { color: #a6adc8; font-size: .85rem; align-self: center; cursor: pointer; }
+    </style>
+    <script>
+    (function () {
+        // Blazor calls these functions on the window object during reconnect attempts.
+        var _attempt = 0;
+        window.Blazor = window.Blazor || {};
+
+        // Override default reconnect UI handlers so we control the dialog.
+        document.addEventListener('DOMContentLoaded', function () {
+            var ui   = document.getElementById('blazor-error-ui');
+            var title = document.getElementById('bm-reconnect-title');
+            var msg   = document.getElementById('bm-reconnect-msg');
+            if (!ui) return;
+
+            // Blazor exposes reconnection handlers via blazor.reconnection
+            // We patch them after Blazor loads.
+            var patch = function () {
+                if (!window.Blazor?._internal?.navigationManager) {
+                    setTimeout(patch, 200);
+                    return;
+                }
+                var orig = window.Blazor._internal.reconnectionDisplay || {};
+                window.Blazor.reconnect = window.Blazor.reconnect || {};
+
+                // Called when reconnection starts
+                window.Blazor._internal.reconnectionDisplay = {
+                    show: function () {
+                        _attempt = 0;
+                        title.textContent = 'Connection lost';
+                        msg.textContent   = 'Reconnecting…';
+                        ui.style.display  = '';
+                    },
+                    update: function (attempt) {
+                        _attempt = attempt;
+                        title.textContent = 'Reconnecting…';
+                        msg.textContent   = 'Attempt ' + attempt + ' of 3 — if this persists, reload the page.';
+                    },
+                    hide: function () {
+                        ui.style.display = 'none';
+                    },
+                    failed: function () {
+                        title.textContent = 'Unable to reconnect';
+                        msg.textContent   = 'The server connection was lost and could not be restored. Reload to continue.';
+                    },
+                    rejected: function () {
+                        title.textContent = 'Session expired';
+                        msg.textContent   = 'This session is no longer valid. Reload to start a new session.';
+                    }
+                };
+            };
+            patch();
+        });
+    })();
+    </script>
 
     <!-- D3 v7 library -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -22746,7 +23105,7 @@ LENGTH 267
     }
   }
 }FILE src/NxtUI.Web/Services/BatchCatalogService.cs
-LENGTH 6101
+LENGTH 6117
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 using System.Text;
@@ -22891,7 +23250,7 @@ public sealed class BatchCatalogService : IBatchCatalogService
                 if (doc.RootElement.TryGetProperty(name, out var el))
                     return el.GetString();
         }
-        catch { }
+        catch (JsonException) { }
         return null;
     }
 }
@@ -22900,6 +23259,90 @@ file static class StringExtensions
 {
     public static string Truncate(this string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
+}
+FILE src/NxtUI.Web/Services/BlazorCircuitFilter.cs
+LENGTH 2897
+using System.Diagnostics;
+using Microsoft.AspNetCore.SignalR;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Wraps every Blazor circuit hub message. Logs exceptions immediately and warns
+/// when any message (render, event dispatch, JS interop) takes longer than the threshold.
+/// Register via AddHubFilter&lt;BlazorCircuitFilter&gt;() in AddSignalR().
+/// Enable via appsettings: "Diagnostics": { "Enabled": true }
+/// </summary>
+public sealed class BlazorCircuitFilter(ILogger<BlazorCircuitFilter> logger) : IHubFilter
+{
+    // Hub method names used by the Blazor protocol — friendlier to log than raw names.
+    private static readonly Dictionary<string, string> MethodLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["BeginInvokeDotNetFromJS"]  = "JS→.NET call",
+        ["EndInvokeJSFromDotNet"]    = ".NET→JS result",
+        ["DispatchBrowserEvent"]     = "browser event",
+        ["OnRenderCompleted"]        = "render ack",
+        ["OnErrorFromRenderer"]      = "renderer error",
+    };
+
+    private const int WarnMs  = 200;
+    private const int ErrorMs = 1000;
+
+    public async ValueTask<object?> InvokeMethodAsync(
+        HubInvocationContext ctx,
+        Func<HubInvocationContext, ValueTask<object?>> next)
+    {
+        var sw = Stopwatch.StartNew();
+        Exception? caught = null;
+        try
+        {
+            return await next(ctx);
+        }
+        catch (Exception ex)
+        {
+            caught = ex;
+            throw;
+        }
+        finally
+        {
+            sw.Stop();
+            var ms    = sw.ElapsedMilliseconds;
+            var label = MethodLabels.GetValueOrDefault(ctx.HubMethodName, ctx.HubMethodName);
+
+            if (caught is not null)
+            {
+                logger.LogError(caught,
+                    "circuit exception | op={Op} duration={Ms}ms",
+                    label, ms);
+            }
+            else if (ms >= ErrorMs)
+            {
+                logger.LogError(
+                    "circuit very slow | op={Op} duration={Ms}ms — possible deadlock or thread starvation",
+                    label, ms);
+            }
+            else if (ms >= WarnMs)
+            {
+                logger.LogWarning(
+                    "circuit slow | op={Op} duration={Ms}ms",
+                    label, ms);
+            }
+        }
+    }
+
+    // Log errors from hub connections/disconnections too.
+    public async Task OnConnectedAsync(HubLifetimeContext ctx, Func<HubLifetimeContext, Task> next)
+    {
+        try { await next(ctx); }
+        catch (Exception ex) { logger.LogError(ex, "circuit OnConnected failed"); throw; }
+    }
+
+    public async Task OnDisconnectedAsync(HubLifetimeContext ctx, Exception? ex, Func<HubLifetimeContext, Exception?, Task> next)
+    {
+        if (ex is not null)
+            logger.LogWarning(ex, "circuit disconnected with error");
+        await next(ctx, ex);
+    }
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
 LENGTH 1300
@@ -22947,7 +23390,7 @@ public class EnvironmentSelectorService
     public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
-LENGTH 6166
+LENGTH 6358
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -22968,6 +23411,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
     private readonly IHeartbeatService         _heartbeat;
     private readonly HeartbeatSettings         _settings;
     private readonly ILogger<HeartbeatMonitor> _log;
+    private readonly OperationTracker          _ops;
 
     private CancellationToken _ct = CancellationToken.None;
 
@@ -22985,13 +23429,15 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
     public event Action<string>? OnServicesUpdated;
 
     public HeartbeatMonitor(
-        IHeartbeatService         heartbeat,
+        IHeartbeatService           heartbeat,
         IOptions<HeartbeatSettings> settings,
-        ILogger<HeartbeatMonitor> log)
+        ILogger<HeartbeatMonitor>   log,
+        OperationTracker            ops)
     {
         _heartbeat = heartbeat;
         _settings  = settings.Value;
         _log       = log;
+        _ops       = ops;
     }
 
     // ── IHeartbeatMonitor ─────────────────────────────────────────────────────
@@ -23067,6 +23513,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         // Prevent concurrent polls for the same env (timer vs. immediate-subscribe race).
         var gate = _gates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0, ct)) return;
+        using var op = _ops.Track($"HeartbeatMonitor.Poll({env})");
         try
         {
             var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);
@@ -23136,7 +23583,7 @@ public interface IHeartbeatMonitor
     event Action<string>? OnServicesUpdated;
 }
 FILE src/NxtUI.Web/Services/InfraHealthCache.cs
-LENGTH 5221
+LENGTH 5901
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using NxtUI.Configuration;
@@ -23158,18 +23605,21 @@ public sealed class InfraHealthCache : BackgroundService
     private readonly IKafkaMonitor    _kafka;
     private readonly MongoConnection  _mongoConnection;
     private readonly ILogger<InfraHealthCache> _log;
+    private readonly OperationTracker _ops;
 
     private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MongoHealth>  _mongoCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnHealthUpdated;
 
-    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log)
+    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log, OperationTracker ops)
     {
         _kafka           = kafka;
         _mongoConnection = mongo;
         _log             = log;
+        _ops             = ops;
     }
 
     public KafkaHealth GetKafka(string env)
@@ -23185,10 +23635,16 @@ public sealed class InfraHealthCache : BackgroundService
     }
 
     /// <summary>Force an immediate poll for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) => _ = PollAllAsync([env], CancellationToken.None);
+    public void RequestRefresh(string env) =>
+        _ = PollAllAsync([env], _ct).ContinueWith(
+            t => _log.LogWarning(t.Exception, "InfraHealthCache: RequestRefresh faulted for {Env}", env),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        _ct = ct;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(PollIntervalSeconds));
         try
         {
@@ -23211,12 +23667,16 @@ public sealed class InfraHealthCache : BackgroundService
             PollMongoAllAsync(envs, ct));
 
         foreach (var env in envs)
-            OnHealthUpdated?.Invoke(env);
+        {
+            try { OnHealthUpdated?.Invoke(env); }
+            catch (Exception ex) { _log.LogWarning(ex, "InfraHealthCache: OnHealthUpdated subscriber threw for {Env}", env); }
+        }
     }
 
     private async Task PollKafkaAsync(string env, CancellationToken ct)
     {
         KafkaHealth result;
+        using var op = _ops.Track($"InfraHealthCache.Kafka({env})");
         try
         {
             var info = await _kafka.GetClusterInfoAsync(env, ct);
@@ -23250,9 +23710,9 @@ public sealed class InfraHealthCache : BackgroundService
     private async Task PollMongoAllAsync(string[] envs, CancellationToken ct)
     {
         if (!_mongoConnection.IsConfigured || envs.Length == 0)
-        {
             return;
-        }
+
+        using var op = _ops.Track($"InfraHealthCache.Mongo(ping)");
 
         MongoHealth result;
         try
@@ -23958,6 +24418,41 @@ public class MockRunService : IRunService
         return events;
     }
 }
+FILE src/NxtUI.Web/Services/OperationTracker.cs
+LENGTH 1088
+using System.Collections.Concurrent;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Singleton registry of in-flight operations. Services call Track() when starting a
+/// meaningful operation so the diagnostics monitor can report what was executing during lag.
+/// </summary>
+public sealed class OperationTracker
+{
+    private readonly ConcurrentDictionary<long, string> _ops = new();
+    private long _seq;
+
+    /// <summary>
+    /// Register an in-flight operation. Dispose the returned handle when the operation completes.
+    /// </summary>
+    public IDisposable Track(string description)
+    {
+        var id = Interlocked.Increment(ref _seq);
+        _ops[id] = description;
+        return new Handle(this, id);
+    }
+
+    /// <summary>Snapshot of all currently registered operations.</summary>
+    public IReadOnlyList<string> ActiveOperations => _ops.Values.ToList();
+
+    private void Remove(long id) => _ops.TryRemove(id, out _);
+
+    private sealed class Handle(OperationTracker owner, long id) : IDisposable
+    {
+        public void Dispose() => owner.Remove(id);
+    }
+}
 FILE src/NxtUI.Web/Services/PerformanceEventService.cs
 LENGTH 7622
 using NxtUI.Core.Services;
@@ -24161,6 +24656,97 @@ public class PerformanceEventService : IDisposable
     }
 
     public void Dispose() => StopPolling();
+}
+FILE src/NxtUI.Web/Services/ServerDiagnosticsMonitor.cs
+LENGTH 3694
+using System.Diagnostics;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Debugging aid: periodically samples server-side health indicators and logs them.
+/// When timer lag is detected, also reports in-flight operations from OperationTracker.
+/// Disable via appsettings: "Diagnostics": { "Enabled": false }
+/// </summary>
+public sealed class ServerDiagnosticsMonitor(
+    ILogger<ServerDiagnosticsMonitor> logger,
+    OperationTracker tracker) : BackgroundService
+{
+    // How often to sample. Larger interval = less log noise.
+    private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
+
+    // Warn when timer fires later than this much past its due time (thread pool saturation).
+    private const double LagWarnMs  = 500;
+    private const double LagInfoMs  = 100;
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        logger.LogInformation("ServerDiagnosticsMonitor started (interval={Interval}s)", Interval.TotalSeconds);
+
+        var process    = Process.GetCurrentProcess();
+        var prevCpuTime = process.TotalProcessorTime;
+        var prevWall    = Stopwatch.GetTimestamp();
+
+        while (!ct.IsCancellationRequested)
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                await Task.Delay(Interval, ct);
+            }
+            catch (OperationCanceledException) { break; }
+            sw.Stop();
+
+            // How much did the timer overshoot? Indicates thread pool / event loop pressure.
+            var lag = sw.Elapsed - Interval;
+
+            try
+            {
+                ThreadPool.GetAvailableThreads(out int workerAvail, out int ioAvail);
+                ThreadPool.GetMaxThreads(out int workerMax,   out int ioMax);
+                int workerUsed = workerMax - workerAvail;
+                int ioUsed     = ioMax     - ioAvail;
+
+                process.Refresh();
+                var nowCpu   = process.TotalProcessorTime;
+                var nowWall  = Stopwatch.GetTimestamp();
+                var cpuDelta = (nowCpu - prevCpuTime).TotalMilliseconds;
+                var wallMs   = (nowWall - prevWall) * 1000.0 / Stopwatch.Frequency;
+                var cpuPct   = wallMs > 0 ? cpuDelta / wallMs * 100.0 : 0;
+                prevCpuTime  = nowCpu;
+                prevWall     = nowWall;
+
+                var wsMb     = process.WorkingSet64 / 1_048_576.0;
+                var threads  = process.Threads.Count;
+
+                var level = lag.TotalMilliseconds > LagWarnMs ? LogLevel.Warning
+                          : lag.TotalMilliseconds > LagInfoMs ? LogLevel.Information
+                          : LogLevel.Debug;
+
+                logger.Log(level,
+                    "diag | lag={Lag:F0}ms | cpu={Cpu:F1}% | ws={WS:F0}MB | threads={Threads} | pool worker={WorkerUsed}/{WorkerMax} io={IoUsed}/{IoMax}",
+                    lag.TotalMilliseconds, cpuPct, wsMb, threads, workerUsed, workerMax, ioUsed, ioMax);
+
+                // When lagging, report what was in-flight at sample time.
+                if (lag.TotalMilliseconds > LagInfoMs)
+                {
+                    var active = tracker.ActiveOperations;
+                    if (active.Count > 0)
+                        logger.Log(level,
+                            "diag | in-flight operations: {Ops}",
+                            string.Join(" | ", active));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "ServerDiagnosticsMonitor: sample failed");
+            }
+        }
+
+        logger.LogInformation("ServerDiagnosticsMonitor stopped");
+    }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
 LENGTH 12144
@@ -24465,7 +25051,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     }
 }
 FILE src/NxtUI.Web/Services/SignalRConnectionService.cs
-LENGTH 5831
+LENGTH 6089
 using NxtUI.Core.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -24532,7 +25118,7 @@ public class SignalRConnectionService(
         if (_connection?.State == HubConnectionState.Connected)
         {
             try { await _connection.InvokeAsync("UnsubscribeFromRun", env, runId); }
-            catch { }
+            catch (Exception ex) { logger.LogWarning(ex, "SignalR UnsubscribeFromRun failed for {Env}/{RunId}", env, runId); }
         }
     }
 
@@ -24582,7 +25168,7 @@ public class SignalRConnectionService(
                 if (parts.Length == 2)
                 {
                     try { await _connection.InvokeAsync("SubscribeToRun", parts[0], parts[1]); }
-                    catch { }
+                    catch (Exception ex) { logger.LogError(ex, "SignalR re-subscribe failed for {Key}", k); }
                 }
             }
         };
@@ -24623,7 +25209,7 @@ public class SignalRConnectionService(
         if (_connection is not null)
         {
             try { await _connection.DisposeAsync(); }
-            catch { }
+            catch (Exception ex) { logger.LogDebug(ex, "SignalR connection dispose failed"); }
         }
     }
 
@@ -25320,7 +25906,7 @@ public class ThemeService
     };
 }
 FILE src/NxtUI.Web/Services/TimelineRun.cs
-LENGTH 4942
+LENGTH 4954
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 
@@ -25458,7 +26044,7 @@ public class TimelineRun(
         if (IsLive)
         {
             try { await signalR.UnsubscribeFromRunAsync(Env, RunId); }
-            catch { }
+            catch (Exception) { }
         }
     }
 }
@@ -25552,7 +26138,7 @@ LENGTH 740
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2500
+LENGTH 2537
 @namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
@@ -25602,7 +26188,7 @@ LENGTH 2500
                 @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<MemoryGraph Env="@env" />,
+                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" />,
 
             TabType.LogBrowser =>
                 @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
@@ -26761,6 +27347,100 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
         // After all subscriptions are released the cache should still be readable.
         var cached = heartbeat.GetServices(env);
         out_.WriteLine($"[{sw.Elapsed:c}] Cache after release: {cached?.Count.ToString() ?? "null"} services");
+    }
+}
+FILE tests/NxtUI.Tests/Performance/EnvironmentConfigTests.cs
+LENGTH 3380
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Performance;
+
+/// <summary>
+/// Verifies that IEnvironmentService correctly reflects the server lists
+/// configured in appsettings.json, so mismatches between config and service
+/// are caught before they reach the UI.
+/// </summary>
+public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper out_)
+    : IClassFixture<ServiceFixture>
+{
+    [Fact]
+    public void GetAll_Returns_All_Configured_Environments()
+    {
+        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+
+        var all = envSvc.GetAll();
+
+        out_.WriteLine($"Configured: {settings.Environments.Count} environments");
+        out_.WriteLine($"Returned:   {all.Count} environments");
+
+        Assert.Equal(settings.Environments.Count, all.Count);
+
+        foreach (var def in settings.Environments)
+        {
+            var found = all.FirstOrDefault(e => e.Id.Equals(def.Id, StringComparison.OrdinalIgnoreCase));
+            out_.WriteLine($"  {def.Id} ({def.Tier}): {(found is not null ? "found" : "MISSING")}");
+            Assert.NotNull(found);
+        }
+    }
+
+    [Fact]
+    public void GetServers_Returns_Correct_Count_For_Each_Environment()
+    {
+        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+
+        foreach (var def in settings.Environments)
+        {
+            var servers = envSvc.GetServers(def.Id);
+            out_.WriteLine($"  {def.Id}: {servers.Count} servers (expected {def.Servers.Count})");
+            Assert.Equal(def.Servers.Count, servers.Count);
+        }
+    }
+
+    [Fact]
+    public void GetServers_Returns_Correct_Hostnames_For_Each_Environment()
+    {
+        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+
+        foreach (var def in settings.Environments)
+        {
+            var actual = envSvc.GetServers(def.Id);
+            foreach (var expected in def.Servers)
+            {
+                out_.WriteLine($"  {def.Id}: checking for '{expected}'");
+                Assert.Contains(expected, actual, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public void GetServers_Returns_Empty_For_Unknown_Environment()
+    {
+        var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
+        var result = envSvc.GetServers("__nonexistent_env__");
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void GetById_Returns_Correct_Env_Or_Null()
+    {
+        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+
+        foreach (var def in settings.Environments)
+        {
+            var env = envSvc.GetById(def.Id);
+            Assert.NotNull(env);
+            Assert.Equal(def.Id, env.Id, StringComparer.OrdinalIgnoreCase);
+            out_.WriteLine($"  {def.Id}: label='{env.Label}', tier='{def.Tier}'");
+        }
+
+        Assert.Null(envSvc.GetById("__nonexistent__"));
     }
 }
 FILE tests/NxtUI.Tests/Performance/HomeTreemapPerfTests.cs
@@ -29404,7 +30084,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 72305
+LENGTH 75747
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -29853,15 +30533,35 @@ html, body {
     padding: 24px 28px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
 }
 
 .bm-home-header {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
     justify-content: space-between;
-    gap: 16px;
     flex-shrink: 0;
+}
+.bm-home-header-left {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    flex: 1;
+}
+.bm-home-title-block {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.bm-env-badge-home {
+    padding: 0 14px;
+    border-radius: 10px;
+    min-height: 48px;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
 }
 .bm-home-title   { font-weight: 700; letter-spacing: -0.01em; }
 .bm-home-subtitle { color: var(--mud-palette-text-secondary); margin-top: 2px; }
@@ -30668,8 +31368,8 @@ html, body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 500px;
     display: block;
+    width: 100%;
 }
 
 /* Detail panel — right side */
@@ -31324,6 +32024,127 @@ html, body {
     max-width: 60%;
 }
 
+/* ── Compact infra strip (header) ────────────────────────────────── */
+
+.bm-infra-strip {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.bm-infra-svc {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bm-infra-svc-icon {
+    font-size: 20px !important;
+    width: 20px !important;
+    height: 20px !important;
+    opacity: 0.65;
+    flex-shrink: 0;
+}
+
+.bm-infra-svc-name {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--mud-palette-text-secondary);
+    flex-shrink: 0;
+}
+
+.bm-infra-dots {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.bm-infra-sep {
+    width: 1px;
+    height: 28px;
+    background: var(--mud-palette-divider);
+    flex-shrink: 0;
+}
+
+.bm-infra-dot {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    cursor: default;
+    transition: transform 100ms ease;
+}
+.bm-infra-dot:hover { transform: scale(1.3); }
+
+.bm-infra-dot-ok      { background: #3FB950; box-shadow: 0 0 7px rgba(63,185,80,0.6); }
+.bm-infra-dot-err     { background: #F85149; box-shadow: 0 0 7px rgba(248,81,73,0.6); }
+.bm-infra-dot-unknown { background: var(--mud-palette-text-disabled); }
+.bm-infra-dot-primary { outline: 2px solid rgba(63,185,80,0.5); outline-offset: 2px; }
+
+@keyframes bm-infra-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}
+.bm-infra-dot-pulse { animation: bm-infra-pulse 1.4s ease-in-out infinite; }
+
+.bm-infra-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+.bm-infra-label-healthy  { color: #3FB950; }
+.bm-infra-label-degraded { color: #D29922; }
+.bm-infra-label-down     { color: #F85149; }
+.bm-infra-label-unknown,
+.bm-infra-label-checking { color: var(--mud-palette-text-secondary); }
+
+.bm-infra-time {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    cursor: default;
+    color: var(--mud-palette-text-secondary);
+}
+.bm-infra-lastupdate {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    cursor: default;
+    gap: 1px;
+}
+.bm-infra-lastupdate-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.65;
+}
+
+/* ── Memory section header ───────────────────────────────────────── */
+
+.bm-memory-header-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bm-memory-header-icon {
+    font-size: 15px !important;
+    width: 15px !important;
+    height: 15px !important;
+    opacity: 0.65;
+}
+
+.bm-memory-spinner {
+    width: 13px !important;
+    height: 13px !important;
+}
+
 /* ── Services Page ───────────────────────────────────────────────── */
 
 .bm-svc-cards {
@@ -31661,6 +32482,14 @@ tr.bm-row-searching td:first-child {
     flex: 1 1 0;
     min-height: 0;
     position: relative;
+}
+
+.bm-mg-brush-container {
+    height: 56px;
+    flex-shrink: 0;
+    position: relative;
+    border-top: 1px solid var(--mud-palette-divider);
+    margin-top: 4px;
 }
 
 .bm-mg-empty {
@@ -33211,7 +34040,7 @@ FILE src/NxtUI.Web/wwwroot/js/.gitignore
 LENGTH 14
 node_modules/
 FILE src/NxtUI.Web/wwwroot/js/app.js
-LENGTH 13352
+LENGTH 15756
 // Batch Monitor — client-side utilities
 
 // ── localStorage helpers ──────────────────────────────────────────────────
@@ -33556,6 +34385,69 @@ export function initTabWheelScroll(containerEl) {
         containerEl.scrollLeft += e.deltaY * 0.8;
     }, { passive: false });
 }
+
+// ── Client diagnostics monitor ────────────────────────────────────────────
+// Measures JS event-loop lag, frame rate, and Long Tasks (browser blocks >50ms).
+// Call bmClientDiag.start(dotnetRef) / .stop(). dotnetRef exposes:
+//   OnClientMetrics(lagMs, fps)
+//   OnLongTask(durationMs, attribution)
+window.bmClientDiag = (function () {
+    const TICK_MS = 5000;   // setInterval ping interval
+
+    let _dotnet     = null;
+    let _timerId    = null;
+    let _rafId      = null;
+    let _observer   = null;
+    let _frameCount = 0;
+    let _lastTickTs = performance.now();
+
+    function rafLoop() {
+        _frameCount++;
+        _rafId = requestAnimationFrame(rafLoop);
+    }
+
+    function tick() {
+        const now     = performance.now();
+        const elapsed = now - _lastTickTs;
+        const lag     = elapsed - TICK_MS;
+        _lastTickTs   = now;
+        const fps     = Math.round(_frameCount / (elapsed / 1000));
+        _frameCount   = 0;
+        if (_dotnet) _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), fps);
+    }
+
+    function startLongTaskObserver() {
+        if (!window.PerformanceObserver) return;
+        try {
+            _observer = new PerformanceObserver(list => {
+                for (const entry of list.getEntries()) {
+                    const attr = entry.attribution?.[0];
+                    const src  = attr?.name || attr?.containerSrc || 'unknown';
+                    if (_dotnet)
+                        _dotnet.invokeMethodAsync('OnLongTask', Math.round(entry.duration), src);
+                }
+            });
+            _observer.observe({ type: 'longtask', buffered: false });
+        } catch (e) { /* browser may not support longtask */ }
+    }
+
+    return {
+        start(dotnetRef) {
+            _dotnet     = dotnetRef;
+            _frameCount = 0;
+            _lastTickTs = performance.now();
+            _rafId      = requestAnimationFrame(rafLoop);
+            _timerId    = setInterval(tick, TICK_MS);
+            startLongTaskObserver();
+        },
+        stop() {
+            if (_timerId)  { clearInterval(_timerId); _timerId = null; }
+            if (_rafId)    { cancelAnimationFrame(_rafId); _rafId = null; }
+            if (_observer) { _observer.disconnect(); _observer = null; }
+            _dotnet = null;
+        }
+    };
+})();
 FILE src/NxtUI.Web/wwwroot/js/d3-animation.js
 LENGTH 4458
 // Batch Monitor — D3 flow graph edge animation
@@ -34369,7 +35261,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 10006
+LENGTH 11781
 window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
@@ -34403,6 +35295,21 @@ window.homeMemoryTreemap = (function () {
         const root = d3.hierarchy(data)
             .sum(d => d.children ? 0 : Math.max(d.ram || 0, minVal))
             .sort((a, b) => b.value - a.value);
+
+        // Give every host column equal width regardless of their RAM totals.
+        // We must also rescale leaf values within each host by the same factor so
+        // they still sum to the new host value — otherwise squarify advances rows by
+        // sumValue/parentValue which overflows the allocated rectangle.
+        if (root.children && root.children.length > 1) {
+            const eq = root.value / root.children.length;
+            root.children.forEach(h => {
+                if (h.value > 0 && h.children) {
+                    const scale = eq / h.value;
+                    h.children.forEach(c => { c.value *= scale; });
+                }
+                h.value = eq;
+            });
+        }
 
         // Two-level tiling: hosts are diced into vertical columns (side-by-side),
         // services within each host are squarified.
@@ -34473,6 +35380,13 @@ window.homeMemoryTreemap = (function () {
                 .attr('opacity', leafOpacity(d))
                 .attr('rx', 2)
                 .style('cursor', 'pointer')
+                .on('click', event => {
+                    event.stopPropagation();
+                    tip.style('display', 'none');
+                    const st = _state.get(container);
+                    if (st?.leafClickRef && d.pid != null)
+                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.pid).catch(() => {});
+                })
                 .on('mousemove', event => {
                     const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';
                     const status = d.online ? '' : ' <span style="color:#f87171">offline</span>';
@@ -34523,10 +35437,16 @@ window.homeMemoryTreemap = (function () {
 
     const _state = new WeakMap(); // container → { aborted, data, ro, _wake }
 
-    function start(container, env, intervalMs) {
+    function allOnlineLeavesHaveRam(node) {
+        if (!node.children || node.children.length === 0)
+            return !node.online || node.ram != null;  // offline leaves don't need RAM
+        return node.children.every(allOnlineLeavesHaveRam);
+    }
+
+    function start(container, env, intervalMs, dotnetRef, leafClickRef) {
         stop(container);
 
-        const s = { aborted: false, data: null, ro: null, _wake: null };
+        const s = { aborted: false, data: null, ro: null, _wake: null, dotnetRef: dotnetRef || null, leafClickRef: leafClickRef || null };
         _state.set(container, s);
 
         // Show a spinner immediately — cleared by paint() on first successful data.
@@ -34562,6 +35482,11 @@ window.homeMemoryTreemap = (function () {
                             s.data     = json;
                             emptyCount = 0;
                             paint(container, s.data);
+                            // Notify .NET when every service leaf has a RAM value.
+                            if (s.dotnetRef && allOnlineLeavesHaveRam(json)) {
+                                s.dotnetRef.invokeMethodAsync('NotifyDataLoaded').catch(() => {});
+                                s.dotnetRef = null;
+                            }
                         }
                     }
                 } catch (_) { /* network error — retry */ }
@@ -34596,7 +35521,7 @@ window.homeMemoryTreemap = (function () {
     return { start, stop };
 })();
 FILE src/NxtUI.Web/wwwroot/js/d3-memory-sunburst.js
-LENGTH 10597
+LENGTH 14215
 // Batch Monitor — Memory Sunburst Chart
 // Renders a two-ring sunburst: outer ring = groups, inner ring = individual series.
 // Data format: { total: number, groups: [{ name, value, color, children: [{ name, value, color }] }] }
@@ -34746,91 +35671,168 @@ const MemorySunburst = (() => {
 
 window.memorySunburst = MemorySunburst;
 
-// ── Line chart ────────────────────────────────────────────────────────────────
-// series: [{ name, color, data: number[], labels: string[] }]
+// ── Line chart with brush navigator ──────────────────────────────────────────
+// series: [{ name, color, timestamps: number[] (ms), values: number[] (MB) }]
+// windowHours: null = show all, number = initial window size in hours
 window.memoryLineChart = (() => {
-    function render(container, series) {
-        d3.select(container).selectAll('*').remove();
+
+    const MONO = "'JetBrains Mono','Cascadia Code',Consolas,monospace";
+
+    function fmtY(v) { return v >= 1000 ? (v / 1024).toFixed(1) + 'G' : v.toFixed(0) + 'M'; }
+
+    function render(mainCt, brushCt, series, windowHours) {
+        d3.select(mainCt).selectAll('*').remove();
+        d3.select(brushCt).selectAll('*').remove();
         if (!series || series.length === 0) return;
 
-        const rect   = container.getBoundingClientRect();
-        const W      = rect.width  || 600;
-        const H      = rect.height || 400;
-        const margin = { top: 16, right: 24, bottom: 36, left: 56 };
-        const iw     = W - margin.left - margin.right;
-        const ih     = H - margin.top  - margin.bottom;
+        // Convert ms timestamps to Date points per series
+        const parsed = series.map(s => ({
+            name:   s.name,
+            color:  s.color,
+            points: s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
+        })).filter(s => s.points.length > 0);
+        if (parsed.length === 0) return;
 
-        const svg = d3.select(container).append('svg')
-            .attr('width', W).attr('height', H);
-        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+        const allTs  = parsed.flatMap(s => s.points.map(p => p.t));
+        const tMin   = d3.min(allTs);
+        const tMax   = d3.max(allTs);
+        const allVals = parsed.flatMap(s => s.points.map(p => p.v));
+        const yMax   = Math.max(d3.max(allVals) || 1, 1);
 
-        const n = series[0].data.length;
-        const x = d3.scaleLinear().domain([0, n - 1]).range([0, iw]);
-        const allVals = series.flatMap(s => s.data);
-        const yMax = Math.max(...allVals, 1);
-        const y = d3.scaleLinear().domain([0, yMax * 1.08]).range([ih, 0]);
+        // Initial window
+        let winStart = tMin, winEnd = tMax;
+        if (windowHours > 0) {
+            winEnd   = tMax;
+            winStart = new Date(tMax.getTime() - windowHours * 3_600_000);
+            if (winStart < tMin) winStart = tMin;
+        }
 
-        // Grid lines
-        g.append('g').attr('class', 'grid')
-         .call(d3.axisLeft(y).ticks(5).tickSize(-iw).tickFormat(''))
-         .selectAll('line').attr('stroke', 'rgba(128,128,128,0.15)');
-        g.select('.grid .domain').remove();
+        // ── Main chart ────────────────────────────────────────────────────
+        const mR = mainCt.getBoundingClientRect();
+        const W  = mR.width  || 600;
+        const H  = mR.height || 340;
+        const mL = 58, mRt = 20, mT = 14, mB = 28;
+        const iW = W - mL - mRt;
+        const iH = H - mT  - mB;
 
-        // Axes
-        const labels = series[0].labels;
-        g.append('g').attr('transform', `translate(0,${ih})`)
-         .call(d3.axisBottom(x).ticks(Math.min(n, 10))
-               .tickFormat(i => labels[Math.round(i)] || ''))
-         .selectAll('text').attr('font-size', '10px');
-        g.append('g')
-         .call(d3.axisLeft(y).ticks(5).tickFormat(v => v >= 1000 ? (v/1024).toFixed(1)+'G' : v.toFixed(0)+'M'))
-         .selectAll('text').attr('font-size', '10px');
-        g.select('.domain').attr('stroke', 'rgba(128,128,128,0.3)');
+        const svgM = d3.select(mainCt).append('svg').attr('width', W).attr('height', H);
+        svgM.append('defs').append('clipPath').attr('id', 'mg-main-clip')
+            .append('rect').attr('width', iW).attr('height', iH + 1);
+        const gM = svgM.append('g').attr('transform', `translate(${mL},${mT})`);
 
-        // Tooltip
-        const tip = d3.select(container).append('div')
+        const xM = d3.scaleTime().domain([winStart, winEnd]).range([0, iW]);
+        const yM = d3.scaleLinear().domain([0, yMax * 1.1]).range([iH, 0]);
+
+        // Grid
+        gM.append('g').attr('class', 'mg-grid')
+          .call(d3.axisLeft(yM).ticks(5).tickSize(-iW).tickFormat(''))
+          .selectAll('line').attr('stroke', 'rgba(128,128,128,0.12)');
+        gM.select('.mg-grid .domain').remove();
+
+        // Axes (mutable — updated on brush)
+        const xAxisG = gM.append('g').attr('transform', `translate(0,${iH})`);
+        const yAxisG = gM.append('g');
+        function drawAxes() {
+            xAxisG.call(d3.axisBottom(xM).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
+                  .selectAll('text').attr('font-size', '10px');
+            yAxisG.call(d3.axisLeft(yM).ticks(5).tickFormat(fmtY))
+                  .selectAll('text').attr('font-size', '10px');
+            gM.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.3)');
+        }
+        drawAxes();
+
+        // Lines (clipped)
+        const linesG = gM.append('g').attr('clip-path', 'url(#mg-main-clip)');
+        const lineGen = d3.line().x(p => xM(p.t)).y(p => yM(p.v)).curve(d3.curveMonotoneX);
+        const paths = {};
+        parsed.forEach(s => {
+            paths[s.name] = linesG.append('path').datum(s.points)
+                .attr('fill', 'none').attr('stroke', s.color)
+                .attr('stroke-width', 1.8).attr('d', lineGen);
+        });
+
+        // Tooltip + crosshair
+        const tip = d3.select(mainCt).append('div')
             .style('position', 'absolute').style('pointer-events', 'none')
-            .style('background', 'rgba(20,20,20,0.88)').style('color', '#e8e8e8')
+            .style('background', 'rgba(18,18,18,0.92)').style('color', '#e8e8e8')
             .style('padding', '6px 10px').style('border-radius', '4px')
             .style('font-size', '11px').style('line-height', '1.7').style('display', 'none')
-            .style('z-index', '9999')
-            .style("font-family", "'JetBrains Mono','Cascadia Code',Consolas,monospace");
+            .style('z-index', '9999').style('font-family', MONO);
 
-        // Lines
-        const line = d3.line().x((_, i) => x(i)).y(d => y(d)).curve(d3.curveMonotoneX);
-        series.forEach(s => {
-            g.append('path').datum(s.data)
-             .attr('fill', 'none').attr('stroke', s.color)
-             .attr('stroke-width', 2).attr('d', line);
-        });
+        const vline = gM.append('line').attr('y1', 0).attr('y2', iH)
+            .attr('stroke', 'rgba(160,160,160,0.4)').attr('stroke-width', 1).attr('display', 'none');
 
-        // Hover overlay
-        const overlay = g.append('rect')
-            .attr('width', iw).attr('height', ih)
-            .attr('fill', 'transparent').style('cursor', 'crosshair');
+        gM.append('rect').attr('width', iW).attr('height', iH)
+          .attr('fill', 'transparent').style('cursor', 'crosshair')
+          .on('mousemove', event => {
+              const [mx] = d3.pointer(event);
+              const hover = xM.invert(mx);
+              vline.attr('x1', mx).attr('x2', mx).attr('display', null);
+              const rows = parsed.map(s => {
+                  const closest = s.points.reduce((a, b) =>
+                      Math.abs(b.t - hover) < Math.abs(a.t - hover) ? b : a, s.points[0]);
+                  return `<span style="color:${s.color}">■</span> ${s.name}: ${closest.v.toFixed(1)} MB`;
+              }).join('<br>');
+              tip.style('display', 'block')
+                 .html(`<strong>${d3.timeFormat('%H:%M:%S')(hover)}</strong><br>${rows}`);
+              const cr = mainCt.getBoundingClientRect();
+              let lx = event.clientX - cr.left + 14;
+              if (lx + 210 > W) lx = event.clientX - cr.left - 220;
+              tip.style('left', lx + 'px').style('top', (event.clientY - cr.top - 20) + 'px');
+          })
+          .on('mouseleave', () => { vline.attr('display', 'none'); tip.style('display', 'none'); });
 
-        const vline = g.append('line').attr('y1', 0).attr('y2', ih)
-            .attr('stroke', 'rgba(128,128,128,0.5)').attr('stroke-width', 1)
-            .attr('display', 'none');
+        // ── Brush / time-range navigator ──────────────────────────────────
+        if (!brushCt) return;
+        const bR  = brushCt.getBoundingClientRect();
+        const bW  = bR.width  || W;
+        const bH  = bR.height || 56;
+        const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
+        const biW = bW - bL - bRt2;
+        const biH = bH - bT - bB;
 
-        overlay.on('mousemove', event => {
-            const [mx] = d3.pointer(event);
-            const idx  = Math.round(x.invert(mx));
-            if (idx < 0 || idx >= n) return;
-            vline.attr('x1', x(idx)).attr('x2', x(idx)).attr('display', null);
+        const svgB = d3.select(brushCt).append('svg').attr('width', bW).attr('height', bH);
+        const gB   = svgB.append('g').attr('transform', `translate(${bL},${bT})`);
 
-            const label = labels[idx] || '';
-            const rows  = series.map(s => `<span style="color:${s.color}">■</span> ${s.name}: ${s.data[idx].toFixed(1)} MB`).join('<br>');
-            tip.style('display', 'block').html(`<strong>${label}</strong><br>${rows}`);
+        const xB = d3.scaleTime().domain([tMin, tMax]).range([0, biW]);
 
-            const cr = container.getBoundingClientRect();
-            let lx = event.clientX - cr.left + 14;
-            if (lx + 180 > W) lx = event.clientX - cr.left - 180;
-            tip.style('left', lx + 'px').style('top', (event.clientY - cr.top - 20) + 'px');
-        }).on('mouseleave', () => {
-            vline.attr('display', 'none');
-            tip.style('display', 'none');
-        });
+        // Subtle background track
+        gB.append('rect')
+          .attr('width', biW).attr('height', biH)
+          .attr('fill', 'rgba(128,128,128,0.06)')
+          .attr('rx', 2);
+
+        // Time axis
+        gB.append('g').attr('transform', `translate(0,${biH})`)
+          .call(d3.axisBottom(xB).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
+          .selectAll('text').attr('font-size', '9px');
+        gB.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.25)');
+        gB.selectAll('.tick line').attr('stroke', 'rgba(128,128,128,0.25)');
+
+        // Brush
+        const brushX = d3.brushX()
+            .extent([[0, 0], [biW, biH]])
+            .on('brush end', ({ selection, sourceEvent }) => {
+                if (!selection || !sourceEvent) return;
+                const [d0, d1] = selection.map(xB.invert);
+                xM.domain([d0, d1]);
+                drawAxes();
+                parsed.forEach(s => paths[s.name].attr('d', lineGen));
+                vline.attr('display', 'none');
+            });
+
+        const brushG = gB.append('g').call(brushX);
+
+        brushG.select('.selection')
+              .attr('fill', 'rgba(100,150,255,0.15)')
+              .attr('stroke', 'rgba(100,150,255,0.5)')
+              .attr('stroke-width', 1);
+        brushG.selectAll('.handle')
+              .attr('fill', 'rgba(120,160,255,0.75)')
+              .attr('rx', 3);
+
+        // Set initial selection without triggering brush event
+        brushG.call(brushX.move, [xB(winStart), xB(winEnd)]);
     }
 
     return { render };

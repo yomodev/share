@@ -13,17 +13,20 @@
             <div class="bm-treemap-spinner"></div>
         </div>
     }
-    <div class="bm-home-treemap" @ref="_ref" @onclick="OpenServices"></div>
+    <div class="bm-home-treemap" @ref="_ref"></div>
 </div>
 
 @code {
-    [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public string            Env            { get; set; } = string.Empty;
+    [Parameter] public EventCallback     OnDataLoaded   { get; set; }
+    [Parameter] public EventCallback<int> OnPidClicked  { get; set; }
 
-    private ElementReference _ref;
-    private IDisposable?     _sub;
-    private string           _subscribedEnv = string.Empty;
-    private bool             _started;
-    private bool             _switching;
+    private ElementReference                        _ref;
+    private IDisposable?                            _sub;
+    private DotNetObjectReference<HomeMemoryTreemap>? _selfRef;
+    private string                                  _subscribedEnv = string.Empty;
+    private bool                                    _started;
+    private bool                                    _switching;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -39,7 +42,8 @@
         {
             // Env changed — overlay is now visible (set above), clear old tree and start new.
             try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
-            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
         }
 
         _switching = false;
@@ -49,9 +53,16 @@
     {
         if (!firstRender || _started) return;
         _started = true;
-        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env);
-        await InvokeAsync(StateHasChanged); // remove the Blazor overlay now JS controls the div
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+        await InvokeAsync(StateHasChanged);
     }
+
+    [JSInvokable]
+    public void NotifyDataLoaded() => _ = OnDataLoaded.InvokeAsync();
+
+    [JSInvokable]
+    public void OnLeafClicked(int pid) => _ = OnPidClicked.InvokeAsync(pid);
 
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));
@@ -59,6 +70,7 @@
     public async ValueTask DisposeAsync()
     {
         _sub?.Dispose();
+        _selfRef?.Dispose();
         try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
     }
 }

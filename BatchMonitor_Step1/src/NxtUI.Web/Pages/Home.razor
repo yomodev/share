@@ -12,16 +12,12 @@
 
     <!-- ── Header ────────────────────────────────────────────────────────── -->
     <div class="bm-home-header">
-        <div>
-            <MudText Typo="Typo.h5" Class="bm-home-title">System dashboard</MudText>
-            <MudText Typo="Typo.body2" Class="bm-home-subtitle">
-                Real-time system monitor
-            </MudText>
-        </div>
-        <div class="bm-home-env">
-            <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" PopoverClass="bm-env-menu-popover">
+
+        <div class="bm-home-header-left">
+            <!-- Env selector (left of title) -->
+            <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense="true" PopoverClass="bm-env-menu-popover">
                 <ActivatorContent>
-                    <span class="bm-env-badge bm-env-badge-btn"
+                    <span class="bm-env-badge bm-env-badge-btn bm-env-badge-home"
                           style="background:@(EnvService.Selected?.BadgeColor); color:@(EnvService.Selected?.BadgeTextColor)"
                           @onclick="@(async e => await context.ToggleAsync(e))">
                         @EnvService.SelectedId
@@ -43,163 +39,124 @@
                     }
                 </ChildContent>
             </MudMenu>
+
+            <div class="bm-home-title-block">
+                <MudText Typo="Typo.h5" Class="bm-home-title">System dashboard</MudText>
+                <MudText Typo="Typo.body2" Class="bm-home-subtitle">
+                    Real-time system monitor
+                </MudText>
+            </div>
         </div>
+
+        <!-- Infra health strip (right) -->
+        <div class="bm-infra-strip">
+
+            <!-- Kafka -->
+            <div class="bm-infra-svc">
+                <MudIcon Icon="@Icons.Material.Outlined.Stream" Class="bm-infra-svc-icon" />
+                <span class="bm-infra-svc-name">Kafka</span>
+                <div class="bm-infra-dots">
+                    @if (_kafkaHealth is null)
+                    {
+                        <span class="bm-infra-dot bm-infra-dot-unknown bm-infra-dot-pulse"></span>
+                    }
+                    else
+                    {
+                        @foreach (var b in _kafkaHealth.Brokers)
+                        {
+                            var bLabel = $"broker {b.Id} · {b.Host}:{b.Port} · {(b.IsOnline ? (b.LatencyMs.HasValue ? $"{b.LatencyMs} ms" : "online") : "offline")}";
+                            <MudTooltip Text="@bLabel" Placement="Placement.Bottom" Arrow="true">
+                                <span class="bm-infra-dot @(b.IsOnline ? "bm-infra-dot-ok" : "bm-infra-dot-err")"></span>
+                            </MudTooltip>
+                        }
+                    }
+                </div>
+                <span class="bm-infra-label bm-infra-label-@StatusCss(_kafkaHealth?.Status)">
+                    @(_kafkaHealth?.Status.ToString().ToUpper() ?? "…")
+                </span>
+            </div>
+
+            <div class="bm-infra-sep"></div>
+
+            <!-- Mongo -->
+            <div class="bm-infra-svc">
+                <MudIcon Icon="@Icons.Material.Outlined.Storage" Class="bm-infra-svc-icon" />
+                <span class="bm-infra-svc-name">Mongo</span>
+                <div class="bm-infra-dots">
+                    @if (_mongoHealth is null)
+                    {
+                        <span class="bm-infra-dot bm-infra-dot-unknown bm-infra-dot-pulse"></span>
+                    }
+                    else if (_mongoHealth.Nodes.Count == 0)
+                    {
+                        var singleTip = _mongoHealth.Status == HealthStatus.Healthy ? "ping ok" : (_mongoHealth.Error ?? "down");
+                        <MudTooltip Text="@singleTip" Placement="Placement.Bottom" Arrow="true">
+                            <span class="bm-infra-dot @(_mongoHealth.Status == HealthStatus.Healthy ? "bm-infra-dot-ok" : "bm-infra-dot-err")"></span>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        @foreach (var n in _mongoHealth.Nodes)
+                        {
+                            var nLabel = $"{n.Host} · {n.Role} · {(n.IsOnline ? (n.LatencyMs.HasValue ? $"{n.LatencyMs} ms" : "online") : "offline")}";
+                            <MudTooltip Text="@nLabel" Placement="Placement.Bottom" Arrow="true">
+                                <span class="bm-infra-dot @(n.IsOnline ? "bm-infra-dot-ok" : "bm-infra-dot-err")
+                                    @(n.Role == "PRIMARY" ? " bm-infra-dot-primary" : "")"></span>
+                            </MudTooltip>
+                        }
+                    }
+                </div>
+                <span class="bm-infra-label bm-infra-label-@StatusCss(_mongoHealth?.Status)">
+                    @(_mongoHealth?.Status.ToString().ToUpper() ?? "…")
+                </span>
+            </div>
+
+            <div class="bm-infra-sep"></div>
+
+            <MudTooltip Text="@($"last checked {_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--"} UTC")" Placement="Placement.Bottom">
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">Last update</span>
+                    <span class="bm-infra-time bm-muted">@(_kafkaHealth?.CheckedAt.ToString("HH:mm") ?? "--:--")</span>
+                </div>
+            </MudTooltip>
+
+        </div>
+
     </div>
 
     <!-- ── Memory treemap ──────────────────────────────────────────────────── -->
-    <div style="display:flex;flex-direction:column;gap:6px;">
-        <div class="bm-section-header">
+    <div class="bm-section-header" style="margin:0;">
+        <div class="bm-memory-header-left">
+            <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
-            <span class="bm-muted" style="font-size:12px;">online services only · click to open services</span>
-        </div>
-        <HomeMemoryTreemap Env="@EnvService.SelectedId" />
-    </div>
-
-    <!-- ── Infrastructure health ─────────────────────────────────────────── -->
-    <div class="bm-section-header">
-        <MudText Typo="Typo.subtitle2" Class="bm-section-title">Infrastructure Health</MudText>
-        <span class="bm-muted" style="font-size:12px;">auto-refresh every 10 s</span>
-    </div>
-
-    <div class="bm-infra-grid">
-
-        <!-- Kafka card -->
-        <div class="bm-health-card bm-health-@StatusCss(_kafkaHealth?.Status)">
-            <div class="bm-health-card-header">
-                <MudIcon Icon="@Icons.Material.Outlined.Stream" Size="Size.Small" Class="bm-health-svc-icon" />
-                <span class="bm-health-name">Kafka</span>
-                @if (_kafkaChecking)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
-                }
-                else if (_kafkaHealth is not null)
-                {
-                    <span class="bm-health-pill bm-health-pill-@StatusCss(_kafkaHealth.Status)">
-                        @_kafkaHealth.Status.ToString().ToUpper()
-                    </span>
-                }
-                <span class="bm-health-time bm-muted">
-                    @(_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
-                </span>
-            </div>
-
-            <div class="bm-health-nodes">
-                @if (_kafkaHealth is not null)
-                {
-                    @foreach (var b in _kafkaHealth.Brokers)
-                    {
-                        <div class="bm-health-node">
-                            <span class="bm-health-dot @(b.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
-                            <span class="bm-health-host">@b.Host:@b.Port</span>
-                            @if (b.IsOnline && b.LatencyMs.HasValue)
-                            {
-                                <span class="bm-health-latency">@b.LatencyMs ms</span>
-                            }
-                            else if (!b.IsOnline)
-                            {
-                                <span class="bm-health-offline">offline</span>
-                            }
-                            <span class="bm-health-role bm-muted">broker @b.Id</span>
-                        </div>
-                    }
-                }
-                else
-                {
-                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
-                        Connecting…
-                    </div>
-                }
-            </div>
-
-            @if (_kafkaHealth is not null)
+            @if (!_memoryLoaded)
             {
-                var onlineKafka = _kafkaHealth.Brokers.Count(b => b.IsOnline);
-                var totalKafka  = _kafkaHealth.Brokers.Count;
-                <div class="bm-health-footer">
-                    <span>@onlineKafka / @totalKafka brokers online</span>
-                    @if (_kafkaHealth.Error is not null)
-                    {
-                        <span class="bm-health-err-text">@_kafkaHealth.Error</span>
-                    }
-                </div>
+                <MudProgressCircular Indeterminate="true" Class="bm-memory-spinner" />
             }
         </div>
-
-        <!-- MongoDB card -->
-        <div class="bm-health-card bm-health-@StatusCss(_mongoHealth?.Status)">
-            <div class="bm-health-card-header">
-                <MudIcon Icon="@Icons.Material.Outlined.Storage" Size="Size.Small" Class="bm-health-svc-icon" />
-                <span class="bm-health-name">MongoDB</span>
-                @if (_mongoChecking)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="bm-health-spinner" />
-                }
-                else if (_mongoHealth is not null)
-                {
-                    <span class="bm-health-pill bm-health-pill-@StatusCss(_mongoHealth.Status)">
-                        @_mongoHealth.Status.ToString().ToUpper()
-                    </span>
-                }
-                <span class="bm-health-time bm-muted">
-                    @(_mongoHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--") UTC
-                </span>
-            </div>
-
-            <div class="bm-health-nodes">
-                @if (_mongoHealth is not null)
-                {
-                    @foreach (var n in _mongoHealth.Nodes)
-                    {
-                        <div class="bm-health-node">
-                            <span class="bm-health-dot @(n.IsOnline ? "bm-dot-ok" : "bm-dot-err")"></span>
-                            <span class="bm-health-host">@n.Host</span>
-                            @if (n.IsOnline && n.LatencyMs.HasValue)
-                            {
-                                <span class="bm-health-latency">@n.LatencyMs ms</span>
-                            }
-                            else if (!n.IsOnline)
-                            {
-                                <span class="bm-health-offline">offline</span>
-                            }
-                            <span class="bm-health-role @(n.Role == "PRIMARY" ? "bm-health-role-primary" : "bm-muted")">
-                                @n.Role
-                            </span>
-                        </div>
-                    }
-                }
-                else
-                {
-                    <div class="bm-health-node bm-muted" style="justify-content:center; padding:16px 0;">
-                        Connecting…
-                    </div>
-                }
-            </div>
-
-            @if (_mongoHealth is not null)
-            {
-                <div class="bm-health-footer">
-                    <span>@_mongoHealth.DatabaseCount databases · replica set</span>
-                    @if (_mongoHealth.Error is not null)
-                    {
-                        <span class="bm-health-err-text">@_mongoHealth.Error</span>
-                    }
-                </div>
-            }
-        </div>
-
+        <MudButton Variant="Variant.Text" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.OpenInNew"
+                   OnClick="OpenServices"
+                   Class="bm-view-all-btn">
+            View All
+        </MudButton>
     </div>
+    <HomeMemoryTreemap Env="@EnvService.SelectedId" OnDataLoaded="OnMemoryDataLoaded" OnPidClicked="OnTreemapPidClicked" />
 
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
-    <MudPaper Elevation="0" Class="bm-mini-summary">
-        <div class="bm-mini-summary-header">
+    <div class="bm-section-header" style="margin:4px 0 0;">
+        <div class="bm-memory-header-left">
+            <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       StartIcon="@Icons.Material.Outlined.ViewList"
-                       OnClick="OpenRunsDashboard"
-                       Class="bm-view-all-btn">
-                View All
-            </MudButton>
         </div>
+        <MudButton Variant="Variant.Text" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.OpenInNew"
+                   OnClick="OpenRunsDashboard"
+                   Class="bm-view-all-btn">
+            View All
+        </MudButton>
+    </div>
+    <MudPaper Elevation="0" Class="bm-mini-summary">
 
         <MudTable T="RunSummary"
                   Items="@_recent"
@@ -251,10 +208,9 @@
     private List<RunSummary> _recent = new();
 
     // Health state
-    private KafkaHealth? _kafkaHealth   = null;
-    private MongoHealth? _mongoHealth   = null;
-    private bool         _kafkaChecking = false;
-    private bool         _mongoChecking = false;
+    private KafkaHealth? _kafkaHealth = null;
+    private MongoHealth? _mongoHealth = null;
+    private bool         _memoryLoaded = false;
 
     private CancellationTokenSource _cts = new();
 
@@ -283,10 +239,8 @@
     private async Task CheckHealthAsync()
     {
         var env = EnvService.SelectedId;
-        _kafkaHealth   = HealthCache.GetKafka(env);
-        _mongoHealth   = HealthCache.GetMongo(env);
-        _kafkaChecking = false;
-        _mongoChecking = false;
+        _kafkaHealth = HealthCache.GetKafka(env);
+        _mongoHealth = HealthCache.GetMongo(env);
         await InvokeAsync(StateHasChanged);
     }
 
@@ -308,7 +262,8 @@
         {
             try
             {
-                _recent = [];
+                _recent       = [];
+                _memoryLoaded = false;
                 StateHasChanged();
                 HealthCache.RequestRefresh(EnvService.SelectedId);
                 await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
@@ -321,7 +276,8 @@
     private async Task OnEnvChanged(string newId)
     {
         EnvService.SelectedId = newId;
-        _recent = [];
+        _recent               = [];
+        _memoryLoaded         = false;
         HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
@@ -330,6 +286,22 @@
 
     private void OpenRunsDashboard() =>
         TabService.OpenOrFocus(TabModel.CreateRunsDashboard(EnvService.SelectedId));
+
+    private void OpenServices() =>
+        TabService.OpenOrFocus(TabModel.CreateServicesDashboard(EnvService.SelectedId));
+
+    private void OnMemoryDataLoaded()
+    {
+        _memoryLoaded = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnTreemapPidClicked(int pid)
+    {
+        var tab = TabModel.CreateMemoryGraph(EnvService.SelectedId);
+        tab.NavigationHint = pid.ToString();
+        TabService.OpenOrFocus(tab);
+    }
 
     private void OpenDetail(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, EnvService.SelectedId));
