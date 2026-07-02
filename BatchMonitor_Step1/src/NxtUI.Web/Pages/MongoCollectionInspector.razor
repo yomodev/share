@@ -5,6 +5,7 @@
 @inject IMongoReader MongoSvc
 @inject IJSRuntime JS
 @inject ILogger<MongoCollectionInspector> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -75,7 +76,7 @@
                         <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
                         @if (_selected.Timestamp.HasValue)
                         {
-                            <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                            <span>&nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp.Value, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix</span>
                         }
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
@@ -149,10 +150,10 @@
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("plain text",   "searches _id (e.g. abc123)"),
-        ("field:value",  "case-insensitive regex on any field (e.g. status:active, name:foo*)"),
-        ("field:>100",   "numeric or date comparison (e.g. amount:>100, createdAt:>-7d, price:10..50)"),
-        ("{ … }",        "raw MongoDB query — any operator works: $gt, $in, $exists, $elemMatch, $or, aggregation expressions, etc. (e.g. {\"status\":{\"$in\":[\"A\",\"B\"]},\"n\":{\"$gt\":5}})"),
+        ("plain text",  "searches _id"),
+        ("field:value", "regex on any field"),
+        ("field:>100",  "numeric / date comparison"),
+        ("{ … }",       "raw MongoDB query"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -178,7 +179,7 @@
             var (docs, total) = await MongoSvc.GetDocumentsAsync(
                 Environment, _database, _collection,
                 string.IsNullOrWhiteSpace(_search) ? null : _search,
-                skip, _pageSize, _sortField, _sortDesc, ct);
+                skip, _pageSize, _sortField, _sortDesc, ct, DtSvc.UseUtc);
             _docs       = docs.ToList();
             _totalCount = total;
             _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));

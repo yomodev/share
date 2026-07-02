@@ -995,7 +995,7 @@ html, body {
 .bm-cs-cols {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0 16px;
+    gap: 0 8px;
 }
 
 .bm-cs-col { min-width: 0; }
@@ -2314,6 +2314,20 @@ tr.bm-row-searching td:first-child {
    ================================================================ */
 
 .bm-mg-toolbar { gap: 8px; }
+.bm-mg-filter-input {
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 4px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    font-size: 12px;
+    width: 160px;
+    outline: none;
+    transition: border-color 150ms;
+}
+.bm-mg-filter-input:focus { border-color: var(--mud-palette-primary); }
+.bm-mg-filter-input::placeholder { color: var(--mud-palette-text-secondary); opacity: 0.7; }
 .bm-mg-toolbar-sep   { width: 1px; height: 20px; background: var(--mud-palette-divider); flex-shrink: 0; }
 .bm-mg-toolbar-spacer { flex: 1 1 auto; }
 
@@ -2324,12 +2338,24 @@ tr.bm-row-searching td:first-child {
     overflow: hidden;
 }
 
-/* Legend panel */
+/* Resize handle between chart and legend */
+.bm-mg-resize-handle {
+    width: 5px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 150ms;
+    position: relative;
+    z-index: 1;
+}
+.bm-mg-resize-handle:hover { background: var(--mud-palette-primary); opacity: 0.25; }
+
+/* Legend panel (right side) */
 .bm-mg-legend {
     width: 220px;
     flex-shrink: 0;
     overflow-y: auto;
-    border-right: 1px solid var(--mud-palette-divider);
+    border-left: 1px solid var(--mud-palette-divider);
     padding: 12px 10px;
     display: flex;
     flex-direction: column;
@@ -2356,7 +2382,8 @@ tr.bm-row-searching td:first-child {
     user-select: none;
 }
 .bm-mg-legend-item:hover { background: var(--mud-palette-action-hover); }
-.bm-mg-legend-item input[type=checkbox] { accent-color: var(--mud-palette-primary); cursor: pointer; }
+.bm-mg-legend-item-hidden { opacity: 0.35; }
+.bm-mg-legend-item-hidden .bm-mg-legend-dot { filter: saturate(0); }
 
 .bm-mg-legend-dot {
     width: 10px;
@@ -2398,7 +2425,7 @@ tr.bm-row-searching td:first-child {
 }
 
 .bm-mg-brush-container {
-    height: 56px;
+    height: 42px;
     flex-shrink: 0;
     position: relative;
     border-top: 1px solid var(--mud-palette-divider);
@@ -2653,3 +2680,197 @@ tr.bm-row-searching td:first-child {
     top: 4px;
     right: 4px;
 }
+
+/* ================================================================
+   ENVIRONMENT PAGE
+   ================================================================ */
+
+.bm-env-page {
+    padding: 16px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.bm-env-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.bm-env-left,
+.bm-env-right {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* ── Section card ─────────────────────────────────────────────── */
+.bm-env-section {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.bm-env-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bm-env-section-icon {
+    color: var(--mud-palette-primary);
+    flex-shrink: 0;
+}
+
+.bm-env-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    flex: 1;
+}
+
+/* ── Booking timeline ─────────────────────────────────────────── */
+.bm-env-booking-legend {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+
+.bm-env-slot-demo {
+    padding: 2px 8px !important;
+    border-radius: 3px;
+    cursor: default !important;
+    pointer-events: none;
+    height: auto !important;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.bm-env-timeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+
+.bm-env-slot {
+    position: relative;
+    width: 20px;
+    height: 24px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: opacity .1s;
+    flex-shrink: 0;
+}
+
+.bm-env-slot:hover { opacity: .75; }
+
+.bm-env-slot-free     { background: var(--mud-palette-background-grey); }
+.bm-env-slot-mine     { background: var(--mud-palette-primary); }
+.bm-env-slot-taken    { background: var(--mud-palette-error); opacity: .6; cursor: not-allowed; }
+.bm-env-slot-selected { background: var(--mud-palette-primary-lighten); }
+
+.bm-env-slot-label {
+    position: absolute;
+    bottom: -14px;
+    left: 0;
+    font-size: 9px;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.bm-env-booking-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+    min-height: 32px;
+}
+
+/* ── Quick links ──────────────────────────────────────────────── */
+.bm-env-links-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.bm-env-link-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--mud-palette-lines-default);
+    cursor: pointer;
+    text-align: center;
+    transition: background .15s;
+}
+
+.bm-env-link-card:hover { background: var(--mud-palette-background-grey); }
+
+.bm-env-link-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.bm-env-link-desc {
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+/* ── Components ───────────────────────────────────────────────── */
+.bm-env-apply-btn { margin-left: auto; }
+
+.bm-env-components-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-env-component-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+}
+
+.bm-env-component-row:last-child { border-bottom: none; }
+
+.bm-env-component-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.bm-env-component-name { font-size: 13px; }
+
+.bm-env-component-ver { font-size: 11px; }
+
+.bm-env-component-status { margin-left: auto; flex-shrink: 0; }
+
+/* ── Terminal ─────────────────────────────────────────────────── */
+.bm-env-terminal {
+    background: #0d0d0d;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'Consolas', 'Cascadia Code', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    min-height: 160px;
+    max-height: 300px;
+    overflow-y: auto;
+    color: #c8c8c8;
+}
+
+.bm-env-term-line { white-space: pre; }
+.bm-term-cmd     { color: #7dd3fc; }
+.bm-term-ok      { color: #86efac; }
+.bm-term-error   { color: #fca5a5; }
+.bm-term-muted   { color: #555; }

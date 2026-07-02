@@ -163,9 +163,11 @@ window.memoryLineChart = (() => {
 
         // Convert ms timestamps to Date points per series
         const parsed = series.map(s => ({
-            name:   s.name,
-            color:  s.color,
-            points: s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
+            name:    s.name,
+            label:   s.label || null,
+            color:   s.color,
+            isFaded: !!s.isFaded,
+            points:  s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
         })).filter(s => s.points.length > 0);
         if (parsed.length === 0) return;
 
@@ -224,7 +226,9 @@ window.memoryLineChart = (() => {
         parsed.forEach(s => {
             paths[s.name] = linesG.append('path').datum(s.points)
                 .attr('fill', 'none').attr('stroke', s.color)
-                .attr('stroke-width', 1.8).attr('d', lineGen);
+                .attr('stroke-width', s.isFaded ? 1.4 : 1.8)
+                .attr('stroke-opacity', s.isFaded ? 0.45 : 1)
+                .attr('d', lineGen);
         });
 
         // Tooltip + crosshair
@@ -247,7 +251,9 @@ window.memoryLineChart = (() => {
               const rows = parsed.map(s => {
                   const closest = s.points.reduce((a, b) =>
                       Math.abs(b.t - hover) < Math.abs(a.t - hover) ? b : a, s.points[0]);
-                  return `<span style="color:${s.color}">■</span> ${s.name}: ${closest.v.toFixed(1)} MB`;
+                  const lbl = s.label || s.name;
+                  const opacity = s.isFaded ? '0.5' : '1';
+                  return `<span style="color:${s.color};opacity:${opacity}">■</span> ${lbl}: ${closest.v.toFixed(1)} MB`;
               }).join('<br>');
               tip.style('display', 'block')
                  .html(`<strong>${d3.timeFormat('%H:%M:%S')(hover)}</strong><br>${rows}`);
@@ -262,7 +268,7 @@ window.memoryLineChart = (() => {
         if (!brushCt) return;
         const bR  = brushCt.getBoundingClientRect();
         const bW  = bR.width  || W;
-        const bH  = bR.height || 56;
+        const bH  = bR.height || 28;
         const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
         const biW = bW - bL - bRt2;
         const biH = bH - bT - bB;
@@ -313,3 +319,24 @@ window.memoryLineChart = (() => {
 
     return { render };
 })();
+
+// ── Legend panel resize (right side drag handle) ──────────────────────────────
+window.mgLegendResize = function (handleEl, legendEl) {
+    if (!handleEl || !legendEl) return;
+    handleEl.addEventListener('mousedown', e => {
+        const startX = e.clientX;
+        const startW = legendEl.offsetWidth;
+        const onMove = e2 => {
+            // handle is on the LEFT edge of the right panel → drag left = wider
+            const w = Math.max(150, Math.min(520, startW + (startX - e2.clientX)));
+            legendEl.style.width = w + 'px';
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup',  onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup',  onUp);
+        e.preventDefault();
+    });
+};

@@ -20,7 +20,8 @@ public enum TabType
     LogViewer,
     LogWorkspace,
     FilterHelp,
-    MemoryGraph
+    MemoryGraph,
+    Environment
 }
 
 /// <summary>
@@ -141,6 +142,15 @@ public class TabModel
         Label       = "Log Browser",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Article
+    };
+
+    public static TabModel CreateEnvironmentDashboard(string env) => new()
+    {
+        Id          = $"dashboard:environment:{env}",
+        Type        = TabType.Environment,
+        Label       = "Environment",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.Computer
     };
 
     public static TabModel CreateSettings() => new()

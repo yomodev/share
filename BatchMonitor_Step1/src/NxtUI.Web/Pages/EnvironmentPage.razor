@@ -1,0 +1,323 @@
+@namespace NxtUI.Web.Pages
+
+<div class="bm-page bm-env-page">
+
+    <div class="bm-env-grid">
+
+        <!-- ── LEFT COLUMN ──────────────────────────────────────────────── -->
+        <div class="bm-env-left">
+
+            <!-- Booking -->
+            <MudPaper Elevation="0" Class="bm-env-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.EventAvailable" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Environment Booking</span>
+                    <span class="bm-muted" style="font-size:11px;">@DateTime.Today.ToString("dddd, MMMM d")</span>
+                </div>
+
+                <div class="bm-env-booking-legend">
+                    <span class="bm-env-slot bm-env-slot-free bm-env-slot-demo">Free</span>
+                    <span class="bm-env-slot bm-env-slot-mine bm-env-slot-demo">Yours</span>
+                    <span class="bm-env-slot bm-env-slot-taken bm-env-slot-demo">Taken</span>
+                </div>
+
+                <div class="bm-env-timeline">
+                    @foreach (var slot in _slots)
+                    {
+                        <div class="bm-env-slot @SlotClass(slot)"
+                             title="@SlotTooltip(slot)"
+                             @onclick="@(() => ToggleSlot(slot))">
+                            @if (slot.Hour % 2 == 0 && slot.Minute == 0)
+                            {
+                                <span class="bm-env-slot-label">@slot.ToString("HH:mm")</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="bm-env-booking-actions">
+                    @if (_selectedSlots.Count > 0)
+                    {
+                        var first = _selectedSlots.Min();
+                        var last  = _selectedSlots.Max().AddMinutes(15);
+                        <span class="bm-muted" style="font-size:12px;">
+                            Selected: <strong>@first.ToString("HH:mm") – @last.ToString("HH:mm")</strong>
+                        </span>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="BookSelected">Book</MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Text"
+                                   OnClick="@(() => _selectedSlots.Clear())">Clear</MudButton>
+                    }
+                    else
+                    {
+                        <span class="bm-muted" style="font-size:12px;">Click slots to select a time range</span>
+                    }
+                </div>
+            </MudPaper>
+
+            <!-- Quick Links -->
+            <MudPaper Elevation="0" Class="bm-env-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.OpenInNew" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Quick Links</span>
+                </div>
+                <div class="bm-env-links-grid">
+                    @foreach (var link in _links)
+                    {
+                        <div class="bm-env-link-card" title="@link.Url">
+                            <MudIcon Icon="@link.Icon" Size="Size.Medium" Style="@($"color:{link.Color}")" />
+                            <span class="bm-env-link-label">@link.Label</span>
+                            <span class="bm-muted bm-env-link-desc">@link.Description</span>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+        </div>
+
+        <!-- ── RIGHT COLUMN ─────────────────────────────────────────────── -->
+        <div class="bm-env-right">
+
+            <!-- Components -->
+            <MudPaper Elevation="0" Class="bm-env-section bm-env-components-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.Extension" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Components</span>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Disabled="@(!_components.Any(c => c.Pending))"
+                               OnClick="ApplyComponents"
+                               Class="bm-env-apply-btn">Apply</MudButton>
+                </div>
+                <div class="bm-env-components-list">
+                    @foreach (var comp in _components)
+                    {
+                        <div class="bm-env-component-row">
+                            <MudCheckBox T="bool" Value="@comp.Selected"
+                                         ValueChanged="@(v => comp.Selected = v)"
+                                         Size="Size.Small"
+                                         Color="Color.Primary"
+                                         Disabled="@(comp.Status == CompStatus.Installing)" />
+                            <div class="bm-env-component-info">
+                                <span class="bm-env-component-name">@comp.Name</span>
+                                <span class="bm-muted bm-env-component-ver">@comp.Version</span>
+                            </div>
+                            <div class="bm-env-component-status">
+                                @switch (comp.Status)
+                                {
+                                    case CompStatus.Installed:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Installed</MudChip>
+                                        break;
+                                    case CompStatus.NotInstalled:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">Not installed</MudChip>
+                                        break;
+                                    case CompStatus.Installing:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                            Installing…
+                                        </MudChip>
+                                        break;
+                                    case CompStatus.Error:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Text">Error</MudChip>
+                                        break;
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            <!-- Terminal -->
+            <MudPaper Elevation="0" Class="bm-env-section bm-env-terminal-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.Terminal" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Installation Log</span>
+                    <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep"
+                                   Size="Size.Small"
+                                   title="Clear"
+                                   OnClick="@(() => _termLines.Clear())" />
+                </div>
+                <div class="bm-env-terminal">
+                    @foreach (var line in _termLines)
+                    {
+                        <div class="bm-env-term-line @line.Css">@line.Text</div>
+                    }
+                    @if (!_termLines.Any())
+                    {
+                        <div class="bm-env-term-line bm-term-muted">Waiting for operations…</div>
+                    }
+                </div>
+            </MudPaper>
+
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Env { get; set; } = string.Empty;
+
+    // ── enums / models ──────────────────────────────────────────────────
+
+    private enum CompStatus { Installed, NotInstalled, Installing, Error }
+
+    private sealed class Component
+    {
+        public string     Name     { get; init; } = "";
+        public string     Version  { get; init; } = "";
+        public CompStatus Status   { get; set;  }
+        public bool       Selected { get; set;  }
+        public bool       Pending  => Selected != (Status == CompStatus.Installed);
+    }
+
+    private sealed class TermLine
+    {
+        public string Text { get; init; } = "";
+        public string Css  { get; init; } = "";
+    }
+
+    private sealed class QuickLink
+    {
+        public string Label       { get; init; } = "";
+        public string Description { get; init; } = "";
+        public string Url         { get; init; } = "#";
+        public string Icon        { get; init; } = Icons.Material.Outlined.Link;
+        public string Color       { get; init; } = "#888";
+    }
+
+    // ── state ────────────────────────────────────────────────────────────
+
+    private readonly List<DateTime> _slots        = [];
+    private readonly HashSet<DateTime> _selectedSlots = [];
+    private readonly HashSet<DateTime> _myBookings    = [];
+    private readonly Dictionary<DateTime, string> _otherBookings = [];
+
+    private readonly List<Component> _components = [];
+    private readonly List<TermLine>  _termLines  = [];
+    private readonly List<QuickLink> _links      = [];
+
+    // ── init ─────────────────────────────────────────────────────────────
+
+    protected override void OnInitialized()
+    {
+        // Time slots: 07:00 – 20:00 in 15-min increments
+        var day = DateTime.Today.AddHours(7);
+        while (day.Hour < 20)
+        {
+            _slots.Add(day);
+            day = day.AddMinutes(15);
+        }
+
+        // Mock other bookings
+        var taken = new[] { (9, 0), (9, 15), (9, 30), (11, 0), (11, 15), (14, 30), (14, 45), (15, 0) };
+        foreach (var (h, m) in taken)
+            _otherBookings[DateTime.Today.AddHours(h).AddMinutes(m)] = h < 12 ? "Alice" : "Bob";
+
+        // Mock my existing booking
+        _myBookings.Add(DateTime.Today.AddHours(13));
+        _myBookings.Add(DateTime.Today.AddHours(13).AddMinutes(15));
+        _myBookings.Add(DateTime.Today.AddHours(13).AddMinutes(30));
+
+        // Quick links
+        _links.AddRange([
+            new QuickLink { Label = "Grafana",  Description = "Metrics & dashboards", Icon = Icons.Material.Outlined.BarChart,     Color = "#f46800", Url = "http://grafana:3000" },
+            new QuickLink { Label = "Kibana",   Description = "Log explorer",          Icon = Icons.Material.Outlined.ManageSearch, Color = "#00bfb3", Url = "http://kibana:5601"  },
+            new QuickLink { Label = "Jenkins",  Description = "CI / CD pipelines",     Icon = Icons.Material.Outlined.Build,        Color = "#d33833", Url = "http://jenkins:8080" },
+            new QuickLink { Label = "Swagger",  Description = "API reference",         Icon = Icons.Material.Outlined.Api,          Color = "#85ea2d", Url = "http://api/swagger"  },
+            new QuickLink { Label = "RabbitMQ", Description = "Message broker UI",     Icon = Icons.Material.Outlined.Router,       Color = "#ff6600", Url = "http://rabbitmq:15672" },
+            new QuickLink { Label = "Seq",      Description = "Structured logs",       Icon = Icons.Material.Outlined.FormatListBulleted, Color = "#a78bfa", Url = "http://seq:5341" },
+        ]);
+
+        // Components
+        _components.AddRange([
+            new Component { Name = "API Gateway",         Version = "2.4.1",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Auth Service",        Version = "1.9.0",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Notification Worker", Version = "3.1.2",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Report Generator",    Version = "1.2.0",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Data Importer",       Version = "0.8.5",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Scheduler",           Version = "2.0.0",  Status = CompStatus.Error,        Selected = false },
+            new Component { Name = "Cache Warmer",        Version = "1.0.3",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Audit Logger",        Version = "1.5.1",  Status = CompStatus.Installed,    Selected = true  },
+        ]);
+
+        // Mock initial terminal output
+        _termLines.AddRange([
+            new TermLine { Text = "$ env-manager init --env " + Env,        Css = "bm-term-cmd"     },
+            new TermLine { Text = "Connecting to environment registry…",     Css = "bm-term-muted"   },
+            new TermLine { Text = "✓ Connected  (registry v2.4)",           Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ Auth Service        v1.9.0  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ API Gateway         v2.4.1  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ Data Importer       v0.8.5  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✗ Scheduler           v2.0.0  [error]",  Css = "bm-term-error"   },
+            new TermLine { Text = "  → Process exited with code 1",         Css = "bm-term-error"   },
+            new TermLine { Text = "Ready.",                                  Css = "bm-term-muted"   },
+        ]);
+    }
+
+    // ── booking ──────────────────────────────────────────────────────────
+
+    private string SlotClass(DateTime slot)
+    {
+        if (_myBookings.Contains(slot))   return "bm-env-slot-mine";
+        if (_otherBookings.ContainsKey(slot)) return "bm-env-slot-taken";
+        if (_selectedSlots.Contains(slot))    return "bm-env-slot-selected";
+        return "bm-env-slot-free";
+    }
+
+    private string SlotTooltip(DateTime slot)
+    {
+        if (_myBookings.Contains(slot))          return $"Your booking · {slot:HH:mm}";
+        if (_otherBookings.TryGetValue(slot, out var who)) return $"Booked by {who} · {slot:HH:mm}";
+        return slot.ToString("HH:mm");
+    }
+
+    private void ToggleSlot(DateTime slot)
+    {
+        if (_myBookings.Contains(slot) || _otherBookings.ContainsKey(slot)) return;
+        if (!_selectedSlots.Remove(slot))
+            _selectedSlots.Add(slot);
+    }
+
+    private void BookSelected()
+    {
+        var sorted = _selectedSlots.Order().ToList();
+        foreach (var s in sorted) _myBookings.Add(s);
+        _selectedSlots.Clear();
+
+        var first = sorted.First();
+        var last  = sorted.Last().AddMinutes(15);
+        _termLines.Add(new TermLine { Text = $"$ book --from {first:HH:mm} --to {last:HH:mm}", Css = "bm-term-cmd" });
+        _termLines.Add(new TermLine { Text = $"✓ Environment booked {first:HH:mm}–{last:HH:mm}", Css = "bm-term-ok" });
+    }
+
+    // ── components ───────────────────────────────────────────────────────
+
+    private async Task ApplyComponents()
+    {
+        var toInstall   = _components.Where(c => c.Selected  && c.Status != CompStatus.Installed).ToList();
+        var toUninstall = _components.Where(c => !c.Selected && c.Status == CompStatus.Installed).ToList();
+
+        foreach (var c in toInstall.Concat(toUninstall))
+            c.Status = CompStatus.Installing;
+        StateHasChanged();
+
+        foreach (var c in toInstall)
+        {
+            _termLines.Add(new TermLine { Text = $"$ install {c.Name} {c.Version}", Css = "bm-term-cmd" });
+            _termLines.Add(new TermLine { Text = $"  Pulling image…",               Css = "bm-term-muted" });
+            StateHasChanged();
+            await Task.Delay(800);
+            _termLines.Add(new TermLine { Text = $"✓ {c.Name} installed successfully", Css = "bm-term-ok" });
+            c.Status = CompStatus.Installed;
+            StateHasChanged();
+        }
+
+        foreach (var c in toUninstall)
+        {
+            _termLines.Add(new TermLine { Text = $"$ uninstall {c.Name}", Css = "bm-term-cmd" });
+            StateHasChanged();
+            await Task.Delay(500);
+            _termLines.Add(new TermLine { Text = $"✓ {c.Name} removed", Css = "bm-term-ok" });
+            c.Status = CompStatus.NotInstalled;
+            StateHasChanged();
+        }
+    }
+}

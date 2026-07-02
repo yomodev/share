@@ -1,6 +1,7 @@
 @namespace NxtUI.Web.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
+@inject DateTimeDisplayService DtSvc
 @inject IJSRuntime JS
 @using Microsoft.JSInterop
 
@@ -40,6 +41,50 @@
 
         <MudItem xs="12" md="6">
             <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">Date &amp; Time</MudText>
+                <div class="bm-settings-row">
+                    <div>
+                        <MudText Typo="Typo.body1">Timezone</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">
+                            How dates and times are displayed across all pages
+                        </MudText>
+                    </div>
+                    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-theme-switcher">
+                        <MudButton StartIcon="@(!DtSvc.UseUtc ? Icons.Material.Filled.LocationOn : Icons.Material.Outlined.LocationOn)"
+                                   Class="@(!DtSvc.UseUtc ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetTz(false))">Local</MudButton>
+                        <MudButton StartIcon="@(DtSvc.UseUtc ? Icons.Material.Filled.Public : Icons.Material.Outlined.Public)"
+                                   Class="@(DtSvc.UseUtc ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetTz(true))">UTC</MudButton>
+                    </MudButtonGroup>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">Developer</MudText>
+                <div class="bm-settings-row">
+                    <div>
+                        <MudText Typo="Typo.body1">Developer mode</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">
+                            Show Batches, Pipelines, and Config in the sidebar
+                        </MudText>
+                    </div>
+                    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-theme-switcher">
+                        <MudButton StartIcon="@(!DtSvc.DevMode ? Icons.Material.Filled.CodeOff : Icons.Material.Outlined.CodeOff)"
+                                   Class="@(!DtSvc.DevMode ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetDevMode(false))">Off</MudButton>
+                        <MudButton StartIcon="@(DtSvc.DevMode ? Icons.Material.Filled.Code : Icons.Material.Outlined.Code)"
+                                   Class="@(DtSvc.DevMode ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetDevMode(true))">On</MudButton>
+                    </MudButtonGroup>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
                 <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">About</MudText>
                 <div class="bm-about-grid">
                     <MudText Typo="Typo.body2" Class="bm-muted">Version</MudText>
@@ -68,7 +113,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
     }
 
     private void SetMode(ThemeMode mode)
@@ -82,6 +127,18 @@
             _                => "dark",
         };
         _ = _appModule?.InvokeVoidAsync("saveTheme", cookie);
+    }
+
+    private void SetTz(bool useUtc)
+    {
+        DtSvc.UseUtc = useUtc;
+        _ = _appModule?.InvokeVoidAsync("saveTz", useUtc ? "utc" : "local");
+    }
+
+    private void SetDevMode(bool enabled)
+    {
+        DtSvc.DevMode = enabled;
+        _ = _appModule?.InvokeVoidAsync("saveDevMode", enabled);
     }
 
     private void OnThemeExternallyChanged()

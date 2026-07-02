@@ -18,6 +18,19 @@ export function saveTheme(value) {
     document.cookie = `bm-theme=${value};path=/;max-age=31536000`;
 }
 
+/** @param {string} value — "utc" | "local" */
+export function saveTz(value) {
+    try { localStorage.setItem('bm-tz', value); } catch { }
+    document.cookie = `bm-tz=${value};path=/;max-age=31536000`;
+}
+
+/** @param {boolean} enabled */
+export function saveDevMode(enabled) {
+    const v = enabled ? '1' : '0';
+    try { localStorage.setItem('bm-dev', v); } catch { }
+    document.cookie = `bm-dev=${v};path=/;max-age=31536000`;
+}
+
 /**
  * Registers a listener for OS dark-mode changes and returns the current OS value.
  * Saves the current OS preference as a cookie so the server can seed it on next load.

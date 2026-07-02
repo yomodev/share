@@ -22,26 +22,27 @@
 
         <div class="bm-mg-toolbar-sep"></div>
 
-        <!-- Chart type -->
-        <span class="bm-svc-grouping-label">Chart</span>
+        <!-- Children toggle -->
+        <MudTooltip Text="Show children processes memory">
+            <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                       Class="@(_splitView ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                       OnClick="@(() => SetSplitView(!_splitView))">Children</MudButton>
+        </MudTooltip>
+
+        <div class="bm-mg-toolbar-sep"></div>
+
+        <!-- Time range -->
+        <span class="bm-svc-grouping-label">Range</span>
         <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
-            <MudButton Class="@(_chartType == ChartType.Line     ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Line))">Line</MudButton>
-            <MudButton Class="@(_chartType == ChartType.Sunburst ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Sunburst))">Sunburst</MudButton>
+            <MudButton Class="@(_windowHours == 0.25  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(0.25))">15M</MudButton>
+            <MudButton Class="@(_windowHours == 0.5   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(0.5))">30M</MudButton>
+            <MudButton Class="@(_windowHours == 1.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1.0))">1H</MudButton>
+            <MudButton Class="@(_windowHours == 2.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(2.0))">2H</MudButton>
+            <MudButton Class="@(_windowHours == 6.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6.0))">6H</MudButton>
+            <MudButton Class="@(_windowHours == 12.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(12.0))">12H</MudButton>
+            <MudButton Class="@(_windowHours == 24.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24.0))">24H</MudButton>
+            <MudButton Class="@(_windowHours == 48.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(48.0))">48H</MudButton>
         </MudButtonGroup>
-
-        @if (_chartType == ChartType.Line)
-        {
-            <div class="bm-mg-toolbar-sep"></div>
-
-            <!-- Time range -->
-            <span class="bm-svc-grouping-label">Range</span>
-            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
-                <MudButton Class="@(_windowHours == 1    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1))">1h</MudButton>
-                <MudButton Class="@(_windowHours == 6    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6))">6h</MudButton>
-                <MudButton Class="@(_windowHours == 24   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24))">24h</MudButton>
-                <MudButton Class="@(_windowHours == null ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(null))">All</MudButton>
-            </MudButtonGroup>
-        }
 
         <div class="bm-mg-toolbar-spacer"></div>
 
@@ -51,35 +52,35 @@
         }
     </div>
 
-    <!-- ── Body: legend panel + chart ────────────────────────────────── -->
+    <!-- ── Body: chart + resize handle + legend ─────────────────────── -->
     <div class="bm-mg-body">
-
-        <!-- Legend / filter panel -->
-        <div class="bm-mg-legend">
-            <div class="bm-mg-legend-title">@LegendTitle</div>
-            @foreach (var item in _legendItems)
-            {
-                <label class="bm-mg-legend-item">
-                    <input type="checkbox"
-                           checked="@item.Visible"
-                           @onchange="@(e => ToggleLegendItem(item, (bool)(e.Value ?? false)))" />
-                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
-                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
-                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
-                </label>
-            }
-        </div>
 
         <!-- Chart area -->
         <div class="bm-mg-chart-area">
             <div class="bm-mg-d3-container" @ref="_chartRef"></div>
-            @if (_chartType == ChartType.Line && _lineSeries.Count == 0)
+            @if (_lineSeries.Count == 0)
             {
                 <div class="bm-mg-empty">No data yet.</div>
             }
-            @if (_chartType == ChartType.Line)
+            <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+        </div>
+
+        <!-- Drag handle -->
+        <div class="bm-mg-resize-handle" @ref="_resizeHandleRef"></div>
+
+        <!-- Legend / filter panel (right side) -->
+        <div class="bm-mg-legend" @ref="_legendRef">
+            <div class="bm-mg-legend-title">@LegendTitle</div>
+            @{ int _li = 0; }
+            @foreach (var item in _legendItems)
             {
-                <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+                int idx = _li++;
+                <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
+                     @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
+                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
+                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
+                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
+                </div>
             }
         </div>
 
@@ -91,14 +92,14 @@
     [Parameter] public string? NavigationHint { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
-    private enum GroupBy   { None, Service, Host }
-    private enum ChartType { Line, Sunburst }
+    private enum GroupBy { None, Service, Host }
 
     // ── state ────────────────────────────────────────────────────────────
-    private GroupBy   _groupBy   = GroupBy.Service;
-    private ChartType _chartType = ChartType.Line;
-    private string?   _lastHint;
-    private int?      _windowHours = 1;   // null = show all; default to last 1 h
+    private GroupBy _groupBy = GroupBy.Service;
+    private string? _lastHint;
+    private double?   _windowHours = 1.0;   // null = show all; default to last 1 h
+    private int       _lastClickedIndex = -1;
+    private bool      _splitView = false;
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -117,10 +118,13 @@
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
     private ElementReference    _brushRef;
+    private ElementReference    _legendRef;
+    private ElementReference    _resizeHandleRef;
     private bool                _chartDirty  = true;
+    private bool                _resizeWired = false;
 
     // Raw samples sent to JS; JS handles bucketing + brush-driven zoom.
-    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values);
+    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values, bool IsFaded = false, string? Label = null);
 
     // 16-color palette
     private static readonly string[] Palette =
@@ -155,18 +159,15 @@
     private void ApplyNavigationHint()
     {
         _lastHint = NavigationHint;
-        if (!int.TryParse(NavigationHint, out var pid)) return;
+        if (string.IsNullOrEmpty(NavigationHint)) return;
 
-        // Switch to per-process grouping so each PID is an individual legend entry.
+        // Hint format: "ServiceName|ProcessId" — the exact key used in GroupBy.None.
         _groupBy = GroupBy.None;
         Rebuild();
 
-        // Uncheck every entry except the one matching the pid.
+        // Show only the exact matching entry; hide everything else.
         foreach (var item in _legendItems)
-        {
-            // None-group key = "ServiceName|ProcessId" — match the trailing |pid segment.
-            item.Visible = item.Key.EndsWith("|" + pid, StringComparison.Ordinal);
-        }
+            item.Visible = item.Key.Equals(NavigationHint, StringComparison.Ordinal);
 
         BuildChartData();
         _chartDirty = true;
@@ -174,13 +175,16 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (!_resizeWired)
+        {
+            _resizeWired = true;
+            try { await JS.InvokeVoidAsync("mgLegendResize", _resizeHandleRef, _legendRef); }
+            catch (Exception) { }
+        }
         if (_chartDirty)
         {
             _chartDirty = false;
-            if (_chartType == ChartType.Sunburst)
-                await RenderSunburstAsync();
-            else
-                await RenderLineAsync();
+            await RenderLineAsync();
         }
     }
 
@@ -204,16 +208,30 @@
         StateHasChanged();
     }
 
-    private void SetChartType(ChartType t)
+    private void OnLegendItemClick(LegendItem item, MouseEventArgs e, int index)
     {
-        _chartType = t;
-        _chartDirty = true;
-        StateHasChanged();
-    }
+        if (e.CtrlKey)
+        {
+            item.Visible = !item.Visible;
+            _lastClickedIndex = index;
+        }
+        else if (e.ShiftKey && _lastClickedIndex >= 0)
+        {
+            int lo = Math.Min(index, _lastClickedIndex);
+            int hi = Math.Max(index, _lastClickedIndex);
+            bool target = !item.Visible;
+            for (int i = lo; i <= hi; i++)
+                _legendItems[i].Visible = target;
+            _lastClickedIndex = index;
+        }
+        else
+        {
+            bool soloAlready = _legendItems.Count(i => i.Visible) == 1 && item.Visible;
+            foreach (var i in _legendItems)
+                i.Visible = soloAlready || ReferenceEquals(i, item);
+            _lastClickedIndex = index;
+        }
 
-    private void ToggleLegendItem(LegendItem item, bool visible)
-    {
-        item.Visible = visible;
         BuildChartData();
         _chartDirty = true;
         StateHasChanged();
@@ -237,12 +255,12 @@
             return new LegendItem
             {
                 Key       = kv.Key,
-                Name      = kv.Key,
+                Name      = FormatLegendName(kv.Key),
                 Color     = color,
                 CurrentMb = mb,
                 Visible   = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
             };
-        }).ToList();
+        }).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
         BuildChartData();
         _chartDirty = true;
@@ -287,31 +305,51 @@
         {
             if (!visible.Contains(key)) continue;
 
+            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
+
             // Merge and sort all samples for this group, dedup by timestamp.
             var samples = svcs
                 .SelectMany(svc => MetricsMonitor.GetHistory(Env, svc))
                 .GroupBy(s => s.Timestamp)
-                .Select(g => (Timestamp: g.Key, Bytes: g.Sum(s => s.TotalCurrentBytes)))
+                .Select(g => (
+                    Timestamp: g.Key,
+                    Main:  g.Sum(s => s.CurrentUsageBytes),
+                    Child: g.Sum(s => s.ChildUsageBytes)))
                 .OrderBy(s => s.Timestamp)
                 .ToList();
 
             if (samples.Count == 0) continue;
 
-            var color      = colorMap.TryGetValue(key, out var c) ? c : "#888";
             var timestamps = samples.Select(s => new DateTimeOffset(s.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds()).ToArray();
-            var values     = samples.Select(s => s.Bytes / 1e6).ToArray();
-            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, values));
+
+            var totalValues = samples.Select(s => (s.Main + s.Child) / 1e6).ToArray();
+            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, totalValues));
+
+            if (_splitView)
+            {
+                var childValues = samples.Select(s => s.Child / 1e6).ToArray();
+                if (childValues.Any(v => v > 0))
+                    _lineSeries.Add(new LineSeriesDto(key + "\tchild", color, timestamps, childValues, IsFaded: true, Label: key + " (children)"));
+            }
         }
     }
 
-    private void SetWindow(int? hours)
+    private void SetWindow(double? hours)
     {
         _windowHours = hours;
         _chartDirty  = true;
         StateHasChanged();
     }
 
-    // ── sunburst ─────────────────────────────────────────────────────────
+    private void SetSplitView(bool split)
+    {
+        _splitView  = split;
+        BuildChartData();
+        _chartDirty = true;
+        StateHasChanged();
+    }
+
+    // ── chart renderers ───────────────────────────────────────────────────
 
     private async Task RenderLineAsync()
     {
@@ -319,83 +357,14 @@
         catch (Exception) { }
     }
 
-    private async Task RenderSunburstAsync()
-    {
-        try
-        {
-            var data = BuildSunburstData();
-            await JS.InvokeVoidAsync("memorySunburst.render", _chartRef, data, new { });
-        }
-        catch (Exception) { }
-    }
-
-    private object BuildSunburstData()
-    {
-        var services = _services;
-        var groups   = GroupServices(services);
-        var visible  = _legendItems.Where(i => i.Visible).Select(i => i.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var colorMap = _legendItems.ToDictionary(i => i.Key, i => i.Color);
-
-        var groupObjects = new List<object>();
-
-        foreach (var (key, svcs) in groups)
-        {
-            if (!visible.Contains(key)) continue;
-            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
-
-            if (_groupBy == GroupBy.None)
-            {
-                // Each entry = one service; split into main + child process
-                foreach (var svc in svcs)
-                {
-                    var latest = MetricsMonitor.GetLatest(Env, svc);
-                    if (latest is null) continue;
-
-                    var mainBytes  = latest.CurrentUsageBytes;
-                    var childBytes = latest.ChildUsageBytes;
-                    var children   = new List<object>();
-
-                    if (mainBytes > 0)
-                        children.Add(new { name = svc.ServiceName + " (main)", value = mainBytes, color });
-
-                    if (childBytes > 0)
-                    {
-                        var childColor = AdjustBrightness(color, 0.65);
-                        children.Add(new { name = svc.ProcessId + "+ (child)", value = childBytes, color = childColor });
-                    }
-
-                    if (children.Count == 0) continue;
-                    var total = mainBytes + childBytes;
-                    groupObjects.Add(new { name = key, value = total, color, children });
-                }
-            }
-            else
-            {
-                // Aggregate across all svcs in this group
-                long totalBytes = 0;
-                var children = new List<object>();
-                int ci = 0;
-                foreach (var svc in svcs)
-                {
-                    var latest = MetricsMonitor.GetLatest(Env, svc);
-                    if (latest is null) continue;
-                    var bytes = latest.TotalCurrentBytes;
-                    if (bytes == 0) continue;
-                    totalBytes += bytes;
-                    var childColor = ShiftHue(color, ci++ * 20);
-                    var childLabel = _groupBy == GroupBy.Host ? svc.ServiceName : svc.HostName;
-                    children.Add(new { name = childLabel, value = bytes, color = childColor });
-                }
-                if (totalBytes == 0) continue;
-                groupObjects.Add(new { name = key, value = totalBytes, color, children });
-            }
-        }
-
-        var grandTotal = groupObjects.Sum(g => (long)((dynamic)g).value);
-        return new { total = grandTotal, groups = groupObjects };
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────
+
+    private string FormatLegendName(string key)
+    {
+        if (_groupBy != GroupBy.None) return key;
+        int sep = key.IndexOf('|');
+        return sep > 0 ? $"{key[..sep]} ({key[(sep + 1)..]})": key;
+    }
 
     private string LegendTitle => _groupBy switch
     {
@@ -413,75 +382,12 @@
     private static string FormatMb(double mb)
         => mb >= 1000 ? $"{mb / 1024.0:F1} GB" : $"{mb:F0} MB";
 
-    // Very rough HSL hue shift for child items — keeps visual relationship to parent color.
-    private static string ShiftHue(string hex, int degrees)
-    {
-        if (!TryParseHex(hex, out var r, out var g, out var b)) return hex;
-        RgbToHsl(r, g, b, out var h, out var s, out var l);
-        h = ((h * 360 + degrees) % 360) / 360.0;
-        HslToRgb(h, s, l, out var nr, out var ng, out var nb);
-        return $"#{nr:X2}{ng:X2}{nb:X2}";
-    }
-
-    private static string AdjustBrightness(string hex, double factor)
-    {
-        if (!TryParseHex(hex, out var r, out var g, out var b)) return hex;
-        return $"#{Clamp255(r * factor):X2}{Clamp255(g * factor):X2}{Clamp255(b * factor):X2}";
-    }
-
-    private static bool TryParseHex(string hex, out int r, out int g, out int b)
-    {
-        r = g = b = 0;
-        hex = hex.TrimStart('#');
-        if (hex.Length != 6) return false;
-        r = Convert.ToInt32(hex[..2], 16);
-        g = Convert.ToInt32(hex[2..4], 16);
-        b = Convert.ToInt32(hex[4..6], 16);
-        return true;
-    }
-
-    private static int Clamp255(double v) => Math.Clamp((int)Math.Round(v), 0, 255);
-
-    private static void RgbToHsl(int r, int g, int b, out double h, out double s, out double l)
-    {
-        double rf = r / 255.0, gf = g / 255.0, bf = b / 255.0;
-        double max = Math.Max(rf, Math.Max(gf, bf));
-        double min = Math.Min(rf, Math.Min(gf, bf));
-        l = (max + min) / 2;
-        if (max == min) { h = s = 0; return; }
-        double d = max - min;
-        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-        h = max == rf ? (gf - bf) / d + (gf < bf ? 6 : 0) :
-            max == gf ? (bf - rf) / d + 2 :
-                        (rf - gf) / d + 4;
-        h /= 6;
-    }
-
-    private static void HslToRgb(double h, double s, double l, out int r, out int g, out int b)
-    {
-        if (s == 0) { r = g = b = Clamp255(l * 255); return; }
-        double q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-        double p = 2 * l - q;
-        r = Clamp255(Hue(p, q, h + 1.0 / 3) * 255);
-        g = Clamp255(Hue(p, q, h)           * 255);
-        b = Clamp255(Hue(p, q, h - 1.0 / 3) * 255);
-    }
-
-    private static double Hue(double p, double q, double t)
-    {
-        if (t < 0) t += 1; if (t > 1) t -= 1;
-        return t < 1.0 / 6 ? p + (q - p) * 6 * t :
-               t < 0.5     ? q :
-               t < 2.0 / 3 ? p + (q - p) * (2.0 / 3 - t) * 6 : p;
-    }
-
     // ── disposal ─────────────────────────────────────────────────────────
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
-        try { await JS.InvokeVoidAsync("memorySunburst.destroy", _chartRef); }
-        catch (Exception) { }
+        return ValueTask.CompletedTask;
     }
 }

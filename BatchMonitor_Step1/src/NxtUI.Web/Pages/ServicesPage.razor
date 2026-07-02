@@ -12,6 +12,7 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -91,13 +92,13 @@
                         @if (group.Key != null)
                         {
                             <div class="bm-svc-group-header">
+                                <span class="bm-svc-group-count">@group.Count()</span>
                                 @group.Key
                                 @{ var groupRam = group.Sum(s => s.RamMb ?? 0); }
                                 @if (groupRam > 0)
                                 {
                                     <span class="bm-svc-group-ram">@FormatMb(groupRam) MB</span>
                                 }
-                                <span class="bm-svc-group-count">@group.Count()</span>
                             </div>
                         }
                         <div class="bm-svc-card-row">
@@ -171,8 +172,8 @@
                     <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
                     <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat" data-value="@context.UpdatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
-                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd DataLabel="RAM (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="@($"bm-monospace {RamColorClass(context.RamMb)}")">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
@@ -509,7 +510,7 @@
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(_filterText))
         {
-            try   { node = SvcFilterParser.Parse(_filterText); }
+            try   { node = SvcFilterParser.Parse(_filterText, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 

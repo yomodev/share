@@ -2,6 +2,7 @@
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
+@inject DateTimeDisplayService DtSvc
 @using Microsoft.JSInterop
 @implements IAsyncDisposable
 
@@ -38,11 +39,14 @@
                             IsActive="@IsTabActive($"dashboard:runs:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateRunsDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.ListAlt"
                             Label="Batches"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:batches:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateBatchesDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Dns"
                             Label="Services"
@@ -50,11 +54,14 @@
                             IsActive="@IsTabActive($"dashboard:services:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateServicesDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.AccountTree"
                             Label="Pipelines"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:pipelines:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreatePipelinesDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Stream"
                             Label="Kafka"
@@ -68,11 +75,23 @@
                             IsActive="@IsTabActive($"dashboard:mongo:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateMongoDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
+            <SidebarNavItem Icon="@Icons.Material.Outlined.Computer"
+                            Label="Environment"
+                            IsOpen="@_drawerOpen"
+                            IsActive="@IsTabActive($"dashboard:environment:{EnvService.SelectedId}")"
+                            OnClick="@(() => Open(TabModel.CreateEnvironmentDashboard(EnvService.SelectedId)))" />
+            }
+
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.Tune"
                             Label="Config"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:config:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateConfigDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Article"
                             Label="Logs"
@@ -140,12 +159,13 @@
     {
         TabService.OnChange += StateHasChanged;
         EnvService.OnChange += StateHasChanged;
+        DtSvc.OnChange      += StateHasChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
         var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
         if (stored is not null)
         {
@@ -171,6 +191,7 @@
     {
         TabService.OnChange -= StateHasChanged;
         EnvService.OnChange -= StateHasChanged;
+        DtSvc.OnChange      -= StateHasChanged;
         if (_appModule is not null)
         {
             try { await _appModule.DisposeAsync(); }
