@@ -189,7 +189,7 @@ window.homeMemoryTreemap = (function () {
         container.innerHTML =
             '<div class="bm-treemap-loading">' +
               '<div class="bm-treemap-spinner"></div>' +
-              '<span class="bm-treemap-loading-label">Loading…</span>' +
+              '<span class="bm-treemap-loading-label">Loading services information…</span>' +
             '</div>';
 
         // ResizeObserver repaints on resize using the last fetched data.

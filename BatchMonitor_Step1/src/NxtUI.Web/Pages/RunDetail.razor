@@ -85,6 +85,8 @@
     private async Task LoadAsync()
     {
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -93,7 +95,13 @@
                 await StartEventServiceAsync();
         }
         catch { _details = null; }
-        finally { _loading = false; StateHasChanged(); }
+        finally
+        {
+            _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private async Task StartEventServiceAsync()

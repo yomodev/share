@@ -17,46 +17,46 @@
         return Tab.Type switch
         {
             TabType.Runs =>
-                @<Runs Environment="@env" />,
+                @<Runs Environment="@env" Tab="@Tab" />,
 
             TabType.RunDetail =>
                 @<RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Services =>
-                @<ServicesPage Env="@env" />,
+                @<ServicesPage Env="@env" Tab="@Tab" />,
 
             TabType.Pipelines =>
                 @<PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
 
             TabType.Kafka =>
-                @<KafkaDashboard Environment="@env" />,
+                @<KafkaDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.KafkaGroups =>
-                @<KafkaGroupsDashboard Environment="@env" />,
+                @<KafkaGroupsDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.MongoDB =>
-                @<MongoDashboard Environment="@env" />,
+                @<MongoDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.MongoDetail =>
-                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" Tab="@Tab" />,
 
             TabType.Batches =>
-                @<Batches Environment="@env" />,
+                @<Batches Environment="@env" Tab="@Tab" />,
 
             TabType.Config =>
                 @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" />,
 
             TabType.LogBrowser =>
-                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.LogViewer =>
-                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.LogWorkspace =>
-                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.Settings =>
                 @<Settings />,

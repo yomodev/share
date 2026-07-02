@@ -171,6 +171,8 @@
 @code {
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
+    [Parameter] public bool    IsFocused      { get; set; }
+    [Parameter] public TabModel? Tab          { get; set; }
 
     // ── filter grammar for log lines ──────────────────────────────────────
     private static readonly FilterParser LogLineParser = new(
@@ -249,34 +251,69 @@
     private bool _isSearchRequested =>
         _fileGlob != "*.log" || !string.IsNullOrEmpty(_contentFilterStr);
 
-    private CancellationTokenSource _cts        = new();
+    private CancellationTokenSource  _cts        = new();
     private CancellationTokenSource? _searchCts;
-    private PeriodicTimer?           _pollTimer;
+    private CancellationTokenSource? _pollCts;
+    private bool                     _previousIsFocused;
     private DateTime                 _lastManualPoll = DateTime.MinValue;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
     {
-        _servers = EnvironmentService.GetServers(Env).ToList();
-
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         try
         {
-            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-            _rootNodes = roots.ToList();
+            _servers = EnvironmentService.GetServers(Env).ToList();
+
+            try
+            {
+                var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+                _rootNodes = roots.ToList();
+            }
+            catch (Exception ex) { _initError = ex.Message; }
+
+            _initialized = true;
+            _lastScan    = DateTime.UtcNow;
+            _previousIsFocused = IsFocused;
+            if (IsFocused) StartPolling();
+
+            // Auto-navigate to today's date folder if one exists at the root.
+            var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+            var todayNode = _rootNodes.FirstOrDefault(n =>
+                n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+            if (todayNode is not null)
+                await OnExpandedChangedAsync(todayNode, true);
         }
-        catch (Exception ex) { _initError = ex.Message; }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
+    }
 
-        _initialized = true;
-        _lastScan    = DateTime.UtcNow;
-        StartPolling();
+    // Synchronous and separate from OnParametersSetAsync below — this must not
+    // block (fire-and-forget only) so activating a tab never stalls on it.
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        _previousIsFocused = IsFocused;
 
-        // Auto-navigate to today's date folder if one exists at the root.
-        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-        var todayNode = _rootNodes.FirstOrDefault(n =>
-            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-        if (todayNode is not null)
-            await OnExpandedChangedAsync(todayNode, true);
+        if (IsFocused)
+        {
+            StartPolling();
+            if (_initialized && _selectedPath is not null && !_isSearching && !_isSearchMode)
+                _ = InvokeAsync(async () =>
+                {
+                    try { await LoadFilesAsync(); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser focus refresh failed"); }
+                });
+        }
+        else
+        {
+            StopPolling();
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -549,16 +586,25 @@
 
     private void StartPolling()
     {
-        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
-        _pollTimer   = new PeriodicTimer(interval);
-        _ = PollLoopAsync();
+        if (_pollCts is not null) return; // already running
+        _pollCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        _ = PollLoopAsync(_pollCts.Token);
     }
 
-    private async Task PollLoopAsync()
+    private void StopPolling()
     {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    private async Task PollLoopAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
+        using var timer = new PeriodicTimer(interval);
         try
         {
-            while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
+            while (await timer.WaitForNextTickAsync(ct))
             {
                 // Skip auto-refresh while a search is running.
                 if (_selectedPath is not null && !_isSearching && !_isSearchMode)
@@ -613,9 +659,9 @@
     public async ValueTask DisposeAsync()
     {
         StopSearch();
+        StopPolling();
         _selfRef?.Dispose();
         await _cts.CancelAsync();
         _cts.Dispose();
-        _pollTimer?.Dispose();
     }
 }

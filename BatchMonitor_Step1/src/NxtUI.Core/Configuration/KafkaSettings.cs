@@ -30,6 +30,20 @@ public class KafkaSettings
     /// </summary>
     public List<TopicDeserializerRule> TopicDeserializers { get; set; } = [];
 
+    /// <summary>
+    /// Last-chance proto type tried when no pattern matches a topic, or every
+    /// candidate for a matched pattern fails to parse. Empty/null disables it
+    /// (falls straight through to the raw-bytes stub).
+    /// </summary>
+    public string? DefaultProtoType { get; set; } = "ProtoMsg";
+
+    /// <summary>
+    /// Folder containing .proto schema files, parsed dynamically at runtime
+    /// (no generated C# classes). Null/empty uses the folder bundled with
+    /// NxtUI.Protos.
+    /// </summary>
+    public string? ProtoSchemaFolder { get; set; }
+
     /// <summary>Maximum messages fetched in one streaming session (default 2000).</summary>
     public int MaxFetchMessages { get; set; } = 2_000;
 
@@ -53,6 +67,10 @@ public class TopicDeserializerRule
     /// <summary>Glob pattern matched against the topic name (case-insensitive).</summary>
     public string Pattern { get; set; } = string.Empty;
 
-    /// <summary>Proto type name registered in <c>MessageRegistry</c>.</summary>
-    public string Type { get; set; } = string.Empty;
+    /// <summary>
+    /// Candidate proto type names, tried in order until one parses successfully.
+    /// Once a candidate succeeds for a given topic, the pipeline remembers it
+    /// and tries that one first on subsequent messages for the same topic.
+    /// </summary>
+    public List<string> Types { get; set; } = [];
 }

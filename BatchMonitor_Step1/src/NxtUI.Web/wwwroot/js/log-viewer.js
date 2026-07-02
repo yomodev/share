@@ -674,7 +674,10 @@ function find(container, term, opts = {}) {
 
     if (matches.length > 0) {
         vp.matchCursor = 0;
-        scrollToEntry(vp, matches[0]);
+        // skipScroll: highlight in place (e.g. double-click on a visible word)
+        // without jumping the viewport to the first match elsewhere in the file.
+        if (opts.skipScroll) renderRows(vp);
+        else scrollToEntry(vp, matches[0]);
     } else {
         renderRows(vp);
     }

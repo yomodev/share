@@ -58,6 +58,17 @@ public class TabModel
 
     public bool IsActive { get; set; }
 
+    // Counter rather than bool so overlapping loads (e.g. multiple panes in a
+    // LogWorkspace tab) don't have one finishing early clear the spinner for
+    // another still in flight.
+    private int _loadingCount;
+
+    /// <summary>True while any async load this tab owns is in flight — TabBar shows a spinner instead of Icon.</summary>
+    public bool IsLoading => _loadingCount > 0;
+
+    public void BeginLoading() => _loadingCount++;
+    public void EndLoading()   => _loadingCount = Math.Max(0, _loadingCount - 1);
+
     /// <summary>When true, opening this tab does not trigger URL navigation (e.g. browser-local files).</summary>
     public bool NoNavigate { get; set; }
 
@@ -253,6 +264,7 @@ public class TabModel
         TabType.Config      => $"/config/{Environment}",
         TabType.Batches     => $"/batches/{Environment}",
         TabType.MemoryGraph => $"/memory/{Environment}",
+        TabType.Environment => $"/environment/{Environment}",
         TabType.LogBrowser        => $"/logs/{Environment}",
         TabType.LogViewer    => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.LogWorkspace => $"/workspace/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
@@ -323,6 +335,9 @@ public class TabModel
 
             "memory" when parts.Length >= 2
                 => CreateMemoryGraph(parts[1]),
+
+            "environment" when parts.Length >= 2
+                => CreateEnvironmentDashboard(parts[1]),
 
             "logs" when parts.Length >= 2
                 => CreateLogsDashboard(parts[1]),

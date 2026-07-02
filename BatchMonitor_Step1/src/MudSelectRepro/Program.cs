@@ -2,7 +2,7 @@ using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor(options => options.DetailedErrors = true);
 builder.Services.AddMudServices();
 
 var app = builder.Build();

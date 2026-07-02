@@ -3,6 +3,7 @@
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
+@inject TabService TabService
 @implements IAsyncDisposable
 
 @code {
@@ -114,6 +115,8 @@
 
     private async Task LoadRunsAsync(string env, string runId)
     {
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         await _runLock.WaitAsync();
         try
         {
@@ -131,7 +134,12 @@
                 _runs.Add(batch);
             }
         }
-        finally { _runLock.Release(); }
+        finally
+        {
+            _runLock.Release();
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
 
         await DebouncedPushAsync();
         StateHasChanged();

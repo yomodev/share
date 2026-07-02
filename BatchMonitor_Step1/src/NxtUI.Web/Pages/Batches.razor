@@ -3,6 +3,7 @@
 @using NxtUI.Web.Services
 @inject IBatchCatalogService CatalogSvc
 @inject ISnackbar Snackbar
+@inject TabService TabService
 
 <div class="bm-page bm-page-fill bm-batches-page">
 
@@ -237,6 +238,7 @@
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private bool   _loading = true;
     private string _search   = "";
@@ -270,10 +272,20 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
-        _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
-        _loading    = false;
-        if (_batches.Count > 0) SelectBatch(_batches[0]);
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
+        {
+            _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
+            _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
+            _loading    = false;
+            if (_batches.Count > 0) SelectBatch(_batches[0]);
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     private void SelectBatch(BatchDefinition batch)

@@ -137,13 +137,9 @@
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
             @_totalCount.ToString("N0") collection@(_totalCount == 1 ? "" : "s")
         </MudText>
-        <MudPagination Count="_totalPages"
-                       Selected="_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
+        <BmPagination Count="_totalPages"
+                      Selected="_page"
+                      SelectedChanged="OnPageChanged" />
         <div class="bm-rows-select">
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -162,6 +158,7 @@
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private List<string>                 _databaseNames = new();
     private List<MongoCollectionSummary> _paged         = new();
@@ -180,12 +177,22 @@
 
     protected override async Task OnInitializedAsync()
     {
-        // Load database names only — fast even with 100+ databases (no dbStats).
-        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
-        if (_databaseNames.Count > 0)
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
         {
-            _selectedDb = _databaseNames[0];
-            await LoadCollectionsAsync();
+            // Load database names only — fast even with 100+ databases (no dbStats).
+            _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+            if (_databaseNames.Count > 0)
+            {
+                _selectedDb = _databaseNames[0];
+                await LoadCollectionsAsync();
+            }
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
     }
 
@@ -204,6 +211,8 @@
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -226,6 +235,8 @@
         finally
         {
             _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
         StateHasChanged();
     }

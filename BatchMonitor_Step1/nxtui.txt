@@ -4841,12 +4841,12 @@ LENGTH 301
 
 </Project>
 FILE src/MudSelectRepro/Program.cs
-LENGTH 321
+LENGTH 361
 using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor(options => options.DetailedErrors = true);
 builder.Services.AddMudServices();
 
 var app = builder.Build();
@@ -4919,49 +4919,108 @@ public readonly struct Result<T>
     public static Result<T> Fail(string error) => new(error);
 }
 FILE src/NxtUI.Protos/MessageRegistry.cs
-LENGTH 1551
-using Google.Protobuf;
+LENGTH 16890
+using System.Globalization;
+using System.Text;
+using System.Text.Json.Nodes;
+using Google.Protobuf.Reflection;
 using NxtUI.Core.Services.Kafka;
 
 namespace NxtUI.Protos;
 
 /// <summary>
-/// Maps proto type names to their parsers and serialises parsed messages to JSON.
-/// Register as singleton and inject into <see cref="TopicDeserializerPipeline"/>.
+/// Dynamically deserialises protobuf messages using .proto schema files parsed
+/// at runtime — no generated C# classes involved. Field descriptors drive a
+/// hand-rolled wire-format walk (varint/fixed32/fixed64/length-delimited)
+/// straight into a JSON object graph.
+///
+/// Schema files are parsed once and cached for the process lifetime (see
+/// KafkaSettings.ProtoSchemaFolder). Restart the app to pick up .proto edits.
 /// </summary>
 public sealed class MessageRegistry : IMessageRegistry
 {
-    private readonly Dictionary<string, MessageParser> _parsers =
+    // Keyed by short message name (e.g. "OrderEvent") — the public lookup API,
+    // matching topic-deserializer config and legacy call sites.
+    private readonly Dictionary<string, DescriptorProto> _byShortName =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly JsonFormatter _formatter =
-        new(JsonFormatter.Settings.Default.WithFormatEnumsAsIntegers(false));
+    // Keyed by fully-qualified name with leading dot (e.g. ".nxtui.OrderEvent")
+    // — how FieldDescriptorProto.TypeName references nested/cross-file types.
+    private readonly Dictionary<string, DescriptorProto> _messagesByFqn = new();
+    private readonly Dictionary<string, EnumDescriptorProto> _enumsByFqn = new();
 
     private MessageRegistry() { }
 
-    public static MessageRegistry CreateDefault()
+    /// <summary>Parses every .proto file in <paramref name="folder"/> (default: the folder bundled with this assembly).</summary>
+    public static MessageRegistry Create(string? folder = null)
     {
-        var r = new MessageRegistry();
-        r.Add("ProtoMsg",      ProtoMsg.Parser);
-        r.Add("OrderEvent",    OrderEvent.Parser);
-        r.Add("PaymentEvent",  PaymentEvent.Parser);
-        return r;
+        folder ??= Path.Combine(AppContext.BaseDirectory, "Protos");
+
+        var registry = new MessageRegistry();
+        var set = new FileDescriptorSet();
+
+        if (Directory.Exists(folder))
+        {
+            foreach (var path in Directory.GetFiles(folder, "*.proto"))
+            {
+                using var reader = new StreamReader(path);
+                set.Add(Path.GetFileName(path), true, reader);
+            }
+        }
+
+        set.Process();
+        var errors = set.GetErrors();
+        if (errors.Length > 0)
+            throw new InvalidOperationException(
+                "Failed to parse .proto schema files: " +
+                string.Join("; ", errors.Select(e => $"{e.File}:{e.LineNumber} {e.Message}")));
+
+        foreach (var file in set.Files)
+            registry.IndexFile(file);
+
+        return registry;
     }
 
-    private void Add(string name, MessageParser parser) => _parsers[name] = parser;
+    private void IndexFile(FileDescriptorProto file)
+    {
+        var prefix = string.IsNullOrEmpty(file.Package) ? "" : "." + file.Package;
+        foreach (var msg in file.MessageTypes)
+            IndexMessage(msg, prefix, isTopLevel: true);
+        foreach (var en in file.EnumTypes)
+            _enumsByFqn[prefix + "." + en.Name] = en;
+    }
+
+    private void IndexMessage(DescriptorProto msg, string parentFqn, bool isTopLevel)
+    {
+        var fqn = parentFqn + "." + msg.Name;
+        _messagesByFqn[fqn] = msg;
+
+        // Map-entry synthetic types and other nested types aren't useful as
+        // top-level lookup targets — only index true top-level message names.
+        if (isTopLevel && msg.Options?.MapEntry != true)
+            _byShortName.TryAdd(msg.Name, msg);
+
+        foreach (var nested in msg.NestedTypes)
+            IndexMessage(nested, fqn, isTopLevel: false);
+        foreach (var en in msg.EnumTypes)
+            _enumsByFqn[fqn + "." + en.Name] = en;
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyCollection<string> RegisteredTypes => _byShortName.Keys;
 
     /// <inheritdoc/>
     public bool TryParseToJson(string typeName, byte[] bytes, out string? json)
     {
-        if (!_parsers.TryGetValue(typeName, out var parser))
+        if (!_byShortName.TryGetValue(typeName, out var descriptor))
         {
             json = null;
             return false;
         }
         try
         {
-            var msg = parser.ParseFrom(bytes);
-            json = _formatter.Format(msg);
+            var obj = DecodeMessage(descriptor, bytes);
+            json = obj.ToJsonString();
             return true;
         }
         catch
@@ -4971,11 +5030,307 @@ public sealed class MessageRegistry : IMessageRegistry
         }
     }
 
-    /// <inheritdoc/>
-    public IReadOnlyCollection<string> RegisteredTypes => _parsers.Keys;
+    // ── Wire format decode ──────────────────────────────────────────────────
+
+    private JsonObject DecodeMessage(DescriptorProto desc, ReadOnlySpan<byte> data)
+    {
+        var obj = new JsonObject();
+        var pos = 0;
+
+        while (pos < data.Length)
+        {
+            var tag        = ReadVarint(data, ref pos);
+            var fieldNum   = (int)(tag >> 3);
+            var wireType   = (int)(tag & 7);
+            var field      = FindField(desc, fieldNum);
+
+            object? value = wireType switch
+            {
+                0 => DecodeVarintTyped(field, ReadVarint(data, ref pos)),
+                1 => DecodeFixed64Typed(field, ReadUInt64LE(data, ref pos)),
+                5 => DecodeFixed32Typed(field, ReadUInt32LE(data, ref pos)),
+                2 => DecodeLengthDelimited(field, ReadLengthDelimited(data, ref pos)),
+                _ => null, // groups (3/4) and anything else — not supported, message is truncated here
+            };
+
+            if (wireType is not (0 or 1 or 2 or 5)) break;
+            if (field is null) continue; // unknown field number — skip, already consumed
+
+            ApplyField(obj, field, value);
+        }
+
+        return obj;
+    }
+
+    private void ApplyField(JsonObject obj, FieldDescriptorProto field, object? value)
+    {
+        var name = JsonFieldName(field);
+
+        // proto3 maps are encoded as `repeated MapEntry { key = 1; value = 2; }`
+        // — reassemble into a real JSON object instead of an array of pairs.
+        if (field.label == FieldDescriptorProto.Label.LabelRepeated &&
+            value is MapEntry entry)
+        {
+            var mapObj = obj[name] as JsonObject ?? (JsonObject)(obj[name] = new JsonObject());
+            mapObj[entry.Key] = entry.Value;
+            return;
+        }
+
+        if (field.label == FieldDescriptorProto.Label.LabelRepeated)
+        {
+            var arr = obj[name] as JsonArray ?? (JsonArray)(obj[name] = new JsonArray());
+            if (value is JsonArray packed) // packed scalar repeated field decoded in one shot
+                foreach (var item in packed.ToList())
+                    arr.Add(item?.DeepClone());
+            else
+                arr.Add(ToJsonNode(value));
+            return;
+        }
+
+        obj[name] = ToJsonNode(value);
+    }
+
+    private sealed record MapEntry(string Key, JsonNode? Value);
+
+    private FieldDescriptorProto? FindField(DescriptorProto desc, int number) =>
+        desc.Fields.FirstOrDefault(f => f.Number == number);
+
+    private static string JsonFieldName(FieldDescriptorProto field) =>
+        !string.IsNullOrEmpty(field.JsonName) ? field.JsonName : ToCamelCase(field.Name);
+
+    private static string ToCamelCase(string snake)
+    {
+        var parts = snake.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return snake;
+        var sb = new StringBuilder(parts[0]);
+        for (var i = 1; i < parts.Length; i++)
+            sb.Append(char.ToUpperInvariant(parts[i][0])).Append(parts[i][1..]);
+        return sb.ToString();
+    }
+
+    // ── Scalar decoding per FieldDescriptorProto.Type ───────────────────────
+
+    private object? DecodeVarintTyped(FieldDescriptorProto? field, ulong raw) => field?.type switch
+    {
+        FieldDescriptorProto.Type.TypeBool   => raw != 0,
+        FieldDescriptorProto.Type.TypeInt32  => unchecked((int)raw),
+        FieldDescriptorProto.Type.TypeInt64  => unchecked((long)raw),
+        FieldDescriptorProto.Type.TypeUint32 => unchecked((uint)raw),
+        FieldDescriptorProto.Type.TypeUint64 => raw,
+        FieldDescriptorProto.Type.TypeSint32 => ZigZagDecode32((uint)raw),
+        FieldDescriptorProto.Type.TypeSint64 => ZigZagDecode64(raw),
+        FieldDescriptorProto.Type.TypeEnum   => EnumName(field.TypeName, unchecked((int)raw)),
+        null                                  => (long)raw, // unknown field, best-effort raw value
+        _                                     => (long)raw,
+    };
+
+    private object? DecodeFixed64Typed(FieldDescriptorProto? field, ulong raw) => field?.type switch
+    {
+        FieldDescriptorProto.Type.TypeDouble  => BitConverter.Int64BitsToDouble(unchecked((long)raw)),
+        FieldDescriptorProto.Type.TypeSfixed64 => unchecked((long)raw),
+        _                                       => raw, // TypeFixed64 or unknown
+    };
+
+    private object? DecodeFixed32Typed(FieldDescriptorProto? field, uint raw) => field?.type switch
+    {
+        FieldDescriptorProto.Type.TypeFloat    => BitConverter.Int32BitsToSingle(unchecked((int)raw)),
+        FieldDescriptorProto.Type.TypeSfixed32 => unchecked((int)raw),
+        _                                        => raw, // TypeFixed32 or unknown
+    };
+
+    private object? DecodeLengthDelimited(FieldDescriptorProto? field, ReadOnlySpan<byte> bytes)
+    {
+        switch (field?.type)
+        {
+            case FieldDescriptorProto.Type.TypeString:
+                return Encoding.UTF8.GetString(bytes);
+
+            case FieldDescriptorProto.Type.TypeBytes:
+                return Convert.ToBase64String(bytes);
+
+            case FieldDescriptorProto.Type.TypeMessage:
+                var nested = ResolveMessage(field.TypeName);
+                if (nested is null) return null;
+                if (nested.Options?.MapEntry == true)
+                {
+                    var entryObj = DecodeMessage(nested, bytes);
+                    return new MapEntry(entryObj["key"]?.ToString() ?? "", entryObj["value"]?.DeepClone());
+                }
+                if (TryDecodeWellKnown(field.TypeName, nested, bytes, out var wellKnown))
+                    return wellKnown;
+                return DecodeMessage(nested, bytes);
+
+            case null:
+                // Unknown field with no schema info — keep as base64 for inspection.
+                return Convert.ToBase64String(bytes);
+
+            default:
+                // Repeated scalar field encoded packed (wire type 2 instead of its
+                // normal scalar wire type) — decode as a run of values.
+                if (field.label == FieldDescriptorProto.Label.LabelRepeated)
+                    return DecodePacked(field, bytes);
+                return Convert.ToBase64String(bytes);
+        }
+    }
+
+    private JsonArray DecodePacked(FieldDescriptorProto field, ReadOnlySpan<byte> bytes)
+    {
+        var arr = new JsonArray();
+        var pos = 0;
+        while (pos < bytes.Length)
+        {
+            object? value = field.type switch
+            {
+                FieldDescriptorProto.Type.TypeFloat or FieldDescriptorProto.Type.TypeSfixed32
+                    => DecodeFixed32Typed(field, ReadUInt32LE(bytes, ref pos)),
+                FieldDescriptorProto.Type.TypeDouble or FieldDescriptorProto.Type.TypeSfixed64
+                    => DecodeFixed64Typed(field, ReadUInt64LE(bytes, ref pos)),
+                _ => DecodeVarintTyped(field, ReadVarint(bytes, ref pos)),
+            };
+            arr.Add(ToJsonNode(value));
+        }
+        return arr;
+    }
+
+    private DescriptorProto? ResolveMessage(string fqn) =>
+        _messagesByFqn.TryGetValue(fqn, out var d) ? d : null;
+
+    private static readonly HashSet<string> WrapperTypeNames = new(StringComparer.Ordinal)
+    {
+        ".google.protobuf.StringValue", ".google.protobuf.BytesValue",
+        ".google.protobuf.Int32Value",  ".google.protobuf.Int64Value",
+        ".google.protobuf.UInt32Value", ".google.protobuf.UInt64Value",
+        ".google.protobuf.FloatValue",  ".google.protobuf.DoubleValue",
+        ".google.protobuf.BoolValue",
+    };
+
+    /// <summary>
+    /// Renders well-known wrapper/Timestamp/Duration types the way proto3 JSON
+    /// mapping does — as plain scalars/strings — instead of as nested objects.
+    /// Wrapper types (Int32Value, StringValue, ...) are how proto3 represents a
+    /// nullable primitive: a message field that's either absent (null) or
+    /// present with one "value" field.
+    /// </summary>
+    private bool TryDecodeWellKnown(string typeName, DescriptorProto nested, ReadOnlySpan<byte> bytes, out JsonNode? result)
+    {
+        if (typeName == ".google.protobuf.Timestamp")
+        {
+            var obj     = DecodeMessage(nested, bytes);
+            var seconds = obj["seconds"]?.GetValue<long>() ?? 0L;
+            var nanos   = obj["nanos"]?.GetValue<int>() ?? 0;
+            var dt = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.AddTicks(nanos / 100);
+            result = JsonValue.Create(dt.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFZ", CultureInfo.InvariantCulture));
+            return true;
+        }
+
+        if (typeName == ".google.protobuf.Duration")
+        {
+            var obj     = DecodeMessage(nested, bytes);
+            var seconds = obj["seconds"]?.GetValue<long>() ?? 0L;
+            var nanos   = obj["nanos"]?.GetValue<int>() ?? 0;
+            var total   = seconds + nanos / 1_000_000_000.0;
+            result = JsonValue.Create(total.ToString("0.#########", CultureInfo.InvariantCulture) + "s");
+            return true;
+        }
+
+        if (WrapperTypeNames.Contains(typeName))
+        {
+            // The wrapper message being present at all means "not null" — but
+            // proto3 omits zero-value scalars from the wire, so an absent inner
+            // "value" field here means the wrapped value IS the type's default
+            // (0 / "" / false), not that the whole field should render as null.
+            var obj = DecodeMessage(nested, bytes);
+            var inner = obj["value"];
+            result = inner is not null ? inner.DeepClone() : DefaultWrapperValue(typeName);
+            return true;
+        }
+
+        result = null;
+        return false;
+    }
+
+    private static JsonNode? DefaultWrapperValue(string typeName) => typeName switch
+    {
+        ".google.protobuf.StringValue" => JsonValue.Create(""),
+        ".google.protobuf.BytesValue"  => JsonValue.Create(""),
+        ".google.protobuf.BoolValue"   => JsonValue.Create(false),
+        ".google.protobuf.FloatValue"  => JsonValue.Create(0f),
+        ".google.protobuf.DoubleValue" => JsonValue.Create(0d),
+        ".google.protobuf.Int32Value"  => JsonValue.Create(0),
+        ".google.protobuf.Int64Value"  => JsonValue.Create(0L),
+        ".google.protobuf.UInt32Value" => JsonValue.Create(0u),
+        ".google.protobuf.UInt64Value" => JsonValue.Create(0UL),
+        _                                => null,
+    };
+
+    private string EnumName(string fqn, int number)
+    {
+        if (_enumsByFqn.TryGetValue(fqn, out var e))
+        {
+            var match = e.Values.FirstOrDefault(v => v.Number == number);
+            if (match is not null) return match.Name;
+        }
+        return number.ToString(); // unknown enum value — fall back to the raw number
+    }
+
+    private static JsonNode? ToJsonNode(object? value) => value switch
+    {
+        null                => null,
+        JsonNode node       => node,
+        bool b              => JsonValue.Create(b),
+        string s            => JsonValue.Create(s),
+        int i               => JsonValue.Create(i),
+        long l              => JsonValue.Create(l),
+        uint ui             => JsonValue.Create(ui),
+        ulong ul            => JsonValue.Create(ul),
+        double d            => JsonValue.Create(d),
+        float f             => JsonValue.Create(f),
+        _                    => JsonValue.Create(value.ToString()),
+    };
+
+    // ── Low-level wire readers ───────────────────────────────────────────────
+
+    private static ulong ReadVarint(ReadOnlySpan<byte> data, ref int pos)
+    {
+        ulong result = 0;
+        var shift = 0;
+        while (true)
+        {
+            var b = data[pos++];
+            result |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+        }
+        return result;
+    }
+
+    private static uint ReadUInt32LE(ReadOnlySpan<byte> data, ref int pos)
+    {
+        var v = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data[pos..]);
+        pos += 4;
+        return v;
+    }
+
+    private static ulong ReadUInt64LE(ReadOnlySpan<byte> data, ref int pos)
+    {
+        var v = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(data[pos..]);
+        pos += 8;
+        return v;
+    }
+
+    private static ReadOnlySpan<byte> ReadLengthDelimited(ReadOnlySpan<byte> data, ref int pos)
+    {
+        var len = (int)ReadVarint(data, ref pos);
+        var slice = data.Slice(pos, len);
+        pos += len;
+        return slice;
+    }
+
+    private static int  ZigZagDecode32(uint n)  => (int)(n >> 1) ^ -(int)(n & 1);
+    private static long ZigZagDecode64(ulong n) => (long)(n >> 1) ^ -(long)(n & 1);
 }
 FILE src/NxtUI.Protos/NxtUI.Protos.csproj
-LENGTH 624
+LENGTH 725
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -4986,12 +5341,13 @@ LENGTH 624
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
-    <PackageReference Include="Grpc.Tools" Version="2.68.1" PrivateAssets="All" />
+    <PackageReference Include="protobuf-net.Reflection" Version="3.2.52" />
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Protos\*.proto" GrpcServices="None" />
+    <!-- .proto files are data, parsed dynamically at runtime by MessageRegistry
+         (no generated C# classes) — just copy them next to the assembly. -->
+    <None Include="Protos\*.proto" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -5046,7 +5402,7 @@ LENGTH 652
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 2203
+LENGTH 2204
 {
   "AllowedHosts": "*",
 
@@ -5094,7 +5450,7 @@ LENGTH 2203
   },
 
   "Diagnostics": {
-    "Enabled": true
+    "Enabled": false
   },
 
   "TestLogGenerator": {
@@ -5216,7 +5572,7 @@ LENGTH 918
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 15700
+LENGTH 15946
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -5281,7 +5637,10 @@ public class Program
         builder.Services.AddSingleton<MongoConnectionFactory>();
 
         // ── Proto message registry + deserialization pipeline ─────────────────
-        builder.Services.AddSingleton<IMessageRegistry>(_ => MessageRegistry.CreateDefault());
+        // .proto files are parsed dynamically at runtime (no generated C# classes);
+        // schema is cached for the process lifetime — restart to pick up edits.
+        builder.Services.AddSingleton<IMessageRegistry>(sp =>
+            MessageRegistry.Create(sp.GetRequiredService<IOptions<KafkaSettings>>().Value.ProtoSchemaFolder));
         builder.Services.AddSingleton<TopicDeserializerPipeline>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
@@ -5535,7 +5894,7 @@ LENGTH 642
 @using NxtUI.Web.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
-LENGTH 1196
+LENGTH 1921
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -5560,6 +5919,17 @@ LENGTH 1196
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
+
+    <!-- Test-only: generates authoritative reference bytes/JSON for MessageRegistryTests
+         to compare NxtUI.Protos' dynamic (schema-driven, no generated classes) decoder
+         against. Not referenced by any shipped project. -->
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Grpc.Tools" Version="2.68.1" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\src\NxtUI.Protos\Protos\*.proto" GrpcServices="None" ProtoRoot="..\..\src\NxtUI.Protos\Protos" />
+    <Protobuf Include="Protos\Fixtures\*.proto" GrpcServices="None" ProtoRoot="Protos\Fixtures" />
   </ItemGroup>
 
   <ItemGroup>
@@ -5569,12 +5939,15 @@ LENGTH 1196
   <ItemGroup>
     <ProjectReference Include="..\..\src\NxtUI.Core\NxtUI.Core.csproj" />
     <ProjectReference Include="..\..\src\NxtUI.Web\NxtUI.Web.csproj" />
+    <ProjectReference Include="..\..\src\NxtUI.Protos\NxtUI.Protos.csproj" />
   </ItemGroup>
 
 </Project>
 FILE src/MudSelectRepro/Pages/Index.razor
-LENGTH 3337
+LENGTH 8728
 @page "/"
+@inject IJSRuntime JS
+@inject ILogger<Index> Logger
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.Small" Style="margin-top:48px;">
@@ -5582,25 +5955,38 @@ LENGTH 3337
     <MudText Typo="Typo.h5" GutterBottom="true">MudSelect removeChild crash — repro</MudText>
 
     <MudPaper Class="pa-4 mb-4" Elevation="1">
-        <MudText Typo="Typo.subtitle2" GutterBottom="true">Steps to reproduce</MudText>
-        <ol style="margin:0;padding-left:20px;line-height:1.8;">
-            <li>Open this page in Chrome <strong>with auto-translate active</strong> (or with Google Translate extension).</li>
-            <li>Click the dropdown below.</li>
-            <li>Select any option.</li>
-        </ol>
-        <MudText Typo="Typo.body2" Class="mt-2" Style="color:var(--mud-palette-error);">
-            Expected: <code>TypeError: Cannot read properties of null (reading 'removeChild')</code> in the browser console,
-            and Blazor circuit terminates.
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Root cause (confirmed 2026-07-02)</MudText>
+        <MudText Typo="Typo.body2">
+            NOT a bug in this app's code, MudBlazor's Ripple, or <code>PopoverOptions.QueueDelay</code> —
+            all ruled out by A/B testing with the three selects below. The actual cause was a Chrome
+            extension: <strong>TransOver</strong> ("hover/click/select to translate", ID
+            <code>aggiiclaiamajehmlfpkjmlbadmkledi</code>), which has "read and change all your data on
+            websites you visit" permission. Its content script mutates the DOM on hover/click/selection —
+            unlike Chrome's built-in Google Translate, this is <strong>not</strong> covered by
+            <code>translate="no"</code>, which only signals the native translate feature. When the
+            extension's DOM mutation landed in the same window as a concurrent Blazor render batch
+            (e.g. the popover-close batch overlapping a background <code>StateHasChanged</code>), the
+            client applied a patch referencing an already-mutated node → <code>parentNode</code> was
+            null → <code>removeChild</code> threw → circuit died.
+            <br /><br />
+            <strong>Fix:</strong> disable the offending extension (or exclude this site in its settings).
+            No app/framework change was needed. Keep this project around — the diagnostics below
+            (<code>diag.js</code>, timed marks, three select variants) are the fastest way to re-diagnose
+            if a similar crash shows up on a different machine/extension in the future.
         </MudText>
     </MudPaper>
 
     <MudPaper Class="pa-4 mb-4" Elevation="1">
-        <MudText Typo="Typo.subtitle2" GutterBottom="true">Fix</MudText>
-        <MudText Typo="Typo.body2">
-            Add <code>translate="no"</code> to the root <code>&lt;html&gt;</code> element in <em>_Host.cshtml</em>.
-            This prevents the browser from wrapping text nodes in <code>&lt;font&gt;</code> elements during
-            translation, which conflicts with Blazor's virtual-DOM reconciliation when MudBlazor closes
-            the popover and Blazor tries to remove nodes whose parents have been modified by the translator.
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Steps to reproduce (requires a DOM-mutating extension)</MudText>
+        <ol style="margin:0;padding-left:20px;line-height:1.8;">
+            <li>Have an extension with broad DOM-write access active (e.g. a hover-translate extension like TransOver, or Chrome's own page translation).</li>
+            <li>Turn "Timer ON" below to add background render pressure (widens the race window).</li>
+            <li>Interact with the extension over the dropdown (hover/select) right as you open/close it.</li>
+        </ol>
+        <MudText Typo="Typo.body2" Class="mt-2" Style="color:var(--mud-palette-error);">
+            Expected: <code>TypeError: Cannot read properties of null (reading 'removeChild')</code> in the browser console,
+            and Blazor circuit terminates. Rarer / harder to hit with the timer off — this is a genuine
+            timing race, not a deterministic bug.
         </MudText>
     </MudPaper>
 
@@ -5615,7 +6001,20 @@ LENGTH 3337
         <MudSwitch @bind-Value="_timerEnabled" Label="@(_timerEnabled ? "Timer ON" : "Timer OFF")" Color="Color.Primary" />
     </MudPaper>
 
-    <MudSelect T="string" @bind-Value="_selected" Label="Mode" Variant="Variant.Outlined" Class="mb-4">
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Diagnostics</MudText>
+        <MudText Typo="Typo.body2">
+            <code>diag.js</code> hooks <code>console.error</code>, <code>window.onerror</code> and
+            <code>unhandledrejection</code>, and keeps a rolling timeline of timer ticks / value
+            changes (via <code>diagMark</code>). On any capture it dumps the recent timeline as a
+            <code>console.table</code>. Open devtools console before testing. Server-side logs use
+            the same <code>HH:mm:ss.fff</code> wall-clock format for cross-correlation.
+            Run <code>copy(dumpDiag())</code> in devtools to grab the full buffer as JSON.
+        </MudText>
+    </MudPaper>
+
+    <MudSelect T="string" Value="_selected" ValueChanged="@(v => OnSelectChanged("ripple-on", v, x => _selected = x))"
+               Label="Mode (ripple on)" Variant="Variant.Outlined" Class="mb-4">
         <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
         <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
         <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
@@ -5624,29 +6023,82 @@ LENGTH 3337
         <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
     </MudSelect>
 
-    <MudText Typo="Typo.body2" Class="bm-muted">Selected: <strong>@_selected</strong></MudText>
+    <!-- Ripple="false" twin — tests whether MudBlazor's own ripple-cleanup JS
+         (which mutates the DOM outside Blazor's render tree) is racing the
+         popover-close render batch, independent of any app-level state/timer. -->
+    <MudSelect T="string" Value="_selectedNoRipple" ValueChanged="@(v => OnSelectChanged("ripple-off", v, x => _selectedNoRipple = x))"
+               Label="Mode (ripple off)" Variant="Variant.Outlined" Ripple="false" Class="mb-4">
+        <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+        <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+        <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+        <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+        <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+        <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+    </MudSelect>
+
+    <!-- Bare MudSelect — no Variant/Margin/Dense/Ripple, just T + @bind-Value + items.
+         Tests whether any of our extra properties are contributing to the crash,
+         or whether the plain default MudSelect crashes identically. -->
+    <MudSelect T="string" Value="_selectedBare" ValueChanged="@(v => OnSelectChanged("bare", v, x => _selectedBare = x))"
+               Label="Mode (bare/defaults)" Class="mb-4">
+        <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+        <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+        <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+        <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+        <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+        <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+    </MudSelect>
+
+    <MudText Typo="Typo.body2" Class="bm-muted">
+        Selected: <strong>@_selected</strong> / <strong>@_selectedNoRipple</strong> / <strong>@_selectedBare</strong>
+    </MudText>
 
 </MudContainer>
 
 @code {
-    private string _selected    = "all";
+    private string _selected         = "all";
+    private string _selectedNoRipple = "all";
+    private string _selectedBare     = "all";
     private int    _renders;
     private bool   _timerEnabled = true;
     private Timer? _timer;
 
+    private static string Now() => DateTime.Now.ToString("HH:mm:ss.fff");
+
     protected override void OnInitialized()
     {
-       //_timer = new Timer(_ =>
-       //{
-       //    if (_timerEnabled)
-       //        InvokeAsync(() => { _renders++; StateHasChanged(); });
-       //}, null, 200, 200);
+        _timer = new Timer(_ =>
+        {
+            if (_timerEnabled)
+                InvokeAsync(async () =>
+                {
+                    _renders++;
+                    // Throttled: marking every tick would itself add interop traffic
+                    // that could perturb the very race we're trying to observe.
+                    if (_renders % 5 == 0)
+                    {
+                        Logger.LogInformation("{Time} | timer tick #{N}", Now(), _renders);
+                        try { await JS.InvokeVoidAsync("diagMark", $"timer tick #{_renders}"); }
+                        catch (JSDisconnectedException) { }
+                    }
+                    StateHasChanged();
+                });
+        }, null, 200, 200);
+    }
+
+    private async void OnSelectChanged(string which, string value, Action<string> setter)
+    {
+        setter(value);
+        Logger.LogInformation("{Time} | select changed | which={Which} value={Value}", Now(), which, value);
+        try { await JS.InvokeVoidAsync("diagMark", $"select changed | {which} -> {value}"); }
+        catch (JSDisconnectedException) { }
+        StateHasChanged();
     }
 
     public void Dispose() => _timer?.Dispose();
 }
 FILE src/MudSelectRepro/Pages/_Host.cshtml
-LENGTH 742
+LENGTH 876
 @page "/"
 @namespace MudSelectRepro.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -5667,6 +6119,8 @@ LENGTH 742
 </head>
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
+    <!-- Loaded first so error/console hooks are in place before Blazor's own scripts run. -->
+    <script src="js/diag.js"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
     <script src="_framework/blazor.server.js"></script>
 </body>
@@ -5752,7 +6206,7 @@ public class HeartbeatSettings
     public int IdleReleaseMinutes { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/KafkaSettings.cs
-LENGTH 2577
+LENGTH 3346
 using System.Security.Cryptography;
 using System.Text;
 
@@ -5785,6 +6239,20 @@ public class KafkaSettings
     /// </summary>
     public List<TopicDeserializerRule> TopicDeserializers { get; set; } = [];
 
+    /// <summary>
+    /// Last-chance proto type tried when no pattern matches a topic, or every
+    /// candidate for a matched pattern fails to parse. Empty/null disables it
+    /// (falls straight through to the raw-bytes stub).
+    /// </summary>
+    public string? DefaultProtoType { get; set; } = "ProtoMsg";
+
+    /// <summary>
+    /// Folder containing .proto schema files, parsed dynamically at runtime
+    /// (no generated C# classes). Null/empty uses the folder bundled with
+    /// NxtUI.Protos.
+    /// </summary>
+    public string? ProtoSchemaFolder { get; set; }
+
     /// <summary>Maximum messages fetched in one streaming session (default 2000).</summary>
     public int MaxFetchMessages { get; set; } = 2_000;
 
@@ -5808,8 +6276,12 @@ public class TopicDeserializerRule
     /// <summary>Glob pattern matched against the topic name (case-insensitive).</summary>
     public string Pattern { get; set; } = string.Empty;
 
-    /// <summary>Proto type name registered in <c>MessageRegistry</c>.</summary>
-    public string Type { get; set; } = string.Empty;
+    /// <summary>
+    /// Candidate proto type names, tried in order until one parses successfully.
+    /// Once a candidate succeeds for a given topic, the pipeline remembers it
+    /// and tries that one first on subsequent messages for the same topic.
+    /// </summary>
+    public List<string> Types { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
 LENGTH 2468
@@ -9127,6 +9599,76 @@ else if (Result.IsOk)
     [Parameter, EditorRequired] public Result<T> Result { get; set; }
     [Parameter, EditorRequired] public RenderFragment<T> ChildContent { get; set; } = null!;
 }
+FILE src/NxtUI.Web/Components/BmPagination.razor
+LENGTH 2251
+@namespace NxtUI.Web.Components
+
+<div class="bm-pagination-wrap">
+    <MudPagination Count="@Count"
+                   Selected="@Selected"
+                   SelectedChanged="@(async (int p) => await SelectedChanged.InvokeAsync(p))"
+                   ShowFirstButton="true"
+                   ShowLastButton="true"
+                   Size="Size.Small"
+                   Class="bm-pagination-ctrl" />
+
+    @if (Count > JumpThreshold)
+    {
+        @if (_editing)
+        {
+            <MudNumericField T="int" @bind-Value="_editValue"
+                              Min="1" Max="@Count"
+                              Immediate="true"
+                              AutoFocus="true"
+                              Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Class="bm-pagination-jump-input"
+                              @onkeydown="OnKeyDown"
+                              @onblur="@(() => CommitJump())" />
+        }
+        else
+        {
+            <MudTooltip Text="Double-click to jump to a page">
+                <span class="bm-pagination-jump-label" @ondblclick="StartEditing">
+                    page @Selected / @Count
+                </span>
+            </MudTooltip>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public int Count { get; set; }
+    [Parameter, EditorRequired] public int Selected { get; set; }
+    [Parameter, EditorRequired] public EventCallback<int> SelectedChanged { get; set; }
+
+    // Only show the "jump to page" control once there are enough pages that
+    // clicking through them one at a time would be tedious.
+    private const int JumpThreshold = 7;
+
+    private bool _editing;
+    private int  _editValue;
+
+    private void StartEditing()
+    {
+        _editValue = Selected;
+        _editing   = true;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CommitJump();
+        else if (e.Key == "Escape") _editing = false;
+    }
+
+    private async Task CommitJump()
+    {
+        if (!_editing) return;
+        _editing = false;
+        var target = Math.Clamp(_editValue, 1, Math.Max(1, Count));
+        if (target != Selected)
+            await SelectedChanged.InvokeAsync(target);
+    }
+}
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
 LENGTH 3122
 @namespace NxtUI.Web.Components
@@ -10153,7 +10695,7 @@ LENGTH 4420
     public void Dispose() => _selfRef?.Dispose();
 }
 FILE src/NxtUI.Web/Components/WorkspacePanel.razor
-LENGTH 4437
+LENGTH 4891
 @namespace NxtUI.Web.Components
 @using NxtUI.Web.Models
 @using NxtUI.Web.Pages
@@ -10171,6 +10713,8 @@ LENGTH 4437
                    FileName="@leaf.FileName"
                    IsSelected="@isSelected"
                    IsMultiPane="@ShowRing"
+                   IsFocused="@IsFocused"
+                   Tab="@Tab"
                    OnOpen="@(() => OnOpen.InvokeAsync(leaf))"
                    OnDupH="@(() => OnDupH.InvokeAsync(leaf))"
                    OnDupV="@(() => OnDupV.InvokeAsync(leaf))"
@@ -10194,6 +10738,8 @@ else if (Node is WsSplit split)
             <WorkspacePanel Node="@split.A"
                             SelectedLeaf="@SelectedLeaf"
                             ShowRing="@ShowRing"
+                            IsFocused="@IsFocused"
+                            Tab="@Tab"
                             OnSelect="OnSelect"
                             OnOpen="OnOpen"
                             OnDupH="OnDupH"
@@ -10209,6 +10755,8 @@ else if (Node is WsSplit split)
             <WorkspacePanel Node="@split.B"
                             SelectedLeaf="@SelectedLeaf"
                             ShowRing="@ShowRing"
+                            IsFocused="@IsFocused"
+                            Tab="@Tab"
                             OnSelect="OnSelect"
                             OnOpen="OnOpen"
                             OnDupH="OnDupH"
@@ -10223,6 +10771,8 @@ else if (Node is WsSplit split)
     [Parameter, EditorRequired] public WsNode                           Node           { get; set; } = null!;
     [Parameter]                 public WsLeaf?                          SelectedLeaf   { get; set; }
     [Parameter]                 public bool                             ShowRing       { get; set; }
+    [Parameter]                 public bool                             IsFocused      { get; set; }
+    [Parameter]                 public TabModel?                        Tab            { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnSelect       { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnOpen         { get; set; }
     [Parameter]                 public EventCallback<WsLeaf>            OnDupH         { get; set; }
@@ -10431,7 +10981,7 @@ LENGTH 393
     // without the main tab-bar and sidebar chrome.
 }
 FILE src/NxtUI.Web/Layout/MainLayout.razor
-LENGTH 6153
+LENGTH 7044
 @namespace NxtUI.Web.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
@@ -10523,19 +11073,34 @@ LENGTH 6153
 
     // ── Tab → URL ────────────────────────────────────────────────────────
 
+    // TabService.OnChange can now fire reentrantly from deep inside another
+    // component's OnInitializedAsync/OnParametersSetAsync (tab-loading spinner
+    // notifications). InvokeAsync defers the whole handler — including
+    // Nav.NavigateTo — instead of running it synchronously mid-render, which
+    // could otherwise wedge the renderer.
+    //
+    // _syncingFromUrl must be captured HERE, synchronously, not re-read inside
+    // the deferred continuation: SyncTabFromUrl's `finally` resets it to false
+    // before the InvokeAsync callback runs, which would silently defeat the
+    // guard and cause Nav.NavigateTo -> LocationChanged -> SyncTabFromUrl ->
+    // OpenOrFocus -> OnChange -> Nav.NavigateTo ... an infinite loop (CPU spin).
     private void OnTabsChanged()
     {
-        StateHasChanged();
-        var label = TabService.ActiveTab?.Label;
-        var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
-        _ = JS.InvokeVoidAsync("bmSetTitle", title);
-        if (_syncingFromUrl) return;
-        if (TabService.ActiveTab?.NoNavigate == true) return;
+        var syncingFromUrl = _syncingFromUrl;
+        InvokeAsync(() =>
+        {
+            StateHasChanged();
+            var label = TabService.ActiveTab?.Label;
+            var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
+            _ = JS.InvokeVoidAsync("bmSetTitle", title);
+            if (syncingFromUrl) return;
+            if (TabService.ActiveTab?.NoNavigate == true) return;
 
-        var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
-        var currentPath = new Uri(Nav.Uri).AbsolutePath;
-        if (targetUrl != currentPath)
-            Nav.NavigateTo(targetUrl);
+            var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
+            var currentPath = new Uri(Nav.Uri).AbsolutePath;
+            if (targetUrl != currentPath)
+                Nav.NavigateTo(targetUrl);
+        });
     }
 
     // ── URL → Tab ────────────────────────────────────────────────────────
@@ -10606,7 +11171,7 @@ LENGTH 6153
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 9026
+LENGTH 9368
 @namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
@@ -10766,10 +11331,16 @@ LENGTH 9026
 
     protected override void OnInitialized()
     {
-        TabService.OnChange += StateHasChanged;
+        // TabService.OnChange can now fire reentrantly from deep inside another
+        // component's OnInitializedAsync/OnParametersSetAsync (tab-loading spinner
+        // notifications) — InvokeAsync defers instead of calling back into the
+        // renderer mid-render.
+        TabService.OnChange += OnTabsChanged;
         EnvService.OnChange += StateHasChanged;
         DtSvc.OnChange      += StateHasChanged;
     }
+
+    private void OnTabsChanged() => InvokeAsync(StateHasChanged);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -10798,7 +11369,7 @@ LENGTH 9026
 
     public async ValueTask DisposeAsync()
     {
-        TabService.OnChange -= StateHasChanged;
+        TabService.OnChange -= OnTabsChanged;
         EnvService.OnChange -= StateHasChanged;
         DtSvc.OnChange      -= StateHasChanged;
         if (_appModule is not null)
@@ -10809,7 +11380,7 @@ LENGTH 9026
     }
 }
 FILE src/NxtUI.Web/Layout/TabBar.razor
-LENGTH 4305
+LENGTH 4512
 @namespace NxtUI.Web.Layout
 @using NxtUI.Web.Models
 @inject TabService TabService
@@ -10841,7 +11412,14 @@ LENGTH 4305
                  aria-selected="@isActive"
                  draggable="true">
 
-                <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                @if (tab.IsLoading)
+                {
+                    <div class="bm-tab-spinner" title="Loading…"></div>
+                }
+                else
+                {
+                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                }
                 <span class="bm-tab-label" @key="@($"{tabId}:{tab.Label}")">@tab.Label</span>
 
                 @if (envInfo is not null)
@@ -11054,7 +11632,7 @@ LENGTH 5013
     }
 }
 FILE src/NxtUI.Web/Models/TabModel.cs
-LENGTH 12693
+LENGTH 13390
 namespace NxtUI.Web.Models;
 
 public enum TabType
@@ -11114,6 +11692,17 @@ public class TabModel
     public string Icon { get; set; } = MudBlazor.Icons.Material.Outlined.Dashboard;
 
     public bool IsActive { get; set; }
+
+    // Counter rather than bool so overlapping loads (e.g. multiple panes in a
+    // LogWorkspace tab) don't have one finishing early clear the spinner for
+    // another still in flight.
+    private int _loadingCount;
+
+    /// <summary>True while any async load this tab owns is in flight — TabBar shows a spinner instead of Icon.</summary>
+    public bool IsLoading => _loadingCount > 0;
+
+    public void BeginLoading() => _loadingCount++;
+    public void EndLoading()   => _loadingCount = Math.Max(0, _loadingCount - 1);
 
     /// <summary>When true, opening this tab does not trigger URL navigation (e.g. browser-local files).</summary>
     public bool NoNavigate { get; set; }
@@ -11310,6 +11899,7 @@ public class TabModel
         TabType.Config      => $"/config/{Environment}",
         TabType.Batches     => $"/batches/{Environment}",
         TabType.MemoryGraph => $"/memory/{Environment}",
+        TabType.Environment => $"/environment/{Environment}",
         TabType.LogBrowser        => $"/logs/{Environment}",
         TabType.LogViewer    => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.LogWorkspace => $"/workspace/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
@@ -11381,6 +11971,9 @@ public class TabModel
             "memory" when parts.Length >= 2
                 => CreateMemoryGraph(parts[1]),
 
+            "environment" when parts.Length >= 2
+                => CreateEnvironmentDashboard(parts[1]),
+
             "logs" when parts.Length >= 2
                 => CreateLogsDashboard(parts[1]),
 
@@ -11448,12 +12041,13 @@ public sealed class WsSplit(WsDir dir, double ratio, WsNode a, WsNode b) : WsNod
     }
 }
 FILE src/NxtUI.Web/Pages/Batches.razor
-LENGTH 17956
+LENGTH 18257
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @inject IBatchCatalogService CatalogSvc
 @inject ISnackbar Snackbar
+@inject TabService TabService
 
 <div class="bm-page bm-page-fill bm-batches-page">
 
@@ -11688,6 +12282,7 @@ LENGTH 17956
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private bool   _loading = true;
     private string _search   = "";
@@ -11721,10 +12316,20 @@ LENGTH 17956
 
     protected override async Task OnInitializedAsync()
     {
-        _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
-        _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
-        _loading    = false;
-        if (_batches.Count > 0) SelectBatch(_batches[0]);
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
+        {
+            _batches    = (await CatalogSvc.GetBatchesAsync()).ToList();
+            _categories = _batches.Select(b => b.Category).Distinct().Order().ToList();
+            _loading    = false;
+            if (_batches.Count > 0) SelectBatch(_batches[0]);
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     private void SelectBatch(BatchDefinition batch)
@@ -12404,7 +13009,7 @@ LENGTH 17757
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16005
+LENGTH 16807
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Configuration
@@ -12621,6 +13226,11 @@ LENGTH 16005
 
     private CancellationTokenSource _cts = new();
 
+    // Controls the Runs polling loop's lifetime independently of _cts — started
+    // only while Home is visible, cancelled the moment it isn't, so no polling
+    // happens in the background while a tab is focused.
+    private CancellationTokenSource? _pollCts;
+
     // Home is visible only when no tab is active. Track the previous state so
     // we can trigger a data refresh when the user switches back to Home.
     private bool _wasVisible;
@@ -12633,17 +13243,32 @@ LENGTH 16005
         _wasVisible = TabService.ActiveTab is null;
         HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-        _ = PollRunsAsync(_cts.Token);
+        if (IsVisible) StartPolling();
     }
 
     private bool IsVisible => TabService.ActiveTab is null;
+
+    private void StartPolling()
+    {
+        if (_pollCts is not null) return; // already running
+        _pollCts = new CancellationTokenSource();
+        _ = PollRunsAsync(_pollCts.Token);
+    }
+
+    private void StopPolling()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
 
     private void OnTabVisibilityChanged()
     {
         var visible = IsVisible;
         if (visible && !_wasVisible)
         {
-            // Home just became visible — refresh stale data then render.
+            // Home just became visible — refresh stale data, render, then resume polling.
+            StartPolling();
             _ = InvokeAsync(async () =>
             {
                 try
@@ -12654,6 +13279,11 @@ LENGTH 16005
                 }
                 catch (Exception ex) { Logger.LogError(ex, "Home visibility refresh failed"); }
             });
+        }
+        else if (!visible && _wasVisible)
+        {
+            // Home just became hidden — stop polling entirely, not just the render.
+            StopPolling();
         }
         _wasVisible = visible;
     }
@@ -12680,8 +13310,7 @@ LENGTH 16005
             {
                 await Task.Delay(interval, ct);
                 await LoadRunsAsync();
-                if (IsVisible)
-                    await InvokeAsync(StateHasChanged);
+                await InvokeAsync(StateHasChanged);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Logger.LogError(ex, "Runs polling failed"); }
@@ -12774,11 +13403,12 @@ LENGTH 16005
         EnvService.OnChange         -= OnEnvExternalChange;
         HealthCache.OnHealthUpdated -= OnHealthUpdated;
         TabService.OnChange         -= OnTabVisibilityChanged;
+        StopPolling();
         _cts.Cancel();
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 2614
+LENGTH 2554
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Web.Services
@@ -12788,12 +13418,8 @@ LENGTH 2614
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
-    @if (!_started || _switching)
-    {
-        <div class="bm-treemap-loading">
-            <div class="bm-treemap-spinner"></div>
-        </div>
-    }
+    <!-- The loading spinner + message are injected by d3-home-treemap.js itself
+         (into _ref, cleared on first paint) — do not duplicate it here. -->
     <div class="bm-home-treemap" @ref="_ref"></div>
 </div>
 
@@ -12807,13 +13433,10 @@ LENGTH 2614
     private DotNetObjectReference<HomeMemoryTreemap>? _selfRef;
     private string                                  _subscribedEnv = string.Empty;
     private bool                                    _started;
-    private bool                                    _switching;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
-
-        _switching = true;
 
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
@@ -12821,13 +13444,12 @@ LENGTH 2614
 
         if (_started)
         {
-            // Env changed — overlay is now visible (set above), clear old tree and start new.
+            // Env changed — clear old tree and start new. start() re-injects its
+            // own loading spinner into the container immediately.
             try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
         }
-
-        _switching = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -12856,7 +13478,7 @@ LENGTH 2614
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26948
+LENGTH 27042
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -13006,11 +13628,9 @@ LENGTH 26948
             <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
                 @_filteredTopics.Count topic@(_filteredTopics.Count == 1 ? "" : "s")
             </MudText>
-            <MudPagination Count="_totalPages"
-                           Selected="_page"
-                           SelectedChanged="OnPageChanged"
-                           ShowFirstButton="true" ShowLastButton="true"
-                           Size="Size.Small" Class="bm-pagination-ctrl" />
+            <BmPagination Count="_totalPages"
+                          Selected="_page"
+                          SelectedChanged="OnPageChanged" />
             <div class="bm-rows-select">
                 <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
                 <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -13155,6 +13775,7 @@ LENGTH 26948
     private enum KafkaView { Topics, Consumers }
 
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     // Shared
     private KafkaClusterInfo? _cluster  = null;
@@ -13214,6 +13835,8 @@ LENGTH 26948
     {
         _loading   = true;
         _enriching = false;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -13281,7 +13904,14 @@ LENGTH 26948
             }
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; _enriching = false; StateHasChanged(); }
+        finally
+        {
+            _loading   = false;
+            _enriching = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private void SwitchView(KafkaView view)
@@ -13454,7 +14084,7 @@ LENGTH 26948
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9730
+LENGTH 10180
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -13462,6 +14092,7 @@ LENGTH 9730
 @inject IKafkaMonitor KafkaSvc
 @inject ILogger<KafkaGroupsDashboard> Logger
 @inject DateTimeDisplayService DtSvc
+@inject TabService TabService
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -13486,9 +14117,14 @@ LENGTH 9730
 
     <!-- Table -->
     <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        <AsyncData Result="_result" Context="_">
+        @if (_result.IsFailed)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
+        }
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
+                  Loading="@_result.IsLoading"
+                  LoadingProgressColor="Color.Primary"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
@@ -13539,7 +14175,6 @@ LENGTH 9730
                 </MudTd>
             </RowTemplate>
         </MudTable>
-        </AsyncData>
     </div>
 
     <!-- Detail panel -->
@@ -13594,6 +14229,7 @@ LENGTH 9730
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private List<KafkaConsumerGroupOverview>  _all      = new();
     private List<KafkaConsumerGroupOverview>  _filtered = new();
@@ -13626,6 +14262,8 @@ LENGTH 9730
         _result       = default; // loading
         _selected     = null;
         _detailResult = default;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -13636,6 +14274,11 @@ LENGTH 9730
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     private void OnFilterChanged(string text)
@@ -13693,7 +14336,7 @@ LENGTH 9730
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 23857
+LENGTH 25202
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -13723,11 +14366,11 @@ LENGTH 23857
                            OnClick="ToggleStream" />
         </MudTooltip>
 
-        <!-- Reset -->
-        <MudTooltip Text="Reset — clear messages and restart">
-            <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt"
+        <!-- Clear -->
+        <MudTooltip Text="Clear — stop and clear messages (does not restart)">
+            <MudIconButton Icon="@Icons.Material.Outlined.ClearAll"
                            Size="Size.Small"
-                           OnClick="ResetStream" />
+                           OnClick="ClearMessages" />
         </MudTooltip>
 
         <!-- Stats popover -->
@@ -13746,14 +14389,15 @@ LENGTH 23857
                    FieldHints="@_fieldHints" />
 
         <!-- Mode select -->
-        <select class="bm-native-select" @bind="_modeKey" @bind:after="@(() => OnModeChanged(_modeKey))">
-            <option value="all">From beginning</option>
-            <option value="latestN">Latest 500</option>
-            <option value="fromOffset">From offset</option>
-            <option value="fromTimestamp">From timestamp</option>
-            <option value="offsetRange">Offset range</option>
-            <option value="tsRange">Timestamp range</option>
-        </select>
+        <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
+                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense" Style="width:180px">
+            <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+            <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+            <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+            <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+            <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+            <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+        </MudSelect>
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -13981,35 +14625,65 @@ LENGTH 23857
 
     // ── Stream control ────────────────────────────────────────────────────────
 
+    // Minimum time between UI renders while messages are streaming in. Without
+    // this, a fast fetch (e.g. "latest 500" or "from beginning") re-renders and
+    // sends a SignalR batch on every single message, flooding the render queue
+    // and starving other UI interactions (buttons feel unresponsive) even
+    // though nothing is actually CPU-bound.
+    private const int StreamRenderIntervalMs = 150;
+
     private async Task StartStreamAsync()
     {
+        var ct = _cts.Token; // captured — lets us detect if a newer action (Clear/Reset/Toggle) supersedes us
         _state = StreamState.Running;
         StateHasChanged();
 
         var (directive, remaining) = ExtractDirective(_filterText);
+        var lastRender = DateTime.MinValue;
 
         try
         {
-            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, _cts.Token))
+            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, ct))
             {
                 _messages.Insert(0, msg);
+
+                var now = DateTime.UtcNow;
+                if ((now - lastRender).TotalMilliseconds < StreamRenderIntervalMs) continue;
+                lastRender = now;
+
                 ApplyClientFilter(remaining);
                 await InvokeAsync(StateHasChanged);
             }
+
+            // Final flush — the last few messages may have arrived inside the
+            // throttle window and never got rendered.
+            ApplyClientFilter(remaining);
             await InvokeAsync(() =>
             {
-                _state = _cts.IsCancellationRequested ? StreamState.Paused : StreamState.Idle;
+                if (ct.IsCancellationRequested) return; // superseded by a newer action
+                _state = StreamState.Idle;
                 StateHasChanged();
             });
         }
         catch (OperationCanceledException)
         {
-            await InvokeAsync(() => { _state = StreamState.Paused; StateHasChanged(); });
+            ApplyClientFilter(remaining);
+            await InvokeAsync(() =>
+            {
+                if (_cts.Token != ct) return; // a newer Clear/Reset/Toggle already set the desired state
+                _state = StreamState.Paused;
+                StateHasChanged();
+            });
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName);
-            await InvokeAsync(() => { _state = StreamState.Idle; StateHasChanged(); });
+            await InvokeAsync(() =>
+            {
+                if (_cts.Token != ct) return;
+                _state = StreamState.Idle;
+                StateHasChanged();
+            });
         }
     }
 
@@ -14028,6 +14702,19 @@ LENGTH 23857
         }
     }
 
+    /// <summary>Stops and clears messages without restarting the fetch — used by the toolbar Clear button.</summary>
+    private void ClearMessages()
+    {
+        _cts.Cancel();
+        _cts      = new CancellationTokenSource();
+        _messages.Clear();
+        _filtered.Clear();
+        _selected = null;
+        _state    = StreamState.Idle;
+        StateHasChanged();
+    }
+
+    /// <summary>Clears messages and restarts the fetch — used when the seek directive changes (mode/partition filter).</summary>
     private void ResetStream()
     {
         _cts.Cancel();
@@ -14038,14 +14725,11 @@ LENGTH 23857
         _ = StartStreamAsync();
     }
 
-    private string _pendingSnippet  = "";
-    private bool   _applySnippet   = false;
-
     private void OnModeChanged(string key)
     {
         _modeKey = key;
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
-        _pendingSnippet = key switch
+        var snippet = key switch
         {
             "latestN"       => "latest:500",
             "fromOffset"    => "offset:>=0",
@@ -14054,11 +14738,12 @@ LENGTH 23857
             "tsRange"       => $"timestamp:{today}..{today}",
             _               => "",
         };
-        _applySnippet = true;
-        // _filterText is deliberately NOT changed here. Updating it in the same
-        // render batch as the MudSelect popover close causes a DOM null-parent
-        // crash in Blazor Server. OnAfterRenderAsync applies it in the next batch,
-        // after the popover-close diff has already been sent to the browser.
+
+        var cleaned = RemoveKafkaSeekTerms(_filterText);
+        _filterText = string.IsNullOrWhiteSpace(snippet)
+            ? cleaned.Trim()
+            : (cleaned.Trim() + " " + snippet).Trim();
+        _filterParseError = null;
     }
 
 
@@ -14162,18 +14847,6 @@ LENGTH 23857
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_applySnippet)
-        {
-            _applySnippet = false;
-            var cleaned = RemoveKafkaSeekTerms(_filterText);
-            _filterText = string.IsNullOrWhiteSpace(_pendingSnippet)
-                ? cleaned.Trim()
-                : (cleaned.Trim() + " " + _pendingSnippet).Trim();
-            _filterParseError = null;
-            _pendingSnippet   = "";
-            await InvokeAsync(StateHasChanged);
-        }
-
         if (_jsonDirty && _selected is not null)
         {
             _jsonDirty = false;
@@ -14244,7 +14917,7 @@ LENGTH 23857
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 26317
+LENGTH 27851
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -14418,6 +15091,8 @@ LENGTH 26317
 @code {
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
+    [Parameter] public bool    IsFocused      { get; set; }
+    [Parameter] public TabModel? Tab          { get; set; }
 
     // ── filter grammar for log lines ──────────────────────────────────────
     private static readonly FilterParser LogLineParser = new(
@@ -14496,34 +15171,69 @@ LENGTH 26317
     private bool _isSearchRequested =>
         _fileGlob != "*.log" || !string.IsNullOrEmpty(_contentFilterStr);
 
-    private CancellationTokenSource _cts        = new();
+    private CancellationTokenSource  _cts        = new();
     private CancellationTokenSource? _searchCts;
-    private PeriodicTimer?           _pollTimer;
+    private CancellationTokenSource? _pollCts;
+    private bool                     _previousIsFocused;
     private DateTime                 _lastManualPoll = DateTime.MinValue;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
     {
-        _servers = EnvironmentService.GetServers(Env).ToList();
-
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         try
         {
-            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-            _rootNodes = roots.ToList();
+            _servers = EnvironmentService.GetServers(Env).ToList();
+
+            try
+            {
+                var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+                _rootNodes = roots.ToList();
+            }
+            catch (Exception ex) { _initError = ex.Message; }
+
+            _initialized = true;
+            _lastScan    = DateTime.UtcNow;
+            _previousIsFocused = IsFocused;
+            if (IsFocused) StartPolling();
+
+            // Auto-navigate to today's date folder if one exists at the root.
+            var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+            var todayNode = _rootNodes.FirstOrDefault(n =>
+                n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+            if (todayNode is not null)
+                await OnExpandedChangedAsync(todayNode, true);
         }
-        catch (Exception ex) { _initError = ex.Message; }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
+    }
 
-        _initialized = true;
-        _lastScan    = DateTime.UtcNow;
-        StartPolling();
+    // Synchronous and separate from OnParametersSetAsync below — this must not
+    // block (fire-and-forget only) so activating a tab never stalls on it.
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        _previousIsFocused = IsFocused;
 
-        // Auto-navigate to today's date folder if one exists at the root.
-        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-        var todayNode = _rootNodes.FirstOrDefault(n =>
-            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-        if (todayNode is not null)
-            await OnExpandedChangedAsync(todayNode, true);
+        if (IsFocused)
+        {
+            StartPolling();
+            if (_initialized && _selectedPath is not null && !_isSearching && !_isSearchMode)
+                _ = InvokeAsync(async () =>
+                {
+                    try { await LoadFilesAsync(); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser focus refresh failed"); }
+                });
+        }
+        else
+        {
+            StopPolling();
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -14796,16 +15506,25 @@ LENGTH 26317
 
     private void StartPolling()
     {
-        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
-        _pollTimer   = new PeriodicTimer(interval);
-        _ = PollLoopAsync();
+        if (_pollCts is not null) return; // already running
+        _pollCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        _ = PollLoopAsync(_pollCts.Token);
     }
 
-    private async Task PollLoopAsync()
+    private void StopPolling()
     {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    private async Task PollLoopAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
+        using var timer = new PeriodicTimer(interval);
         try
         {
-            while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync(_cts.Token))
+            while (await timer.WaitForNextTickAsync(ct))
             {
                 // Skip auto-refresh while a search is running.
                 if (_selectedPath is not null && !_isSearching && !_isSearchMode)
@@ -14860,21 +15579,23 @@ LENGTH 26317
     public async ValueTask DisposeAsync()
     {
         StopSearch();
+        StopPolling();
         _selfRef?.Dispose();
         await _cts.CancelAsync();
         _cts.Dispose();
-        _pollTimer?.Dispose();
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 20517
+LENGTH 21885
 @namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<LogViewer> Logger
 @inject IConfiguration Config
+@inject TabService TabService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -14956,7 +15677,7 @@ LENGTH 20517
                       FontIncreaseDisabled="@(_fontSize >= _fontSizes[^1])"
                       FieldHints="@LogFieldHints"
                       OnFindTermChanged="@(v => { _findTerm = v; })"
-                      OnRunFind="RunFindAsync"
+                      OnRunFind="@(() => RunFindAsync())"
                       OnRegexToggled="OnRegexToggled"
                       OnCaseToggled="OnCaseToggled"
                       OnNextMatch="NextMatchAsync"
@@ -14989,6 +15710,8 @@ LENGTH 20517
     [Parameter] public string? FileName   { get; set; }
     [Parameter] public bool    IsSelected  { get; set; }
     [Parameter] public bool    IsMultiPane { get; set; }
+    [Parameter] public bool    IsFocused   { get; set; }
+    [Parameter] public TabModel? Tab       { get; set; }
 
     [Parameter] public EventCallback OnOpen  { get; set; }
     [Parameter] public EventCallback OnDupH  { get; set; }
@@ -15037,6 +15760,8 @@ LENGTH 20517
     private bool _wordWrap = false;
 
     private bool           _isTailing;
+    private bool           _tailDesired; // true once a live (non-local) file has been rendered
+    private bool           _previousIsFocused;
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
 
@@ -15053,6 +15778,21 @@ LENGTH 20517
         : $"{Path}  •  Ctrl+Click to copy";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
+
+    protected override void OnInitialized() => _previousIsFocused = IsFocused;
+
+    // Synchronous and separate from OnParametersSetAsync below — this must not
+    // block (fire-and-forget only) so activating a tab never stalls on it.
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        _previousIsFocused = IsFocused;
+
+        if (IsFocused && _tailDesired && !_isTailing)
+            StartTail();
+        else if (!IsFocused && _isTailing)
+            StopTail(clearDesired: false);
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -15075,7 +15815,9 @@ LENGTH 20517
     private async Task OnWordDoubleClickedAsync(string word)
     {
         _findTerm = word;
-        await RunFindAsync();
+        // skipScroll — the word is already visible where the user clicked;
+        // don't jump the viewport to the first match elsewhere in the file.
+        await RunFindAsync(skipScroll: true);
         StateHasChanged();
     }
 
@@ -15182,6 +15924,9 @@ LENGTH 20517
         StopTail();
         StateHasChanged();
 
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+
         try
         {
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
@@ -15202,6 +15947,8 @@ LENGTH 20517
         finally
         {
             _isLoading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
             StateHasChanged();
         }
     }
@@ -15235,11 +15982,11 @@ LENGTH 20517
 
     // ── Find ──────────────────────────────────────────────────────────────
 
-    private async Task RunFindAsync()
+    private async Task RunFindAsync(bool skipScroll = false)
     {
         if (_viewport is null) return;
         var result = await _viewport.FindAsync(_findTerm,
-            new { isRegex = _isRegex, caseSensitive = _caseSensitive });
+            new { isRegex = _isRegex, caseSensitive = _caseSensitive, skipScroll });
         _matchCount   = result.Count;
         _matchCurrent = result.Current;
     }
@@ -15324,13 +16071,16 @@ LENGTH 20517
 
     private void StartTail()
     {
+        _tailDesired = true;
+        if (!IsFocused || _isTailing) return;
         _isTailing = true;
         _tailTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
         _ = TailLoopAsync();
     }
 
-    private void StopTail()
+    private void StopTail(bool clearDesired = true)
     {
+        if (clearDesired) _tailDesired = false;
         _isTailing = false;
         _tailTimer?.Dispose();
         _tailTimer = null;
@@ -15384,7 +16134,7 @@ LENGTH 20517
     }
 }
 FILE src/NxtUI.Web/Pages/LogWorkspace.razor
-LENGTH 3964
+LENGTH 4161
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Components
@@ -15395,6 +16145,8 @@ LENGTH 3964
     <WorkspacePanel Node="@_root"
                     SelectedLeaf="@_selected"
                     ShowRing="@(_root is not WsLeaf)"
+                    IsFocused="@IsFocused"
+                    Tab="@Tab"
                     OnSelect="OnSelect"
                     OnOpen="OnOpen"
                     OnDupH="OnDupH"
@@ -15404,9 +16156,11 @@ LENGTH 3964
 </div>
 
 @code {
-    [Parameter] public string? Path     { get; set; }
-    [Parameter] public string  Env      { get; set; } = string.Empty;
-    [Parameter] public string? FileName { get; set; }
+    [Parameter] public string?   Path      { get; set; }
+    [Parameter] public string    Env       { get; set; } = string.Empty;
+    [Parameter] public string?   FileName  { get; set; }
+    [Parameter] public bool      IsFocused { get; set; }
+    [Parameter] public TabModel? Tab       { get; set; }
 
     private WsNode  _root     = null!;
     private WsLeaf? _selected;
@@ -15502,7 +16256,7 @@ LENGTH 3964
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 15960
+LENGTH 16267
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -15510,6 +16264,7 @@ LENGTH 15960
 @inject IHeartbeatService HeartbeatSvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
+@inject TabService TabService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-mg-page">
@@ -15595,6 +16350,7 @@ LENGTH 15960
 @code {
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
+    [Parameter] public TabModel? Tab           { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
     private enum GroupBy { None, Service, Host }
@@ -15649,9 +16405,19 @@ LENGTH 15960
 
     protected override async Task OnInitializedAsync()
     {
-        _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-        Rebuild();
-        ApplyNavigationHint();
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
+        {
+            _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            Rebuild();
+            ApplyNavigationHint();
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     protected override Task OnParametersSetAsync()
@@ -16013,7 +16779,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 10967
+LENGTH 11625
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16022,6 +16788,7 @@ LENGTH 10967
 @inject IJSRuntime JS
 @inject ILogger<MongoCollectionInspector> Logger
 @inject DateTimeDisplayService DtSvc
+@inject TabService TabService
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -16120,13 +16887,9 @@ LENGTH 10967
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
             @_totalCount.ToString("N0") doc@(_totalCount == 1 ? "" : "s")
         </MudText>
-        <MudPagination Count="_totalPages"
-                       Selected="_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
+        <BmPagination Count="_totalPages"
+                      Selected="_page"
+                      SelectedChanged="OnPageChanged" />
         <div class="bm-rows-select">
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -16146,9 +16909,11 @@ LENGTH 10967
 @code {
     [Parameter] public string EntityId    { get; set; } = string.Empty;  // "database/collection"
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private string _database   = string.Empty;
     private string _collection = string.Empty;
+    private string _loadedEntityId = string.Empty;
 
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
@@ -16176,6 +16941,15 @@ LENGTH 10967
 
     protected override async Task OnParametersSetAsync()
     {
+        // Guard against redundant reloads: Blazor calls OnParametersSetAsync on
+        // every re-render that passes parameters down to this component (e.g.
+        // MainLayout.StateHasChanged() from a tab-loading spinner notification),
+        // not just when EntityId actually changes. Without this check, LoadAsync
+        // -> TabService.NotifyChanged() -> ancestor re-render -> OnParametersSetAsync
+        // -> LoadAsync becomes an infinite loop.
+        if (EntityId == _loadedEntityId) return;
+        _loadedEntityId = EntityId;
+
         var parts   = EntityId.Split('/', 2);
         _database   = parts.Length > 0 ? parts[0] : string.Empty;
         _collection = parts.Length > 1 ? parts[1] : string.Empty;
@@ -16190,6 +16964,8 @@ LENGTH 10967
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -16204,7 +16980,12 @@ LENGTH 10967
             _page       = Math.Clamp(_page, 1, _totalPages);
         }
         catch (OperationCanceledException) { return; }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
 
         StateHasChanged();
     }
@@ -16291,7 +17072,7 @@ LENGTH 10967
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11427
+LENGTH 11661
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16431,13 +17212,9 @@ LENGTH 11427
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
             @_totalCount.ToString("N0") collection@(_totalCount == 1 ? "" : "s")
         </MudText>
-        <MudPagination Count="_totalPages"
-                       Selected="_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
+        <BmPagination Count="_totalPages"
+                      Selected="_page"
+                      SelectedChanged="OnPageChanged" />
         <div class="bm-rows-select">
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -16456,6 +17233,7 @@ LENGTH 11427
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private List<string>                 _databaseNames = new();
     private List<MongoCollectionSummary> _paged         = new();
@@ -16474,12 +17252,22 @@ LENGTH 11427
 
     protected override async Task OnInitializedAsync()
     {
-        // Load database names only — fast even with 100+ databases (no dbStats).
-        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
-        if (_databaseNames.Count > 0)
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
         {
-            _selectedDb = _databaseNames[0];
-            await LoadCollectionsAsync();
+            // Load database names only — fast even with 100+ databases (no dbStats).
+            _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+            if (_databaseNames.Count > 0)
+            {
+                _selectedDb = _databaseNames[0];
+                await LoadCollectionsAsync();
+            }
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
     }
 
@@ -16498,6 +17286,8 @@ LENGTH 11427
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -16520,6 +17310,8 @@ LENGTH 11427
         finally
         {
             _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
         StateHasChanged();
     }
@@ -16610,7 +17402,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16207
+LENGTH 16383
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -16698,6 +17490,8 @@ LENGTH 16207
     private async Task LoadAsync()
     {
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -16706,7 +17500,13 @@ LENGTH 16207
                 await StartEventServiceAsync();
         }
         catch { _details = null; }
-        finally { _loading = false; StateHasChanged(); }
+        finally
+        {
+            _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private async Task StartEventServiceAsync()
@@ -17020,7 +17820,7 @@ LENGTH 16207
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11676
+LENGTH 12142
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -17050,9 +17850,17 @@ LENGTH 11676
 
     <!-- ── Table ─────────────────────────────────────────────────────── -->
     <div class="bm-table-wrap">
-        <AsyncData Result="_result" Context="_">
+        @if (_result.IsFailed)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
+        }
+        <!-- Table shell (headers, toolbar, pagination) renders immediately; only
+             the rows populate progressively. Loading="" shows MudTable's own
+             progress bar without hiding the structure underneath. -->
         <MudTable T="RunSummary"
                   Items="@_paged"
+                  Loading="@_result.IsLoading"
+                  LoadingProgressColor="Color.Primary"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
@@ -17143,7 +17951,6 @@ LENGTH 11676
                 </MudTd>
             </RowTemplate>
         </MudTable>
-        </AsyncData>
     </div>
 
     <!-- ── Footer: count + rows per page + pagination ────────────────── -->
@@ -17152,13 +17959,9 @@ LENGTH 11676
             @_filtered.Count results
         </MudText>
 
-        <MudPagination Count="@_totalPages"
-                       Selected="@_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
+        <BmPagination Count="@_totalPages"
+                      Selected="@_page"
+                      SelectedChanged="OnPageChanged" />
 
         <div class="bm-rows-select">
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
@@ -17183,6 +17986,7 @@ LENGTH 11676
 
 @code {
     [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private int _page     = 1;
     private int _pageSize = 25;
@@ -17218,6 +18022,8 @@ LENGTH 11676
     private async Task LoadAsync()
     {
         _result = default; // loading
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -17232,6 +18038,11 @@ LENGTH 11676
         catch (Exception ex)
         {
             _result = Result<List<RunSummary>>.Fail(ex.Message);
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
     }
 
@@ -17302,7 +18113,7 @@ LENGTH 11676
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 31921
+LENGTH 31907
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17516,13 +18327,9 @@ LENGTH 31921
 
         @if (!_graphView)
         {
-            <MudPagination Count="@_totalPages"
-                           Selected="@_page"
-                           SelectedChanged="OnPageChanged"
-                           ShowFirstButton="true"
-                           ShowLastButton="true"
-                           Size="Size.Small"
-                           Class="bm-pagination-ctrl" />
+            <BmPagination Count="@_totalPages"
+                          Selected="@_page"
+                          SelectedChanged="OnPageChanged" />
 
             <div class="bm-rows-select">
                 <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
@@ -17547,6 +18354,7 @@ LENGTH 31921
 
 @code {
     [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private int  _page     = 1;
     private int  _pageSize = 25;
@@ -17628,6 +18436,8 @@ LENGTH 31921
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
 
         try
         {
@@ -17650,6 +18460,8 @@ LENGTH 31921
         finally
         {
             _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
 
         await InvokeAsync(StateHasChanged);
@@ -18167,12 +18979,13 @@ LENGTH 7458
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 30915
+LENGTH 31109
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
+@inject TabService TabService
 @implements IAsyncDisposable
 
 @code {
@@ -18284,6 +19097,8 @@ LENGTH 30915
 
     private async Task LoadRunsAsync(string env, string runId)
     {
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         await _runLock.WaitAsync();
         try
         {
@@ -18301,7 +19116,12 @@ LENGTH 30915
                 _runs.Add(batch);
             }
         }
-        finally { _runLock.Release(); }
+        finally
+        {
+            _runLock.Release();
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
 
         await DebouncedPushAsync();
         StateHasChanged();
@@ -21582,7 +22402,7 @@ public class SignalRConnectionService(
     }
 }
 FILE src/NxtUI.Web/Services/TabService.cs
-LENGTH 4688
+LENGTH 4938
 using NxtUI.Web.Models;
 
 namespace NxtUI.Web.Services;
@@ -21603,6 +22423,12 @@ public class TabService
 
     /// <summary>Raised whenever the tab list or active tab changes.</summary>
     public event Action? OnChange;
+
+    /// <summary>
+    /// Triggers TabBar re-render after mutating a TabModel's mutable fields
+    /// directly (e.g. IsLoading) rather than through one of the methods below.
+    /// </summary>
+    public void NotifyChanged() => OnChange?.Invoke();
 
     // ── Public API ───────────────────────────────────────────────────────
 
@@ -22501,7 +23327,7 @@ LENGTH 740
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2622
+LENGTH 2821
 @namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
@@ -22521,46 +23347,46 @@ LENGTH 2622
         return Tab.Type switch
         {
             TabType.Runs =>
-                @<Runs Environment="@env" />,
+                @<Runs Environment="@env" Tab="@Tab" />,
 
             TabType.RunDetail =>
                 @<RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Services =>
-                @<ServicesPage Env="@env" />,
+                @<ServicesPage Env="@env" Tab="@Tab" />,
 
             TabType.Pipelines =>
                 @<PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
 
             TabType.Kafka =>
-                @<KafkaDashboard Environment="@env" />,
+                @<KafkaDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.KafkaGroups =>
-                @<KafkaGroupsDashboard Environment="@env" />,
+                @<KafkaGroupsDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.MongoDB =>
-                @<MongoDashboard Environment="@env" />,
+                @<MongoDashboard Environment="@env" Tab="@Tab" />,
 
             TabType.MongoDetail =>
-                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<MongoCollectionInspector EntityId="@(Tab.EntityId ?? string.Empty)" Environment="@env" Tab="@Tab" />,
 
             TabType.Batches =>
-                @<Batches Environment="@env" />,
+                @<Batches Environment="@env" Tab="@Tab" />,
 
             TabType.Config =>
                 @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" />,
 
             TabType.LogBrowser =>
-                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" />,
+                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.LogViewer =>
-                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.LogWorkspace =>
-                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" />,
+                @<LogWorkspace Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.Settings =>
                 @<Settings />,
@@ -23584,7 +24410,7 @@ public sealed class KafkaIntegrationTestFactAttribute : FactAttribute
     }
 }
 FILE tests/NxtUI.Tests/Integration/KafkaIntegrationTests.cs
-LENGTH 12403
+LENGTH 13872
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -23642,7 +24468,7 @@ public sealed class KafkaIntegrationTests
     {
         var settings = Options.Create(new KafkaSettings
         {
-            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Type = "OrderEvent" }]
+            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Types = ["OrderEvent"] }]
         });
         var registry = new NullMessageRegistry();
         var pipeline = new TopicDeserializerPipeline(settings, registry);
@@ -23658,7 +24484,7 @@ public sealed class KafkaIntegrationTests
     {
         var settings = Options.Create(new KafkaSettings
         {
-            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Type = "OrderEvent" }]
+            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Types = ["OrderEvent"] }]
         });
         var registry = new RecordingMessageRegistry("OrderEvent");
         var pipeline = new TopicDeserializerPipeline(settings, registry);
@@ -23666,6 +24492,27 @@ public sealed class KafkaIntegrationTests
         pipeline.Deserialize("order.events", [0xDE, 0xAD]);
 
         registry.LastQueried.Should().Be("OrderEvent");
+    }
+
+    [IntegrationTestFact]
+    public void Pipeline_MultipleCandidates_TriesInOrder_ThenCachesTheWinner()
+    {
+        var settings = Options.Create(new KafkaSettings
+        {
+            TopicDeserializers =
+                [new TopicDeserializerRule { Pattern = "order*", Types = ["WrongType", "OrderEvent", "AlsoNeverReached"] }]
+        });
+        var registry = new OrderedMessageRegistry("OrderEvent");
+        var pipeline = new TopicDeserializerPipeline(settings, registry);
+
+        var (_, type1) = pipeline.Deserialize("order.events", [0xDE, 0xAD]);
+        type1.Should().Be("OrderEvent");
+        registry.Queried.Should().Equal("WrongType", "OrderEvent"); // stops at first success, never tries the third
+
+        registry.Queried.Clear();
+        var (_, type2) = pipeline.Deserialize("order.events", [0xBE, 0xEF]);
+        type2.Should().Be("OrderEvent");
+        registry.Queried.Should().Equal("OrderEvent"); // cached from the first call — skips "WrongType" this time
     }
 
     // ── KafkaFilterExtractor ──────────────────────────────────────────────────
@@ -23906,6 +24753,18 @@ public sealed class KafkaIntegrationTests
         public bool TryParseToJson(string typeName, byte[] bytes, out string? json)
         {
             LastQueried = typeName;
+            json = typeName == acceptType ? "{}" : null;
+            return typeName == acceptType;
+        }
+        public IReadOnlyCollection<string> RegisteredTypes => [acceptType];
+    }
+
+    private sealed class OrderedMessageRegistry(string acceptType) : IMessageRegistry
+    {
+        public List<string> Queried { get; } = [];
+        public bool TryParseToJson(string typeName, byte[] bytes, out string? json)
+        {
+            Queried.Add(typeName);
             json = typeName == acceptType ? "{}" : null;
             return typeName == acceptType;
         }
@@ -24963,7 +25822,7 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
 }
 FILE tests/NxtUI.Tests/Performance/ServiceFixture.cs
-LENGTH 8555
+LENGTH 8601
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -25084,6 +25943,7 @@ public sealed class ServiceFixture : IAsyncLifetime
         // Real MongoDB heartbeat — swap comment to test real infrastructure:
         // svc.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
 
+        svc.AddSingleton<OperationTracker>();
         svc.AddSingleton<HeartbeatMonitor>();
         svc.AddSingleton<IHeartbeatMonitor>(sp => sp.GetRequiredService<HeartbeatMonitor>());
         svc.AddHostedService(sp => sp.GetRequiredService<HeartbeatMonitor>());
@@ -25224,6 +26084,277 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         }
     }
 }
+FILE tests/NxtUI.Tests/Protos/MessageRegistryTests.cs
+LENGTH 7943
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
+using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+using NxtUI.Protos;
+using NxtUI.Tests.Protos.Fixtures;
+
+namespace NxtUI.Tests.Protos;
+
+/// <summary>
+/// Verifies MessageRegistry's dynamic (schema-driven, no generated C# classes)
+/// wire-format decoder against known-good bytes produced by Google.Protobuf's
+/// own generated classes and JsonFormatter — the two must agree.
+/// </summary>
+public class MessageRegistryTests
+{
+    // Compile-time source path (this file's own directory) — stable regardless
+    // of build output location (bin/Debug vs bin/Release, IDE vs `dotnet test`).
+    private static string SourceDir([CallerFilePath] string here = "") => Path.GetDirectoryName(here)!;
+
+    private static readonly MessageRegistry AppRegistry =
+        MessageRegistry.Create(Path.Combine(SourceDir(), "..", "..", "..", "src", "NxtUI.Protos", "Protos"));
+
+    private static readonly MessageRegistry FixtureRegistry =
+        MessageRegistry.Create(Path.Combine(SourceDir(), "Fixtures"));
+
+    // ── Scalars, nested messages, enums, repeated fields ────────────────────
+
+    [Fact]
+    public void Decodes_scalars_nested_message_enum_and_repeated_fields_matching_reference()
+    {
+        var order = new global::NxtUI.Protos.OrderEvent
+        {
+            OrderId       = "ord-123",
+            CustomerId    = "cust-456",
+            Status        = global::NxtUI.Protos.OrderStatus.Confirmed,
+            TotalAmount   = 199.95,
+            Currency      = "EUR",
+            CorrelationId = "corr-abc",
+            OccurredAt    = Timestamp.FromDateTime(new DateTime(2026, 7, 2, 10, 30, 0, DateTimeKind.Utc)),
+        };
+        order.Lines.Add(new global::NxtUI.Protos.OrderLine { Sku = "SKU-1", Quantity = 2, Price = 49.99 });
+        order.Lines.Add(new global::NxtUI.Protos.OrderLine { Sku = "SKU-2", Quantity = 1, Price = 99.97 });
+
+        var ok = AppRegistry.TryParseToJson("OrderEvent", order.ToByteArray(), out var json);
+
+        ok.Should().BeTrue();
+        var node = JsonNode.Parse(json!)!;
+        node["orderId"]!.GetValue<string>().Should().Be("ord-123");
+        node["customerId"]!.GetValue<string>().Should().Be("cust-456");
+        node["status"]!.GetValue<string>().Should().Be("ORDER_STATUS_CONFIRMED");
+        node["totalAmount"]!.GetValue<double>().Should().Be(199.95);
+        node["currency"]!.GetValue<string>().Should().Be("EUR");
+        node["correlationId"]!.GetValue<string>().Should().Be("corr-abc");
+        node["occurredAt"]!.GetValue<string>().Should().Be("2026-07-02T10:30:00Z");
+
+        var lines = node["lines"]!.AsArray();
+        lines.Should().HaveCount(2);
+        lines[0]!["sku"]!.GetValue<string>().Should().Be("SKU-1");
+        lines[0]!["quantity"]!.GetValue<int>().Should().Be(2);
+        lines[0]!["price"]!.GetValue<double>().Should().Be(49.99);
+        lines[1]!["sku"]!.GetValue<string>().Should().Be("SKU-2");
+    }
+
+    [Fact]
+    public void Unknown_enum_value_falls_back_to_raw_number()
+    {
+        // PaymentStatus only defines 0-5; write an out-of-range value directly
+        // via ProtoMsg's raw payload to simulate a schema-ahead-of-us producer.
+        var payment = new global::NxtUI.Protos.PaymentEvent { PaymentId = "p1", Status = (global::NxtUI.Protos.PaymentStatus)99 };
+        AppRegistry.TryParseToJson("PaymentEvent", payment.ToByteArray(), out var json).Should().BeTrue();
+
+        JsonNode.Parse(json!)!["status"]!.GetValue<string>().Should().Be("99");
+    }
+
+    // ── Map fields ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Decodes_map_field_as_json_object_not_array_of_pairs()
+    {
+        var msg = new global::NxtUI.Protos.ProtoMsg
+        {
+            TypeUrl = "type.googleapis.com/nxtui.OrderEvent",
+            Payload = ByteString.CopyFrom([1, 2, 3]),
+        };
+        msg.Metadata["source"]  = "unit-test";
+        msg.Metadata["version"] = "1";
+
+        AppRegistry.TryParseToJson("ProtoMsg", msg.ToByteArray(), out var json).Should().BeTrue();
+
+        var node = JsonNode.Parse(json!)!;
+        node["typeUrl"]!.GetValue<string>().Should().Be("type.googleapis.com/nxtui.OrderEvent");
+        node["payload"]!.GetValue<string>().Should().Be(Convert.ToBase64String([1, 2, 3]));
+        var metadata = node["metadata"]!.AsObject();
+        metadata["source"]!.GetValue<string>().Should().Be("unit-test");
+        metadata["version"]!.GetValue<string>().Should().Be("1");
+    }
+
+    // ── Lookup failure paths ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Unregistered_type_name_returns_false()
+    {
+        var ok = AppRegistry.TryParseToJson("NoSuchMessageType", [1, 2, 3], out var json);
+        ok.Should().BeFalse();
+        json.Should().BeNull();
+    }
+
+    [Fact]
+    public void Truncated_garbage_bytes_return_false_instead_of_throwing()
+    {
+        // A length-delimited tag claiming more bytes than actually follow.
+        byte[] garbage = [0x0A, 0xFF, 0xFF, 0xFF, 0x7F];
+        var ok = AppRegistry.TryParseToJson("OrderEvent", garbage, out var json);
+        ok.Should().BeFalse();
+        json.Should().BeNull();
+    }
+
+    [Fact]
+    public void RegisteredTypes_includes_all_top_level_app_messages()
+    {
+        AppRegistry.RegisteredTypes.Should().Contain(["OrderEvent", "OrderLine", "PaymentEvent", "ProtoMsg"]);
+    }
+
+    // ── Well-known types: Timestamp / Duration / nullable-primitive wrappers ─
+
+    [Fact]
+    public void Wrapper_types_render_as_plain_scalars_not_nested_objects()
+    {
+        var msg = new WellKnownTest
+        {
+            Nickname = "yomo",
+            Retries  = 0,          // present but zero-valued — must be 0, not null
+            BigCount = 42,
+            Active   = true,
+            Score    = 3.5,
+        };
+
+        FixtureRegistry.TryParseToJson("WellKnownTest", msg.ToByteArray(), out var json).Should().BeTrue();
+        var node = JsonNode.Parse(json!)!;
+
+        node["nickname"]!.GetValue<string>().Should().Be("yomo");
+        node["retries"]!.GetValue<int>().Should().Be(0);
+        node["bigCount"]!.GetValue<long>().Should().Be(42);
+        node["active"]!.GetValue<bool>().Should().BeTrue();
+        node["score"]!.GetValue<double>().Should().Be(3.5);
+    }
+
+    [Fact]
+    public void Wrapper_fields_left_entirely_unset_are_absent_from_json()
+    {
+        var msg = new WellKnownTest(); // nothing set at all
+
+        FixtureRegistry.TryParseToJson("WellKnownTest", msg.ToByteArray(), out var json).Should().BeTrue();
+        var node = JsonNode.Parse(json!)!.AsObject();
+
+        node.ContainsKey("nickname").Should().BeFalse();
+        node.ContainsKey("retries").Should().BeFalse();
+        node.ContainsKey("active").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Timestamp_renders_as_iso8601_string()
+    {
+        var msg = new WellKnownTest
+        {
+            CreatedAt = Timestamp.FromDateTime(new DateTime(2026, 7, 2, 10, 30, 0, DateTimeKind.Utc)),
+        };
+
+        FixtureRegistry.TryParseToJson("WellKnownTest", msg.ToByteArray(), out var json).Should().BeTrue();
+        JsonNode.Parse(json!)!["createdAt"]!.GetValue<string>().Should().Be("2026-07-02T10:30:00Z");
+    }
+
+    [Fact]
+    public void Duration_renders_as_seconds_suffixed_string()
+    {
+        var msg = new WellKnownTest
+        {
+            Timeout = Duration.FromTimeSpan(TimeSpan.FromSeconds(1.5)),
+        };
+
+        FixtureRegistry.TryParseToJson("WellKnownTest", msg.ToByteArray(), out var json).Should().BeTrue();
+        JsonNode.Parse(json!)!["timeout"]!.GetValue<string>().Should().Be("1.5s");
+    }
+}
+FILE src/MudSelectRepro/wwwroot/js/diag.js
+LENGTH 3397
+// Debugging aid for the MudSelect removeChild repro. Loaded BEFORE blazor.server.js
+// so error/console hooks are in place from the very first render.
+(function () {
+    const MAX_EVENTS = 300;
+    const events = [];
+    window.__diagEvents = events;
+
+    function stamp() {
+        const d = new Date();
+        return {
+            wall: d.toISOString().slice(11, 23),      // HH:mm:ss.SSS — correlate with server logs
+            perf: performance.now().toFixed(1),        // high-res, monotonic — correlate client-side ordering
+        };
+    }
+
+    function record(kind, detail) {
+        const s = stamp();
+        const entry = { ...s, kind, detail };
+        events.push(entry);
+        if (events.length > MAX_EVENTS) events.shift();
+        return entry;
+    }
+
+    function dumpRecent(n) {
+        console.table(events.slice(-(n || 25)).map(e => ({
+            wall: e.wall, perf: e.perf, kind: e.kind,
+            detail: typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail),
+        })));
+    }
+
+    // Called from Blazor (JS interop) to mark app-level lifecycle points:
+    // timer ticks, value changes, popover-relevant events. Cheap, no return value.
+    window.diagMark = function (label) {
+        const e = record('mark', label);
+        console.log('%c[DIAG mark]', 'color:#0af;font-weight:bold', e.wall, label);
+    };
+
+    // Capture Blazor's own internal failure log ("Error: There was an error
+    // applying batch N.") plus any other console.error traffic, with full text.
+    const origError = console.error.bind(console);
+    console.error = function (...args) {
+        const text = args.map(a => (a && a.stack) ? a.stack : String(a)).join(' | ');
+        record('console.error', text);
+        origError(...args);
+        if (/error applying batch/i.test(text)) {
+            console.log('%c[DIAG] Blazor batch-apply failure detected — recent timeline:', 'color:#f33;font-weight:bold;font-size:14px');
+            dumpRecent(30);
+        }
+    };
+
+    // Synchronous uncaught errors (the actual TypeError surfaces here).
+    window.addEventListener('error', function (ev) {
+        record('window.error', {
+            message: ev.message,
+            filename: ev.filename,
+            lineno: ev.lineno,
+            colno: ev.colno,
+            stack: ev.error && ev.error.stack,
+        });
+        console.log('%c[DIAG] Uncaught error — recent timeline:', 'color:#f33;font-weight:bold;font-size:14px', ev.message);
+        dumpRecent(30);
+    });
+
+    // In case the failure surfaces as a rejected promise instead (SignalR message
+    // handling is largely async).
+    window.addEventListener('unhandledrejection', function (ev) {
+        const reason = ev.reason;
+        record('unhandledrejection', {
+            message: reason && reason.message,
+            stack: reason && reason.stack,
+        });
+        console.log('%c[DIAG] Unhandled rejection — recent timeline:', 'color:#f33;font-weight:bold;font-size:14px', reason && reason.message);
+        dumpRecent(30);
+    });
+
+    // Manual escape hatch: run `copy(dumpDiag())` in devtools console to grab the
+    // full ring buffer as JSON for pasting elsewhere.
+    window.dumpDiag = function () { return JSON.stringify(events, null, 2); };
+
+    console.log('%c[DIAG] diag.js loaded — window.__diagEvents / window.dumpDiag() available', 'color:#0af;font-weight:bold');
+})();
 FILE src/NxtUI.Core/Services/Kafka/IMessageRegistry.cs
 LENGTH 474
 namespace NxtUI.Core.Services.Kafka;
@@ -25811,7 +26942,7 @@ public class KafkaService(
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/TopicDeserializerPipeline.cs
-LENGTH 2024
+LENGTH 3176
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -25822,39 +26953,57 @@ namespace NxtUI.Core.Services.Kafka;
 /// Deserialises raw Kafka message bytes according to topic pattern rules.
 ///
 /// Resolution order:
-///   1. First matching glob pattern from config → try configured proto type
-///   2. No match or parse failure → try <c>ProtoMsg</c> envelope
-///   3. Both fail → unknown stub JSON with byte size
+///   1. If this topic previously resolved to a working type, try that first.
+///   2. First matching glob pattern from config → try its candidate types in
+///      order until one parses successfully; remember the winner for this topic.
+///   3. No match or all candidates failed → try the configured default type.
+///   4. That fails too → unknown stub JSON with byte size.
 /// </summary>
 public sealed class TopicDeserializerPipeline
 {
-    private readonly record struct Rule(Regex Pattern, string TypeName);
+    private readonly record struct Rule(Regex Pattern, List<string> TypeNames);
 
-    private readonly List<Rule>      _rules;
+    private readonly List<Rule>       _rules;
     private readonly IMessageRegistry _registry;
+    private readonly string?          _defaultType;
+
+    // Per-topic cache of the last type that successfully parsed a message —
+    // avoids re-trying every candidate on every message once one is known good.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _resolvedType = new();
 
     public TopicDeserializerPipeline(IOptions<KafkaSettings> settings, IMessageRegistry registry)
     {
-        _registry = registry;
-        _rules    = settings.Value.TopicDeserializers
-            .Select(r => new Rule(GlobToRegex(r.Pattern), r.Type))
+        _registry    = registry;
+        _defaultType = settings.Value.DefaultProtoType;
+        _rules       = settings.Value.TopicDeserializers
+            .Select(r => new Rule(GlobToRegex(r.Pattern), r.Types))
             .ToList();
     }
 
     public (string JsonPayload, string PayloadType) Deserialize(string topicName, byte[] bytes)
     {
-        // Phase 1 — matched type
+        // Phase 0 — a type already known to work for this topic
+        if (_resolvedType.TryGetValue(topicName, out var known) &&
+            _registry.TryParseToJson(known, bytes, out var knownJson))
+            return (knownJson!, known);
+
+        // Phase 1 — first matching glob pattern, try its candidates in order
         foreach (var rule in _rules)
         {
             if (!rule.Pattern.IsMatch(topicName)) continue;
-            if (_registry.TryParseToJson(rule.TypeName, bytes, out var matched))
-                return (matched!, rule.TypeName);
-            break;
+            foreach (var typeName in rule.TypeNames)
+            {
+                if (!_registry.TryParseToJson(typeName, bytes, out var matched)) continue;
+                _resolvedType[topicName] = typeName;
+                return (matched!, typeName);
+            }
+            break; // matched a pattern but every candidate failed — fall through to default
         }
 
-        // Phase 2 — ProtoMsg fallback
-        if (_registry.TryParseToJson("ProtoMsg", bytes, out var proto))
-            return (proto!, "ProtoMsg");
+        // Phase 2 — configured default/last-chance type
+        if (!string.IsNullOrEmpty(_defaultType) &&
+            _registry.TryParseToJson(_defaultType, bytes, out var proto))
+            return (proto!, _defaultType);
 
         // Phase 3 — unknown binary
         return ($"{{\"type\":\"unknown\",\"sizeBytes\":{bytes.Length}}}", "unknown");
@@ -27329,7 +28478,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 84377
+LENGTH 83457
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -27674,6 +28823,16 @@ html, body {
 .bm-tab-icon { flex-shrink: 0; font-size: 14px !important; color: var(--mud-palette-text-secondary); }
 .bm-tab.active .bm-tab-icon { color: var(--mud-palette-primary); }
 
+.bm-tab-spinner {
+    flex-shrink: 0;
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(128, 128, 128, 0.25);
+    border-top-color: var(--mud-palette-primary);
+    border-radius: 50%;
+    animation: bm-spin 0.8s linear infinite;
+}
+
 .bm-tab-label {
     font-size: 0.78rem;
     font-weight: 500;
@@ -27973,7 +29132,22 @@ html, body {
     flex-shrink: 0;
 }
 .bm-footer-count    { flex-shrink: 0; white-space: nowrap; }
-.bm-pagination-ctrl { flex: 1; display: flex; justify-content: center; }
+.bm-pagination-wrap { flex: 1; display: flex; justify-content: center; align-items: center; gap: 10px; }
+.bm-pagination-ctrl { }
+.bm-pagination-jump-label {
+    font-size: 0.75rem;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background-color 0.15s, color 0.15s;
+}
+.bm-pagination-jump-label:hover {
+    background: rgba(var(--mud-palette-text-primary-rgb), 0.06);
+    color: var(--mud-palette-text-primary);
+}
+.bm-pagination-jump-input { width: 90px; flex-shrink: 0; }
 .bm-rows-select     { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 /* Shrink the inner input text of the rows-per-page MudSelect */
 .bm-rows-select .mud-select-input,
@@ -28320,39 +29494,6 @@ html, body {
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-}
-
-/* Native <select> styled to match MudSelect Outlined Dense.
-   Used in streaming components where MudSelect's MudPopover
-   causes DOM race conditions with background re-renders. */
-select.bm-native-select {
-    height: 36px;
-    padding: 0 28px 0 10px;
-    border: 1px solid rgba(var(--mud-palette-text-primary-rgb), 0.23);
-    border-radius: 4px;
-    background-color: transparent;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24'%3E%3Cpath fill='%23888' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 4px center;
-    color: var(--mud-palette-text-primary);
-    font-size: 14px;
-    font-family: inherit;
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-    outline: none;
-    transition: border-color 0.15s;
-}
-select.bm-native-select:hover {
-    border-color: var(--mud-palette-text-primary);
-}
-select.bm-native-select:focus {
-    border-color: var(--mud-palette-primary);
-    border-width: 2px;
-}
-select.bm-native-select option {
-    background: var(--mud-palette-surface);
-    color: var(--mud-palette-text-primary);
 }
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
@@ -29071,22 +30212,24 @@ select.bm-native-select option {
 }
 
 .bm-treemap-loading {
+    position: absolute;
+    inset: 0;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
     gap: 10px;
-    width: 100%;
-    height: 100%;
+    z-index: 1;
 }
 
 .bm-treemap-spinner {
-    width: 28px;
-    height: 28px;
-    border: 3px solid rgba(128,128,128,0.2);
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    border: 3px solid rgba(128, 128, 128, 0.2);
     border-top-color: var(--mud-palette-primary);
     border-radius: 50%;
-    animation: bm-spin 0.75s linear infinite;
+    animation: bm-spin 0.8s linear infinite;
 }
 
 @keyframes bm-spin {
@@ -29094,34 +30237,9 @@ select.bm-native-select option {
 }
 
 .bm-treemap-loading-label {
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     color: var(--mud-palette-text-secondary);
     font-family: var(--bm-font-ui, sans-serif);
-}
-
-.bm-treemap-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    z-index: 1;
-}
-
-.bm-treemap-spinner {
-    width: 32px;
-    height: 32px;
-    border: 3px solid rgba(128, 128, 128, 0.2);
-    border-top-color: var(--mud-palette-primary);
-    border-radius: 50%;
-    animation: bm-spin 0.8s linear infinite;
-}
-
-.bm-treemap-loading-label {
-    font-size: 12px;
-    color: var(--mud-palette-text-secondary);
 }
 
 .bm-treemap-error {
@@ -32835,7 +33953,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 11796
+LENGTH 11817
 window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
@@ -33027,7 +34145,7 @@ window.homeMemoryTreemap = (function () {
         container.innerHTML =
             '<div class="bm-treemap-loading">' +
               '<div class="bm-treemap-spinner"></div>' +
-              '<span class="bm-treemap-loading-label">Loading…</span>' +
+              '<span class="bm-treemap-loading-label">Loading services information…</span>' +
             '</div>';
 
         // ResizeObserver repaints on resize using the last fetched data.
@@ -36298,7 +37416,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 33212
+LENGTH 33424
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -36975,7 +38093,10 @@ function find(container, term, opts = {}) {
 
     if (matches.length > 0) {
         vp.matchCursor = 0;
-        scrollToEntry(vp, matches[0]);
+        // skipScroll: highlight in place (e.g. double-click on a visible word)
+        // without jumping the viewport to the first match elsewhere in the file.
+        if (opts.skipScroll) renderRows(vp);
+        else scrollToEntry(vp, matches[0]);
     } else {
         renderRows(vp);
     }
@@ -38485,4 +39606,26 @@ window.wsResizer = (function () {
 
     return { start };
 })();
+FILE tests/NxtUI.Tests/Protos/Fixtures/WellKnownTest.proto
+LENGTH 764
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Tests.Protos.Fixtures";
+package nxtui.test;
+
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Test-only fixture — exercises well-known types (nullable primitives via
+// wrapper messages, Duration, Timestamp) that aren't used by the app's real
+// message schemas in src/NxtUI.Protos/Protos.
+message WellKnownTest {
+  google.protobuf.StringValue nickname  = 1;
+  google.protobuf.Int32Value  retries   = 2;
+  google.protobuf.Int64Value  bigCount  = 3;
+  google.protobuf.BoolValue   active    = 4;
+  google.protobuf.DoubleValue score     = 5;
+  google.protobuf.Duration    timeout   = 6;
+  google.protobuf.Timestamp   createdAt = 7;
+}
 END

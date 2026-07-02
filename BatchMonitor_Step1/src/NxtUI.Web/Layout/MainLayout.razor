@@ -89,19 +89,34 @@
 
     // ── Tab → URL ────────────────────────────────────────────────────────
 
+    // TabService.OnChange can now fire reentrantly from deep inside another
+    // component's OnInitializedAsync/OnParametersSetAsync (tab-loading spinner
+    // notifications). InvokeAsync defers the whole handler — including
+    // Nav.NavigateTo — instead of running it synchronously mid-render, which
+    // could otherwise wedge the renderer.
+    //
+    // _syncingFromUrl must be captured HERE, synchronously, not re-read inside
+    // the deferred continuation: SyncTabFromUrl's `finally` resets it to false
+    // before the InvokeAsync callback runs, which would silently defeat the
+    // guard and cause Nav.NavigateTo -> LocationChanged -> SyncTabFromUrl ->
+    // OpenOrFocus -> OnChange -> Nav.NavigateTo ... an infinite loop (CPU spin).
     private void OnTabsChanged()
     {
-        StateHasChanged();
-        var label = TabService.ActiveTab?.Label;
-        var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
-        _ = JS.InvokeVoidAsync("bmSetTitle", title);
-        if (_syncingFromUrl) return;
-        if (TabService.ActiveTab?.NoNavigate == true) return;
+        var syncingFromUrl = _syncingFromUrl;
+        InvokeAsync(() =>
+        {
+            StateHasChanged();
+            var label = TabService.ActiveTab?.Label;
+            var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
+            _ = JS.InvokeVoidAsync("bmSetTitle", title);
+            if (syncingFromUrl) return;
+            if (TabService.ActiveTab?.NoNavigate == true) return;
 
-        var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
-        var currentPath = new Uri(Nav.Uri).AbsolutePath;
-        if (targetUrl != currentPath)
-            Nav.NavigateTo(targetUrl);
+            var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
+            var currentPath = new Uri(Nav.Uri).AbsolutePath;
+            if (targetUrl != currentPath)
+                Nav.NavigateTo(targetUrl);
+        });
     }
 
     // ── URL → Tab ────────────────────────────────────────────────────────

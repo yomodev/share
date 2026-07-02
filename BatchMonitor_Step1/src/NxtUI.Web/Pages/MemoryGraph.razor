@@ -5,6 +5,7 @@
 @inject IHeartbeatService HeartbeatSvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
+@inject TabService TabService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-mg-page">
@@ -90,6 +91,7 @@
 @code {
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
+    [Parameter] public TabModel? Tab           { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
     private enum GroupBy { None, Service, Host }
@@ -144,9 +146,19 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-        Rebuild();
-        ApplyNavigationHint();
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
+        {
+            _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+            Rebuild();
+            ApplyNavigationHint();
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     protected override Task OnParametersSetAsync()

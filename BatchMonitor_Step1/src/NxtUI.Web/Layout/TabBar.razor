@@ -29,7 +29,14 @@
                  aria-selected="@isActive"
                  draggable="true">
 
-                <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                @if (tab.IsLoading)
+                {
+                    <div class="bm-tab-spinner" title="Loading…"></div>
+                }
+                else
+                {
+                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                }
                 <span class="bm-tab-label" @key="@($"{tabId}:{tab.Label}")">@tab.Label</span>
 
                 @if (envInfo is not null)

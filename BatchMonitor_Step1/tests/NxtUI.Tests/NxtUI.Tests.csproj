@@ -22,6 +22,17 @@
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
+
+    <!-- Test-only: generates authoritative reference bytes/JSON for MessageRegistryTests
+         to compare NxtUI.Protos' dynamic (schema-driven, no generated classes) decoder
+         against. Not referenced by any shipped project. -->
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Grpc.Tools" Version="2.68.1" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\src\NxtUI.Protos\Protos\*.proto" GrpcServices="None" ProtoRoot="..\..\src\NxtUI.Protos\Protos" />
+    <Protobuf Include="Protos\Fixtures\*.proto" GrpcServices="None" ProtoRoot="Protos\Fixtures" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,6 +42,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\NxtUI.Core\NxtUI.Core.csproj" />
     <ProjectReference Include="..\..\src\NxtUI.Web\NxtUI.Web.csproj" />
+    <ProjectReference Include="..\..\src\NxtUI.Protos\NxtUI.Protos.csproj" />
   </ItemGroup>
 
 </Project>

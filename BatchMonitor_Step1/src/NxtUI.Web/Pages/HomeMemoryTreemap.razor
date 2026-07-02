@@ -7,12 +7,8 @@
 @implements IAsyncDisposable
 
 <div class="bm-home-treemap-wrap">
-    @if (!_started || _switching)
-    {
-        <div class="bm-treemap-loading">
-            <div class="bm-treemap-spinner"></div>
-        </div>
-    }
+    <!-- The loading spinner + message are injected by d3-home-treemap.js itself
+         (into _ref, cleared on first paint) — do not duplicate it here. -->
     <div class="bm-home-treemap" @ref="_ref"></div>
 </div>
 
@@ -26,13 +22,10 @@
     private DotNetObjectReference<HomeMemoryTreemap>? _selfRef;
     private string                                  _subscribedEnv = string.Empty;
     private bool                                    _started;
-    private bool                                    _switching;
 
     protected override async Task OnParametersSetAsync()
     {
         if (Env == _subscribedEnv) return;
-
-        _switching = true;
 
         _sub?.Dispose();
         _sub = MetricsMonitor.Subscribe(Env);
@@ -40,13 +33,12 @@
 
         if (_started)
         {
-            // Env changed — overlay is now visible (set above), clear old tree and start new.
+            // Env changed — clear old tree and start new. start() re-injects its
+            // own loading spinner into the container immediately.
             try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
             _selfRef ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
         }
-
-        _switching = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

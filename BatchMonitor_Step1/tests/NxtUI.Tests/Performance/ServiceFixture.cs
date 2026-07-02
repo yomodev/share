@@ -118,6 +118,7 @@ public sealed class ServiceFixture : IAsyncLifetime
         // Real MongoDB heartbeat — swap comment to test real infrastructure:
         // svc.AddSingleton<IHeartbeatService, MongoHeartbeatService>();
 
+        svc.AddSingleton<OperationTracker>();
         svc.AddSingleton<HeartbeatMonitor>();
         svc.AddSingleton<IHeartbeatMonitor>(sp => sp.GetRequiredService<HeartbeatMonitor>());
         svc.AddHostedService(sp => sp.GetRequiredService<HeartbeatMonitor>());

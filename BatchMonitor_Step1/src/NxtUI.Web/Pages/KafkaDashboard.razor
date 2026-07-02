@@ -147,11 +147,9 @@
             <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
                 @_filteredTopics.Count topic@(_filteredTopics.Count == 1 ? "" : "s")
             </MudText>
-            <MudPagination Count="_totalPages"
-                           Selected="_page"
-                           SelectedChanged="OnPageChanged"
-                           ShowFirstButton="true" ShowLastButton="true"
-                           Size="Size.Small" Class="bm-pagination-ctrl" />
+            <BmPagination Count="_totalPages"
+                          Selected="_page"
+                          SelectedChanged="OnPageChanged" />
             <div class="bm-rows-select">
                 <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
                 <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -296,6 +294,7 @@
     private enum KafkaView { Topics, Consumers }
 
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     // Shared
     private KafkaClusterInfo? _cluster  = null;
@@ -355,6 +354,8 @@
     {
         _loading   = true;
         _enriching = false;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -422,7 +423,14 @@
             }
         }
         catch (OperationCanceledException) { }
-        finally { _loading = false; _enriching = false; StateHasChanged(); }
+        finally
+        {
+            _loading   = false;
+            _enriching = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private void SwitchView(KafkaView view)

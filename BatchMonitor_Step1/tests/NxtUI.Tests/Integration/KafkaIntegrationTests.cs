@@ -55,7 +55,7 @@ public sealed class KafkaIntegrationTests
     {
         var settings = Options.Create(new KafkaSettings
         {
-            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Type = "OrderEvent" }]
+            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Types = ["OrderEvent"] }]
         });
         var registry = new NullMessageRegistry();
         var pipeline = new TopicDeserializerPipeline(settings, registry);
@@ -71,7 +71,7 @@ public sealed class KafkaIntegrationTests
     {
         var settings = Options.Create(new KafkaSettings
         {
-            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Type = "OrderEvent" }]
+            TopicDeserializers = [new TopicDeserializerRule { Pattern = "order*", Types = ["OrderEvent"] }]
         });
         var registry = new RecordingMessageRegistry("OrderEvent");
         var pipeline = new TopicDeserializerPipeline(settings, registry);
@@ -79,6 +79,27 @@ public sealed class KafkaIntegrationTests
         pipeline.Deserialize("order.events", [0xDE, 0xAD]);
 
         registry.LastQueried.Should().Be("OrderEvent");
+    }
+
+    [IntegrationTestFact]
+    public void Pipeline_MultipleCandidates_TriesInOrder_ThenCachesTheWinner()
+    {
+        var settings = Options.Create(new KafkaSettings
+        {
+            TopicDeserializers =
+                [new TopicDeserializerRule { Pattern = "order*", Types = ["WrongType", "OrderEvent", "AlsoNeverReached"] }]
+        });
+        var registry = new OrderedMessageRegistry("OrderEvent");
+        var pipeline = new TopicDeserializerPipeline(settings, registry);
+
+        var (_, type1) = pipeline.Deserialize("order.events", [0xDE, 0xAD]);
+        type1.Should().Be("OrderEvent");
+        registry.Queried.Should().Equal("WrongType", "OrderEvent"); // stops at first success, never tries the third
+
+        registry.Queried.Clear();
+        var (_, type2) = pipeline.Deserialize("order.events", [0xBE, 0xEF]);
+        type2.Should().Be("OrderEvent");
+        registry.Queried.Should().Equal("OrderEvent"); // cached from the first call — skips "WrongType" this time
     }
 
     // ── KafkaFilterExtractor ──────────────────────────────────────────────────
@@ -319,6 +340,18 @@ public sealed class KafkaIntegrationTests
         public bool TryParseToJson(string typeName, byte[] bytes, out string? json)
         {
             LastQueried = typeName;
+            json = typeName == acceptType ? "{}" : null;
+            return typeName == acceptType;
+        }
+        public IReadOnlyCollection<string> RegisteredTypes => [acceptType];
+    }
+
+    private sealed class OrderedMessageRegistry(string acceptType) : IMessageRegistry
+    {
+        public List<string> Queried { get; } = [];
+        public bool TryParseToJson(string typeName, byte[] bytes, out string? json)
+        {
+            Queried.Add(typeName);
             json = typeName == acceptType ? "{}" : null;
             return typeName == acceptType;
         }

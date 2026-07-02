@@ -1,0 +1,20 @@
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Tests.Protos.Fixtures";
+package nxtui.test;
+
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Test-only fixture — exercises well-known types (nullable primitives via
+// wrapper messages, Duration, Timestamp) that aren't used by the app's real
+// message schemas in src/NxtUI.Protos/Protos.
+message WellKnownTest {
+  google.protobuf.StringValue nickname  = 1;
+  google.protobuf.Int32Value  retries   = 2;
+  google.protobuf.Int64Value  bigCount  = 3;
+  google.protobuf.BoolValue   active    = 4;
+  google.protobuf.DoubleValue score     = 5;
+  google.protobuf.Duration    timeout   = 6;
+  google.protobuf.Timestamp   createdAt = 7;
+}

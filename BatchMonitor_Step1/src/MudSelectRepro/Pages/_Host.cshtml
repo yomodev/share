@@ -18,6 +18,8 @@
 </head>
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
+    <!-- Loaded first so error/console hooks are in place before Blazor's own scripts run. -->
+    <script src="js/diag.js"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
     <script src="_framework/blazor.server.js"></script>
 </body>

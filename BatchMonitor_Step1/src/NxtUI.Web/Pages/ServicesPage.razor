@@ -211,13 +211,9 @@
 
         @if (!_graphView)
         {
-            <MudPagination Count="@_totalPages"
-                           Selected="@_page"
-                           SelectedChanged="OnPageChanged"
-                           ShowFirstButton="true"
-                           ShowLastButton="true"
-                           Size="Size.Small"
-                           Class="bm-pagination-ctrl" />
+            <BmPagination Count="@_totalPages"
+                          Selected="@_page"
+                          SelectedChanged="OnPageChanged" />
 
             <div class="bm-rows-select">
                 <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
@@ -242,6 +238,7 @@
 
 @code {
     [Parameter] public string Env { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private int  _page     = 1;
     private int  _pageSize = 25;
@@ -323,6 +320,8 @@
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
 
         try
         {
@@ -345,6 +344,8 @@
         finally
         {
             _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
 
         await InvokeAsync(StateHasChanged);

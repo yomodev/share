@@ -8,12 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
-    <PackageReference Include="Grpc.Tools" Version="2.68.1" PrivateAssets="All" />
+    <PackageReference Include="protobuf-net.Reflection" Version="3.2.52" />
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Protos\*.proto" GrpcServices="None" />
+    <!-- .proto files are data, parsed dynamically at runtime by MessageRegistry
+         (no generated C# classes) — just copy them next to the assembly. -->
+    <None Include="Protos\*.proto" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

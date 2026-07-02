@@ -5,6 +5,7 @@
 @inject IKafkaMonitor KafkaSvc
 @inject ILogger<KafkaGroupsDashboard> Logger
 @inject DateTimeDisplayService DtSvc
+@inject TabService TabService
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -29,9 +30,14 @@
 
     <!-- Table -->
     <div class="bm-table-wrap @(_selected is not null ? "bm-inspector-split-top" : "")">
-        <AsyncData Result="_result" Context="_">
+        @if (_result.IsFailed)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
+        }
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
+                  Loading="@_result.IsLoading"
+                  LoadingProgressColor="Color.Primary"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
@@ -82,7 +88,6 @@
                 </MudTd>
             </RowTemplate>
         </MudTable>
-        </AsyncData>
     </div>
 
     <!-- Detail panel -->
@@ -137,6 +142,7 @@
 
 @code {
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private List<KafkaConsumerGroupOverview>  _all      = new();
     private List<KafkaConsumerGroupOverview>  _filtered = new();
@@ -169,6 +175,8 @@
         _result       = default; // loading
         _selected     = null;
         _detailResult = default;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -179,6 +187,11 @@
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     private void OnFilterChanged(string text)

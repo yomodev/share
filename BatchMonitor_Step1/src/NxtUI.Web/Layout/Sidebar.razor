@@ -157,10 +157,16 @@
 
     protected override void OnInitialized()
     {
-        TabService.OnChange += StateHasChanged;
+        // TabService.OnChange can now fire reentrantly from deep inside another
+        // component's OnInitializedAsync/OnParametersSetAsync (tab-loading spinner
+        // notifications) — InvokeAsync defers instead of calling back into the
+        // renderer mid-render.
+        TabService.OnChange += OnTabsChanged;
         EnvService.OnChange += StateHasChanged;
         DtSvc.OnChange      += StateHasChanged;
     }
+
+    private void OnTabsChanged() => InvokeAsync(StateHasChanged);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -189,7 +195,7 @@
 
     public async ValueTask DisposeAsync()
     {
-        TabService.OnChange -= StateHasChanged;
+        TabService.OnChange -= OnTabsChanged;
         EnvService.OnChange -= StateHasChanged;
         DtSvc.OnChange      -= StateHasChanged;
         if (_appModule is not null)

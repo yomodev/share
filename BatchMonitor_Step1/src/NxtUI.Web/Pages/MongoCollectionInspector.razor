@@ -6,6 +6,7 @@
 @inject IJSRuntime JS
 @inject ILogger<MongoCollectionInspector> Logger
 @inject DateTimeDisplayService DtSvc
+@inject TabService TabService
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -104,13 +105,9 @@
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
             @_totalCount.ToString("N0") doc@(_totalCount == 1 ? "" : "s")
         </MudText>
-        <MudPagination Count="_totalPages"
-                       Selected="_page"
-                       SelectedChanged="OnPageChanged"
-                       ShowFirstButton="true"
-                       ShowLastButton="true"
-                       Size="Size.Small"
-                       Class="bm-pagination-ctrl" />
+        <BmPagination Count="_totalPages"
+                      Selected="_page"
+                      SelectedChanged="OnPageChanged" />
         <div class="bm-rows-select">
             <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
             <MudSelect T="int" Value="_pageSize" ValueChanged="OnPageSizeChanged"
@@ -130,9 +127,11 @@
 @code {
     [Parameter] public string EntityId    { get; set; } = string.Empty;  // "database/collection"
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab { get; set; }
 
     private string _database   = string.Empty;
     private string _collection = string.Empty;
+    private string _loadedEntityId = string.Empty;
 
     private List<MongoDocument> _docs       = new();
     private MongoDocument?      _selected   = null;
@@ -160,6 +159,15 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        // Guard against redundant reloads: Blazor calls OnParametersSetAsync on
+        // every re-render that passes parameters down to this component (e.g.
+        // MainLayout.StateHasChanged() from a tab-loading spinner notification),
+        // not just when EntityId actually changes. Without this check, LoadAsync
+        // -> TabService.NotifyChanged() -> ancestor re-render -> OnParametersSetAsync
+        // -> LoadAsync becomes an infinite loop.
+        if (EntityId == _loadedEntityId) return;
+        _loadedEntityId = EntityId;
+
         var parts   = EntityId.Split('/', 2);
         _database   = parts.Length > 0 ? parts[0] : string.Empty;
         _collection = parts.Length > 1 ? parts[1] : string.Empty;
@@ -174,6 +182,8 @@
         var ct = _cts.Token;
 
         _loading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -188,7 +198,12 @@
             _page       = Math.Clamp(_page, 1, _totalPages);
         }
         catch (OperationCanceledException) { return; }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
 
         StateHasChanged();
     }

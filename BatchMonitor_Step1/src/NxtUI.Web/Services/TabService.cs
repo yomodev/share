@@ -19,6 +19,12 @@ public class TabService
     /// <summary>Raised whenever the tab list or active tab changes.</summary>
     public event Action? OnChange;
 
+    /// <summary>
+    /// Triggers TabBar re-render after mutating a TabModel's mutable fields
+    /// directly (e.g. IsLoading) rather than through one of the methods below.
+    /// </summary>
+    public void NotifyChanged() => OnChange?.Invoke();
+
     // ── Public API ───────────────────────────────────────────────────────
 
     /// <summary>

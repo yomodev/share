@@ -1,10 +1,12 @@
 @namespace NxtUI.Web.Pages
+@using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<LogViewer> Logger
 @inject IConfiguration Config
+@inject TabService TabService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -86,7 +88,7 @@
                       FontIncreaseDisabled="@(_fontSize >= _fontSizes[^1])"
                       FieldHints="@LogFieldHints"
                       OnFindTermChanged="@(v => { _findTerm = v; })"
-                      OnRunFind="RunFindAsync"
+                      OnRunFind="@(() => RunFindAsync())"
                       OnRegexToggled="OnRegexToggled"
                       OnCaseToggled="OnCaseToggled"
                       OnNextMatch="NextMatchAsync"
@@ -119,6 +121,8 @@
     [Parameter] public string? FileName   { get; set; }
     [Parameter] public bool    IsSelected  { get; set; }
     [Parameter] public bool    IsMultiPane { get; set; }
+    [Parameter] public bool    IsFocused   { get; set; }
+    [Parameter] public TabModel? Tab       { get; set; }
 
     [Parameter] public EventCallback OnOpen  { get; set; }
     [Parameter] public EventCallback OnDupH  { get; set; }
@@ -167,6 +171,8 @@
     private bool _wordWrap = false;
 
     private bool           _isTailing;
+    private bool           _tailDesired; // true once a live (non-local) file has been rendered
+    private bool           _previousIsFocused;
     private PeriodicTimer? _tailTimer;
     private CancellationTokenSource _cts = new();
 
@@ -183,6 +189,21 @@
         : $"{Path}  •  Ctrl+Click to copy";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
+
+    protected override void OnInitialized() => _previousIsFocused = IsFocused;
+
+    // Synchronous and separate from OnParametersSetAsync below — this must not
+    // block (fire-and-forget only) so activating a tab never stalls on it.
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        _previousIsFocused = IsFocused;
+
+        if (IsFocused && _tailDesired && !_isTailing)
+            StartTail();
+        else if (!IsFocused && _isTailing)
+            StopTail(clearDesired: false);
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -205,7 +226,9 @@
     private async Task OnWordDoubleClickedAsync(string word)
     {
         _findTerm = word;
-        await RunFindAsync();
+        // skipScroll — the word is already visible where the user clicked;
+        // don't jump the viewport to the first match elsewhere in the file.
+        await RunFindAsync(skipScroll: true);
         StateHasChanged();
     }
 
@@ -312,6 +335,9 @@
         StopTail();
         StateHasChanged();
 
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+
         try
         {
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
@@ -332,6 +358,8 @@
         finally
         {
             _isLoading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
             StateHasChanged();
         }
     }
@@ -365,11 +393,11 @@
 
     // ── Find ──────────────────────────────────────────────────────────────
 
-    private async Task RunFindAsync()
+    private async Task RunFindAsync(bool skipScroll = false)
     {
         if (_viewport is null) return;
         var result = await _viewport.FindAsync(_findTerm,
-            new { isRegex = _isRegex, caseSensitive = _caseSensitive });
+            new { isRegex = _isRegex, caseSensitive = _caseSensitive, skipScroll });
         _matchCount   = result.Count;
         _matchCurrent = result.Current;
     }
@@ -454,13 +482,16 @@
 
     private void StartTail()
     {
+        _tailDesired = true;
+        if (!IsFocused || _isTailing) return;
         _isTailing = true;
         _tailTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
         _ = TailLoopAsync();
     }
 
-    private void StopTail()
+    private void StopTail(bool clearDesired = true)
     {
+        if (clearDesired) _tailDesired = false;
         _isTailing = false;
         _tailTimer?.Dispose();
         _tailTimer = null;

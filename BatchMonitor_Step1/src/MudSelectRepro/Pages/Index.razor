@@ -1,4 +1,6 @@
 @page "/"
+@inject IJSRuntime JS
+@inject ILogger<Index> Logger
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.Small" Style="margin-top:48px;">
@@ -6,25 +8,38 @@
     <MudText Typo="Typo.h5" GutterBottom="true">MudSelect removeChild crash — repro</MudText>
 
     <MudPaper Class="pa-4 mb-4" Elevation="1">
-        <MudText Typo="Typo.subtitle2" GutterBottom="true">Steps to reproduce</MudText>
-        <ol style="margin:0;padding-left:20px;line-height:1.8;">
-            <li>Open this page in Chrome <strong>with auto-translate active</strong> (or with Google Translate extension).</li>
-            <li>Click the dropdown below.</li>
-            <li>Select any option.</li>
-        </ol>
-        <MudText Typo="Typo.body2" Class="mt-2" Style="color:var(--mud-palette-error);">
-            Expected: <code>TypeError: Cannot read properties of null (reading 'removeChild')</code> in the browser console,
-            and Blazor circuit terminates.
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Root cause (confirmed 2026-07-02)</MudText>
+        <MudText Typo="Typo.body2">
+            NOT a bug in this app's code, MudBlazor's Ripple, or <code>PopoverOptions.QueueDelay</code> —
+            all ruled out by A/B testing with the three selects below. The actual cause was a Chrome
+            extension: <strong>TransOver</strong> ("hover/click/select to translate", ID
+            <code>aggiiclaiamajehmlfpkjmlbadmkledi</code>), which has "read and change all your data on
+            websites you visit" permission. Its content script mutates the DOM on hover/click/selection —
+            unlike Chrome's built-in Google Translate, this is <strong>not</strong> covered by
+            <code>translate="no"</code>, which only signals the native translate feature. When the
+            extension's DOM mutation landed in the same window as a concurrent Blazor render batch
+            (e.g. the popover-close batch overlapping a background <code>StateHasChanged</code>), the
+            client applied a patch referencing an already-mutated node → <code>parentNode</code> was
+            null → <code>removeChild</code> threw → circuit died.
+            <br /><br />
+            <strong>Fix:</strong> disable the offending extension (or exclude this site in its settings).
+            No app/framework change was needed. Keep this project around — the diagnostics below
+            (<code>diag.js</code>, timed marks, three select variants) are the fastest way to re-diagnose
+            if a similar crash shows up on a different machine/extension in the future.
         </MudText>
     </MudPaper>
 
     <MudPaper Class="pa-4 mb-4" Elevation="1">
-        <MudText Typo="Typo.subtitle2" GutterBottom="true">Fix</MudText>
-        <MudText Typo="Typo.body2">
-            Add <code>translate="no"</code> to the root <code>&lt;html&gt;</code> element in <em>_Host.cshtml</em>.
-            This prevents the browser from wrapping text nodes in <code>&lt;font&gt;</code> elements during
-            translation, which conflicts with Blazor's virtual-DOM reconciliation when MudBlazor closes
-            the popover and Blazor tries to remove nodes whose parents have been modified by the translator.
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Steps to reproduce (requires a DOM-mutating extension)</MudText>
+        <ol style="margin:0;padding-left:20px;line-height:1.8;">
+            <li>Have an extension with broad DOM-write access active (e.g. a hover-translate extension like TransOver, or Chrome's own page translation).</li>
+            <li>Turn "Timer ON" below to add background render pressure (widens the race window).</li>
+            <li>Interact with the extension over the dropdown (hover/select) right as you open/close it.</li>
+        </ol>
+        <MudText Typo="Typo.body2" Class="mt-2" Style="color:var(--mud-palette-error);">
+            Expected: <code>TypeError: Cannot read properties of null (reading 'removeChild')</code> in the browser console,
+            and Blazor circuit terminates. Rarer / harder to hit with the timer off — this is a genuine
+            timing race, not a deterministic bug.
         </MudText>
     </MudPaper>
 
@@ -39,7 +54,20 @@
         <MudSwitch @bind-Value="_timerEnabled" Label="@(_timerEnabled ? "Timer ON" : "Timer OFF")" Color="Color.Primary" />
     </MudPaper>
 
-    <MudSelect T="string" @bind-Value="_selected" Label="Mode" Variant="Variant.Outlined" Class="mb-4">
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Diagnostics</MudText>
+        <MudText Typo="Typo.body2">
+            <code>diag.js</code> hooks <code>console.error</code>, <code>window.onerror</code> and
+            <code>unhandledrejection</code>, and keeps a rolling timeline of timer ticks / value
+            changes (via <code>diagMark</code>). On any capture it dumps the recent timeline as a
+            <code>console.table</code>. Open devtools console before testing. Server-side logs use
+            the same <code>HH:mm:ss.fff</code> wall-clock format for cross-correlation.
+            Run <code>copy(dumpDiag())</code> in devtools to grab the full buffer as JSON.
+        </MudText>
+    </MudPaper>
+
+    <MudSelect T="string" Value="_selected" ValueChanged="@(v => OnSelectChanged("ripple-on", v, x => _selected = x))"
+               Label="Mode (ripple on)" Variant="Variant.Outlined" Class="mb-4">
         <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
         <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
         <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
@@ -48,23 +76,76 @@
         <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
     </MudSelect>
 
-    <MudText Typo="Typo.body2" Class="bm-muted">Selected: <strong>@_selected</strong></MudText>
+    <!-- Ripple="false" twin — tests whether MudBlazor's own ripple-cleanup JS
+         (which mutates the DOM outside Blazor's render tree) is racing the
+         popover-close render batch, independent of any app-level state/timer. -->
+    <MudSelect T="string" Value="_selectedNoRipple" ValueChanged="@(v => OnSelectChanged("ripple-off", v, x => _selectedNoRipple = x))"
+               Label="Mode (ripple off)" Variant="Variant.Outlined" Ripple="false" Class="mb-4">
+        <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+        <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+        <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+        <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+        <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+        <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+    </MudSelect>
+
+    <!-- Bare MudSelect — no Variant/Margin/Dense/Ripple, just T + @bind-Value + items.
+         Tests whether any of our extra properties are contributing to the crash,
+         or whether the plain default MudSelect crashes identically. -->
+    <MudSelect T="string" Value="_selectedBare" ValueChanged="@(v => OnSelectChanged("bare", v, x => _selectedBare = x))"
+               Label="Mode (bare/defaults)" Class="mb-4">
+        <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+        <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+        <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+        <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+        <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+        <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+    </MudSelect>
+
+    <MudText Typo="Typo.body2" Class="bm-muted">
+        Selected: <strong>@_selected</strong> / <strong>@_selectedNoRipple</strong> / <strong>@_selectedBare</strong>
+    </MudText>
 
 </MudContainer>
 
 @code {
-    private string _selected    = "all";
+    private string _selected         = "all";
+    private string _selectedNoRipple = "all";
+    private string _selectedBare     = "all";
     private int    _renders;
     private bool   _timerEnabled = true;
     private Timer? _timer;
 
+    private static string Now() => DateTime.Now.ToString("HH:mm:ss.fff");
+
     protected override void OnInitialized()
     {
-       //_timer = new Timer(_ =>
-       //{
-       //    if (_timerEnabled)
-       //        InvokeAsync(() => { _renders++; StateHasChanged(); });
-       //}, null, 200, 200);
+        _timer = new Timer(_ =>
+        {
+            if (_timerEnabled)
+                InvokeAsync(async () =>
+                {
+                    _renders++;
+                    // Throttled: marking every tick would itself add interop traffic
+                    // that could perturb the very race we're trying to observe.
+                    if (_renders % 5 == 0)
+                    {
+                        Logger.LogInformation("{Time} | timer tick #{N}", Now(), _renders);
+                        try { await JS.InvokeVoidAsync("diagMark", $"timer tick #{_renders}"); }
+                        catch (JSDisconnectedException) { }
+                    }
+                    StateHasChanged();
+                });
+        }, null, 200, 200);
+    }
+
+    private async void OnSelectChanged(string which, string value, Action<string> setter)
+    {
+        setter(value);
+        Logger.LogInformation("{Time} | select changed | which={Which} value={Value}", Now(), which, value);
+        try { await JS.InvokeVoidAsync("diagMark", $"select changed | {which} -> {value}"); }
+        catch (JSDisconnectedException) { }
+        StateHasChanged();
     }
 
     public void Dispose() => _timer?.Dispose();

@@ -62,7 +62,10 @@ public class Program
         builder.Services.AddSingleton<MongoConnectionFactory>();
 
         // ── Proto message registry + deserialization pipeline ─────────────────
-        builder.Services.AddSingleton<IMessageRegistry>(_ => MessageRegistry.CreateDefault());
+        // .proto files are parsed dynamically at runtime (no generated C# classes);
+        // schema is cached for the process lifetime — restart to pick up edits.
+        builder.Services.AddSingleton<IMessageRegistry>(sp =>
+            MessageRegistry.Create(sp.GetRequiredService<IOptions<KafkaSettings>>().Value.ProtoSchemaFolder));
         builder.Services.AddSingleton<TopicDeserializerPipeline>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────

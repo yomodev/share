@@ -27,11 +27,11 @@
                            OnClick="ToggleStream" />
         </MudTooltip>
 
-        <!-- Reset -->
-        <MudTooltip Text="Reset — clear messages and restart">
-            <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt"
+        <!-- Clear -->
+        <MudTooltip Text="Clear — stop and clear messages (does not restart)">
+            <MudIconButton Icon="@Icons.Material.Outlined.ClearAll"
                            Size="Size.Small"
-                           OnClick="ResetStream" />
+                           OnClick="ClearMessages" />
         </MudTooltip>
 
         <!-- Stats popover -->
@@ -50,14 +50,15 @@
                    FieldHints="@_fieldHints" />
 
         <!-- Mode select -->
-        <select class="bm-native-select" @bind="_modeKey" @bind:after="@(() => OnModeChanged(_modeKey))">
-            <option value="all">From beginning</option>
-            <option value="latestN">Latest 500</option>
-            <option value="fromOffset">From offset</option>
-            <option value="fromTimestamp">From timestamp</option>
-            <option value="offsetRange">Offset range</option>
-            <option value="tsRange">Timestamp range</option>
-        </select>
+        <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
+                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense" Style="width:180px">
+            <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+            <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+            <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+            <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+            <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+            <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+        </MudSelect>
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -285,35 +286,65 @@
 
     // ── Stream control ────────────────────────────────────────────────────────
 
+    // Minimum time between UI renders while messages are streaming in. Without
+    // this, a fast fetch (e.g. "latest 500" or "from beginning") re-renders and
+    // sends a SignalR batch on every single message, flooding the render queue
+    // and starving other UI interactions (buttons feel unresponsive) even
+    // though nothing is actually CPU-bound.
+    private const int StreamRenderIntervalMs = 150;
+
     private async Task StartStreamAsync()
     {
+        var ct = _cts.Token; // captured — lets us detect if a newer action (Clear/Reset/Toggle) supersedes us
         _state = StreamState.Running;
         StateHasChanged();
 
         var (directive, remaining) = ExtractDirective(_filterText);
+        var lastRender = DateTime.MinValue;
 
         try
         {
-            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, _cts.Token))
+            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, ct))
             {
                 _messages.Insert(0, msg);
+
+                var now = DateTime.UtcNow;
+                if ((now - lastRender).TotalMilliseconds < StreamRenderIntervalMs) continue;
+                lastRender = now;
+
                 ApplyClientFilter(remaining);
                 await InvokeAsync(StateHasChanged);
             }
+
+            // Final flush — the last few messages may have arrived inside the
+            // throttle window and never got rendered.
+            ApplyClientFilter(remaining);
             await InvokeAsync(() =>
             {
-                _state = _cts.IsCancellationRequested ? StreamState.Paused : StreamState.Idle;
+                if (ct.IsCancellationRequested) return; // superseded by a newer action
+                _state = StreamState.Idle;
                 StateHasChanged();
             });
         }
         catch (OperationCanceledException)
         {
-            await InvokeAsync(() => { _state = StreamState.Paused; StateHasChanged(); });
+            ApplyClientFilter(remaining);
+            await InvokeAsync(() =>
+            {
+                if (_cts.Token != ct) return; // a newer Clear/Reset/Toggle already set the desired state
+                _state = StreamState.Paused;
+                StateHasChanged();
+            });
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName);
-            await InvokeAsync(() => { _state = StreamState.Idle; StateHasChanged(); });
+            await InvokeAsync(() =>
+            {
+                if (_cts.Token != ct) return;
+                _state = StreamState.Idle;
+                StateHasChanged();
+            });
         }
     }
 
@@ -332,6 +363,19 @@
         }
     }
 
+    /// <summary>Stops and clears messages without restarting the fetch — used by the toolbar Clear button.</summary>
+    private void ClearMessages()
+    {
+        _cts.Cancel();
+        _cts      = new CancellationTokenSource();
+        _messages.Clear();
+        _filtered.Clear();
+        _selected = null;
+        _state    = StreamState.Idle;
+        StateHasChanged();
+    }
+
+    /// <summary>Clears messages and restarts the fetch — used when the seek directive changes (mode/partition filter).</summary>
     private void ResetStream()
     {
         _cts.Cancel();
@@ -342,14 +386,11 @@
         _ = StartStreamAsync();
     }
 
-    private string _pendingSnippet  = "";
-    private bool   _applySnippet   = false;
-
     private void OnModeChanged(string key)
     {
         _modeKey = key;
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
-        _pendingSnippet = key switch
+        var snippet = key switch
         {
             "latestN"       => "latest:500",
             "fromOffset"    => "offset:>=0",
@@ -358,11 +399,12 @@
             "tsRange"       => $"timestamp:{today}..{today}",
             _               => "",
         };
-        _applySnippet = true;
-        // _filterText is deliberately NOT changed here. Updating it in the same
-        // render batch as the MudSelect popover close causes a DOM null-parent
-        // crash in Blazor Server. OnAfterRenderAsync applies it in the next batch,
-        // after the popover-close diff has already been sent to the browser.
+
+        var cleaned = RemoveKafkaSeekTerms(_filterText);
+        _filterText = string.IsNullOrWhiteSpace(snippet)
+            ? cleaned.Trim()
+            : (cleaned.Trim() + " " + snippet).Trim();
+        _filterParseError = null;
     }
 
 
@@ -466,18 +508,6 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_applySnippet)
-        {
-            _applySnippet = false;
-            var cleaned = RemoveKafkaSeekTerms(_filterText);
-            _filterText = string.IsNullOrWhiteSpace(_pendingSnippet)
-                ? cleaned.Trim()
-                : (cleaned.Trim() + " " + _pendingSnippet).Trim();
-            _filterParseError = null;
-            _pendingSnippet   = "";
-            await InvokeAsync(StateHasChanged);
-        }
-
         if (_jsonDirty && _selected is not null)
         {
             _jsonDirty = false;

@@ -8,6 +8,8 @@
     <WorkspacePanel Node="@_root"
                     SelectedLeaf="@_selected"
                     ShowRing="@(_root is not WsLeaf)"
+                    IsFocused="@IsFocused"
+                    Tab="@Tab"
                     OnSelect="OnSelect"
                     OnOpen="OnOpen"
                     OnDupH="OnDupH"
@@ -17,9 +19,11 @@
 </div>
 
 @code {
-    [Parameter] public string? Path     { get; set; }
-    [Parameter] public string  Env      { get; set; } = string.Empty;
-    [Parameter] public string? FileName { get; set; }
+    [Parameter] public string?   Path      { get; set; }
+    [Parameter] public string    Env       { get; set; } = string.Empty;
+    [Parameter] public string?   FileName  { get; set; }
+    [Parameter] public bool      IsFocused { get; set; }
+    [Parameter] public TabModel? Tab       { get; set; }
 
     private WsNode  _root     = null!;
     private WsLeaf? _selected;

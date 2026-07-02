@@ -1,0 +1,68 @@
+@namespace NxtUI.Web.Components
+
+<div class="bm-pagination-wrap">
+    <MudPagination Count="@Count"
+                   Selected="@Selected"
+                   SelectedChanged="@(async (int p) => await SelectedChanged.InvokeAsync(p))"
+                   ShowFirstButton="true"
+                   ShowLastButton="true"
+                   Size="Size.Small"
+                   Class="bm-pagination-ctrl" />
+
+    @if (Count > JumpThreshold)
+    {
+        @if (_editing)
+        {
+            <MudNumericField T="int" @bind-Value="_editValue"
+                              Min="1" Max="@Count"
+                              Immediate="true"
+                              AutoFocus="true"
+                              Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Class="bm-pagination-jump-input"
+                              @onkeydown="OnKeyDown"
+                              @onblur="@(() => CommitJump())" />
+        }
+        else
+        {
+            <MudTooltip Text="Double-click to jump to a page">
+                <span class="bm-pagination-jump-label" @ondblclick="StartEditing">
+                    page @Selected / @Count
+                </span>
+            </MudTooltip>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public int Count { get; set; }
+    [Parameter, EditorRequired] public int Selected { get; set; }
+    [Parameter, EditorRequired] public EventCallback<int> SelectedChanged { get; set; }
+
+    // Only show the "jump to page" control once there are enough pages that
+    // clicking through them one at a time would be tedious.
+    private const int JumpThreshold = 7;
+
+    private bool _editing;
+    private int  _editValue;
+
+    private void StartEditing()
+    {
+        _editValue = Selected;
+        _editing   = true;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CommitJump();
+        else if (e.Key == "Escape") _editing = false;
+    }
+
+    private async Task CommitJump()
+    {
+        if (!_editing) return;
+        _editing = false;
+        var target = Math.Clamp(_editValue, 1, Math.Max(1, Count));
+        if (target != Selected)
+            await SelectedChanged.InvokeAsync(target);
+    }
+}
