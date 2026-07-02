@@ -1,12 +1,16 @@
 @namespace NxtUI.Web.Pages
+@using Microsoft.Extensions.Options
+@using NxtUI.Configuration
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
+@using NxtUI.Filtering
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IRunService RunService
 @inject InfraHealthCache HealthCache
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
+@inject IOptions<RunsSettings> RunsOpts
 @implements IDisposable
 
 <div class="bm-home">
@@ -130,10 +134,6 @@
         <div class="bm-memory-header-left">
             <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
-            @if (!_memoryLoaded)
-            {
-                <MudProgressCircular Indeterminate="true" Class="bm-memory-spinner" />
-            }
         </div>
         <MudButton Variant="Variant.Text" Size="Size.Small"
                    StartIcon="@Icons.Material.Outlined.OpenInNew"
@@ -142,14 +142,24 @@
             View All
         </MudButton>
     </div>
-    <HomeMemoryTreemap Env="@EnvService.SelectedId" OnDataLoaded="OnMemoryDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+    <HomeMemoryTreemap Env="@EnvService.SelectedId" OnPidClicked="OnTreemapPidClicked" />
 
     <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
     <div class="bm-section-header" style="margin:4px 0 0;">
         <div class="bm-memory-header-left">
             <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
+            @if (_recent.Count > 0)
+            {
+                <span class="bm-muted" style="font-size:11px;margin-left:6px;">(@_recent.Count)</span>
+            }
         </div>
+        <FilterBox Value="@_runFilterText"
+                   OnFilterChanged="OnRunFilterChanged"
+                   ParseError="@_runFilterError"
+                   Placeholder="name: type: status:running start:>=-7d"
+                   Class="bm-home-run-filter"
+                   FieldHints="@_runFieldHints" />
         <MudButton Variant="Variant.Text" Size="Size.Small"
                    StartIcon="@Icons.Material.Outlined.OpenInNew"
                    OnClick="OpenRunsDashboard"
@@ -208,19 +218,65 @@
     // Batch state
     private List<RunSummary> _recent = new();
 
+    // Run filter
+    private string      _runFilterText  = "";
+    private string?     _runFilterError = null;
+    private FilterNode? _runFilterAst   = null;
+
+    private static readonly FilterParser _runParser =
+        new(["RunId", "Name", "Description"]);
+
+    private static readonly (string Aliases, string Label)[] _runFieldHints =
+    [
+        ("name",              "name:Batch*  /  name:MyBatch"),
+        ("type / run",        "type:FullLoad  /  run:abc123"),
+        ("status",            "status:running  /  status:completed  /  status:failed"),
+        ("start / started",   "start:>=-7d  /  start:2024-01-01..2024-02-01"),
+        ("end / finish",      "end:>=2024-01-01  /  end:null"),
+        ("desc",              "desc:keyword — search in description"),
+    ];
+
     // Health state
     private KafkaHealth? _kafkaHealth = null;
     private MongoHealth? _mongoHealth = null;
-    private bool         _memoryLoaded = false;
 
     private CancellationTokenSource _cts = new();
+
+    // Home is visible only when no tab is active. Track the previous state so
+    // we can trigger a data refresh when the user switches back to Home.
+    private bool _wasVisible;
 
     protected override async Task OnInitializedAsync()
     {
         EnvService.OnChange         += OnEnvExternalChange;
         HealthCache.OnHealthUpdated += OnHealthUpdated;
+        TabService.OnChange         += OnTabVisibilityChanged;
+        _wasVisible = TabService.ActiveTab is null;
         HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+        _ = PollRunsAsync(_cts.Token);
+    }
+
+    private bool IsVisible => TabService.ActiveTab is null;
+
+    private void OnTabVisibilityChanged()
+    {
+        var visible = IsVisible;
+        if (visible && !_wasVisible)
+        {
+            // Home just became visible — refresh stale data then render.
+            _ = InvokeAsync(async () =>
+            {
+                try
+                {
+                    HealthCache.RequestRefresh(EnvService.SelectedId);
+                    await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+                    StateHasChanged();
+                }
+                catch (Exception ex) { Logger.LogError(ex, "Home visibility refresh failed"); }
+            });
+        }
+        _wasVisible = visible;
     }
 
     // ── Batch ─────────────────────────────────────────────────────────────
@@ -229,10 +285,50 @@
     {
         try
         {
-            var batches = await RunService.GetRunsAsync(EnvService.SelectedId, DateTime.UtcNow, 5);
-            _recent = batches.Take(5).ToList();
+            var cfg    = RunsOpts.Value;
+            var filter = new RunFilter { FilterAst = _runFilterAst };
+            var runs   = await RunService.GetRunsAsync(
+                EnvService.SelectedId, DateTime.UtcNow, cfg.PageSize, filter, _cts.Token);
+            _recent = runs;
         }
-        catch { /* non-critical */ }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
+    }
+
+    private async Task PollRunsAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(RunsOpts.Value.PollingIntervalSeconds);
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(interval, ct);
+                await LoadRunsAsync();
+                if (IsVisible)
+                    await InvokeAsync(StateHasChanged);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Logger.LogError(ex, "Runs polling failed"); }
+        }
+    }
+
+    private void OnRunFilterChanged(string text)
+    {
+        _runFilterText  = text;
+        _runFilterError = null;
+        _runFilterAst   = null;
+
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { _runFilterAst = _runParser.Parse(text); }
+            catch (Exception ex) { _runFilterError = ex.Message; }
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            await LoadRunsAsync();
+            StateHasChanged();
+        });
     }
 
     // ── Health ────────────────────────────────────────────────────────────
@@ -242,7 +338,7 @@
         var env = EnvService.SelectedId;
         _kafkaHealth = HealthCache.GetKafka(env);
         _mongoHealth = HealthCache.GetMongo(env);
-        await InvokeAsync(StateHasChanged);
+        await InvokeAsync(() => { if (IsVisible) StateHasChanged(); });
     }
 
     private void OnHealthUpdated(string env)
@@ -264,11 +360,10 @@
             try
             {
                 _recent       = [];
-                _memoryLoaded = false;
-                StateHasChanged();
+                if (IsVisible) StateHasChanged();
                 HealthCache.RequestRefresh(EnvService.SelectedId);
                 await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
-                StateHasChanged();
+                if (IsVisible) StateHasChanged();
             }
             catch (Exception ex) { Logger.LogError(ex, "Env change update failed"); }
         });
@@ -278,7 +373,6 @@
     {
         EnvService.SelectedId = newId;
         _recent               = [];
-        _memoryLoaded         = false;
         HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
     }
@@ -291,11 +385,6 @@
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(EnvService.SelectedId));
 
-    private void OnMemoryDataLoaded()
-    {
-        _memoryLoaded = true;
-        _ = InvokeAsync(StateHasChanged);
-    }
 
     private void OnTreemapPidClicked(string key)
     {
@@ -327,6 +416,7 @@
     {
         EnvService.OnChange         -= OnEnvExternalChange;
         HealthCache.OnHealthUpdated -= OnHealthUpdated;
+        TabService.OnChange         -= OnTabVisibilityChanged;
         _cts.Cancel();
     }
 }

@@ -28,6 +28,7 @@ public sealed class EnvironmentConfigLoader(
 
     public KafkaSettings  GetKafka(string envId) => Get(envId).Kafka;
     public MongoSettings  GetMongo(string envId) => Get(envId).Mongo;
+    public SqlSettings    GetSql  (string envId) => Get(envId).Sql;
 
     private EnvironmentConfig Get(string envId) =>
         _cache.GetOrAdd(envId, Load);
@@ -58,4 +59,5 @@ public sealed class EnvironmentConfig
 {
     public KafkaSettings Kafka { get; set; } = new();
     public MongoSettings Mongo { get; set; } = new();
+    public SqlSettings   Sql   { get; set; } = new();
 }

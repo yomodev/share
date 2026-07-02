@@ -1,0 +1,71 @@
+@page "/"
+@implements IDisposable
+
+<MudContainer MaxWidth="MaxWidth.Small" Style="margin-top:48px;">
+
+    <MudText Typo="Typo.h5" GutterBottom="true">MudSelect removeChild crash — repro</MudText>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Steps to reproduce</MudText>
+        <ol style="margin:0;padding-left:20px;line-height:1.8;">
+            <li>Open this page in Chrome <strong>with auto-translate active</strong> (or with Google Translate extension).</li>
+            <li>Click the dropdown below.</li>
+            <li>Select any option.</li>
+        </ol>
+        <MudText Typo="Typo.body2" Class="mt-2" Style="color:var(--mud-palette-error);">
+            Expected: <code>TypeError: Cannot read properties of null (reading 'removeChild')</code> in the browser console,
+            and Blazor circuit terminates.
+        </MudText>
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Fix</MudText>
+        <MudText Typo="Typo.body2">
+            Add <code>translate="no"</code> to the root <code>&lt;html&gt;</code> element in <em>_Host.cshtml</em>.
+            This prevents the browser from wrapping text nodes in <code>&lt;font&gt;</code> elements during
+            translation, which conflicts with Blazor's virtual-DOM reconciliation when MudBlazor closes
+            the popover and Blazor tries to remove nodes whose parents have been modified by the translator.
+        </MudText>
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.subtitle2" GutterBottom="true">Background render pressure</MudText>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            A timer fires every 200 ms and calls <code>StateHasChanged</code>, simulating a
+            background polling component (as in the real app). This ensures there is always a
+            pending render batch that can race with the popover-close update.
+            Render count: <strong>@_renders</strong>
+        </MudText>
+        <MudSwitch @bind-Value="_timerEnabled" Label="@(_timerEnabled ? "Timer ON" : "Timer OFF")" Color="Color.Primary" />
+    </MudPaper>
+
+    <MudSelect T="string" @bind-Value="_selected" Label="Mode" Variant="Variant.Outlined" Class="mb-4">
+        <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+        <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+        <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+        <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+        <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+        <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+    </MudSelect>
+
+    <MudText Typo="Typo.body2" Class="bm-muted">Selected: <strong>@_selected</strong></MudText>
+
+</MudContainer>
+
+@code {
+    private string _selected    = "all";
+    private int    _renders;
+    private bool   _timerEnabled = true;
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _timer = new Timer(_ =>
+        {
+            if (_timerEnabled)
+                InvokeAsync(() => { _renders++; StateHasChanged(); });
+        }, null, 200, 200);
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

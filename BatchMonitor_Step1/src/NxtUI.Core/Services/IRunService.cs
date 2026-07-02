@@ -1,4 +1,5 @@
 using NxtUI.Core.Models;
+using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services;
 
@@ -61,6 +62,12 @@ public class RunFilter
 
     /// <summary>Filter by one or more batch types.</summary>
     public List<string>? Types { get; set; }
+
+    /// <summary>
+    /// Full parsed AST from the filter box. When set, <see cref="SqlRunService"/> uses
+    /// <see cref="SqlFilterBuilder"/> to generate a WHERE clause; other backends may ignore it.
+    /// </summary>
+    public FilterNode? FilterAst { get; set; }
 
     public bool IsEmpty =>
         string.IsNullOrWhiteSpace(SearchText) &&

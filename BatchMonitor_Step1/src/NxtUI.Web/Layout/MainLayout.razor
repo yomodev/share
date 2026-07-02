@@ -75,7 +75,7 @@
         await JS.InvokeVoidAsync("bmSetTheme", ThemeService.IsDark);
 
         if (!firstRender) return;
-        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
         _dotnetRef  = DotNetObjectReference.Create(this);
         // Always register watcher — SetSystemDark is a no-op when Mode != System
         var isDark  = await _appModule.InvokeAsync<bool>("watchSystemTheme", _dotnetRef);

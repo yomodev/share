@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 using MudBlazor.Services;
 using NLog;
 using NLog.Web;
@@ -7,6 +8,7 @@ using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
+using NxtUI.Core.Services.Sql;
 using NxtUI.Protos;
 using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
@@ -43,6 +45,9 @@ public class Program
         builder.Services.Configure<KafkaSettings>(
             builder.Configuration.GetSection(KafkaSettings.SectionName));
 
+        builder.Services.Configure<RunsSettings>(
+            builder.Configuration.GetSection(RunsSettings.SectionName));
+
         // ── Per-environment config loader ─────────────────────────────────────
         builder.Services.AddSingleton(new EnvironmentConfigOptions
         {
@@ -77,10 +82,14 @@ public class Program
         var signalRBuilder = builder.Services.AddSignalR();
 
         // ── Batch / Run service ──────────────────────────────────────────────
-        // Mock: fast demo without MongoDB.  Real: swap comment below.
+        // Mock: fast demo without any backend.  Swap comment for a real backend.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
         // builder.Services.AddSingleton<IRunService, MongoRunService>();
+        // builder.Services.AddSingleton<IRunService>(sp => new SqlRunService(
+        //     sp.GetRequiredService<EnvironmentConfigLoader>(),
+        //     sp.GetRequiredService<IOptions<RunsSettings>>().Value,
+        //     sp.GetRequiredService<ILogger<SqlRunService>>()));
 
         // ── Kafka ─────────────────────────────────────────────────────────────
         // Mock: no broker required.  Real: swap comment block below.
@@ -166,6 +175,7 @@ public class Program
         // map controllers
         app.MapControllers();
 
+        app.MapRazorPages();
         app.MapBlazorHub();
         app.MapHub<RunHub>("/hubs/run");
         app.MapHub<RunEventsHub>("/hubs/run-events");
@@ -206,7 +216,7 @@ public class Program
             return Results.Ok(new { name = "root", children = hosts });
         });
 
-        app.MapFallbackToPage("/_Host");
+        app.MapFallbackToPage("/{**path}", "/_Host");
 
         app.Run();
     }

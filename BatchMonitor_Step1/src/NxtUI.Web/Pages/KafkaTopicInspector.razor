@@ -49,18 +49,15 @@
                    Class="bm-filter-input"
                    FieldHints="@_fieldHints" />
 
-        <!-- Mode shortcut buttons -->
-        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-kafka-mode-group">
-            <MudTooltip Text="Stream from beginning">
-                <MudButton OnClick="@(() => SetMode(""))">All</MudButton>
-            </MudTooltip>
-            <MudTooltip Text="Last 500 messages per partition">
-                <MudButton OnClick="@(() => SetMode("latest:500"))">L500</MudButton>
-            </MudTooltip>
-            <MudTooltip Text="Last 100 messages per partition">
-                <MudButton OnClick="@(() => SetMode("latest:100"))">L100</MudButton>
-            </MudTooltip>
-        </MudButtonGroup>
+        <!-- Mode select -->
+        <select class="bm-native-select" @bind="_modeKey" @bind:after="@(() => OnModeChanged(_modeKey))">
+            <option value="all">From beginning</option>
+            <option value="latestN">Latest 500</option>
+            <option value="fromOffset">From offset</option>
+            <option value="fromTimestamp">From timestamp</option>
+            <option value="offsetRange">Offset range</option>
+            <option value="tsRange">Timestamp range</option>
+        </select>
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -84,15 +81,17 @@
         </span>
     </div>
 
-    <!-- Stats panel -->
-    @if (_showStats)
-    {
-        <div class="bm-kafka-stats-panel">
+    <!-- Stats dialog -->
+    <MudDialog Visible="_showStats" VisibleChanged="@((v) => _showStats = v)">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Partition stats — @TopicName</MudText>
+        </TitleContent>
+        <DialogContent>
             @if (_statsLoading)
             {
-                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="height:2px;" />
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="height:2px;margin-bottom:8px;" />
             }
-            else if (_stats.Count > 0)
+            @if (_stats.Count > 0)
             {
                 <table class="bm-kafka-stats-table">
                     <thead>
@@ -108,7 +107,7 @@
                     <tbody>
                         @foreach (var s in _stats)
                         {
-                            <tr class="bm-kafka-stats-row" @onclick="@(() => AppendPartitionFilter(s.Partition))">
+                            <tr class="bm-kafka-stats-row" @onclick="@(() => ApplyPartitionFilter(s.Partition))">
                                 <td><span class="bm-kafka-mono">@s.Partition</span></td>
                                 <td><span class="bm-kafka-mono">@s.LowWatermark</span></td>
                                 <td><span class="bm-kafka-mono">@s.HighWatermark</span></td>
@@ -119,10 +118,14 @@
                         }
                     </tbody>
                 </table>
-                <span class="bm-muted" style="font-size:10px;padding:4px 8px;">Click a row to filter by partition</span>
+                <MudText Typo="Typo.caption" Class="bm-muted" Style="padding:4px 0;">Click a row to filter by partition and close</MudText>
             }
-        </div>
-    }
+        </DialogContent>
+        <DialogActions>
+            <MudButton StartIcon="@Icons.Material.Outlined.Refresh" OnClick="LoadStatsAsync" Disabled="_statsLoading">Refresh</MudButton>
+            <MudButton OnClick="@(() => _showStats = false)">Close</MudButton>
+        </DialogActions>
+    </MudDialog>
 
     <!-- Message table + detail side by side -->
     <div class="bm-inspector-body">
@@ -142,6 +145,8 @@
                       Height="100%"
                       SelectedItem="_selected"
                       SelectedItemChanged="OnRowSelected"
+                      RowClassFunc="@((msg, _) => ReferenceEquals(msg, _selected) ? "bm-row-selected" : "")"
+                      OnRowClick="OnRowClick"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
                     <MudTh Style="white-space:nowrap;">Offset</MudTh>
@@ -244,9 +249,11 @@
     private string  _filterText       = string.Empty;
     private string? _filterParseError;
 
-    private bool                         _showStats   = false;
-    private bool                         _statsLoading= false;
-    private List<KafkaPartitionStats>    _stats       = [];
+    private bool                         _showStats    = false;
+    private bool                         _statsLoading = false;
+    private List<KafkaPartitionStats>    _stats        = [];
+
+    private string _modeKey = "all";
 
     private static readonly string[] SearchableFields =
         ["Key", "PayloadType", "Partition", "Offset", "Timestamp", "latest"];
@@ -274,11 +281,7 @@
         ("<field>",          "any JSON payload field: orderId:abc  /  amount:>100"),
     ];
 
-    protected override Task OnInitializedAsync()
-    {
-        _ = StartStreamAsync();
-        return Task.CompletedTask;
-    }
+    protected override Task OnInitializedAsync() => Task.CompletedTask;
 
     // ── Stream control ────────────────────────────────────────────────────────
 
@@ -294,20 +297,24 @@
             await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, _cts.Token))
             {
                 _messages.Insert(0, msg);
-                if (_messages.Count > 2_000) _messages.RemoveAt(_messages.Count - 1);
                 ApplyClientFilter(remaining);
                 await InvokeAsync(StateHasChanged);
             }
-            _state = _cts.IsCancellationRequested ? StreamState.Paused : StreamState.Idle;
+            await InvokeAsync(() =>
+            {
+                _state = _cts.IsCancellationRequested ? StreamState.Paused : StreamState.Idle;
+                StateHasChanged();
+            });
         }
-        catch (OperationCanceledException) { _state = StreamState.Paused; }
+        catch (OperationCanceledException)
+        {
+            await InvokeAsync(() => { _state = StreamState.Paused; StateHasChanged(); });
+        }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName);
-            _state = StreamState.Idle;
+            await InvokeAsync(() => { _state = StreamState.Idle; StateHasChanged(); });
         }
-
-        await InvokeAsync(StateHasChanged);
     }
 
     private void ToggleStream()
@@ -316,6 +323,7 @@
         {
             _cts.Cancel();
             _state = StreamState.Paused;
+            StateHasChanged();
         }
         else
         {
@@ -334,9 +342,32 @@
         _ = StartStreamAsync();
     }
 
+    private string _pendingSnippet  = "";
+    private bool   _applySnippet   = false;
+
+    private void OnModeChanged(string key)
+    {
+        _modeKey = key;
+        var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        _pendingSnippet = key switch
+        {
+            "latestN"       => "latest:500",
+            "fromOffset"    => "offset:>=0",
+            "fromTimestamp" => $"timestamp:>={today}",
+            "offsetRange"   => "offset:0..1000",
+            "tsRange"       => $"timestamp:{today}..{today}",
+            _               => "",
+        };
+        _applySnippet = true;
+        // _filterText is deliberately NOT changed here. Updating it in the same
+        // render batch as the MudSelect popover close causes a DOM null-parent
+        // crash in Blazor Server. OnAfterRenderAsync applies it in the next batch,
+        // after the popover-close diff has already been sent to the browser.
+    }
+
+
     private void SetMode(string filterSnippet)
     {
-        // Remove existing latest/offset/timestamp terms, append the new snippet
         var cleaned = RemoveKafkaSeekTerms(_filterText);
         _filterText = string.IsNullOrWhiteSpace(filterSnippet)
             ? cleaned.Trim()
@@ -362,9 +393,8 @@
 
     private async Task ToggleStats()
     {
-        _showStats = !_showStats;
-        if (_showStats && _stats.Count == 0)
-            await LoadStatsAsync();
+        _showStats = true;
+        await LoadStatsAsync();
     }
 
     private async Task LoadStatsAsync()
@@ -380,8 +410,9 @@
         finally { _statsLoading = false; StateHasChanged(); }
     }
 
-    private void AppendPartitionFilter(int partition)
+    private void ApplyPartitionFilter(int partition)
     {
+        _showStats = false;
         var cleaned = RemoveKafkaSeekTerms(_filterText).Replace($"partition:{partition}", "").Trim();
         _filterText = (cleaned + $" partition:{partition}").Trim();
         _filterParseError = null;
@@ -425,14 +456,28 @@
 
     // ── Row selection ─────────────────────────────────────────────────────────
 
-    private void OnRowSelected(KafkaMessage? msg)
+    private void OnRowClick(TableRowClickEventArgs<KafkaMessage> args)
     {
-        _selected  = ReferenceEquals(_selected, msg) ? null : msg;
+        _selected  = ReferenceEquals(_selected, args.Item) ? null : args.Item;
         _jsonDirty = _selected is not null;
     }
 
+    private void OnRowSelected(KafkaMessage? msg) { } // handled by OnRowClick
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_applySnippet)
+        {
+            _applySnippet = false;
+            var cleaned = RemoveKafkaSeekTerms(_filterText);
+            _filterText = string.IsNullOrWhiteSpace(_pendingSnippet)
+                ? cleaned.Trim()
+                : (cleaned.Trim() + " " + _pendingSnippet).Trim();
+            _filterParseError = null;
+            _pendingSnippet   = "";
+            await InvokeAsync(StateHasChanged);
+        }
+
         if (_jsonDirty && _selected is not null)
         {
             _jsonDirty = false;
