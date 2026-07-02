@@ -51,6 +51,8 @@
                       Height="100%"
                       SelectedItem="_selected"
                       SelectedItemChanged="OnRowSelected"
+                      RowClassFunc="@((doc, _) => ReferenceEquals(doc, _selected) ? "bm-row-selected" : "")"
+                      OnRowClick="OnRowClick"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
                     <MudTh Style="white-space:nowrap; cursor:pointer;" @onclick='@(() => SetSort("_id"))'>_id@(SortIcon("_id"))</MudTh>
@@ -213,11 +215,13 @@
     private void OnPageChanged(int p) { _page = p; _ = LoadAsync(); }
     private void OnPageSizeChanged(int s) { _pageSize = s; _page = 1; _ = LoadAsync(); }
 
-    private void OnRowSelected(MongoDocument? doc)
+    private void OnRowClick(TableRowClickEventArgs<MongoDocument> args)
     {
-        _selected  = ReferenceEquals(_selected, doc) ? null : doc;
+        _selected  = ReferenceEquals(_selected, args.Item) ? null : args.Item;
         _jsonDirty = _selected is not null;
     }
+
+    private void OnRowSelected(MongoDocument? doc) { } // handled by OnRowClick
 
     private async Task OnResizerMouseDown(MouseEventArgs e)
     {

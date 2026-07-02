@@ -22,7 +22,7 @@
         try
         {
             // Importing app.js ensures bmClientDiag is defined before we call it.
-            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
             _selfRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("bmClientDiag.start", _selfRef);
             Logger.LogInformation("Client diagnostics monitor started");
@@ -49,7 +49,7 @@
     [JSInvokable]
     public void OnLongTask(int durationMs, string attribution)
     {
-        Logger.LogWarning(
+        Logger.LogDebug(
             "client-diag | long-task blocked={Duration}ms | script={Attribution}",
             durationMs, attribution);
     }
