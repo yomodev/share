@@ -3,7 +3,6 @@
 @using NxtUI.Configuration
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@using NxtUI.Filtering
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IRunService RunService
@@ -149,17 +148,7 @@
         <div class="bm-memory-header-left">
             <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
-            @if (_recent.Count > 0)
-            {
-                <span class="bm-muted" style="font-size:11px;margin-left:6px;">(@_recent.Count)</span>
-            }
         </div>
-        <FilterBox Value="@_runFilterText"
-                   OnFilterChanged="OnRunFilterChanged"
-                   ParseError="@_runFilterError"
-                   Placeholder="name: type: status:running start:>=-7d"
-                   Class="bm-home-run-filter"
-                   FieldHints="@_runFieldHints" />
         <MudButton Variant="Variant.Text" Size="Size.Small"
                    StartIcon="@Icons.Material.Outlined.OpenInNew"
                    OnClick="OpenRunsDashboard"
@@ -167,6 +156,7 @@
             View All
         </MudButton>
     </div>
+
     <MudPaper Elevation="0" Class="bm-mini-summary">
 
         <MudTable T="RunSummary"
@@ -218,24 +208,6 @@
     // Batch state
     private List<RunSummary> _recent = new();
 
-    // Run filter
-    private string      _runFilterText  = "";
-    private string?     _runFilterError = null;
-    private FilterNode? _runFilterAst   = null;
-
-    private static readonly FilterParser _runParser =
-        new(["RunId", "Name", "Description"]);
-
-    private static readonly (string Aliases, string Label)[] _runFieldHints =
-    [
-        ("name",              "name:Batch*  /  name:MyBatch"),
-        ("type / run",        "type:FullLoad  /  run:abc123"),
-        ("status",            "status:running  /  status:completed  /  status:failed"),
-        ("start / started",   "start:>=-7d  /  start:2024-01-01..2024-02-01"),
-        ("end / finish",      "end:>=2024-01-01  /  end:null"),
-        ("desc",              "desc:keyword — search in description"),
-    ];
-
     // Health state
     private KafkaHealth? _kafkaHealth = null;
     private MongoHealth? _mongoHealth = null;
@@ -285,11 +257,8 @@
     {
         try
         {
-            var cfg    = RunsOpts.Value;
-            var filter = new RunFilter { FilterAst = _runFilterAst };
-            var runs   = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, cfg.PageSize, filter, _cts.Token);
-            _recent = runs;
+            _recent = await RunService.GetRunsAsync(
+                EnvService.SelectedId, DateTime.UtcNow, 5, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -310,25 +279,6 @@
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Logger.LogError(ex, "Runs polling failed"); }
         }
-    }
-
-    private void OnRunFilterChanged(string text)
-    {
-        _runFilterText  = text;
-        _runFilterError = null;
-        _runFilterAst   = null;
-
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            try   { _runFilterAst = _runParser.Parse(text); }
-            catch (Exception ex) { _runFilterError = ex.Message; }
-        }
-
-        _ = InvokeAsync(async () =>
-        {
-            await LoadRunsAsync();
-            StateHasChanged();
-        });
     }
 
     // ── Health ────────────────────────────────────────────────────────────

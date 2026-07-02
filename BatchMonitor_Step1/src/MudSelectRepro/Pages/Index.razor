@@ -60,11 +60,11 @@
 
     protected override void OnInitialized()
     {
-        _timer = new Timer(_ =>
-        {
-            if (_timerEnabled)
-                InvokeAsync(() => { _renders++; StateHasChanged(); });
-        }, null, 200, 200);
+       //_timer = new Timer(_ =>
+       //{
+       //    if (_timerEnabled)
+       //        InvokeAsync(() => { _renders++; StateHasChanged(); });
+       //}, null, 200, 200);
     }
 
     public void Dispose() => _timer?.Dispose();

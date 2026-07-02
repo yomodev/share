@@ -164,18 +164,22 @@
     private int _page     = 1;
     private int _pageSize = 25;
     private Result<List<RunSummary>> _result;
-    private string  _filterText       = string.Empty;
-    private string? _filterParseError = null;
+    private string      _filterText       = string.Empty;
+    private string?     _filterParseError = null;
+    private FilterNode? _filterAst        = null;
 
     private static readonly string[] RunSearchableFields = ["Name", "RunId", "Type", "Status"];
     private static readonly FilterParser RunFilterParser   = new(RunSearchableFields);
 
     private static readonly (string Aliases, string Label)[] _runFieldHints =
     [
-        ("name", "run name"),
-        ("run / runid",     "run identifier"),
-        ("type",            "run type"),
-        ("status",          "Running / Completed / Failed"),
+        ("name",                        "run name"),
+        ("run / runid",                 "run identifier"),
+        ("type",                        "run type"),
+        ("status",                      "Running / Completed / Failed"),
+        ("start / started",             "start time"),
+        ("end / ended / finish",        "end time"),
+        ("desc / description",          "description"),
     ];
 
     private List<RunSummary> _all      = new();
@@ -195,7 +199,9 @@
         try
         {
             _all = await RunService.GetRunsAsync(
-                Environment, DateTime.UtcNow, 200, ct: _cts.Token);
+                Environment, DateTime.UtcNow, 200,
+                filter: new RunFilter { FilterAst = _filterAst },
+                ct: _cts.Token);
             ApplyFilter();
             _result = Result<List<RunSummary>>.Ok(_all);
         }
@@ -217,6 +223,8 @@
             try   { node = RunFilterParser.Parse(text, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
+
+        _filterAst = node;
 
         _filtered = node is null
             ? _all
@@ -240,6 +248,7 @@
     {
         _filterText       = string.Empty;
         _filterParseError = null;
+        _filterAst        = null;
         await LoadAsync();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }
