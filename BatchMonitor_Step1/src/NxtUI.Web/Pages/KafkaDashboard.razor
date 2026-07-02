@@ -7,6 +7,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<KafkaDashboard> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
@@ -444,7 +445,7 @@
         {
             try
             {
-                node = (_viewMode == KafkaView.Topics ? TopicParser : GroupParser).Parse(text);
+                node = (_viewMode == KafkaView.Topics ? TopicParser : GroupParser).Parse(text, DtSvc.UseUtc);
             }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }

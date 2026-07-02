@@ -258,7 +258,7 @@ public class MockMongoService : IMongoService
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool useUtc = true)
     {
         var colMeta  = _collections.TryGetValue(database, out var cols)
             ? cols.FirstOrDefault(c => c.Name == collection) : null;

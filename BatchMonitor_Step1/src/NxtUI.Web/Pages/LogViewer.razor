@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<LogViewer> Logger
+@inject IConfiguration Config
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -341,7 +342,8 @@
         if (_rawContent is null && _localKey is null) return;
         if (!_rendered) return;
 
-        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap };
+        var formats = Config.GetSection("Logs:Formats").Get<string[]>() ?? [];
+        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap, formats };
         if (_localKey is not null)
         {
             await _viewport.RenderLocalFileAsync(_localKey, opts);

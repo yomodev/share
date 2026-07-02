@@ -21,7 +21,7 @@ public interface IMongoReader
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default, bool useUtc = true);
     Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default);
 }
 

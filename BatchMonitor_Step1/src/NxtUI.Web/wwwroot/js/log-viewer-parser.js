@@ -1,13 +1,16 @@
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
-// Log format:  timestamp|level|host|pid|threadId|message|caller[|extra1|extra2|...]
-//   • Fields 0-6 are fixed-position; caller is always at index 6.
-//   • Any pipe-delimited fields beyond index 6 are captured as `extras: string[]`.
-//   • Lines that do NOT start with a timestamp are continuations of the previous entry
-//     (stack traces, exception detail lines, etc.)
+// Supports two parsing modes:
+//   1. Legacy (no formats supplied): fixed-position pipe-delimited format
+//      timestamp|level|host|pid|threadId|message|caller[|extra1|...]
+//   2. Configurable (formats array supplied): each format string uses placeholders
+//      {timestamp}, {level}, {host}, {pid}, {thread}, {message}, {caller},
+//      {*} (anything on the line, non-capturing), {$} (end of line), {newline}
+//      The best matching format is auto-detected from the first lines.
+//      If no format matches, every line is treated as plain text.
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number, isPlainText?:boolean }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -16,52 +19,209 @@ export function isTimestampLine(line) {
     return TIMESTAMP_RE.test(line);
 }
 
-/**
- * Parse raw log text into an array of structured entries.
- * Multi-line continuation lines (no leading timestamp) are attached
- * to the preceding entry's `continuations` array.
- */
-export function parseLog(rawText) {
-    if (!rawText) return [];
+// ── Configurable format compiler ─────────────────────────────────────────────
 
+/**
+ * Compile a placeholder format string into a named-capture regex.
+ * Returns a compiled format object, or null if the string is invalid/trivial.
+ * @param {string} formatStr
+ * @returns {{ regex: RegExp, fieldNames: string[], hasNewline: boolean, formatStr: string } | null}
+ */
+export function compileFormat(formatStr) {
+    if (!formatStr) return null;
+
+    // Tokenize: split into placeholders and literals
+    const tokens = [];
+    const tokenRe = /\{([^}]+)\}/g;
+    let last = 0, m;
+    while ((m = tokenRe.exec(formatStr)) !== null) {
+        if (m.index > last) tokens.push({ type: 'lit', val: formatStr.slice(last, m.index) });
+        tokens.push({ type: 'ph', name: m[1] });
+        last = m.index + m[0].length;
+    }
+    if (last < formatStr.length) tokens.push({ type: 'lit', val: formatStr.slice(last) });
+
+    const CAPTURE = new Set(['timestamp', 'level', 'host', 'pid', 'thread', 'message', 'caller']);
+    const fieldNames = [];
+    let pattern = '^';
+    let hasNewline = false;
+
+    for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (tok.type === 'lit') {
+            pattern += escapeRegex(tok.val);
+            continue;
+        }
+        const name = tok.name;
+        if (name === 'newline') { pattern += '\\n'; hasNewline = true; continue; }
+        if (name === '$')       { pattern += '(?=$|\\n)'; continue; }
+        if (name === '*')       { pattern += '[^\\n]*'; continue; }
+
+        // Determine stopper based on what follows this field
+        const next = tokens[i + 1];
+        let stopper;
+        if (!next) {
+            stopper = '[^\\n]*';  // last token: greedy to EOL
+        } else if (next.type === 'ph') {
+            if (next.name === '$' || next.name === '*' || next.name === 'newline') {
+                stopper = '[^\\n]*';  // before EOL marker: greedy
+            } else {
+                stopper = '[^\\n]*?'; // before another capture: non-greedy
+            }
+        } else {
+            // Next is a literal — stop before its first character
+            const fc = next.val[0];
+            const fcEsc = (fc === ']' || fc === '\\' || fc === '^' || fc === '-') ? ('\\' + fc) : fc;
+            stopper = `[^\\n${fcEsc}]*`;
+        }
+
+        if (CAPTURE.has(name)) {
+            pattern += `(?<${name}>${stopper})`;
+            fieldNames.push(name);
+        } else {
+            pattern += `(?:${stopper})`;
+        }
+    }
+
+    if (fieldNames.length < 2) return null; // too few fields to be useful
+
+    return { regex: new RegExp(pattern, 'gm'), fieldNames, hasNewline, formatStr };
+}
+
+/**
+ * Detect the best matching format for rawText by trying each compiled format.
+ * Returns the first format that matches at least 3 times in the first 10 KB,
+ * or null (plain text fallback).
+ * @param {string} rawText
+ * @param {Array} compiledFormats
+ * @returns {object|null}
+ */
+export function detectFormat(rawText, compiledFormats) {
+    if (!compiledFormats || compiledFormats.length === 0) return null;
+    const sample = rawText.length > 10000 ? rawText.slice(0, 10000) : rawText;
+    for (const fmt of compiledFormats) {
+        const re = new RegExp(fmt.regex.source, fmt.regex.flags);
+        re.lastIndex = 0;
+        let matches = 0;
+        let hit;
+        while ((hit = re.exec(sample)) !== null) {
+            if (hit[0] === '') { re.lastIndex++; continue; }
+            if (++matches >= 3) return fmt;
+        }
+    }
+    return null;
+}
+
+// ── Format-driven parsing ────────────────────────────────────────────────────
+
+/**
+ * Parse rawText using a pre-detected format (skips detection).
+ * Pass detectedFormat = null for plain-text mode.
+ * Used by appendRaw to continue with the same format as the initial render.
+ * @param {string} rawText
+ * @param {object|null} detectedFormat
+ * @returns {LogEntry[]}
+ */
+export function parseMore(rawText, detectedFormat) {
+    if (!rawText) return [];
+    return detectedFormat ? parseWithFormat(rawText, detectedFormat) : parsePlainText(rawText);
+}
+
+function parsePlainText(rawText) {
     const lines = rawText.split('\n');
     const entries = [];
-    let current = null;
-
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        // Skip a single trailing empty line (common at end of file)
         if (line === '' && i === lines.length - 1) continue;
+        entries.push({
+            lineIndex: i, timestamp: '', level: '', host: '',
+            pid: 0, threadId: 0, message: line, caller: '',
+            extras: [], continuations: [], displayLineCount: 1,
+            isPlainText: true,
+        });
+    }
+    return entries;
+}
 
-        if (TIMESTAMP_RE.test(line)) {
-            current = parseLine(line, i);
-            entries.push(current);
-        } else if (current !== null) {
-            current.continuations.push(line);
-            current.displayLineCount++;
+function parseWithFormat(rawText, fmt) {
+    const re = new RegExp(fmt.regex.source, fmt.regex.flags);
+    re.lastIndex = 0;
+    const entries = [];
+    let lineIndex = 0;
+    let prevEnd   = 0;
+    let m;
+
+    while ((m = re.exec(rawText)) !== null) {
+        if (m[0] === '') { re.lastIndex++; continue; }
+
+        const g = m.groups ?? {};
+
+        // Count newlines in gap between previous match end and this match start
+        const gap = rawText.slice(prevEnd, m.index);
+        const gapNewlines = countNewlines(gap);
+        lineIndex += gapNewlines;
+
+        // Gap content (continuation lines of the previous entry)
+        if (gap.trim() && entries.length > 0) {
+            const contLines = gap.split('\n').filter(l => l.length > 0);
+            const last = entries[entries.length - 1];
+            last.continuations.push(...contLines);
+            last.displayLineCount += contLines.length;
         }
-        // Lines before any entry (pre-header noise) are silently discarded
+
+        const matchNewlines = countNewlines(m[0]);
+
+        entries.push({
+            lineIndex,
+            timestamp: (g.timestamp ?? '').trim(),
+            level:     (g.level     ?? '').trim(),
+            host:      g.host    ?? '',
+            pid:       parseInt(g.pid,    10) || 0,
+            threadId:  parseInt(g.thread, 10) || 0,
+            message:   g.message ?? '',
+            caller:    g.caller  ?? '',
+            extras:    [],
+            continuations:    [],
+            displayLineCount: 1 + matchNewlines,
+            isPlainText:      false,
+        });
+
+        lineIndex += matchNewlines;
+        prevEnd    = re.lastIndex;
+    }
+
+    // Remaining text after last match → continuation of last entry
+    if (prevEnd < rawText.length && entries.length > 0) {
+        const tail = rawText.slice(prevEnd);
+        const tailLines = tail.split('\n').filter(l => l.length > 0);
+        const last = entries[entries.length - 1];
+        last.continuations.push(...tailLines);
+        last.displayLineCount += tailLines.length;
     }
 
     return entries;
 }
 
-function parseLine(line, lineIndex) {
-    const parts = line.split('|');
+function countNewlines(text) {
+    let n = 0;
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '\n') n++;
+    }
+    return n;
+}
 
-    // Fixed positions: 0=timestamp, 1=level, 2=host, 3=pid, 4=threadId, 5=message, 6=caller
-    // Parts beyond index 6 are unknown extra fields, captured as extras[].
-    // Fewer than 7 parts: be lenient and fill what we can.
-    const timestamp = parts[0] ?? '';
-    const level     = parts[1] ?? '';
-    const host      = parts[2] ?? '';
-    const pid       = parseInt(parts[3], 10) || 0;
-    const threadId  = parts.length > 5 ? (parseInt(parts[4], 10) || 0) : 0;
-    const message   = parts[5] ?? parts[4] ?? '';
-    const caller    = parts[6] ?? '';
-    const extras    = parts.length > 7 ? parts.slice(7) : [];
-
-    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, extras, continuations: [], displayLineCount: 1 };
+/**
+ * Parse raw log text into an array of structured entries.
+ * Auto-detects the best matching format from compiledFormats and falls back
+ * to plain text if none matches (every line becomes its own entry).
+ * @param {string} rawText
+ * @param {Array} [compiledFormats]
+ * @returns {LogEntry[]}
+ */
+export function parseLog(rawText, compiledFormats) {
+    if (!rawText) return [];
+    const fmt = detectFormat(rawText, compiledFormats ?? []);
+    return fmt ? parseWithFormat(rawText, fmt) : parsePlainText(rawText);
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -77,12 +237,11 @@ export function buildRegex(term, { isRegex = false, caseSensitive = false } = {}
     if (!term) return null;
     const flags = caseSensitive ? 'g' : 'gi';
     const pattern = isRegex ? term : escapeRegex(term);
-    return new RegExp(pattern, flags); // throws SyntaxError on invalid regex
+    return new RegExp(pattern, flags);
 }
 
 /**
  * Find all entry indices whose searchable text matches `re`.
- * Searches: level, host, message, caller, and all continuation lines.
  * @param {LogEntry[]} entries
  * @param {RegExp} re
  * @returns {number[]}
@@ -97,6 +256,10 @@ export function findMatches(entries, re) {
 }
 
 function entrySearchText(entry) {
+    if (entry.isPlainText) {
+        const base = entry.message;
+        return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
+    }
     const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`
         + (entry.extras.length ? '|' + entry.extras.join('|') : '');
     return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
@@ -107,7 +270,6 @@ function entrySearchText(entry) {
 /**
  * Return an HTML string where every occurrence of `re` in `text` is
  * wrapped with <mark class="lv-hl">…</mark>.
- * Input text is HTML-escaped before matching.
  * @param {string} text
  * @param {RegExp | null} re
  * @returns {string}
@@ -126,7 +288,7 @@ export function highlightText(text, re) {
         result += safe.slice(lastEnd, m.index);
         result += `<mark class="lv-hl">${m[0]}</mark>`;
         lastEnd = cloned.lastIndex;
-        if (m[0] === '') { cloned.lastIndex++; } // prevent infinite loop on zero-width match
+        if (m[0] === '') { cloned.lastIndex++; }
     }
     result += safe.slice(lastEnd);
     return result;

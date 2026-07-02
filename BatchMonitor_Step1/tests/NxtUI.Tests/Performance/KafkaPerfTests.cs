@@ -92,11 +92,11 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
-            await foreach (var msg in kafka.TailTopicAsync(env, topic, maxMessages: 10, cts.Token))
+            await foreach (var msg in kafka.TailTopicAsync(env, topic, new KafkaSeekDirective { Latest = 10 }, cts.Token))
             {
                 messages.Add(msg);
                 out_.WriteLine($"  [{sw.Elapsed:c}] partition={msg.Partition} offset={msg.Offset} " +
-                               $"key={msg.Key ?? "(null)"} valueLen={msg.Value.Length}");
+                               $"key={msg.Key ?? "(null)"} type={msg.PayloadType} size={msg.RawSizeBytes}");
             }
         }
         catch (OperationCanceledException)

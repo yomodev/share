@@ -307,6 +307,16 @@
         };
         // kept as alias so any older call sites still work
         window.bmDownloadFile = window.bmSaveFile;
+
+        // Download raw bytes (Uint8Array / byte[]) received from Blazor
+        window.bmSaveBytes = function(filename, bytes, mimeType) {
+            const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
+            const url  = URL.createObjectURL(blob);
+            const a    = Object.assign(document.createElement('a'), { href: url, download: filename, style: 'display:none' });
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+        };
     </script>
 
     <!-- Prevent text selection on double-click inside tables (dblclick triggers row actions) -->

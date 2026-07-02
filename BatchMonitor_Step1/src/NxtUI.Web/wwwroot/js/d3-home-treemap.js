@@ -121,7 +121,7 @@ window.homeMemoryTreemap = (function () {
                     tip.style('display', 'none');
                     const st = _state.get(container);
                     if (st?.leafClickRef && d.pid != null)
-                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.pid).catch(() => {});
+                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.name + '|' + d.pid).catch(() => {});
                 })
                 .on('mousemove', event => {
                     const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';

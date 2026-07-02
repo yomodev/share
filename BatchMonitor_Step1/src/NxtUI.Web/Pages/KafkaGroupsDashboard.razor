@@ -4,6 +4,7 @@
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
 @inject ILogger<KafkaGroupsDashboard> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -187,7 +188,7 @@
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = Parser.Parse(text); }
+            try   { node = Parser.Parse(text, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
         _filtered = node is null

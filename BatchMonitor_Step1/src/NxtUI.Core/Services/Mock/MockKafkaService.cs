@@ -167,46 +167,85 @@ public class MockKafkaService : IKafkaService
     ];
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
-        string env, string topicName, int maxMessages,
+        string env, string topicName, KafkaSeekDirective directive,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        bool live    = maxMessages <= 0;
-        var topic    = _topics.FirstOrDefault(t => t.Name == topicName);
-        var parts    = topic?.PartitionCount ?? 3;
-        var baseOff  = _rng.NextInt64(1_000, 5_000_000);
-        var cap      = live ? int.MaxValue : maxMessages;
-        // For bounded fetch: start messages in the past; for live: start near now
-        var baseTs   = live ? DateTime.UtcNow.AddSeconds(-2) : DateTime.UtcNow.AddMinutes(-maxMessages * 0.4);
+        var topic   = _topics.FirstOrDefault(t => t.Name == topicName);
+        var parts   = topic?.PartitionCount ?? 3;
+        var baseOff = directive.OffsetFrom ?? _rng.NextInt64(1_000, 5_000_000);
+        var live    = !directive.OffsetTo.HasValue && !directive.TimestampTo.HasValue && !directive.Latest.HasValue;
+        var cap     = directive.Latest ?? (live ? 2_000 : 500);
+        var baseTs  = directive.TimestampFrom ?? (live ? DateTime.UtcNow.AddSeconds(-2) : DateTime.UtcNow.AddMinutes(-cap * 0.4));
 
         for (int i = 0; i < cap; i++)
         {
             ct.ThrowIfCancellationRequested();
 
-            var key   = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
-            var tmpl  = _valueTemplates[_rng.Next(_valueTemplates.Length)];
-            var value = tmpl
+            var partition = directive.Partitions is { Count: > 0 }
+                ? directive.Partitions.ElementAt(_rng.Next(directive.Partitions.Count))
+                : _rng.Next(0, parts);
+
+            var key  = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
+            var json = _valueTemplates[_rng.Next(_valueTemplates.Length)]
                 .Replace("{key}",    key)
                 .Replace("{n}",      (baseOff + i).ToString())
                 .Replace("{amount}", _rng.Next(10, 9999).ToString())
                 .Replace("{ts}",     (live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2)).ToString("o"));
 
+            var offset = baseOff + i;
+            if (directive.OffsetTo.HasValue && offset > directive.OffsetTo.Value) yield break;
+
+            var ts = live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2);
+            if (directive.TimestampTo.HasValue && ts > directive.TimestampTo.Value) yield break;
+
             yield return new KafkaMessage
             {
-                Offset    = baseOff + i,
-                Partition = _rng.Next(0, parts),
-                Key       = key,
-                Value     = value,
-                Timestamp = live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2),
-                Headers   = i % 4 == 0
+                Offset       = offset,
+                Partition    = partition,
+                Key          = key,
+                Timestamp    = ts,
+                JsonPayload  = json,
+                PayloadType  = topicName.Contains("order")   ? "OrderEvent"   :
+                               topicName.Contains("payment") ? "PaymentEvent" : "ProtoMsg",
+                RawSizeBytes = json.Length,
+                Headers      = i % 4 == 0
                     ? new() { ["correlation-id"] = Guid.NewGuid().ToString("N")[..8], ["source"] = "mock" }
                     : new(),
             };
 
-            // Live mode: realistic inter-message delay; bounded: fast burst with small pauses
             if (live)
                 await Task.Delay(_rng.Next(400, 1200), ct);
             else if (i % 10 == 9)
                 await Task.Delay(20, ct);
         }
+    }
+
+    public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
+        string env, string topicName, CancellationToken ct = default)
+    {
+        var topic   = _topics.FirstOrDefault(t => t.Name == topicName);
+        var parts   = topic?.PartitionCount ?? 3;
+        var perPart = (topic?.MessageCount ?? 10_000) / parts;
+        var baseTs  = DateTime.UtcNow.AddDays(-7);
+
+        IReadOnlyList<KafkaPartitionStats> result = Enumerable.Range(0, parts)
+            .Select(p => new KafkaPartitionStats
+            {
+                Partition             = p,
+                LowWatermark          = 0,
+                HighWatermark         = perPart + _rng.Next(-100, 100),
+                FirstMessageTimestamp = baseTs.AddMinutes(p * 5),
+                LastMessageTimestamp  = DateTime.UtcNow.AddSeconds(-_rng.Next(0, 60)),
+            }).ToList();
+
+        return Task.FromResult(result);
+    }
+
+    public Task<byte[]?> FetchRawBytesAsync(
+        string env, string topicName, int partition, long offset, CancellationToken ct = default)
+    {
+        var stub = System.Text.Encoding.UTF8.GetBytes(
+            $"{{\"mock\":true,\"topic\":\"{topicName}\",\"partition\":{partition},\"offset\":{offset}}}");
+        return Task.FromResult<byte[]?>(stub);
     }
 }

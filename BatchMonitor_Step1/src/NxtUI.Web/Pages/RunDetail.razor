@@ -5,6 +5,7 @@
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 @code {
@@ -202,8 +203,7 @@
     private string FormatSliderTime()
     {
         if (!IsReplay || _replayTimestamp is null) return "LIVE";
-        var ts = _replayTimestamp.Value.ToLocalTime();
-        return ts.ToString("HH:mm:ss");
+        return DtSvc.Format(_replayTimestamp.Value, "HH:mm:ss");
     }
 
     // ── Top bar helpers ────────────────────────────────────────────────────
@@ -336,7 +336,7 @@
                     </div>
                     <div class="bm-details-row">
                         <div class="bm-details-key">Start</div>
-                        <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
+                        <div class="bm-details-value">@DtSvc.Format(_details.Start, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix</div>
                     </div>
                     <div class="bm-details-row">
                         <div class="bm-details-key">Duration</div>
@@ -391,7 +391,7 @@
                 </MudTooltip>
             }
 
-            <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : _sliderMin.ToLocalTime().ToString("HH:mm:ss"))</span>
+            <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : DtSvc.Format(_sliderMin, "HH:mm:ss"))</span>
 
             <MudSlider Class="bm-timeline-slider"
                        Min="0.0" Max="@SliderSteps"
@@ -400,7 +400,7 @@
                        ValueChanged="@((double v) => OnSliderChanged(v))"
                        Disabled="@(_sliderMax <= _sliderMin)" />
 
-            <span class="bm-slider-label bm-muted">@(_sliderMax == default ? "" : _sliderMax.ToLocalTime().ToString("HH:mm:ss"))</span>
+            <span class="bm-slider-label bm-muted">@(_sliderMax == default ? "" : DtSvc.Format(_sliderMax, "HH:mm:ss"))</span>
 
             <span class="bm-slider-count bm-muted">@_eventCount events</span>
         </div>

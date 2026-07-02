@@ -10279,7 +10279,7 @@ LENGTH 625
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 1863
+LENGTH 2108
 {
   "AllowedHosts": "*",
 
@@ -10303,6 +10303,11 @@ LENGTH 1863
   },
 
   "Logs": {
+    "Formats": [
+      "{timestamp}|{level}|{host}|{pid}|{thread}|{message}|{caller}{*}{$}",
+      "{timestamp}|{level}|{thread}|{message}|{caller}{*}{$}",
+      "{timestamp}{newline}{host}|{pid}|{thread}|{message}|{caller}|{*}{newline}"
+    ],
     "ServiceTemplates": [
       "\\\\{server}\\Shared\\bau\\logs\\{date}\\Services\\{service}_{env}\\{server}_*_Pid_{pid}"
     ],
@@ -10340,7 +10345,7 @@ LENGTH 1863
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 2942
+LENGTH 2933
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
   ANSI color codes used below (&#27; = ESC):
@@ -10371,7 +10376,7 @@ LENGTH 2942
 
   <targets>
     <target xsi:type="Console" name="console"
-            layout="${clr_time}${date:format=HH\:mm\:ss.fff}${clr_reset} ${clr_tid}[${threadid:padding=3}]${clr_reset} ${clr_level}${pad:padding=-5:inner=${level:uppercase=true}}${clr_reset} ${clr_caller}${callsite:className=false:methodName=true:fileName=false}${clr_reset} ${message} ${exception:format=tostring}" />
+            layout="${clr_time}${date:format=HH\:mm\:ss.fff}${clr_reset} ${clr_tid}[${threadid:padding=3}]${clr_reset} ${clr_level}${pad:padding=-5:inner=${level:uppercase=true}}${clr_reset} ${clr_caller}${logger:shortName=true}${clr_reset} ${message} ${exception:format=tostring}" />
 
     <!-- Diagnostics monitor: plain-text rolling file, one per day, kept 14 days -->
     <target xsi:type="File" name="diag-file"
@@ -10383,7 +10388,7 @@ LENGTH 2942
             maxArchiveFiles="14"
             concurrentWrites="false"
             keepFileOpen="true"
-            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${message} ${exception:format=tostring}" />
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
   </targets>
 
   <rules>
@@ -10431,7 +10436,7 @@ LENGTH 697
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 14176
+LENGTH 14238
 using Microsoft.AspNetCore.SignalR;
 using MudBlazor.Services;
 using NLog;
@@ -10565,6 +10570,7 @@ public class Program
         builder.Services.AddScoped<EnvironmentSelectorService>();
         builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
+        builder.Services.AddScoped<DateTimeDisplayService>();
 
         builder.Services.AddHttpContextAccessor();
 
@@ -11227,7 +11233,7 @@ public static class FilterEvaluator
     }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 21277
+LENGTH 22537
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -11300,11 +11306,15 @@ public sealed class FilterParser
     }
 
     /// <summary>Parses <paramref name="input"/> and returns the AST root, or null for empty input.</summary>
-    public FilterNode? Parse(string input)
+    /// <param name="useUtc">
+    /// When false, date/time literals without a Z suffix are treated as server-local time
+    /// and converted to UTC for comparison. Literals ending in Z are always UTC.
+    /// </param>
+    public FilterNode? Parse(string input, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
         var tokens = Tokenize(input);
-        var ctx    = new ParseContext(tokens);
+        var ctx    = new ParseContext(tokens, useUtc);
         var node   = ParseOr(ctx);
         return node;
     }
@@ -11416,9 +11426,10 @@ public sealed class FilterParser
     // PARSE CONTEXT
     // ═══════════════════════════════════════════════════════════════════════
 
-    private sealed class ParseContext(List<Token> tokens)
+    private sealed class ParseContext(List<Token> tokens, bool useUtc = true)
     {
         private int _pos;
+        public bool UseUtc => useUtc;
         public Token Current => tokens[_pos];
         public Token Peek(int offset = 1) =>
             _pos + offset < tokens.Count ? tokens[_pos + offset] : tokens[^1];
@@ -11637,13 +11648,13 @@ public sealed class FilterParser
         if (tok.Kind == TK.Word)
         {
             ctx.Consume();
-            return (InterpretWord(tok.Text), false);
+            return (InterpretWord(tok.Text, ctx.UseUtc), false);
         }
 
         return (null, false);
     }
 
-    private static FilterValue InterpretWord(string text)
+    private static FilterValue InterpretWord(string text, bool useUtc = true)
     {
         // null keyword
         if (text.Equals("null", StringComparison.OrdinalIgnoreCase))
@@ -11654,7 +11665,7 @@ public sealed class FilterParser
             return new NumberValue(num);
 
         // Absolute date / relative offset (includes hh:mm → today + time)
-        if (TryParseDate(text, out var dt))
+        if (TryParseDate(text, useUtc, out var dt))
             return new DateValue(dt);
 
         // String (glob or plain)
@@ -11693,27 +11704,33 @@ public sealed class FilterParser
         new(@"^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(:\d{2})?)?z?$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static bool TryParseDate(string text, out DateTime result)
+    private static bool TryParseDate(string text, bool useUtc, out DateTime result)
     {
         result = default;
         var textLower = text.ToLowerInvariant();
 
-        // Named dates (z suffix is a no-op for now — server parser always uses UTC).
+        // Z suffix forces UTC interpretation regardless of the useUtc setting.
+        bool hasZ  = textLower.EndsWith('z');
+        bool asUtc = useUtc || hasZ;
+
+        // Named dates — "now" is always UTC; today/yesterday respect setting.
         switch (textLower)
         {
             case "now" or "nowz":
                 result = DateTime.UtcNow;
                 return true;
             case "today" or "todayz":
-                result = DateTime.UtcNow.Date;
+                result = asUtc ? DateTime.UtcNow.Date : DateTime.Today.ToUniversalTime();
                 return true;
             case "yesterday" or "yesterdayz":
-                result = DateTime.UtcNow.Date.AddDays(-1);
+                result = asUtc
+                    ? DateTime.UtcNow.Date.AddDays(-1)
+                    : DateTime.Today.AddDays(-1).ToUniversalTime();
                 return true;
         }
 
-        // Relative offset: -7d / -2h / -30m / -1w  → now − N  (real past timestamp)
-        //                   7d /  2h /  30m /  1w  → today + N (age-based comparison)
+        // Relative offset: -7d / -2h / -30m / -1w  → now − N  (always UTC-relative)
+        //                   7d /  2h /  30m /  1w  → today + N
         var relMatch = RelativeDate.Match(text);
         if (relMatch.Success)
         {
@@ -11733,41 +11750,59 @@ public sealed class FilterParser
             }
             else
             {
+                var todayBase = asUtc ? DateTime.UtcNow.Date : DateTime.Today.ToUniversalTime();
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
-                    "s" => DateTime.UtcNow.Date.AddSeconds(amount),
-                    "m" => DateTime.UtcNow.Date.AddMinutes(amount),
-                    "h" => DateTime.UtcNow.Date.AddHours(amount),
-                    "d" => DateTime.UtcNow.Date.AddDays(amount),
-                    "w" => DateTime.UtcNow.Date.AddDays(amount * 7),
-                    _   => DateTime.UtcNow.Date,
+                    "s" => todayBase.AddSeconds(amount),
+                    "m" => todayBase.AddMinutes(amount),
+                    "h" => todayBase.AddHours(amount),
+                    "d" => todayBase.AddDays(amount),
+                    "w" => todayBase.AddDays(amount * 7),
+                    _   => todayBase,
                 };
             }
             return true;
         }
 
-        // Time-only (hh:mm or hh:mm:ss) → today's date + that time
+        // Time-only (hh:mm or hh:mm:ss) — today's date at the given time.
+        // With Z suffix or UTC setting: today UTC. Without: today local → UTC.
         var todMatch = TimeOnly.Match(text);
         if (todMatch.Success && !text.StartsWith('-'))
         {
             int th = int.Parse(todMatch.Groups[1].Value);
             int tm = int.Parse(todMatch.Groups[2].Value);
             int ts = todMatch.Groups[3].Success ? int.Parse(todMatch.Groups[3].Value) : 0;
-            result = DateTime.UtcNow.Date.AddHours(th).AddMinutes(tm).AddSeconds(ts);
+            var todayBase = asUtc ? DateTime.UtcNow.Date : DateTime.Today;
+            result = todayBase.AddHours(th).AddMinutes(tm).AddSeconds(ts);
+            if (!asUtc) result = result.ToUniversalTime();
             return true;
         }
 
-        // ISO date (with or without time, with or without z)
+        // ISO date (with or without time, with or without z).
         var isoMatch = IsoDate.Match(text);
         if (isoMatch.Success)
         {
-            // Normalise: replace lowercase 't' separator and ensure 'Z' suffix for parsing.
-            var normalised = text.TrimEnd('z', 'Z').Replace('t', 'T') + "Z";
-            if (DateTime.TryParse(normalised,
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
-                    out result))
-                return true;
+            var bare = text.TrimEnd('z', 'Z').Replace('t', 'T');
+            if (asUtc)
+            {
+                if (DateTime.TryParse(bare + "Z",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                        out result))
+                    return true;
+            }
+            else
+            {
+                // Treat as server-local time, convert to UTC.
+                if (DateTime.TryParse(bare,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeLocal,
+                        out result))
+                {
+                    result = result.ToUniversalTime();
+                    return true;
+                }
+            }
         }
 
         return false;
@@ -12866,7 +12901,7 @@ public interface ILogViewerService
     (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
-LENGTH 2167
+LENGTH 2187
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -12890,7 +12925,7 @@ public interface IMongoReader
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default, bool useUtc = true);
     Task<MongoCollectionDetails> GetCollectionDetailsAsync(string env, string database, string collection, CancellationToken ct = default);
 }
 
@@ -13623,7 +13658,7 @@ LENGTH 2136
         try
         {
             // Importing app.js ensures bmClientDiag is defined before we call it.
-            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
             _selfRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("bmClientDiag.start", _selfRef);
             Logger.LogInformation("Client diagnostics monitor started");
@@ -14817,7 +14852,7 @@ LENGTH 6153
         await JS.InvokeVoidAsync("bmSetTheme", ThemeService.IsDark);
 
         if (!firstRender) return;
-        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+        _appModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
         _dotnetRef  = DotNetObjectReference.Create(this);
         // Always register watcher — SetSystemDark is a no-op when Mode != System
         var isDark  = await _appModule.InvokeAsync<bool>("watchSystemTheme", _dotnetRef);
@@ -14914,11 +14949,12 @@ LENGTH 6153
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 8297
+LENGTH 9055
 @namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
 @inject IJSRuntime JS
+@inject DateTimeDisplayService DtSvc
 @using Microsoft.JSInterop
 @implements IAsyncDisposable
 
@@ -14955,11 +14991,14 @@ LENGTH 8297
                             IsActive="@IsTabActive($"dashboard:runs:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateRunsDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.ListAlt"
                             Label="Batches"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:batches:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateBatchesDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Dns"
                             Label="Services"
@@ -14967,11 +15006,14 @@ LENGTH 8297
                             IsActive="@IsTabActive($"dashboard:services:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateServicesDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.AccountTree"
                             Label="Pipelines"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:pipelines:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreatePipelinesDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Stream"
                             Label="Kafka"
@@ -14985,11 +15027,23 @@ LENGTH 8297
                             IsActive="@IsTabActive($"dashboard:mongo:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateMongoDashboard(EnvService.SelectedId)))" />
 
+            @if (DtSvc.DevMode)
+            {
+            <SidebarNavItem Icon="@Icons.Material.Outlined.Computer"
+                            Label="Environment"
+                            IsOpen="@_drawerOpen"
+                            IsActive="@IsTabActive($"dashboard:environment:{EnvService.SelectedId}")"
+                            OnClick="@(() => Open(TabModel.CreateEnvironmentDashboard(EnvService.SelectedId)))" />
+            }
+
+            @if (DtSvc.DevMode)
+            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.Tune"
                             Label="Config"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:config:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateConfigDashboard(EnvService.SelectedId)))" />
+            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Article"
                             Label="Logs"
@@ -15057,12 +15111,13 @@ LENGTH 8297
     {
         TabService.OnChange += StateHasChanged;
         EnvService.OnChange += StateHasChanged;
+        DtSvc.OnChange      += StateHasChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
         var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
         if (stored is not null)
         {
@@ -15088,6 +15143,7 @@ LENGTH 8297
     {
         TabService.OnChange -= StateHasChanged;
         EnvService.OnChange -= StateHasChanged;
+        DtSvc.OnChange      -= StateHasChanged;
         if (_appModule is not null)
         {
             try { await _appModule.DisposeAsync(); }
@@ -15163,7 +15219,7 @@ LENGTH 4305
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
             try
             {
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
@@ -15317,7 +15373,7 @@ LENGTH 5013
         if (firstRender && _field is not null)
         {
             // Use requestAnimationFrame so focus runs after the dialog open animation.
-            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
             await appModule.InvokeVoidAsync("focusAfterFrame", _fieldRef);
             try { await appModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
@@ -15341,7 +15397,7 @@ LENGTH 5013
     }
 }
 FILE src/NxtUI.Web/Models/TabModel.cs
-LENGTH 12361
+LENGTH 12693
 namespace NxtUI.Web.Models;
 
 public enum TabType
@@ -15364,7 +15420,8 @@ public enum TabType
     LogViewer,
     LogWorkspace,
     FilterHelp,
-    MemoryGraph
+    MemoryGraph,
+    Environment
 }
 
 /// <summary>
@@ -15485,6 +15542,15 @@ public class TabModel
         Label       = "Log Browser",
         Environment = env,
         Icon        = MudBlazor.Icons.Material.Outlined.Article
+    };
+
+    public static TabModel CreateEnvironmentDashboard(string env) => new()
+    {
+        Id          = $"dashboard:environment:{env}",
+        Type        = TabType.Environment,
+        Label       = "Environment",
+        Environment = env,
+        Icon        = MudBlazor.Icons.Material.Outlined.Computer
     };
 
     public static TabModel CreateSettings() => new()
@@ -16077,6 +16143,331 @@ LENGTH 155
 @* Catch-all route — MainLayout renders all content via the tab system; this page has no body. *@
 @page "/"
 @page "/{**path}"
+FILE src/NxtUI.Web/Pages/EnvironmentPage.razor
+LENGTH 17333
+@namespace NxtUI.Web.Pages
+
+<div class="bm-page bm-env-page">
+
+    <div class="bm-env-grid">
+
+        <!-- ── LEFT COLUMN ──────────────────────────────────────────────── -->
+        <div class="bm-env-left">
+
+            <!-- Booking -->
+            <MudPaper Elevation="0" Class="bm-env-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.EventAvailable" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Environment Booking</span>
+                    <span class="bm-muted" style="font-size:11px;">@DateTime.Today.ToString("dddd, MMMM d")</span>
+                </div>
+
+                <div class="bm-env-booking-legend">
+                    <span class="bm-env-slot bm-env-slot-free bm-env-slot-demo">Free</span>
+                    <span class="bm-env-slot bm-env-slot-mine bm-env-slot-demo">Yours</span>
+                    <span class="bm-env-slot bm-env-slot-taken bm-env-slot-demo">Taken</span>
+                </div>
+
+                <div class="bm-env-timeline">
+                    @foreach (var slot in _slots)
+                    {
+                        <div class="bm-env-slot @SlotClass(slot)"
+                             title="@SlotTooltip(slot)"
+                             @onclick="@(() => ToggleSlot(slot))">
+                            @if (slot.Hour % 2 == 0 && slot.Minute == 0)
+                            {
+                                <span class="bm-env-slot-label">@slot.ToString("HH:mm")</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="bm-env-booking-actions">
+                    @if (_selectedSlots.Count > 0)
+                    {
+                        var first = _selectedSlots.Min();
+                        var last  = _selectedSlots.Max().AddMinutes(15);
+                        <span class="bm-muted" style="font-size:12px;">
+                            Selected: <strong>@first.ToString("HH:mm") – @last.ToString("HH:mm")</strong>
+                        </span>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="BookSelected">Book</MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Text"
+                                   OnClick="@(() => _selectedSlots.Clear())">Clear</MudButton>
+                    }
+                    else
+                    {
+                        <span class="bm-muted" style="font-size:12px;">Click slots to select a time range</span>
+                    }
+                </div>
+            </MudPaper>
+
+            <!-- Quick Links -->
+            <MudPaper Elevation="0" Class="bm-env-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.OpenInNew" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Quick Links</span>
+                </div>
+                <div class="bm-env-links-grid">
+                    @foreach (var link in _links)
+                    {
+                        <div class="bm-env-link-card" title="@link.Url">
+                            <MudIcon Icon="@link.Icon" Size="Size.Medium" Style="@($"color:{link.Color}")" />
+                            <span class="bm-env-link-label">@link.Label</span>
+                            <span class="bm-muted bm-env-link-desc">@link.Description</span>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+        </div>
+
+        <!-- ── RIGHT COLUMN ─────────────────────────────────────────────── -->
+        <div class="bm-env-right">
+
+            <!-- Components -->
+            <MudPaper Elevation="0" Class="bm-env-section bm-env-components-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.Extension" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Components</span>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Disabled="@(!_components.Any(c => c.Pending))"
+                               OnClick="ApplyComponents"
+                               Class="bm-env-apply-btn">Apply</MudButton>
+                </div>
+                <div class="bm-env-components-list">
+                    @foreach (var comp in _components)
+                    {
+                        <div class="bm-env-component-row">
+                            <MudCheckBox T="bool" Value="@comp.Selected"
+                                         ValueChanged="@(v => comp.Selected = v)"
+                                         Size="Size.Small"
+                                         Color="Color.Primary"
+                                         Disabled="@(comp.Status == CompStatus.Installing)" />
+                            <div class="bm-env-component-info">
+                                <span class="bm-env-component-name">@comp.Name</span>
+                                <span class="bm-muted bm-env-component-ver">@comp.Version</span>
+                            </div>
+                            <div class="bm-env-component-status">
+                                @switch (comp.Status)
+                                {
+                                    case CompStatus.Installed:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Installed</MudChip>
+                                        break;
+                                    case CompStatus.NotInstalled:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">Not installed</MudChip>
+                                        break;
+                                    case CompStatus.Installing:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                            Installing…
+                                        </MudChip>
+                                        break;
+                                    case CompStatus.Error:
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Text">Error</MudChip>
+                                        break;
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            <!-- Terminal -->
+            <MudPaper Elevation="0" Class="bm-env-section bm-env-terminal-section">
+                <div class="bm-env-section-header">
+                    <MudIcon Icon="@Icons.Material.Outlined.Terminal" Size="Size.Small" Class="bm-env-section-icon" />
+                    <span class="bm-env-section-title">Installation Log</span>
+                    <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep"
+                                   Size="Size.Small"
+                                   title="Clear"
+                                   OnClick="@(() => _termLines.Clear())" />
+                </div>
+                <div class="bm-env-terminal">
+                    @foreach (var line in _termLines)
+                    {
+                        <div class="bm-env-term-line @line.Css">@line.Text</div>
+                    }
+                    @if (!_termLines.Any())
+                    {
+                        <div class="bm-env-term-line bm-term-muted">Waiting for operations…</div>
+                    }
+                </div>
+            </MudPaper>
+
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Env { get; set; } = string.Empty;
+
+    // ── enums / models ──────────────────────────────────────────────────
+
+    private enum CompStatus { Installed, NotInstalled, Installing, Error }
+
+    private sealed class Component
+    {
+        public string     Name     { get; init; } = "";
+        public string     Version  { get; init; } = "";
+        public CompStatus Status   { get; set;  }
+        public bool       Selected { get; set;  }
+        public bool       Pending  => Selected != (Status == CompStatus.Installed);
+    }
+
+    private sealed class TermLine
+    {
+        public string Text { get; init; } = "";
+        public string Css  { get; init; } = "";
+    }
+
+    private sealed class QuickLink
+    {
+        public string Label       { get; init; } = "";
+        public string Description { get; init; } = "";
+        public string Url         { get; init; } = "#";
+        public string Icon        { get; init; } = Icons.Material.Outlined.Link;
+        public string Color       { get; init; } = "#888";
+    }
+
+    // ── state ────────────────────────────────────────────────────────────
+
+    private readonly List<DateTime> _slots        = [];
+    private readonly HashSet<DateTime> _selectedSlots = [];
+    private readonly HashSet<DateTime> _myBookings    = [];
+    private readonly Dictionary<DateTime, string> _otherBookings = [];
+
+    private readonly List<Component> _components = [];
+    private readonly List<TermLine>  _termLines  = [];
+    private readonly List<QuickLink> _links      = [];
+
+    // ── init ─────────────────────────────────────────────────────────────
+
+    protected override void OnInitialized()
+    {
+        // Time slots: 07:00 – 20:00 in 15-min increments
+        var day = DateTime.Today.AddHours(7);
+        while (day.Hour < 20)
+        {
+            _slots.Add(day);
+            day = day.AddMinutes(15);
+        }
+
+        // Mock other bookings
+        var taken = new[] { (9, 0), (9, 15), (9, 30), (11, 0), (11, 15), (14, 30), (14, 45), (15, 0) };
+        foreach (var (h, m) in taken)
+            _otherBookings[DateTime.Today.AddHours(h).AddMinutes(m)] = h < 12 ? "Alice" : "Bob";
+
+        // Mock my existing booking
+        _myBookings.Add(DateTime.Today.AddHours(13));
+        _myBookings.Add(DateTime.Today.AddHours(13).AddMinutes(15));
+        _myBookings.Add(DateTime.Today.AddHours(13).AddMinutes(30));
+
+        // Quick links
+        _links.AddRange([
+            new QuickLink { Label = "Grafana",  Description = "Metrics & dashboards", Icon = Icons.Material.Outlined.BarChart,     Color = "#f46800", Url = "http://grafana:3000" },
+            new QuickLink { Label = "Kibana",   Description = "Log explorer",          Icon = Icons.Material.Outlined.ManageSearch, Color = "#00bfb3", Url = "http://kibana:5601"  },
+            new QuickLink { Label = "Jenkins",  Description = "CI / CD pipelines",     Icon = Icons.Material.Outlined.Build,        Color = "#d33833", Url = "http://jenkins:8080" },
+            new QuickLink { Label = "Swagger",  Description = "API reference",         Icon = Icons.Material.Outlined.Api,          Color = "#85ea2d", Url = "http://api/swagger"  },
+            new QuickLink { Label = "RabbitMQ", Description = "Message broker UI",     Icon = Icons.Material.Outlined.Router,       Color = "#ff6600", Url = "http://rabbitmq:15672" },
+            new QuickLink { Label = "Seq",      Description = "Structured logs",       Icon = Icons.Material.Outlined.FormatListBulleted, Color = "#a78bfa", Url = "http://seq:5341" },
+        ]);
+
+        // Components
+        _components.AddRange([
+            new Component { Name = "API Gateway",         Version = "2.4.1",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Auth Service",        Version = "1.9.0",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Notification Worker", Version = "3.1.2",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Report Generator",    Version = "1.2.0",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Data Importer",       Version = "0.8.5",  Status = CompStatus.Installed,    Selected = true  },
+            new Component { Name = "Scheduler",           Version = "2.0.0",  Status = CompStatus.Error,        Selected = false },
+            new Component { Name = "Cache Warmer",        Version = "1.0.3",  Status = CompStatus.NotInstalled, Selected = false },
+            new Component { Name = "Audit Logger",        Version = "1.5.1",  Status = CompStatus.Installed,    Selected = true  },
+        ]);
+
+        // Mock initial terminal output
+        _termLines.AddRange([
+            new TermLine { Text = "$ env-manager init --env " + Env,        Css = "bm-term-cmd"     },
+            new TermLine { Text = "Connecting to environment registry…",     Css = "bm-term-muted"   },
+            new TermLine { Text = "✓ Connected  (registry v2.4)",           Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ Auth Service        v1.9.0  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ API Gateway         v2.4.1  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✓ Data Importer       v0.8.5  [up]",     Css = "bm-term-ok"      },
+            new TermLine { Text = "✗ Scheduler           v2.0.0  [error]",  Css = "bm-term-error"   },
+            new TermLine { Text = "  → Process exited with code 1",         Css = "bm-term-error"   },
+            new TermLine { Text = "Ready.",                                  Css = "bm-term-muted"   },
+        ]);
+    }
+
+    // ── booking ──────────────────────────────────────────────────────────
+
+    private string SlotClass(DateTime slot)
+    {
+        if (_myBookings.Contains(slot))   return "bm-env-slot-mine";
+        if (_otherBookings.ContainsKey(slot)) return "bm-env-slot-taken";
+        if (_selectedSlots.Contains(slot))    return "bm-env-slot-selected";
+        return "bm-env-slot-free";
+    }
+
+    private string SlotTooltip(DateTime slot)
+    {
+        if (_myBookings.Contains(slot))          return $"Your booking · {slot:HH:mm}";
+        if (_otherBookings.TryGetValue(slot, out var who)) return $"Booked by {who} · {slot:HH:mm}";
+        return slot.ToString("HH:mm");
+    }
+
+    private void ToggleSlot(DateTime slot)
+    {
+        if (_myBookings.Contains(slot) || _otherBookings.ContainsKey(slot)) return;
+        if (!_selectedSlots.Remove(slot))
+            _selectedSlots.Add(slot);
+    }
+
+    private void BookSelected()
+    {
+        var sorted = _selectedSlots.Order().ToList();
+        foreach (var s in sorted) _myBookings.Add(s);
+        _selectedSlots.Clear();
+
+        var first = sorted.First();
+        var last  = sorted.Last().AddMinutes(15);
+        _termLines.Add(new TermLine { Text = $"$ book --from {first:HH:mm} --to {last:HH:mm}", Css = "bm-term-cmd" });
+        _termLines.Add(new TermLine { Text = $"✓ Environment booked {first:HH:mm}–{last:HH:mm}", Css = "bm-term-ok" });
+    }
+
+    // ── components ───────────────────────────────────────────────────────
+
+    private async Task ApplyComponents()
+    {
+        var toInstall   = _components.Where(c => c.Selected  && c.Status != CompStatus.Installed).ToList();
+        var toUninstall = _components.Where(c => !c.Selected && c.Status == CompStatus.Installed).ToList();
+
+        foreach (var c in toInstall.Concat(toUninstall))
+            c.Status = CompStatus.Installing;
+        StateHasChanged();
+
+        foreach (var c in toInstall)
+        {
+            _termLines.Add(new TermLine { Text = $"$ install {c.Name} {c.Version}", Css = "bm-term-cmd" });
+            _termLines.Add(new TermLine { Text = $"  Pulling image…",               Css = "bm-term-muted" });
+            StateHasChanged();
+            await Task.Delay(800);
+            _termLines.Add(new TermLine { Text = $"✓ {c.Name} installed successfully", Css = "bm-term-ok" });
+            c.Status = CompStatus.Installed;
+            StateHasChanged();
+        }
+
+        foreach (var c in toUninstall)
+        {
+            _termLines.Add(new TermLine { Text = $"$ uninstall {c.Name}", Css = "bm-term-cmd" });
+            StateHasChanged();
+            await Task.Delay(500);
+            _termLines.Add(new TermLine { Text = $"✓ {c.Name} removed", Css = "bm-term-ok" });
+            c.Status = CompStatus.NotInstalled;
+            StateHasChanged();
+        }
+    }
+}
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
 LENGTH 17757
 @namespace NxtUI.Web.Pages
@@ -16356,7 +16747,7 @@ LENGTH 17757
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 14381
+LENGTH 14504
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16365,6 +16756,7 @@ LENGTH 14381
 @inject IRunService RunService
 @inject InfraHealthCache HealthCache
 @inject ILogger<Home> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-home">
@@ -16472,10 +16864,10 @@ LENGTH 14381
 
             <div class="bm-infra-sep"></div>
 
-            <MudTooltip Text="@($"last checked {_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--"} UTC")" Placement="Placement.Bottom">
+            <MudTooltip Text="@($"last checked {(_kafkaHealth is not null ? DtSvc.Format(_kafkaHealth.CheckedAt, "HH:mm:ss") : "--:--:--")}{DtSvc.ZoneSuffix}")" Placement="Placement.Bottom">
                 <div class="bm-infra-lastupdate">
                     <span class="bm-infra-lastupdate-label bm-muted">Last update</span>
-                    <span class="bm-infra-time bm-muted">@(_kafkaHealth?.CheckedAt.ToString("HH:mm") ?? "--:--")</span>
+                    <span class="bm-infra-time bm-muted">@(_kafkaHealth is not null ? DtSvc.Format(_kafkaHealth.CheckedAt, "HH:mm") : "--:--")</span>
                 </div>
             </MudTooltip>
 
@@ -16541,7 +16933,7 @@ LENGTH 14381
                 </MudTd>
                 <MudTd>
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @context.Start.ToString("HH:mm:ss") UTC
+                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
                     </MudText>
                 </MudTd>
                 <MudTd>
@@ -16655,10 +17047,10 @@ LENGTH 14381
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnTreemapPidClicked(int pid)
+    private void OnTreemapPidClicked(string key)
     {
         var tab = TabModel.CreateMemoryGraph(EnvService.SelectedId);
-        tab.NavigationHint = pid.ToString();
+        tab.NavigationHint = key;
         TabService.OpenOrFocus(tab);
     }
 
@@ -16689,7 +17081,7 @@ LENGTH 14381
     }
 }
 FILE src/NxtUI.Web/Pages/HomeMemoryTreemap.razor
-LENGTH 2608
+LENGTH 2614
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Web.Services
@@ -16711,7 +17103,7 @@ LENGTH 2608
 @code {
     [Parameter] public string            Env            { get; set; } = string.Empty;
     [Parameter] public EventCallback     OnDataLoaded   { get; set; }
-    [Parameter] public EventCallback<int> OnPidClicked  { get; set; }
+    [Parameter] public EventCallback<string> OnPidClicked  { get; set; }
 
     private ElementReference                        _ref;
     private IDisposable?                            _sub;
@@ -16754,7 +17146,7 @@ LENGTH 2608
     public void NotifyDataLoaded() => _ = OnDataLoaded.InvokeAsync();
 
     [JSInvokable]
-    public void OnLeafClicked(int pid) => _ = OnPidClicked.InvokeAsync(pid);
+    public void OnLeafClicked(string key) => _ = OnPidClicked.InvokeAsync(key);
 
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));
@@ -16767,7 +17159,7 @@ LENGTH 2608
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26897
+LENGTH 26948
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16777,6 +17169,7 @@ LENGTH 26897
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<KafkaDashboard> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill @(_viewMode == KafkaView.Consumers ? "bm-inspector" : "")">
@@ -17214,7 +17607,7 @@ LENGTH 26897
         {
             try
             {
-                node = (_viewMode == KafkaView.Topics ? TopicParser : GroupParser).Parse(text);
+                node = (_viewMode == KafkaView.Topics ? TopicParser : GroupParser).Parse(text, DtSvc.UseUtc);
             }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
@@ -17364,13 +17757,14 @@ LENGTH 26897
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 9679
+LENGTH 9730
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @using NxtUI.Filtering
 @inject IKafkaMonitor KafkaSvc
 @inject ILogger<KafkaGroupsDashboard> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -17554,7 +17948,7 @@ LENGTH 9679
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = Parser.Parse(text); }
+            try   { node = Parser.Parse(text, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
         _filtered = node is null
@@ -17602,7 +17996,7 @@ LENGTH 9679
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 12940
+LENGTH 13014
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -17610,6 +18004,7 @@ LENGTH 12940
 @inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
 @inject ILogger<KafkaTopicInspector> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -17715,7 +18110,7 @@ LENGTH 12940
                         <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
+                        <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
                     </MudTd>
                 </RowTemplate>
             </MudTable>
@@ -17729,7 +18124,7 @@ LENGTH 12940
                     <span class="bm-kafka-mono">
                         offset <strong>@_selected.Offset</strong>
                         &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
-                        &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
+                        &nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp, "yyyy-MM-dd HH:mm:ss.fff")@DtSvc.ZoneSuffix
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
                         <MudTooltip Text="Save as JSON">
@@ -17870,7 +18265,7 @@ LENGTH 12940
             return;
         }
         FilterNode? node = null;
-        try   { node = Parser.Parse(_filterText); }
+        try   { node = Parser.Parse(_filterText, DtSvc.UseUtc); }
         catch (FilterParseException ex) { _filterParseError = ex.Message; _filtered = _messages; return; }
 
         _filtered = _messages.Where(m => FilterEvaluator.Evaluate(node, m)).ToList();
@@ -17934,7 +18329,7 @@ LENGTH 12940
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 26284
+LENGTH 26317
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17948,6 +18343,7 @@ LENGTH 26284
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
 @inject ILogger<LogBrowser> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -18079,10 +18475,10 @@ LENGTH 26284
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
                             <MudTd DataLabel="Created" @ondblclick="@(() => OpenInViewer(context))">
-                                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd DataLabel="Last Updated" @ondblclick="@(() => OpenInViewer(context))">
-                                <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                                <MudText Typo="Typo.body2" Class="bm-monospace">@DtSvc.Format(context.LastModifiedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd>
                                 <MudTooltip Text="Copy full path">
@@ -18234,7 +18630,7 @@ LENGTH 26284
         _contentFilterStr   = v;
         _contentFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _contentFilterNode = null; return; }
-        try   { _contentFilterNode = LogLineParser.Parse(v); }
+        try   { _contentFilterNode = LogLineParser.Parse(v, DtSvc.UseUtc); }
         catch (Exception ex) { _contentFilterError = ex.Message; _contentFilterNode = null; }
     }
 
@@ -18556,13 +18952,14 @@ LENGTH 26284
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 20399
+LENGTH 20517
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Services
 @inject ILogViewerService LogViewerSvc
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<LogViewer> Logger
+@inject IConfiguration Config
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lv-page" @onkeydown="OnPageKeyDown" @onkeydown:preventDefault="@_preventKey">
@@ -18900,7 +19297,8 @@ LENGTH 20399
         if (_rawContent is null && _localKey is null) return;
         if (!_rendered) return;
 
-        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap };
+        var formats = Config.GetSection("Logs:Formats").Get<string[]>() ?? [];
+        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap, formats };
         if (_localKey is not null)
         {
             await _viewport.RenderLocalFileAsync(_localKey, opts);
@@ -19189,7 +19587,7 @@ LENGTH 3964
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 19568
+LENGTH 15960
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -19214,26 +19612,27 @@ LENGTH 19568
 
         <div class="bm-mg-toolbar-sep"></div>
 
-        <!-- Chart type -->
-        <span class="bm-svc-grouping-label">Chart</span>
+        <!-- Children toggle -->
+        <MudTooltip Text="Show children processes memory">
+            <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                       Class="@(_splitView ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                       OnClick="@(() => SetSplitView(!_splitView))">Children</MudButton>
+        </MudTooltip>
+
+        <div class="bm-mg-toolbar-sep"></div>
+
+        <!-- Time range -->
+        <span class="bm-svc-grouping-label">Range</span>
         <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
-            <MudButton Class="@(_chartType == ChartType.Line     ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Line))">Line</MudButton>
-            <MudButton Class="@(_chartType == ChartType.Sunburst ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetChartType(ChartType.Sunburst))">Sunburst</MudButton>
+            <MudButton Class="@(_windowHours == 0.25  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(0.25))">15M</MudButton>
+            <MudButton Class="@(_windowHours == 0.5   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(0.5))">30M</MudButton>
+            <MudButton Class="@(_windowHours == 1.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1.0))">1H</MudButton>
+            <MudButton Class="@(_windowHours == 2.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(2.0))">2H</MudButton>
+            <MudButton Class="@(_windowHours == 6.0   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6.0))">6H</MudButton>
+            <MudButton Class="@(_windowHours == 12.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(12.0))">12H</MudButton>
+            <MudButton Class="@(_windowHours == 24.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24.0))">24H</MudButton>
+            <MudButton Class="@(_windowHours == 48.0  ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(48.0))">48H</MudButton>
         </MudButtonGroup>
-
-        @if (_chartType == ChartType.Line)
-        {
-            <div class="bm-mg-toolbar-sep"></div>
-
-            <!-- Time range -->
-            <span class="bm-svc-grouping-label">Range</span>
-            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-svc-group-toggle">
-                <MudButton Class="@(_windowHours == 1    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(1))">1h</MudButton>
-                <MudButton Class="@(_windowHours == 6    ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(6))">6h</MudButton>
-                <MudButton Class="@(_windowHours == 24   ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(24))">24h</MudButton>
-                <MudButton Class="@(_windowHours == null ? "bm-view-btn-active" : "bm-view-btn-inactive")" OnClick="@(() => SetWindow(null))">All</MudButton>
-            </MudButtonGroup>
-        }
 
         <div class="bm-mg-toolbar-spacer"></div>
 
@@ -19243,35 +19642,35 @@ LENGTH 19568
         }
     </div>
 
-    <!-- ── Body: legend panel + chart ────────────────────────────────── -->
+    <!-- ── Body: chart + resize handle + legend ─────────────────────── -->
     <div class="bm-mg-body">
-
-        <!-- Legend / filter panel -->
-        <div class="bm-mg-legend">
-            <div class="bm-mg-legend-title">@LegendTitle</div>
-            @foreach (var item in _legendItems)
-            {
-                <label class="bm-mg-legend-item">
-                    <input type="checkbox"
-                           checked="@item.Visible"
-                           @onchange="@(e => ToggleLegendItem(item, (bool)(e.Value ?? false)))" />
-                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
-                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
-                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
-                </label>
-            }
-        </div>
 
         <!-- Chart area -->
         <div class="bm-mg-chart-area">
             <div class="bm-mg-d3-container" @ref="_chartRef"></div>
-            @if (_chartType == ChartType.Line && _lineSeries.Count == 0)
+            @if (_lineSeries.Count == 0)
             {
                 <div class="bm-mg-empty">No data yet.</div>
             }
-            @if (_chartType == ChartType.Line)
+            <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+        </div>
+
+        <!-- Drag handle -->
+        <div class="bm-mg-resize-handle" @ref="_resizeHandleRef"></div>
+
+        <!-- Legend / filter panel (right side) -->
+        <div class="bm-mg-legend" @ref="_legendRef">
+            <div class="bm-mg-legend-title">@LegendTitle</div>
+            @{ int _li = 0; }
+            @foreach (var item in _legendItems)
             {
-                <div class="bm-mg-brush-container" @ref="_brushRef"></div>
+                int idx = _li++;
+                <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
+                     @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
+                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
+                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
+                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
+                </div>
             }
         </div>
 
@@ -19283,14 +19682,14 @@ LENGTH 19568
     [Parameter] public string? NavigationHint { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
-    private enum GroupBy   { None, Service, Host }
-    private enum ChartType { Line, Sunburst }
+    private enum GroupBy { None, Service, Host }
 
     // ── state ────────────────────────────────────────────────────────────
-    private GroupBy   _groupBy   = GroupBy.Service;
-    private ChartType _chartType = ChartType.Line;
-    private string?   _lastHint;
-    private int?      _windowHours = 1;   // null = show all; default to last 1 h
+    private GroupBy _groupBy = GroupBy.Service;
+    private string? _lastHint;
+    private double?   _windowHours = 1.0;   // null = show all; default to last 1 h
+    private int       _lastClickedIndex = -1;
+    private bool      _splitView = false;
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -19309,10 +19708,13 @@ LENGTH 19568
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
     private ElementReference    _brushRef;
+    private ElementReference    _legendRef;
+    private ElementReference    _resizeHandleRef;
     private bool                _chartDirty  = true;
+    private bool                _resizeWired = false;
 
     // Raw samples sent to JS; JS handles bucketing + brush-driven zoom.
-    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values);
+    private sealed record LineSeriesDto(string Name, string Color, long[] Timestamps, double[] Values, bool IsFaded = false, string? Label = null);
 
     // 16-color palette
     private static readonly string[] Palette =
@@ -19347,18 +19749,15 @@ LENGTH 19568
     private void ApplyNavigationHint()
     {
         _lastHint = NavigationHint;
-        if (!int.TryParse(NavigationHint, out var pid)) return;
+        if (string.IsNullOrEmpty(NavigationHint)) return;
 
-        // Switch to per-process grouping so each PID is an individual legend entry.
+        // Hint format: "ServiceName|ProcessId" — the exact key used in GroupBy.None.
         _groupBy = GroupBy.None;
         Rebuild();
 
-        // Uncheck every entry except the one matching the pid.
+        // Show only the exact matching entry; hide everything else.
         foreach (var item in _legendItems)
-        {
-            // None-group key = "ServiceName|ProcessId" — match the trailing |pid segment.
-            item.Visible = item.Key.EndsWith("|" + pid, StringComparison.Ordinal);
-        }
+            item.Visible = item.Key.Equals(NavigationHint, StringComparison.Ordinal);
 
         BuildChartData();
         _chartDirty = true;
@@ -19366,13 +19765,16 @@ LENGTH 19568
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (!_resizeWired)
+        {
+            _resizeWired = true;
+            try { await JS.InvokeVoidAsync("mgLegendResize", _resizeHandleRef, _legendRef); }
+            catch (Exception) { }
+        }
         if (_chartDirty)
         {
             _chartDirty = false;
-            if (_chartType == ChartType.Sunburst)
-                await RenderSunburstAsync();
-            else
-                await RenderLineAsync();
+            await RenderLineAsync();
         }
     }
 
@@ -19396,16 +19798,30 @@ LENGTH 19568
         StateHasChanged();
     }
 
-    private void SetChartType(ChartType t)
+    private void OnLegendItemClick(LegendItem item, MouseEventArgs e, int index)
     {
-        _chartType = t;
-        _chartDirty = true;
-        StateHasChanged();
-    }
+        if (e.CtrlKey)
+        {
+            item.Visible = !item.Visible;
+            _lastClickedIndex = index;
+        }
+        else if (e.ShiftKey && _lastClickedIndex >= 0)
+        {
+            int lo = Math.Min(index, _lastClickedIndex);
+            int hi = Math.Max(index, _lastClickedIndex);
+            bool target = !item.Visible;
+            for (int i = lo; i <= hi; i++)
+                _legendItems[i].Visible = target;
+            _lastClickedIndex = index;
+        }
+        else
+        {
+            bool soloAlready = _legendItems.Count(i => i.Visible) == 1 && item.Visible;
+            foreach (var i in _legendItems)
+                i.Visible = soloAlready || ReferenceEquals(i, item);
+            _lastClickedIndex = index;
+        }
 
-    private void ToggleLegendItem(LegendItem item, bool visible)
-    {
-        item.Visible = visible;
         BuildChartData();
         _chartDirty = true;
         StateHasChanged();
@@ -19429,12 +19845,12 @@ LENGTH 19568
             return new LegendItem
             {
                 Key       = kv.Key,
-                Name      = kv.Key,
+                Name      = FormatLegendName(kv.Key),
                 Color     = color,
                 CurrentMb = mb,
                 Visible   = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
             };
-        }).ToList();
+        }).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
         BuildChartData();
         _chartDirty = true;
@@ -19479,31 +19895,51 @@ LENGTH 19568
         {
             if (!visible.Contains(key)) continue;
 
+            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
+
             // Merge and sort all samples for this group, dedup by timestamp.
             var samples = svcs
                 .SelectMany(svc => MetricsMonitor.GetHistory(Env, svc))
                 .GroupBy(s => s.Timestamp)
-                .Select(g => (Timestamp: g.Key, Bytes: g.Sum(s => s.TotalCurrentBytes)))
+                .Select(g => (
+                    Timestamp: g.Key,
+                    Main:  g.Sum(s => s.CurrentUsageBytes),
+                    Child: g.Sum(s => s.ChildUsageBytes)))
                 .OrderBy(s => s.Timestamp)
                 .ToList();
 
             if (samples.Count == 0) continue;
 
-            var color      = colorMap.TryGetValue(key, out var c) ? c : "#888";
             var timestamps = samples.Select(s => new DateTimeOffset(s.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds()).ToArray();
-            var values     = samples.Select(s => s.Bytes / 1e6).ToArray();
-            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, values));
+
+            var totalValues = samples.Select(s => (s.Main + s.Child) / 1e6).ToArray();
+            _lineSeries.Add(new LineSeriesDto(key, color, timestamps, totalValues));
+
+            if (_splitView)
+            {
+                var childValues = samples.Select(s => s.Child / 1e6).ToArray();
+                if (childValues.Any(v => v > 0))
+                    _lineSeries.Add(new LineSeriesDto(key + "\tchild", color, timestamps, childValues, IsFaded: true, Label: key + " (children)"));
+            }
         }
     }
 
-    private void SetWindow(int? hours)
+    private void SetWindow(double? hours)
     {
         _windowHours = hours;
         _chartDirty  = true;
         StateHasChanged();
     }
 
-    // ── sunburst ─────────────────────────────────────────────────────────
+    private void SetSplitView(bool split)
+    {
+        _splitView  = split;
+        BuildChartData();
+        _chartDirty = true;
+        StateHasChanged();
+    }
+
+    // ── chart renderers ───────────────────────────────────────────────────
 
     private async Task RenderLineAsync()
     {
@@ -19511,83 +19947,14 @@ LENGTH 19568
         catch (Exception) { }
     }
 
-    private async Task RenderSunburstAsync()
-    {
-        try
-        {
-            var data = BuildSunburstData();
-            await JS.InvokeVoidAsync("memorySunburst.render", _chartRef, data, new { });
-        }
-        catch (Exception) { }
-    }
-
-    private object BuildSunburstData()
-    {
-        var services = _services;
-        var groups   = GroupServices(services);
-        var visible  = _legendItems.Where(i => i.Visible).Select(i => i.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var colorMap = _legendItems.ToDictionary(i => i.Key, i => i.Color);
-
-        var groupObjects = new List<object>();
-
-        foreach (var (key, svcs) in groups)
-        {
-            if (!visible.Contains(key)) continue;
-            var color = colorMap.TryGetValue(key, out var c) ? c : "#888";
-
-            if (_groupBy == GroupBy.None)
-            {
-                // Each entry = one service; split into main + child process
-                foreach (var svc in svcs)
-                {
-                    var latest = MetricsMonitor.GetLatest(Env, svc);
-                    if (latest is null) continue;
-
-                    var mainBytes  = latest.CurrentUsageBytes;
-                    var childBytes = latest.ChildUsageBytes;
-                    var children   = new List<object>();
-
-                    if (mainBytes > 0)
-                        children.Add(new { name = svc.ServiceName + " (main)", value = mainBytes, color });
-
-                    if (childBytes > 0)
-                    {
-                        var childColor = AdjustBrightness(color, 0.65);
-                        children.Add(new { name = svc.ProcessId + "+ (child)", value = childBytes, color = childColor });
-                    }
-
-                    if (children.Count == 0) continue;
-                    var total = mainBytes + childBytes;
-                    groupObjects.Add(new { name = key, value = total, color, children });
-                }
-            }
-            else
-            {
-                // Aggregate across all svcs in this group
-                long totalBytes = 0;
-                var children = new List<object>();
-                int ci = 0;
-                foreach (var svc in svcs)
-                {
-                    var latest = MetricsMonitor.GetLatest(Env, svc);
-                    if (latest is null) continue;
-                    var bytes = latest.TotalCurrentBytes;
-                    if (bytes == 0) continue;
-                    totalBytes += bytes;
-                    var childColor = ShiftHue(color, ci++ * 20);
-                    var childLabel = _groupBy == GroupBy.Host ? svc.ServiceName : svc.HostName;
-                    children.Add(new { name = childLabel, value = bytes, color = childColor });
-                }
-                if (totalBytes == 0) continue;
-                groupObjects.Add(new { name = key, value = totalBytes, color, children });
-            }
-        }
-
-        var grandTotal = groupObjects.Sum(g => (long)((dynamic)g).value);
-        return new { total = grandTotal, groups = groupObjects };
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────
+
+    private string FormatLegendName(string key)
+    {
+        if (_groupBy != GroupBy.None) return key;
+        int sep = key.IndexOf('|');
+        return sep > 0 ? $"{key[..sep]} ({key[(sep + 1)..]})": key;
+    }
 
     private string LegendTitle => _groupBy switch
     {
@@ -19605,76 +19972,13 @@ LENGTH 19568
     private static string FormatMb(double mb)
         => mb >= 1000 ? $"{mb / 1024.0:F1} GB" : $"{mb:F0} MB";
 
-    // Very rough HSL hue shift for child items — keeps visual relationship to parent color.
-    private static string ShiftHue(string hex, int degrees)
-    {
-        if (!TryParseHex(hex, out var r, out var g, out var b)) return hex;
-        RgbToHsl(r, g, b, out var h, out var s, out var l);
-        h = ((h * 360 + degrees) % 360) / 360.0;
-        HslToRgb(h, s, l, out var nr, out var ng, out var nb);
-        return $"#{nr:X2}{ng:X2}{nb:X2}";
-    }
-
-    private static string AdjustBrightness(string hex, double factor)
-    {
-        if (!TryParseHex(hex, out var r, out var g, out var b)) return hex;
-        return $"#{Clamp255(r * factor):X2}{Clamp255(g * factor):X2}{Clamp255(b * factor):X2}";
-    }
-
-    private static bool TryParseHex(string hex, out int r, out int g, out int b)
-    {
-        r = g = b = 0;
-        hex = hex.TrimStart('#');
-        if (hex.Length != 6) return false;
-        r = Convert.ToInt32(hex[..2], 16);
-        g = Convert.ToInt32(hex[2..4], 16);
-        b = Convert.ToInt32(hex[4..6], 16);
-        return true;
-    }
-
-    private static int Clamp255(double v) => Math.Clamp((int)Math.Round(v), 0, 255);
-
-    private static void RgbToHsl(int r, int g, int b, out double h, out double s, out double l)
-    {
-        double rf = r / 255.0, gf = g / 255.0, bf = b / 255.0;
-        double max = Math.Max(rf, Math.Max(gf, bf));
-        double min = Math.Min(rf, Math.Min(gf, bf));
-        l = (max + min) / 2;
-        if (max == min) { h = s = 0; return; }
-        double d = max - min;
-        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-        h = max == rf ? (gf - bf) / d + (gf < bf ? 6 : 0) :
-            max == gf ? (bf - rf) / d + 2 :
-                        (rf - gf) / d + 4;
-        h /= 6;
-    }
-
-    private static void HslToRgb(double h, double s, double l, out int r, out int g, out int b)
-    {
-        if (s == 0) { r = g = b = Clamp255(l * 255); return; }
-        double q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-        double p = 2 * l - q;
-        r = Clamp255(Hue(p, q, h + 1.0 / 3) * 255);
-        g = Clamp255(Hue(p, q, h)           * 255);
-        b = Clamp255(Hue(p, q, h - 1.0 / 3) * 255);
-    }
-
-    private static double Hue(double p, double q, double t)
-    {
-        if (t < 0) t += 1; if (t > 1) t -= 1;
-        return t < 1.0 / 6 ? p + (q - p) * 6 * t :
-               t < 0.5     ? q :
-               t < 2.0 / 3 ? p + (q - p) * (2.0 / 3 - t) * 6 : p;
-    }
-
     // ── disposal ─────────────────────────────────────────────────────────
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
-        try { await JS.InvokeVoidAsync("memorySunburst.destroy", _chartRef); }
-        catch (Exception) { }
+        return ValueTask.CompletedTask;
     }
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInfoDialog.razor
@@ -19794,7 +20098,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 10898
+LENGTH 10698
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19802,6 +20106,7 @@ LENGTH 10898
 @inject IMongoReader MongoSvc
 @inject IJSRuntime JS
 @inject ILogger<MongoCollectionInspector> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -19872,7 +20177,7 @@ LENGTH 10898
                         <span class="bm-muted">_id:&nbsp;</span><strong>@_selected.Id</strong>
                         @if (_selected.Timestamp.HasValue)
                         {
-                            <span>&nbsp;·&nbsp; @_selected.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                            <span>&nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp.Value, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix</span>
                         }
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
@@ -19946,10 +20251,10 @@ LENGTH 10898
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("plain text",   "searches _id (e.g. abc123)"),
-        ("field:value",  "case-insensitive regex on any field (e.g. status:active, name:foo*)"),
-        ("field:>100",   "numeric or date comparison (e.g. amount:>100, createdAt:>-7d, price:10..50)"),
-        ("{ … }",        "raw MongoDB query — any operator works: $gt, $in, $exists, $elemMatch, $or, aggregation expressions, etc. (e.g. {\"status\":{\"$in\":[\"A\",\"B\"]},\"n\":{\"$gt\":5}})"),
+        ("plain text",  "searches _id"),
+        ("field:value", "regex on any field"),
+        ("field:>100",  "numeric / date comparison"),
+        ("{ … }",       "raw MongoDB query"),
     ];
 
     protected override async Task OnParametersSetAsync()
@@ -19975,7 +20280,7 @@ LENGTH 10898
             var (docs, total) = await MongoSvc.GetDocumentsAsync(
                 Environment, _database, _collection,
                 string.IsNullOrWhiteSpace(_search) ? null : _search,
-                skip, _pageSize, _sortField, _sortDesc, ct);
+                skip, _pageSize, _sortField, _sortDesc, ct, DtSvc.UseUtc);
             _docs       = docs.ToList();
             _totalCount = total;
             _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
@@ -20386,7 +20691,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16200
+LENGTH 16207
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -20394,6 +20699,7 @@ LENGTH 16200
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 @code {
@@ -20591,8 +20897,7 @@ LENGTH 16200
     private string FormatSliderTime()
     {
         if (!IsReplay || _replayTimestamp is null) return "LIVE";
-        var ts = _replayTimestamp.Value.ToLocalTime();
-        return ts.ToString("HH:mm:ss");
+        return DtSvc.Format(_replayTimestamp.Value, "HH:mm:ss");
     }
 
     // ── Top bar helpers ────────────────────────────────────────────────────
@@ -20725,7 +21030,7 @@ LENGTH 16200
                     </div>
                     <div class="bm-details-row">
                         <div class="bm-details-key">Start</div>
-                        <div class="bm-details-value">@_details.Start.ToString("yyyy-MM-dd HH:mm:ss") UTC</div>
+                        <div class="bm-details-value">@DtSvc.Format(_details.Start, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix</div>
                     </div>
                     <div class="bm-details-row">
                         <div class="bm-details-key">Duration</div>
@@ -20780,7 +21085,7 @@ LENGTH 16200
                 </MudTooltip>
             }
 
-            <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : _sliderMin.ToLocalTime().ToString("HH:mm:ss"))</span>
+            <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : DtSvc.Format(_sliderMin, "HH:mm:ss"))</span>
 
             <MudSlider Class="bm-timeline-slider"
                        Min="0.0" Max="@SliderSteps"
@@ -20789,18 +21094,19 @@ LENGTH 16200
                        ValueChanged="@((double v) => OnSliderChanged(v))"
                        Disabled="@(_sliderMax <= _sliderMin)" />
 
-            <span class="bm-slider-label bm-muted">@(_sliderMax == default ? "" : _sliderMax.ToLocalTime().ToString("HH:mm:ss"))</span>
+            <span class="bm-slider-label bm-muted">@(_sliderMax == default ? "" : DtSvc.Format(_sliderMax, "HH:mm:ss"))</span>
 
             <span class="bm-slider-count bm-muted">@_eventCount events</span>
         </div>
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 11195
+LENGTH 11251
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject DateTimeDisplayService DtSvc
 @using NxtUI.Filtering
 @implements IDisposable
 
@@ -20880,7 +21186,7 @@ LENGTH 11195
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @context.Start.ToString("yyyy-MM-dd HH:mm:ss")
+                        @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                     </MudText>
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
@@ -21012,7 +21318,7 @@ LENGTH 11195
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = RunFilterParser.Parse(text); }
+            try   { node = RunFilterParser.Parse(text, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 
@@ -21068,7 +21374,7 @@ LENGTH 11195
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 31888
+LENGTH 31921
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -21083,6 +21389,7 @@ LENGTH 31888
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -21162,13 +21469,13 @@ LENGTH 31888
                         @if (group.Key != null)
                         {
                             <div class="bm-svc-group-header">
+                                <span class="bm-svc-group-count">@group.Count()</span>
                                 @group.Key
                                 @{ var groupRam = group.Sum(s => s.RamMb ?? 0); }
                                 @if (groupRam > 0)
                                 {
                                     <span class="bm-svc-group-ram">@FormatMb(groupRam) MB</span>
                                 }
-                                <span class="bm-svc-group-count">@group.Count()</span>
                             </div>
                         }
                         <div class="bm-svc-card-row">
@@ -21242,8 +21549,8 @@ LENGTH 31888
                     <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
                     <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat" data-value="@context.UpdatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
-                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedDateTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
                     <MudTd DataLabel="RAM (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="@($"bm-monospace {RamColorClass(context.RamMb)}")">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
@@ -21580,7 +21887,7 @@ LENGTH 31888
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(_filterText))
         {
-            try   { node = SvcFilterParser.Parse(_filterText); }
+            try   { node = SvcFilterParser.Parse(_filterText, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 
@@ -21771,10 +22078,11 @@ public partial class ServicesPage
     };
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 4288
+LENGTH 7458
 @namespace NxtUI.Web.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
+@inject DateTimeDisplayService DtSvc
 @inject IJSRuntime JS
 @using Microsoft.JSInterop
 
@@ -21814,6 +22122,50 @@ LENGTH 4288
 
         <MudItem xs="12" md="6">
             <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">Date &amp; Time</MudText>
+                <div class="bm-settings-row">
+                    <div>
+                        <MudText Typo="Typo.body1">Timezone</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">
+                            How dates and times are displayed across all pages
+                        </MudText>
+                    </div>
+                    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-theme-switcher">
+                        <MudButton StartIcon="@(!DtSvc.UseUtc ? Icons.Material.Filled.LocationOn : Icons.Material.Outlined.LocationOn)"
+                                   Class="@(!DtSvc.UseUtc ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetTz(false))">Local</MudButton>
+                        <MudButton StartIcon="@(DtSvc.UseUtc ? Icons.Material.Filled.Public : Icons.Material.Outlined.Public)"
+                                   Class="@(DtSvc.UseUtc ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetTz(true))">UTC</MudButton>
+                    </MudButtonGroup>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">Developer</MudText>
+                <div class="bm-settings-row">
+                    <div>
+                        <MudText Typo="Typo.body1">Developer mode</MudText>
+                        <MudText Typo="Typo.body2" Class="bm-muted">
+                            Show Batches, Pipelines, and Config in the sidebar
+                        </MudText>
+                    </div>
+                    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-theme-switcher">
+                        <MudButton StartIcon="@(!DtSvc.DevMode ? Icons.Material.Filled.CodeOff : Icons.Material.Outlined.CodeOff)"
+                                   Class="@(!DtSvc.DevMode ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetDevMode(false))">Off</MudButton>
+                        <MudButton StartIcon="@(DtSvc.DevMode ? Icons.Material.Filled.Code : Icons.Material.Outlined.Code)"
+                                   Class="@(DtSvc.DevMode ? "bm-view-btn-active" : "bm-view-btn-inactive")"
+                                   OnClick="@(() => SetDevMode(true))">On</MudButton>
+                    </MudButtonGroup>
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="bm-settings-section">
                 <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">About</MudText>
                 <div class="bm-about-grid">
                     <MudText Typo="Typo.body2" Class="bm-muted">Version</MudText>
@@ -21842,7 +22194,7 @@ LENGTH 4288
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
     }
 
     private void SetMode(ThemeMode mode)
@@ -21856,6 +22208,18 @@ LENGTH 4288
             _                => "dark",
         };
         _ = _appModule?.InvokeVoidAsync("saveTheme", cookie);
+    }
+
+    private void SetTz(bool useUtc)
+    {
+        DtSvc.UseUtc = useUtc;
+        _ = _appModule?.InvokeVoidAsync("saveTz", useUtc ? "utc" : "local");
+    }
+
+    private void SetDevMode(bool enabled)
+    {
+        DtSvc.DevMode = enabled;
+        _ = _appModule?.InvokeVoidAsync("saveDevMode", enabled);
     }
 
     private void OnThemeExternallyChanged()
@@ -21966,7 +22330,7 @@ LENGTH 30915
         {
             try
             {
-                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=5");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
                 _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=6");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
@@ -22645,7 +23009,7 @@ LENGTH 30915
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 21155
+LENGTH 21203
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22774,8 +23138,9 @@ LENGTH 21155
     <!-- Dagre (layout engine only — no bundled D3, no rendering) for hierarchical DAG layout -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
 
-    <!-- Memory sunburst chart -->
+    <!-- Memory charts -->
     <script src="js/d3-memory-sunburst.js?v=1"></script>
+    <script src="js/d3-memory-stacked.js?v=1"></script>
 
     <!-- Home memory treemap -->
     <script src="js/d3-home-treemap.js?v=16"></script>
@@ -23077,7 +23442,7 @@ LENGTH 21155
     <script src="js/workspace.js"></script>
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
-    <link rel="modulepreload" href="js/app.js?v=5" />
+    <link rel="modulepreload" href="js/app.js?v=6" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
 </html>
@@ -23343,6 +23708,66 @@ public sealed class BlazorCircuitFilter(ILogger<BlazorCircuitFilter> logger) : I
             logger.LogWarning(ex, "circuit disconnected with error");
         await next(ctx, ex);
     }
+}
+FILE src/NxtUI.Web/Services/DateTimeDisplayService.cs
+LENGTH 1579
+using Microsoft.AspNetCore.Http;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Tracks the user's date/time display preference (UTC vs local) and exposes
+/// a helper to convert UTC datetimes for rendering.
+/// Preference is persisted in the "bm-tz" cookie so it survives page reloads.
+/// </summary>
+public class DateTimeDisplayService
+{
+    private bool _useUtc;
+
+    private bool _devMode;
+
+    public DateTimeDisplayService(IHttpContextAccessor http)
+    {
+        var cookies = http.HttpContext?.Request.Cookies;
+        _useUtc  = cookies?["bm-tz"]  == "utc";
+        _devMode = cookies?["bm-dev"] == "1";
+    }
+
+    public bool DevMode
+    {
+        get => _devMode;
+        set
+        {
+            if (_devMode == value) return;
+            _devMode = value;
+            OnChange?.Invoke();
+        }
+    }
+
+    public bool UseUtc
+    {
+        get => _useUtc;
+        set
+        {
+            if (_useUtc == value) return;
+            _useUtc = value;
+            OnChange?.Invoke();
+        }
+    }
+
+    /// <summary>Convert a UTC datetime for display (to local if setting is local).</summary>
+    public DateTime ToDisplay(DateTime dt)
+    {
+        if (_useUtc) return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+        return dt.Kind == DateTimeKind.Utc ? dt.ToLocalTime() : dt;
+    }
+
+    /// <summary>Format a UTC datetime for display using the current preference.</summary>
+    public string Format(DateTime dt, string format) => ToDisplay(dt).ToString(format);
+
+    public string ZoneSuffix => _useUtc ? " UTC" : "";
+
+    public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
 LENGTH 1300
@@ -26138,7 +26563,7 @@ LENGTH 740
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2537
+LENGTH 2622
 @namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
@@ -26210,6 +26635,9 @@ LENGTH 2537
 
             TabType.FilterHelp =>
                 @<FilterHelp />,
+
+            TabType.Environment =>
+                @<EnvironmentPage Env="@env" />,
 
             _ =>
                 @<PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
@@ -29222,7 +29650,7 @@ public class MockKafkaService : IKafkaService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockMongoService.cs
-LENGTH 16969
+LENGTH 16989
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -29483,7 +29911,7 @@ public class MockMongoService : IMongoService
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool useUtc = true)
     {
         var colMeta  = _collections.TryGetValue(database, out var cols)
             ? cols.FirstOrDefault(c => c.Name == collection) : null;
@@ -29797,7 +30225,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 12468
+LENGTH 12524
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -29956,7 +30384,7 @@ public class MongoService : IMongoService
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool useUtc = true)
     {
         _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search} sort={Sort}{Desc}",
             env, database, collection, skip, limit, search, sortField, sortDesc ? " desc" : "");
@@ -29964,7 +30392,7 @@ public class MongoService : IMongoService
         var db  = _connection.Client.GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
-        var filter = BuildDocumentFilter(search);
+        var filter = BuildDocumentFilter(search, useUtc);
 
         var total = await col.CountDocumentsAsync(filter, cancellationToken: ct);
 
@@ -30002,7 +30430,7 @@ public class MongoService : IMongoService
 
     // ── Filter builder ─────────────────────────────────────────────────────────
 
-    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search)
+    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(search))
         {
@@ -30027,7 +30455,7 @@ public class MongoService : IMongoService
         // Field:value filter language → AST → MongoDB filter
         try
         {
-            var node = DocFilterParser.Parse(s);
+            var node = DocFilterParser.Parse(s, useUtc);
             return MongoFilterBuilder.Build(node);
         }
         catch
@@ -30084,7 +30512,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 75747
+LENGTH 81248
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -31082,7 +31510,7 @@ html, body {
 .bm-cs-cols {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0 16px;
+    gap: 0 8px;
 }
 
 .bm-cs-col { min-width: 0; }
@@ -32401,6 +32829,20 @@ tr.bm-row-searching td:first-child {
    ================================================================ */
 
 .bm-mg-toolbar { gap: 8px; }
+.bm-mg-filter-input {
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 4px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    font-size: 12px;
+    width: 160px;
+    outline: none;
+    transition: border-color 150ms;
+}
+.bm-mg-filter-input:focus { border-color: var(--mud-palette-primary); }
+.bm-mg-filter-input::placeholder { color: var(--mud-palette-text-secondary); opacity: 0.7; }
 .bm-mg-toolbar-sep   { width: 1px; height: 20px; background: var(--mud-palette-divider); flex-shrink: 0; }
 .bm-mg-toolbar-spacer { flex: 1 1 auto; }
 
@@ -32411,12 +32853,24 @@ tr.bm-row-searching td:first-child {
     overflow: hidden;
 }
 
-/* Legend panel */
+/* Resize handle between chart and legend */
+.bm-mg-resize-handle {
+    width: 5px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 150ms;
+    position: relative;
+    z-index: 1;
+}
+.bm-mg-resize-handle:hover { background: var(--mud-palette-primary); opacity: 0.25; }
+
+/* Legend panel (right side) */
 .bm-mg-legend {
     width: 220px;
     flex-shrink: 0;
     overflow-y: auto;
-    border-right: 1px solid var(--mud-palette-divider);
+    border-left: 1px solid var(--mud-palette-divider);
     padding: 12px 10px;
     display: flex;
     flex-direction: column;
@@ -32443,7 +32897,8 @@ tr.bm-row-searching td:first-child {
     user-select: none;
 }
 .bm-mg-legend-item:hover { background: var(--mud-palette-action-hover); }
-.bm-mg-legend-item input[type=checkbox] { accent-color: var(--mud-palette-primary); cursor: pointer; }
+.bm-mg-legend-item-hidden { opacity: 0.35; }
+.bm-mg-legend-item-hidden .bm-mg-legend-dot { filter: saturate(0); }
 
 .bm-mg-legend-dot {
     width: 10px;
@@ -32485,7 +32940,7 @@ tr.bm-row-searching td:first-child {
 }
 
 .bm-mg-brush-container {
-    height: 56px;
+    height: 42px;
     flex-shrink: 0;
     position: relative;
     border-top: 1px solid var(--mud-palette-divider);
@@ -32740,6 +33195,200 @@ tr.bm-row-searching td:first-child {
     top: 4px;
     right: 4px;
 }
+
+/* ================================================================
+   ENVIRONMENT PAGE
+   ================================================================ */
+
+.bm-env-page {
+    padding: 16px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.bm-env-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.bm-env-left,
+.bm-env-right {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* ── Section card ─────────────────────────────────────────────── */
+.bm-env-section {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.bm-env-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bm-env-section-icon {
+    color: var(--mud-palette-primary);
+    flex-shrink: 0;
+}
+
+.bm-env-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    flex: 1;
+}
+
+/* ── Booking timeline ─────────────────────────────────────────── */
+.bm-env-booking-legend {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+
+.bm-env-slot-demo {
+    padding: 2px 8px !important;
+    border-radius: 3px;
+    cursor: default !important;
+    pointer-events: none;
+    height: auto !important;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.bm-env-timeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+
+.bm-env-slot {
+    position: relative;
+    width: 20px;
+    height: 24px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: opacity .1s;
+    flex-shrink: 0;
+}
+
+.bm-env-slot:hover { opacity: .75; }
+
+.bm-env-slot-free     { background: var(--mud-palette-background-grey); }
+.bm-env-slot-mine     { background: var(--mud-palette-primary); }
+.bm-env-slot-taken    { background: var(--mud-palette-error); opacity: .6; cursor: not-allowed; }
+.bm-env-slot-selected { background: var(--mud-palette-primary-lighten); }
+
+.bm-env-slot-label {
+    position: absolute;
+    bottom: -14px;
+    left: 0;
+    font-size: 9px;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.bm-env-booking-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+    min-height: 32px;
+}
+
+/* ── Quick links ──────────────────────────────────────────────── */
+.bm-env-links-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.bm-env-link-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--mud-palette-lines-default);
+    cursor: pointer;
+    text-align: center;
+    transition: background .15s;
+}
+
+.bm-env-link-card:hover { background: var(--mud-palette-background-grey); }
+
+.bm-env-link-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.bm-env-link-desc {
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+/* ── Components ───────────────────────────────────────────────── */
+.bm-env-apply-btn { margin-left: auto; }
+
+.bm-env-components-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-env-component-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+}
+
+.bm-env-component-row:last-child { border-bottom: none; }
+
+.bm-env-component-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.bm-env-component-name { font-size: 13px; }
+
+.bm-env-component-ver { font-size: 11px; }
+
+.bm-env-component-status { margin-left: auto; flex-shrink: 0; }
+
+/* ── Terminal ─────────────────────────────────────────────────── */
+.bm-env-terminal {
+    background: #0d0d0d;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'Consolas', 'Cascadia Code', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    min-height: 160px;
+    max-height: 300px;
+    overflow-y: auto;
+    color: #c8c8c8;
+}
+
+.bm-env-term-line { white-space: pre; }
+.bm-term-cmd     { color: #7dd3fc; }
+.bm-term-ok      { color: #86efac; }
+.bm-term-error   { color: #fca5a5; }
+.bm-term-muted   { color: #555; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
 LENGTH 7502
 /* ================================================================
@@ -34040,7 +34689,7 @@ FILE src/NxtUI.Web/wwwroot/js/.gitignore
 LENGTH 14
 node_modules/
 FILE src/NxtUI.Web/wwwroot/js/app.js
-LENGTH 15756
+LENGTH 16191
 // Batch Monitor — client-side utilities
 
 // ── localStorage helpers ──────────────────────────────────────────────────
@@ -34059,6 +34708,19 @@ export function setLocalStorage(key, value) {
 export function saveTheme(value) {
     try { localStorage.setItem('bm-theme', value); } catch { }
     document.cookie = `bm-theme=${value};path=/;max-age=31536000`;
+}
+
+/** @param {string} value — "utc" | "local" */
+export function saveTz(value) {
+    try { localStorage.setItem('bm-tz', value); } catch { }
+    document.cookie = `bm-tz=${value};path=/;max-age=31536000`;
+}
+
+/** @param {boolean} enabled */
+export function saveDevMode(enabled) {
+    const v = enabled ? '1' : '0';
+    try { localStorage.setItem('bm-dev', v); } catch { }
+    document.cookie = `bm-dev=${v};path=/;max-age=31536000`;
 }
 
 /**
@@ -35261,7 +35923,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 11781
+LENGTH 11796
 window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
@@ -35385,7 +36047,7 @@ window.homeMemoryTreemap = (function () {
                     tip.style('display', 'none');
                     const st = _state.get(container);
                     if (st?.leafClickRef && d.pid != null)
-                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.pid).catch(() => {});
+                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.name + '|' + d.pid).catch(() => {});
                 })
                 .on('mousemove', event => {
                     const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';
@@ -35520,8 +36182,230 @@ window.homeMemoryTreemap = (function () {
 
     return { start, stop };
 })();
+FILE src/NxtUI.Web/wwwroot/js/d3-memory-stacked.js
+LENGTH 9935
+// Batch Monitor — Memory Stacked Area Chart
+// series: [{ name, color, timestamps: number[] (ms), values: number[] (MB) }]
+// windowHours: null = show all, number = initial window size in hours
+
+window.memoryStackedChart = (() => {
+
+    const MONO = "'JetBrains Mono','Cascadia Code',Consolas,monospace";
+
+    function fmtY(v) { return v >= 1000 ? (v / 1024).toFixed(1) + 'G' : v.toFixed(0) + 'M'; }
+
+    // Linear interpolation of a sorted point array at time t
+    function interpolate(points, t) {
+        if (points.length === 0) return 0;
+        if (t <= points[0].t) return points[0].v;
+        if (t >= points[points.length - 1].t) return points[points.length - 1].v;
+        let lo = 0, hi = points.length - 1;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (points[mid].t <= t) lo = mid; else hi = mid;
+        }
+        const p0 = points[lo], p1 = points[hi];
+        const ratio = (t - p0.t) / (p1.t - p0.t);
+        return p0.v + (p1.v - p0.v) * ratio;
+    }
+
+    function render(mainCt, brushCt, series, windowHours) {
+        d3.select(mainCt).selectAll('*').remove();
+        d3.select(brushCt).selectAll('*').remove();
+        if (!series || series.length === 0) return;
+
+        const parsed = series.map(s => ({
+            key:    s.name,
+            color:  s.color,
+            points: s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
+                        .sort((a, b) => a.t - b.t)
+        })).filter(s => s.points.length > 0);
+        if (parsed.length === 0) return;
+
+        // Union time axis — merge all series timestamps and sort
+        const allMs = [...new Set(parsed.flatMap(s => s.points.map(p => p.t.getTime())))].sort((a, b) => a - b);
+        const tMin  = new Date(allMs[0]);
+        const tMax  = new Date(allMs[allMs.length - 1]);
+
+        // Build a flat row per timestamp, each series value interpolated
+        const keys = parsed.map(s => s.key);
+        const rows = allMs.map(ms => {
+            const t = ms;
+            const row = { t: new Date(ms) };
+            parsed.forEach(s => { row[s.key] = interpolate(s.points, t); });
+            return row;
+        });
+
+        const colorMap = Object.fromEntries(parsed.map(s => [s.key, s.color]));
+
+        const stack = d3.stack().keys(keys).order(d3.stackOrderNone).offset(d3.stackOffsetNone);
+        const layers = stack(rows);
+        const yMax = d3.max(rows, r => keys.reduce((sum, k) => sum + r[k], 0)) || 1;
+
+        // Initial window
+        let winStart = tMin, winEnd = tMax;
+        if (windowHours > 0) {
+            winEnd   = tMax;
+            winStart = new Date(tMax.getTime() - windowHours * 3_600_000);
+            if (winStart < tMin) winStart = tMin;
+        }
+
+        // ── Main chart ────────────────────────────────────────────────────────
+        const mR = mainCt.getBoundingClientRect();
+        const W  = mR.width  || 600;
+        const H  = mR.height || 340;
+        const mL = 58, mRt = 20, mT = 14, mB = 28;
+        const iW = W - mL - mRt;
+        const iH = H - mT - mB;
+
+        const svgM = d3.select(mainCt).append('svg').attr('width', W).attr('height', H);
+        svgM.append('defs').append('clipPath').attr('id', 'mg-stk-clip')
+            .append('rect').attr('width', iW).attr('height', iH + 1);
+        const gM = svgM.append('g').attr('transform', `translate(${mL},${mT})`);
+
+        const xM = d3.scaleTime().domain([winStart, winEnd]).range([0, iW]);
+        const yM = d3.scaleLinear().domain([0, yMax * 1.05]).range([iH, 0]);
+
+        // Grid
+        gM.append('g').attr('class', 'mg-grid')
+          .call(d3.axisLeft(yM).ticks(5).tickSize(-iW).tickFormat(''))
+          .selectAll('line').attr('stroke', 'rgba(128,128,128,0.12)');
+        gM.select('.mg-grid .domain').remove();
+
+        const xAxisG = gM.append('g').attr('transform', `translate(0,${iH})`);
+        const yAxisG = gM.append('g');
+
+        function drawAxes() {
+            xAxisG.call(d3.axisBottom(xM).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
+                  .selectAll('text').attr('font-size', '10px');
+            yAxisG.call(d3.axisLeft(yM).ticks(5).tickFormat(fmtY))
+                  .selectAll('text').attr('font-size', '10px');
+            gM.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.3)');
+        }
+        drawAxes();
+
+        const areaGen = d3.area()
+            .x(d => xM(d.data.t))
+            .y0(d => yM(d[0]))
+            .y1(d => yM(d[1]))
+            .curve(d3.curveMonotoneX);
+
+        const areasG = gM.append('g').attr('clip-path', 'url(#mg-stk-clip)');
+        const areaPaths = {};
+        layers.forEach(layer => {
+            areaPaths[layer.key] = areasG.append('path')
+                .datum(layer)
+                .attr('fill', colorMap[layer.key] || '#888')
+                .attr('fill-opacity', 0.72)
+                .attr('stroke', colorMap[layer.key] || '#888')
+                .attr('stroke-width', 0.8)
+                .attr('stroke-opacity', 0.9)
+                .attr('d', areaGen);
+        });
+
+        // Tooltip + crosshair
+        const tip = d3.select(mainCt).append('div')
+            .style('position', 'absolute').style('pointer-events', 'none')
+            .style('background', 'rgba(18,18,18,0.92)').style('color', '#e8e8e8')
+            .style('padding', '6px 10px').style('border-radius', '4px')
+            .style('font-size', '11px').style('line-height', '1.7').style('display', 'none')
+            .style('z-index', '9999').style('font-family', MONO);
+
+        const vline = gM.append('line').attr('y1', 0).attr('y2', iH)
+            .attr('stroke', 'rgba(160,160,160,0.4)').attr('stroke-width', 1).attr('display', 'none');
+
+        gM.append('rect').attr('width', iW).attr('height', iH)
+          .attr('fill', 'transparent').style('cursor', 'crosshair')
+          .on('mousemove', event => {
+              const [mx] = d3.pointer(event);
+              const hover = xM.invert(mx).getTime();
+              vline.attr('x1', mx).attr('x2', mx).attr('display', null);
+
+              // Find closest row by time
+              let closest = rows[0];
+              let bestDiff = Math.abs(rows[0].t.getTime() - hover);
+              for (const r of rows) {
+                  const d = Math.abs(r.t.getTime() - hover);
+                  if (d < bestDiff) { bestDiff = d; closest = r; }
+              }
+              const total = keys.reduce((s, k) => s + closest[k], 0);
+              const rowsHtml = [...parsed].reverse().map(s =>
+                  `<span style="color:${s.color}">■</span> ${s.key}: ${closest[s.key].toFixed(1)} MB`
+              ).join('<br>');
+              tip.style('display', 'block')
+                 .html(`<strong>${d3.timeFormat('%H:%M:%S')(closest.t)}</strong> &nbsp;Σ ${total.toFixed(1)} MB<br>${rowsHtml}`);
+              const cr = mainCt.getBoundingClientRect();
+              let lx = event.clientX - cr.left + 14;
+              if (lx + 220 > W) lx = event.clientX - cr.left - 230;
+              tip.style('left', lx + 'px').style('top', (event.clientY - cr.top - 20) + 'px');
+          })
+          .on('mouseleave', () => { vline.attr('display', 'none'); tip.style('display', 'none'); });
+
+        // ── Brush / navigator ─────────────────────────────────────────────────
+        if (!brushCt) return;
+        const bR  = brushCt.getBoundingClientRect();
+        const bW  = bR.width  || W;
+        const bH  = bR.height || 28;
+        const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
+        const biW = bW - bL - bRt2;
+        const biH = bH - bT - bB;
+
+        const svgB = d3.select(brushCt).append('svg').attr('width', bW).attr('height', bH);
+        const gB   = svgB.append('g').attr('transform', `translate(${bL},${bT})`);
+
+        const xB = d3.scaleTime().domain([tMin, tMax]).range([0, biW]);
+        const yB = d3.scaleLinear().domain([0, yMax]).range([biH, 0]);
+
+        gB.append('rect').attr('width', biW).attr('height', biH)
+          .attr('fill', 'rgba(128,128,128,0.06)').attr('rx', 2);
+
+        // Mini stacked areas inside the brush overview
+        const miniArea = d3.area()
+            .x(d => xB(d.data.t))
+            .y0(d => yB(d[0]))
+            .y1(d => yB(d[1]))
+            .curve(d3.curveMonotoneX);
+
+        layers.forEach(layer => {
+            gB.append('path').datum(layer)
+              .attr('fill', colorMap[layer.key] || '#888')
+              .attr('fill-opacity', 0.6)
+              .attr('d', miniArea);
+        });
+
+        gB.append('g').attr('transform', `translate(0,${biH})`)
+          .call(d3.axisBottom(xB).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
+          .selectAll('text').attr('font-size', '9px');
+        gB.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.25)');
+        gB.selectAll('.tick line').attr('stroke', 'rgba(128,128,128,0.25)');
+
+        const brushX = d3.brushX()
+            .extent([[0, 0], [biW, biH]])
+            .on('brush end', ({ selection, sourceEvent }) => {
+                if (!selection || !sourceEvent) return;
+                const [d0, d1] = selection.map(xB.invert);
+                xM.domain([d0, d1]);
+                drawAxes();
+                layers.forEach(layer => areaPaths[layer.key].attr('d', areaGen));
+                vline.attr('display', 'none');
+            });
+
+        const brushG = gB.append('g').call(brushX);
+        brushG.select('.selection')
+              .attr('fill', 'rgba(100,150,255,0.15)')
+              .attr('stroke', 'rgba(100,150,255,0.5)')
+              .attr('stroke-width', 1);
+        brushG.selectAll('.handle')
+              .attr('fill', 'rgba(120,160,255,0.75)')
+              .attr('rx', 3);
+
+        brushG.call(brushX.move, [xB(winStart), xB(winEnd)]);
+    }
+
+    return { render };
+})();
 FILE src/NxtUI.Web/wwwroot/js/d3-memory-sunburst.js
-LENGTH 14215
+LENGTH 15448
 // Batch Monitor — Memory Sunburst Chart
 // Renders a two-ring sunburst: outer ring = groups, inner ring = individual series.
 // Data format: { total: number, groups: [{ name, value, color, children: [{ name, value, color }] }] }
@@ -35687,9 +36571,11 @@ window.memoryLineChart = (() => {
 
         // Convert ms timestamps to Date points per series
         const parsed = series.map(s => ({
-            name:   s.name,
-            color:  s.color,
-            points: s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
+            name:    s.name,
+            label:   s.label || null,
+            color:   s.color,
+            isFaded: !!s.isFaded,
+            points:  s.timestamps.map((t, i) => ({ t: new Date(t), v: s.values[i] }))
         })).filter(s => s.points.length > 0);
         if (parsed.length === 0) return;
 
@@ -35748,7 +36634,9 @@ window.memoryLineChart = (() => {
         parsed.forEach(s => {
             paths[s.name] = linesG.append('path').datum(s.points)
                 .attr('fill', 'none').attr('stroke', s.color)
-                .attr('stroke-width', 1.8).attr('d', lineGen);
+                .attr('stroke-width', s.isFaded ? 1.4 : 1.8)
+                .attr('stroke-opacity', s.isFaded ? 0.45 : 1)
+                .attr('d', lineGen);
         });
 
         // Tooltip + crosshair
@@ -35771,7 +36659,9 @@ window.memoryLineChart = (() => {
               const rows = parsed.map(s => {
                   const closest = s.points.reduce((a, b) =>
                       Math.abs(b.t - hover) < Math.abs(a.t - hover) ? b : a, s.points[0]);
-                  return `<span style="color:${s.color}">■</span> ${s.name}: ${closest.v.toFixed(1)} MB`;
+                  const lbl = s.label || s.name;
+                  const opacity = s.isFaded ? '0.5' : '1';
+                  return `<span style="color:${s.color};opacity:${opacity}">■</span> ${lbl}: ${closest.v.toFixed(1)} MB`;
               }).join('<br>');
               tip.style('display', 'block')
                  .html(`<strong>${d3.timeFormat('%H:%M:%S')(hover)}</strong><br>${rows}`);
@@ -35786,7 +36676,7 @@ window.memoryLineChart = (() => {
         if (!brushCt) return;
         const bR  = brushCt.getBoundingClientRect();
         const bW  = bR.width  || W;
-        const bH  = bR.height || 56;
+        const bH  = bR.height || 28;
         const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
         const biW = bW - bL - bRt2;
         const biH = bH - bT - bB;
@@ -35837,6 +36727,27 @@ window.memoryLineChart = (() => {
 
     return { render };
 })();
+
+// ── Legend panel resize (right side drag handle) ──────────────────────────────
+window.mgLegendResize = function (handleEl, legendEl) {
+    if (!handleEl || !legendEl) return;
+    handleEl.addEventListener('mousedown', e => {
+        const startX = e.clientX;
+        const startW = legendEl.offsetWidth;
+        const onMove = e2 => {
+            // handle is on the LEFT edge of the right panel → drag left = wider
+            const w = Math.max(150, Math.min(520, startW + (startX - e2.clientX)));
+            legendEl.style.width = w + 'px';
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup',  onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup',  onUp);
+        e.preventDefault();
+    });
+};
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
 LENGTH 48129
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
@@ -37934,17 +38845,20 @@ window.bmJsonViewer = (() => {
     return { render };
 })();
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.js
-LENGTH 5733
+LENGTH 11618
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
-// Log format:  timestamp|level|host|pid|threadId|message|caller[|extra1|extra2|...]
-//   • Fields 0-6 are fixed-position; caller is always at index 6.
-//   • Any pipe-delimited fields beyond index 6 are captured as `extras: string[]`.
-//   • Lines that do NOT start with a timestamp are continuations of the previous entry
-//     (stack traces, exception detail lines, etc.)
+// Supports two parsing modes:
+//   1. Legacy (no formats supplied): fixed-position pipe-delimited format
+//      timestamp|level|host|pid|threadId|message|caller[|extra1|...]
+//   2. Configurable (formats array supplied): each format string uses placeholders
+//      {timestamp}, {level}, {host}, {pid}, {thread}, {message}, {caller},
+//      {*} (anything on the line, non-capturing), {$} (end of line), {newline}
+//      The best matching format is auto-detected from the first lines.
+//      If no format matches, every line is treated as plain text.
 
-/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number }} LogEntry */
+/** @typedef {{ lineIndex:number, timestamp:string, level:string, host:string, pid:number, threadId:number, message:string, caller:string, extras:string[], continuations:string[], displayLineCount:number, isPlainText?:boolean }} LogEntry */
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
@@ -37953,52 +38867,209 @@ export function isTimestampLine(line) {
     return TIMESTAMP_RE.test(line);
 }
 
-/**
- * Parse raw log text into an array of structured entries.
- * Multi-line continuation lines (no leading timestamp) are attached
- * to the preceding entry's `continuations` array.
- */
-export function parseLog(rawText) {
-    if (!rawText) return [];
+// ── Configurable format compiler ─────────────────────────────────────────────
 
+/**
+ * Compile a placeholder format string into a named-capture regex.
+ * Returns a compiled format object, or null if the string is invalid/trivial.
+ * @param {string} formatStr
+ * @returns {{ regex: RegExp, fieldNames: string[], hasNewline: boolean, formatStr: string } | null}
+ */
+export function compileFormat(formatStr) {
+    if (!formatStr) return null;
+
+    // Tokenize: split into placeholders and literals
+    const tokens = [];
+    const tokenRe = /\{([^}]+)\}/g;
+    let last = 0, m;
+    while ((m = tokenRe.exec(formatStr)) !== null) {
+        if (m.index > last) tokens.push({ type: 'lit', val: formatStr.slice(last, m.index) });
+        tokens.push({ type: 'ph', name: m[1] });
+        last = m.index + m[0].length;
+    }
+    if (last < formatStr.length) tokens.push({ type: 'lit', val: formatStr.slice(last) });
+
+    const CAPTURE = new Set(['timestamp', 'level', 'host', 'pid', 'thread', 'message', 'caller']);
+    const fieldNames = [];
+    let pattern = '^';
+    let hasNewline = false;
+
+    for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (tok.type === 'lit') {
+            pattern += escapeRegex(tok.val);
+            continue;
+        }
+        const name = tok.name;
+        if (name === 'newline') { pattern += '\\n'; hasNewline = true; continue; }
+        if (name === '$')       { pattern += '(?=$|\\n)'; continue; }
+        if (name === '*')       { pattern += '[^\\n]*'; continue; }
+
+        // Determine stopper based on what follows this field
+        const next = tokens[i + 1];
+        let stopper;
+        if (!next) {
+            stopper = '[^\\n]*';  // last token: greedy to EOL
+        } else if (next.type === 'ph') {
+            if (next.name === '$' || next.name === '*' || next.name === 'newline') {
+                stopper = '[^\\n]*';  // before EOL marker: greedy
+            } else {
+                stopper = '[^\\n]*?'; // before another capture: non-greedy
+            }
+        } else {
+            // Next is a literal — stop before its first character
+            const fc = next.val[0];
+            const fcEsc = (fc === ']' || fc === '\\' || fc === '^' || fc === '-') ? ('\\' + fc) : fc;
+            stopper = `[^\\n${fcEsc}]*`;
+        }
+
+        if (CAPTURE.has(name)) {
+            pattern += `(?<${name}>${stopper})`;
+            fieldNames.push(name);
+        } else {
+            pattern += `(?:${stopper})`;
+        }
+    }
+
+    if (fieldNames.length < 2) return null; // too few fields to be useful
+
+    return { regex: new RegExp(pattern, 'gm'), fieldNames, hasNewline, formatStr };
+}
+
+/**
+ * Detect the best matching format for rawText by trying each compiled format.
+ * Returns the first format that matches at least 3 times in the first 10 KB,
+ * or null (plain text fallback).
+ * @param {string} rawText
+ * @param {Array} compiledFormats
+ * @returns {object|null}
+ */
+export function detectFormat(rawText, compiledFormats) {
+    if (!compiledFormats || compiledFormats.length === 0) return null;
+    const sample = rawText.length > 10000 ? rawText.slice(0, 10000) : rawText;
+    for (const fmt of compiledFormats) {
+        const re = new RegExp(fmt.regex.source, fmt.regex.flags);
+        re.lastIndex = 0;
+        let matches = 0;
+        let hit;
+        while ((hit = re.exec(sample)) !== null) {
+            if (hit[0] === '') { re.lastIndex++; continue; }
+            if (++matches >= 3) return fmt;
+        }
+    }
+    return null;
+}
+
+// ── Format-driven parsing ────────────────────────────────────────────────────
+
+/**
+ * Parse rawText using a pre-detected format (skips detection).
+ * Pass detectedFormat = null for plain-text mode.
+ * Used by appendRaw to continue with the same format as the initial render.
+ * @param {string} rawText
+ * @param {object|null} detectedFormat
+ * @returns {LogEntry[]}
+ */
+export function parseMore(rawText, detectedFormat) {
+    if (!rawText) return [];
+    return detectedFormat ? parseWithFormat(rawText, detectedFormat) : parsePlainText(rawText);
+}
+
+function parsePlainText(rawText) {
     const lines = rawText.split('\n');
     const entries = [];
-    let current = null;
-
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        // Skip a single trailing empty line (common at end of file)
         if (line === '' && i === lines.length - 1) continue;
+        entries.push({
+            lineIndex: i, timestamp: '', level: '', host: '',
+            pid: 0, threadId: 0, message: line, caller: '',
+            extras: [], continuations: [], displayLineCount: 1,
+            isPlainText: true,
+        });
+    }
+    return entries;
+}
 
-        if (TIMESTAMP_RE.test(line)) {
-            current = parseLine(line, i);
-            entries.push(current);
-        } else if (current !== null) {
-            current.continuations.push(line);
-            current.displayLineCount++;
+function parseWithFormat(rawText, fmt) {
+    const re = new RegExp(fmt.regex.source, fmt.regex.flags);
+    re.lastIndex = 0;
+    const entries = [];
+    let lineIndex = 0;
+    let prevEnd   = 0;
+    let m;
+
+    while ((m = re.exec(rawText)) !== null) {
+        if (m[0] === '') { re.lastIndex++; continue; }
+
+        const g = m.groups ?? {};
+
+        // Count newlines in gap between previous match end and this match start
+        const gap = rawText.slice(prevEnd, m.index);
+        const gapNewlines = countNewlines(gap);
+        lineIndex += gapNewlines;
+
+        // Gap content (continuation lines of the previous entry)
+        if (gap.trim() && entries.length > 0) {
+            const contLines = gap.split('\n').filter(l => l.length > 0);
+            const last = entries[entries.length - 1];
+            last.continuations.push(...contLines);
+            last.displayLineCount += contLines.length;
         }
-        // Lines before any entry (pre-header noise) are silently discarded
+
+        const matchNewlines = countNewlines(m[0]);
+
+        entries.push({
+            lineIndex,
+            timestamp: (g.timestamp ?? '').trim(),
+            level:     (g.level     ?? '').trim(),
+            host:      g.host    ?? '',
+            pid:       parseInt(g.pid,    10) || 0,
+            threadId:  parseInt(g.thread, 10) || 0,
+            message:   g.message ?? '',
+            caller:    g.caller  ?? '',
+            extras:    [],
+            continuations:    [],
+            displayLineCount: 1 + matchNewlines,
+            isPlainText:      false,
+        });
+
+        lineIndex += matchNewlines;
+        prevEnd    = re.lastIndex;
+    }
+
+    // Remaining text after last match → continuation of last entry
+    if (prevEnd < rawText.length && entries.length > 0) {
+        const tail = rawText.slice(prevEnd);
+        const tailLines = tail.split('\n').filter(l => l.length > 0);
+        const last = entries[entries.length - 1];
+        last.continuations.push(...tailLines);
+        last.displayLineCount += tailLines.length;
     }
 
     return entries;
 }
 
-function parseLine(line, lineIndex) {
-    const parts = line.split('|');
+function countNewlines(text) {
+    let n = 0;
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '\n') n++;
+    }
+    return n;
+}
 
-    // Fixed positions: 0=timestamp, 1=level, 2=host, 3=pid, 4=threadId, 5=message, 6=caller
-    // Parts beyond index 6 are unknown extra fields, captured as extras[].
-    // Fewer than 7 parts: be lenient and fill what we can.
-    const timestamp = parts[0] ?? '';
-    const level     = parts[1] ?? '';
-    const host      = parts[2] ?? '';
-    const pid       = parseInt(parts[3], 10) || 0;
-    const threadId  = parts.length > 5 ? (parseInt(parts[4], 10) || 0) : 0;
-    const message   = parts[5] ?? parts[4] ?? '';
-    const caller    = parts[6] ?? '';
-    const extras    = parts.length > 7 ? parts.slice(7) : [];
-
-    return { lineIndex, timestamp, level: level.trim(), host, pid, threadId, message, caller, extras, continuations: [], displayLineCount: 1 };
+/**
+ * Parse raw log text into an array of structured entries.
+ * Auto-detects the best matching format from compiledFormats and falls back
+ * to plain text if none matches (every line becomes its own entry).
+ * @param {string} rawText
+ * @param {Array} [compiledFormats]
+ * @returns {LogEntry[]}
+ */
+export function parseLog(rawText, compiledFormats) {
+    if (!rawText) return [];
+    const fmt = detectFormat(rawText, compiledFormats ?? []);
+    return fmt ? parseWithFormat(rawText, fmt) : parsePlainText(rawText);
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -38014,12 +39085,11 @@ export function buildRegex(term, { isRegex = false, caseSensitive = false } = {}
     if (!term) return null;
     const flags = caseSensitive ? 'g' : 'gi';
     const pattern = isRegex ? term : escapeRegex(term);
-    return new RegExp(pattern, flags); // throws SyntaxError on invalid regex
+    return new RegExp(pattern, flags);
 }
 
 /**
  * Find all entry indices whose searchable text matches `re`.
- * Searches: level, host, message, caller, and all continuation lines.
  * @param {LogEntry[]} entries
  * @param {RegExp} re
  * @returns {number[]}
@@ -38034,6 +39104,10 @@ export function findMatches(entries, re) {
 }
 
 function entrySearchText(entry) {
+    if (entry.isPlainText) {
+        const base = entry.message;
+        return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
+    }
     const base = `${entry.timestamp}|${entry.level}|${entry.host}|${entry.pid}|${entry.threadId}|${entry.message}|${entry.caller}`
         + (entry.extras.length ? '|' + entry.extras.join('|') : '');
     return entry.continuations.length ? base + '\n' + entry.continuations.join('\n') : base;
@@ -38044,7 +39118,6 @@ function entrySearchText(entry) {
 /**
  * Return an HTML string where every occurrence of `re` in `text` is
  * wrapped with <mark class="lv-hl">…</mark>.
- * Input text is HTML-escaped before matching.
  * @param {string} text
  * @param {RegExp | null} re
  * @returns {string}
@@ -38063,7 +39136,7 @@ export function highlightText(text, re) {
         result += safe.slice(lastEnd, m.index);
         result += `<mark class="lv-hl">${m[0]}</mark>`;
         lastEnd = cloned.lastIndex;
-        if (m[0] === '') { cloned.lastIndex++; } // prevent infinite loop on zero-width match
+        if (m[0] === '') { cloned.lastIndex++; }
     }
     result += safe.slice(lastEnd);
     return result;
@@ -38313,7 +39386,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 32630
+LENGTH 33212
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -38325,7 +39398,7 @@ LENGTH 32630
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=4';
+import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=5';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -38645,16 +39718,20 @@ function renderRows(vp) {
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
         buf.push(`<span class="lv-lineno" title="line ${e.lineIndex + 1}">${lineNo}</span>`);
-        const tsParts = e.timestamp.split(' ');
-        const tsDate  = escapeHtml(tsParts[0] ?? e.timestamp);
-        const tsTime  = tsParts[1] ? ` <span class="lv-ts-time">${escapeHtml(tsParts[1])}</span>` : '';
-        buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
-        buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
-        buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
-        buf.push(`<span class="lv-pid" title="pid">${escapeHtml(e.pid)}</span>`);
-        if (e.threadId !== 0) buf.push(`<span class="lv-tid" title="tid">${escapeHtml(e.threadId)}</span>`);
-        buf.push(`<span class="lv-msg">${msgHtml}</span>`);
-        if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
+        if (e.isPlainText) {
+            buf.push(`<span class="lv-msg">${msgHtml}</span>`);
+        } else {
+            const tsParts = e.timestamp.split(' ');
+            const tsDate  = escapeHtml(tsParts[0] ?? e.timestamp);
+            const tsTime  = tsParts[1] ? ` <span class="lv-ts-time">${escapeHtml(tsParts[1])}</span>` : '';
+            buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
+            buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
+            buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
+            buf.push(`<span class="lv-pid" title="pid">${escapeHtml(e.pid)}</span>`);
+            if (e.threadId !== 0) buf.push(`<span class="lv-tid" title="tid">${escapeHtml(e.threadId)}</span>`);
+            buf.push(`<span class="lv-msg">${msgHtml}</span>`);
+            if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
+        }
         buf.push(`</div>`); // .lv-fields
 
         for (const cont of e.continuations) {
@@ -38857,21 +39934,31 @@ function _createViewport(container, doc, options) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+function _compileFormats(formatStrs) {
+    if (!formatStrs || formatStrs.length === 0) return [];
+    return formatStrs.map(compileFormat).filter(Boolean);
+}
+
 /**
  * Render a log file into `container`. Creates a new document and a viewport.
  * Returns the docId so callers can attach additional viewports later.
  * @param {HTMLElement} container
  * @param {string}      rawText
- * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
+ * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean, formats?: string[] }} options
  * @returns {string} docId
  */
 function render(container, rawText, options = {}) {
     destroy(container);
 
+    const raw = rawText ?? '';
+    const compiledFormats = _compileFormats(options.formats);
+    const detectedFormat  = detectFormat(raw, compiledFormats);
+
     const docId = _newDocId();
     const doc = {
         docId,
-        entries:    parseLog(rawText ?? ''),
+        entries:       parseMore(raw, detectedFormat),
+        detectedFormat,
         bookmarks:  new Map(),
         _viewports: new Set(),
     };
@@ -38915,7 +40002,7 @@ function appendRaw(container, newRawText) {
     const doc     = vp.doc;
     const entries = doc.entries;
 
-    const newEntries = parseLog(newRawText);
+    const newEntries = parseMore(newRawText, doc.detectedFormat);
     if (newEntries.length === 0) return;
 
     const lastSourceLine = entries.length > 0

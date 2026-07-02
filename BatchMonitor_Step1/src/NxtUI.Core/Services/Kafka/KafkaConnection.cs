@@ -15,14 +15,9 @@ namespace NxtUI.Core.Services.Kafka;
 /// For SASL/SCRAM or SASL/PLAIN, populate <see cref="KafkaSettings.SaslMechanism"/>,
 /// <see cref="KafkaSettings.SaslUsername"/>, and <see cref="KafkaSettings.SaslPassword"/>.
 /// </remarks>
-public sealed class KafkaConnection
+public sealed class KafkaConnection(IOptions<KafkaSettings> options)
 {
-    private readonly KafkaSettings _settings;
-
-    public KafkaConnection(IOptions<KafkaSettings> options)
-    {
-        _settings = options.Value;
-    }
+    private readonly KafkaSettings _settings = options.Value;
 
     /// <summary>Returns a producer config pre-wired with security settings.</summary>
     public ProducerConfig BuildProducerConfig() =>

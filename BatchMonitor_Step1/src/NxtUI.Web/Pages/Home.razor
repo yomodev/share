@@ -6,6 +6,7 @@
 @inject IRunService RunService
 @inject InfraHealthCache HealthCache
 @inject ILogger<Home> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-home">
@@ -113,10 +114,10 @@
 
             <div class="bm-infra-sep"></div>
 
-            <MudTooltip Text="@($"last checked {_kafkaHealth?.CheckedAt.ToString("HH:mm:ss") ?? "--:--:--"} UTC")" Placement="Placement.Bottom">
+            <MudTooltip Text="@($"last checked {(_kafkaHealth is not null ? DtSvc.Format(_kafkaHealth.CheckedAt, "HH:mm:ss") : "--:--:--")}{DtSvc.ZoneSuffix}")" Placement="Placement.Bottom">
                 <div class="bm-infra-lastupdate">
                     <span class="bm-infra-lastupdate-label bm-muted">Last update</span>
-                    <span class="bm-infra-time bm-muted">@(_kafkaHealth?.CheckedAt.ToString("HH:mm") ?? "--:--")</span>
+                    <span class="bm-infra-time bm-muted">@(_kafkaHealth is not null ? DtSvc.Format(_kafkaHealth.CheckedAt, "HH:mm") : "--:--")</span>
                 </div>
             </MudTooltip>
 
@@ -182,7 +183,7 @@
                 </MudTd>
                 <MudTd>
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @context.Start.ToString("HH:mm:ss") UTC
+                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
                     </MudText>
                 </MudTd>
                 <MudTd>
@@ -296,10 +297,10 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnTreemapPidClicked(int pid)
+    private void OnTreemapPidClicked(string key)
     {
         var tab = TabModel.CreateMemoryGraph(EnvService.SelectedId);
-        tab.NavigationHint = pid.ToString();
+        tab.NavigationHint = key;
         TabService.OpenOrFocus(tab);
     }
 

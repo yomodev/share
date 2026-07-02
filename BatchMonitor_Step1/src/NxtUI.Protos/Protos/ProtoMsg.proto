@@ -1,0 +1,12 @@
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Protos";
+package nxtui;
+
+// Generic envelope used when no specific type matches a topic.
+// Services typically set type_url to a fully-qualified type name and
+// place the actual serialised proto in payload.
+message ProtoMsg {
+  string type_url = 1;
+  bytes  payload  = 2;
+  map<string, string> metadata = 3;
+}

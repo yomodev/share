@@ -1,0 +1,31 @@
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Protos";
+package nxtui;
+
+import "google/protobuf/timestamp.proto";
+
+enum OrderStatus {
+  ORDER_STATUS_UNKNOWN   = 0;
+  ORDER_STATUS_CREATED   = 1;
+  ORDER_STATUS_CONFIRMED = 2;
+  ORDER_STATUS_SHIPPED   = 3;
+  ORDER_STATUS_DELIVERED = 4;
+  ORDER_STATUS_CANCELLED = 5;
+}
+
+message OrderEvent {
+  string      order_id     = 1;
+  string      customer_id  = 2;
+  OrderStatus status       = 3;
+  double      total_amount = 4;
+  string      currency     = 5;
+  repeated OrderLine lines = 6;
+  google.protobuf.Timestamp occurred_at = 7;
+  string correlation_id = 8;
+}
+
+message OrderLine {
+  string sku      = 1;
+  int32  quantity = 2;
+  double price    = 3;
+}

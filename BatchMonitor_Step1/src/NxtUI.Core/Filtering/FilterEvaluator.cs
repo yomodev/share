@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace NxtUI.Filtering;
@@ -87,10 +88,47 @@ public static class FilterEvaluator
             caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
     }
 
-    private static object? GetProperty(object obj, string field) =>
-        obj.GetType()
-           .GetProperty(field, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-           ?.GetValue(obj);
+    private static object? GetProperty(object obj, string field)
+    {
+        var direct = obj.GetType()
+            .GetProperty(field, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+            ?.GetValue(obj);
+
+        if (direct is not null) return direct;
+
+        // Fallback: if the object has a JsonPayload string, search inside it.
+        // This lets payload field filters (e.g. orderId:>0) work on deserialized proto messages.
+        var jsonPayload = obj.GetType()
+            .GetProperty("JsonPayload", BindingFlags.Public | BindingFlags.Instance)
+            ?.GetValue(obj) as string;
+
+        if (string.IsNullOrEmpty(jsonPayload)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonPayload);
+            if (doc.RootElement.TryGetProperty(field, out var elem))
+                return ExtractJsonValue(elem);
+
+            // Also try camelCase variant
+            var camel = char.ToLowerInvariant(field[0]) + field[1..];
+            if (doc.RootElement.TryGetProperty(camel, out var camelElem))
+                return ExtractJsonValue(camelElem);
+        }
+        catch { }
+
+        return null;
+    }
+
+    private static object? ExtractJsonValue(JsonElement elem) => elem.ValueKind switch
+    {
+        JsonValueKind.Number when elem.TryGetDouble(out var d) => d,
+        JsonValueKind.String  => elem.GetString(),
+        JsonValueKind.True    => true,
+        JsonValueKind.False   => false,
+        JsonValueKind.Null    => null,
+        _                     => elem.GetRawText(),
+    };
 
     private static double ToDouble(object? v) => v switch
     {

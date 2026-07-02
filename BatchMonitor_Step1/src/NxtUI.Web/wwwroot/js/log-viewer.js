@@ -9,7 +9,7 @@
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseLog, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=4';
+import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=5';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -329,16 +329,20 @@ function renderRows(vp) {
         buf.push(`<div class="lv-fields" style="white-space:${ws}">`);
         buf.push(`${bmHtml}`);
         buf.push(`<span class="lv-lineno" title="line ${e.lineIndex + 1}">${lineNo}</span>`);
-        const tsParts = e.timestamp.split(' ');
-        const tsDate  = escapeHtml(tsParts[0] ?? e.timestamp);
-        const tsTime  = tsParts[1] ? ` <span class="lv-ts-time">${escapeHtml(tsParts[1])}</span>` : '';
-        buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
-        buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
-        buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
-        buf.push(`<span class="lv-pid" title="pid">${escapeHtml(e.pid)}</span>`);
-        if (e.threadId !== 0) buf.push(`<span class="lv-tid" title="tid">${escapeHtml(e.threadId)}</span>`);
-        buf.push(`<span class="lv-msg">${msgHtml}</span>`);
-        if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
+        if (e.isPlainText) {
+            buf.push(`<span class="lv-msg">${msgHtml}</span>`);
+        } else {
+            const tsParts = e.timestamp.split(' ');
+            const tsDate  = escapeHtml(tsParts[0] ?? e.timestamp);
+            const tsTime  = tsParts[1] ? ` <span class="lv-ts-time">${escapeHtml(tsParts[1])}</span>` : '';
+            buf.push(`<span class="lv-ts">${tsDate}${tsTime}</span>`);
+            buf.push(`<span class="lv-lv lv-lv-${levelCss}">${escapeHtml(e.level)}</span>`);
+            buf.push(`<span class="lv-host">${escapeHtml(e.host)}</span>`);
+            buf.push(`<span class="lv-pid" title="pid">${escapeHtml(e.pid)}</span>`);
+            if (e.threadId !== 0) buf.push(`<span class="lv-tid" title="tid">${escapeHtml(e.threadId)}</span>`);
+            buf.push(`<span class="lv-msg">${msgHtml}</span>`);
+            if (e.caller) buf.push(`<span class="lv-caller">${calHtml}</span>`);
+        }
         buf.push(`</div>`); // .lv-fields
 
         for (const cont of e.continuations) {
@@ -541,21 +545,31 @@ function _createViewport(container, doc, options) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+function _compileFormats(formatStrs) {
+    if (!formatStrs || formatStrs.length === 0) return [];
+    return formatStrs.map(compileFormat).filter(Boolean);
+}
+
 /**
  * Render a log file into `container`. Creates a new document and a viewport.
  * Returns the docId so callers can attach additional viewports later.
  * @param {HTMLElement} container
  * @param {string}      rawText
- * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
+ * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean, formats?: string[] }} options
  * @returns {string} docId
  */
 function render(container, rawText, options = {}) {
     destroy(container);
 
+    const raw = rawText ?? '';
+    const compiledFormats = _compileFormats(options.formats);
+    const detectedFormat  = detectFormat(raw, compiledFormats);
+
     const docId = _newDocId();
     const doc = {
         docId,
-        entries:    parseLog(rawText ?? ''),
+        entries:       parseMore(raw, detectedFormat),
+        detectedFormat,
         bookmarks:  new Map(),
         _viewports: new Set(),
     };
@@ -599,7 +613,7 @@ function appendRaw(container, newRawText) {
     const doc     = vp.doc;
     const entries = doc.entries;
 
-    const newEntries = parseLog(newRawText);
+    const newEntries = parseMore(newRawText, doc.detectedFormat);
     if (newEntries.length === 0) return;
 
     const lastSourceLine = entries.length > 0

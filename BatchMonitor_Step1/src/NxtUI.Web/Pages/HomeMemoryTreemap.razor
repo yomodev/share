@@ -19,7 +19,7 @@
 @code {
     [Parameter] public string            Env            { get; set; } = string.Empty;
     [Parameter] public EventCallback     OnDataLoaded   { get; set; }
-    [Parameter] public EventCallback<int> OnPidClicked  { get; set; }
+    [Parameter] public EventCallback<string> OnPidClicked  { get; set; }
 
     private ElementReference                        _ref;
     private IDisposable?                            _sub;
@@ -62,7 +62,7 @@
     public void NotifyDataLoaded() => _ = OnDataLoaded.InvokeAsync();
 
     [JSInvokable]
-    public void OnLeafClicked(int pid) => _ = OnPidClicked.InvokeAsync(pid);
+    public void OnLeafClicked(string key) => _ = OnPidClicked.InvokeAsync(key);
 
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));

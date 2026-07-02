@@ -1,0 +1,16 @@
+{
+  "Kafka": {
+    "BootstrapServers": "kafka-staging-1:9092,kafka-staging-2:9092",
+    "TlsEnabled": true,
+    "TlsCaPath": "/etc/ssl/certs/kafka-staging-ca.pem",
+    "SaslMechanism": "ScramSha256",
+    "SaslUsername": "nxtui",
+    "SaslPassword": "change-me"
+  },
+  "Mongo": {
+    "ConnectionString": "mongodb://mongo-staging-1:27017,mongo-staging-2:27017/?replicaSet=rs0",
+    "DatabasePrefix": "BatchMonitor",
+    "Username": "nxtui",
+    "Password": "change-me"
+  }
+}

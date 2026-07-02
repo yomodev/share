@@ -70,11 +70,15 @@ public sealed class FilterParser
     }
 
     /// <summary>Parses <paramref name="input"/> and returns the AST root, or null for empty input.</summary>
-    public FilterNode? Parse(string input)
+    /// <param name="useUtc">
+    /// When false, date/time literals without a Z suffix are treated as server-local time
+    /// and converted to UTC for comparison. Literals ending in Z are always UTC.
+    /// </param>
+    public FilterNode? Parse(string input, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
         var tokens = Tokenize(input);
-        var ctx    = new ParseContext(tokens);
+        var ctx    = new ParseContext(tokens, useUtc);
         var node   = ParseOr(ctx);
         return node;
     }
@@ -186,9 +190,10 @@ public sealed class FilterParser
     // PARSE CONTEXT
     // ═══════════════════════════════════════════════════════════════════════
 
-    private sealed class ParseContext(List<Token> tokens)
+    private sealed class ParseContext(List<Token> tokens, bool useUtc = true)
     {
         private int _pos;
+        public bool UseUtc => useUtc;
         public Token Current => tokens[_pos];
         public Token Peek(int offset = 1) =>
             _pos + offset < tokens.Count ? tokens[_pos + offset] : tokens[^1];
@@ -407,13 +412,13 @@ public sealed class FilterParser
         if (tok.Kind == TK.Word)
         {
             ctx.Consume();
-            return (InterpretWord(tok.Text), false);
+            return (InterpretWord(tok.Text, ctx.UseUtc), false);
         }
 
         return (null, false);
     }
 
-    private static FilterValue InterpretWord(string text)
+    private static FilterValue InterpretWord(string text, bool useUtc = true)
     {
         // null keyword
         if (text.Equals("null", StringComparison.OrdinalIgnoreCase))
@@ -424,7 +429,7 @@ public sealed class FilterParser
             return new NumberValue(num);
 
         // Absolute date / relative offset (includes hh:mm → today + time)
-        if (TryParseDate(text, out var dt))
+        if (TryParseDate(text, useUtc, out var dt))
             return new DateValue(dt);
 
         // String (glob or plain)
@@ -463,27 +468,33 @@ public sealed class FilterParser
         new(@"^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(:\d{2})?)?z?$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static bool TryParseDate(string text, out DateTime result)
+    private static bool TryParseDate(string text, bool useUtc, out DateTime result)
     {
         result = default;
         var textLower = text.ToLowerInvariant();
 
-        // Named dates (z suffix is a no-op for now — server parser always uses UTC).
+        // Z suffix forces UTC interpretation regardless of the useUtc setting.
+        bool hasZ  = textLower.EndsWith('z');
+        bool asUtc = useUtc || hasZ;
+
+        // Named dates — "now" is always UTC; today/yesterday respect setting.
         switch (textLower)
         {
             case "now" or "nowz":
                 result = DateTime.UtcNow;
                 return true;
             case "today" or "todayz":
-                result = DateTime.UtcNow.Date;
+                result = asUtc ? DateTime.UtcNow.Date : DateTime.Today.ToUniversalTime();
                 return true;
             case "yesterday" or "yesterdayz":
-                result = DateTime.UtcNow.Date.AddDays(-1);
+                result = asUtc
+                    ? DateTime.UtcNow.Date.AddDays(-1)
+                    : DateTime.Today.AddDays(-1).ToUniversalTime();
                 return true;
         }
 
-        // Relative offset: -7d / -2h / -30m / -1w  → now − N  (real past timestamp)
-        //                   7d /  2h /  30m /  1w  → today + N (age-based comparison)
+        // Relative offset: -7d / -2h / -30m / -1w  → now − N  (always UTC-relative)
+        //                   7d /  2h /  30m /  1w  → today + N
         var relMatch = RelativeDate.Match(text);
         if (relMatch.Success)
         {
@@ -503,41 +514,59 @@ public sealed class FilterParser
             }
             else
             {
+                var todayBase = asUtc ? DateTime.UtcNow.Date : DateTime.Today.ToUniversalTime();
                 result = relMatch.Groups[3].Value.ToLower() switch
                 {
-                    "s" => DateTime.UtcNow.Date.AddSeconds(amount),
-                    "m" => DateTime.UtcNow.Date.AddMinutes(amount),
-                    "h" => DateTime.UtcNow.Date.AddHours(amount),
-                    "d" => DateTime.UtcNow.Date.AddDays(amount),
-                    "w" => DateTime.UtcNow.Date.AddDays(amount * 7),
-                    _   => DateTime.UtcNow.Date,
+                    "s" => todayBase.AddSeconds(amount),
+                    "m" => todayBase.AddMinutes(amount),
+                    "h" => todayBase.AddHours(amount),
+                    "d" => todayBase.AddDays(amount),
+                    "w" => todayBase.AddDays(amount * 7),
+                    _   => todayBase,
                 };
             }
             return true;
         }
 
-        // Time-only (hh:mm or hh:mm:ss) → today's date + that time
+        // Time-only (hh:mm or hh:mm:ss) — today's date at the given time.
+        // With Z suffix or UTC setting: today UTC. Without: today local → UTC.
         var todMatch = TimeOnly.Match(text);
         if (todMatch.Success && !text.StartsWith('-'))
         {
             int th = int.Parse(todMatch.Groups[1].Value);
             int tm = int.Parse(todMatch.Groups[2].Value);
             int ts = todMatch.Groups[3].Success ? int.Parse(todMatch.Groups[3].Value) : 0;
-            result = DateTime.UtcNow.Date.AddHours(th).AddMinutes(tm).AddSeconds(ts);
+            var todayBase = asUtc ? DateTime.UtcNow.Date : DateTime.Today;
+            result = todayBase.AddHours(th).AddMinutes(tm).AddSeconds(ts);
+            if (!asUtc) result = result.ToUniversalTime();
             return true;
         }
 
-        // ISO date (with or without time, with or without z)
+        // ISO date (with or without time, with or without z).
         var isoMatch = IsoDate.Match(text);
         if (isoMatch.Success)
         {
-            // Normalise: replace lowercase 't' separator and ensure 'Z' suffix for parsing.
-            var normalised = text.TrimEnd('z', 'Z').Replace('t', 'T') + "Z";
-            if (DateTime.TryParse(normalised,
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
-                    out result))
-                return true;
+            var bare = text.TrimEnd('z', 'Z').Replace('t', 'T');
+            if (asUtc)
+            {
+                if (DateTime.TryParse(bare + "Z",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                        out result))
+                    return true;
+            }
+            else
+            {
+                // Treat as server-local time, convert to UTC.
+                if (DateTime.TryParse(bare,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeLocal,
+                        out result))
+                {
+                    result = result.ToUniversalTime();
+                    return true;
+                }
+            }
         }
 
         return false;

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using NxtUI.Configuration;
+using System.Security.Cryptography.X509Certificates;
 
 namespace NxtUI.Core.Services.Mongo;
 
@@ -21,13 +22,13 @@ namespace NxtUI.Core.Services.Mongo;
 /// </remarks>
 public sealed class MongoConnection
 {
-    private readonly MongoSettings  _settings;
-    private readonly IMongoClient   _client;
+    private readonly MongoSettings _settings;
+    private readonly IMongoClient _client;
 
     public MongoConnection(IOptions<MongoSettings> options)
     {
         _settings = options.Value;
-        _client   = BuildClient(_settings);
+        _client = BuildClient(_settings);
     }
 
     public IMongoClient Client => _client;
@@ -60,9 +61,7 @@ public sealed class MongoConnection
 
             if (!string.IsNullOrWhiteSpace(s.TlsCertificatePath))
             {
-                var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(
-                    s.TlsCertificatePath,
-                    s.TlsCertificatePassword);
+                var cert = new X509Certificate2(s.TlsCertificatePath, s.TlsCertificatePassword);
 
                 settings.SslSettings = new SslSettings
                 {
@@ -84,9 +83,12 @@ public sealed class MongoConnection
         if (string.IsNullOrWhiteSpace(username))
             return connectionString;
 
-        var url      = new MongoUrlBuilder(connectionString);
-        url.Username = username;
-        url.Password = password ?? string.Empty;
+        var url = new MongoUrlBuilder(connectionString)
+        {
+            Username = username,
+            Password = password ?? string.Empty
+        };
+
         return url.ToMongoUrl().ToString();
     }
 }

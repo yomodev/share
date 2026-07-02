@@ -2685,6 +2685,59 @@ tr.bm-row-searching td:first-child {
    ENVIRONMENT PAGE
    ================================================================ */
 
+/* ================================================================
+   KAFKA TOPIC INSPECTOR — payload type badge + stats panel
+   ================================================================ */
+
+.bm-kafka-mode-group { flex-shrink: 0; }
+
+.bm-kafka-payload-type {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: .03em;
+    background: var(--mud-palette-background-grey);
+    color: var(--mud-palette-text-secondary);
+}
+.bm-kafka-type-orderevent   { background: #1e3a5f; color: #7dd3fc; }
+.bm-kafka-type-paymentevent { background: #3b1f5e; color: #c4b5fd; }
+.bm-kafka-type-protomsg     { background: #1a3a2a; color: #86efac; }
+.bm-kafka-type-unknown      { background: var(--mud-palette-background-grey); color: var(--mud-palette-text-disabled); }
+
+.bm-kafka-stats-panel {
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    background: var(--mud-palette-background-grey);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.bm-kafka-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.bm-kafka-stats-table th {
+    padding: 4px 10px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    white-space: nowrap;
+}
+
+.bm-kafka-stats-table td { padding: 3px 10px; white-space: nowrap; }
+
+.bm-kafka-stats-row { cursor: pointer; transition: background .1s; }
+.bm-kafka-stats-row:hover { background: var(--mud-palette-action-hover); }
+
+/* ================================================================
+   ENVIRONMENT PAGE
+   ================================================================ */
+
 .bm-env-page {
     padding: 16px;
     height: 100%;

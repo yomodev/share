@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -55,5 +58,12 @@ public class MongoSettings
             ? DatabasePrefix
             : HeartbeatsDatabasePrefix;
         return $"{prefix}{environmentId}";
+    }
+
+    public string GetFingerprint()
+    {
+        var key = $"{ConnectionString}|{Username}|{TlsEnabled}|{TlsCertificatePath}";
+        var hash = MD5.HashData(Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(hash)[..12];
     }
 }

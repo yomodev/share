@@ -5,52 +5,62 @@
 @inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
 @inject ILogger<KafkaTopicInspector> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
 
-    <!-- Toolbar -->
+    <!-- Toolbar row 1: topic + stream controls + filter + count -->
     <div class="bm-batch-toolbar">
         <span class="bm-inspector-topic">
             <MudIcon Icon="@Icons.Material.Outlined.MoveToInbox" Size="Size.Small" Class="bm-inspector-topic-icon" />
             @TopicName
         </span>
 
-        <MudTooltip Text="@(_running ? "Pause" : "Resume")">
-            <MudIconButton Icon="@(_running ? Icons.Material.Outlined.Pause : Icons.Material.Outlined.PlayArrow)"
+        <!-- Start / Pause -->
+        <MudTooltip Text="@(_state == StreamState.Running ? "Pause" : "Start")">
+            <MudIconButton Icon="@(_state == StreamState.Running
+                                    ? Icons.Material.Outlined.Pause
+                                    : Icons.Material.Outlined.PlayArrow)"
                            Size="Size.Small"
-                           Color="@(_running ? Color.Warning : Color.Success)"
-                           OnClick="ToggleRunning" />
+                           Color="@(_state == StreamState.Running ? Color.Warning : Color.Success)"
+                           OnClick="ToggleStream" />
         </MudTooltip>
 
-        <MudTooltip Text="Restart — clear and fetch again">
+        <!-- Reset -->
+        <MudTooltip Text="Reset — clear messages and restart">
             <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt"
                            Size="Size.Small"
-                           OnClick="Restart" />
+                           OnClick="ResetStream" />
         </MudTooltip>
 
-        <MudTooltip Text="Clear messages">
-            <MudIconButton Icon="@Icons.Material.Outlined.ClearAll"
+        <!-- Stats popover -->
+        <MudTooltip Text="Partition stats">
+            <MudIconButton Icon="@Icons.Material.Outlined.Analytics"
                            Size="Size.Small"
-                           OnClick="Clear" />
+                           Color="@(_showStats ? Color.Primary : Color.Default)"
+                           OnClick="ToggleStats" />
         </MudTooltip>
 
         <FilterBox Value="@_filterText"
                    OnFilterChanged="OnFilterChanged"
                    ParseError="@_filterParseError"
-                   Placeholder="Filter messages…"
+                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
                    Class="bm-filter-input"
                    FieldHints="@_fieldHints" />
 
-        <MudSelect T="int" Value="_maxMessages" ValueChanged="OnMaxChanged"
-                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                   Style="width:110px;" Label="Mode">
-            <MudSelectItem Value="50">Last 50</MudSelectItem>
-            <MudSelectItem Value="100">Last 100</MudSelectItem>
-            <MudSelectItem Value="250">Last 250</MudSelectItem>
-            <MudSelectItem Value="500">Last 500</MudSelectItem>
-            <MudSelectItem Value="0">&#x221e; Live</MudSelectItem>
-        </MudSelect>
+        <!-- Mode shortcut buttons -->
+        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-kafka-mode-group">
+            <MudTooltip Text="Stream from beginning">
+                <MudButton OnClick="@(() => SetMode(""))">All</MudButton>
+            </MudTooltip>
+            <MudTooltip Text="Last 500 messages per partition">
+                <MudButton OnClick="@(() => SetMode("latest:500"))">L500</MudButton>
+            </MudTooltip>
+            <MudTooltip Text="Last 100 messages per partition">
+                <MudButton OnClick="@(() => SetMode("latest:100"))">L100</MudButton>
+            </MudTooltip>
+        </MudButtonGroup>
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -62,18 +72,62 @@
                 <span>@_messages.Count</span>
             }
             <span>&nbsp;msg@(_messages.Count == 1 ? "" : "s")</span>
-            @if (_maxMessages == 0 && _loading)
+            @if (_state == StreamState.Running)
             {
                 <MudIcon Icon="@Icons.Material.Outlined.FiberManualRecord"
                          Size="Size.Small" Color="Color.Error" Class="bm-inspector-live-dot" />
             }
+            else if (_state == StreamState.Paused)
+            {
+                <span class="bm-muted" style="font-size:10px;">paused</span>
+            }
         </span>
     </div>
+
+    <!-- Stats panel -->
+    @if (_showStats)
+    {
+        <div class="bm-kafka-stats-panel">
+            @if (_statsLoading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="height:2px;" />
+            }
+            else if (_stats.Count > 0)
+            {
+                <table class="bm-kafka-stats-table">
+                    <thead>
+                        <tr>
+                            <th>Partition</th>
+                            <th>Low offset</th>
+                            <th>High offset</th>
+                            <th>Messages</th>
+                            <th>First message</th>
+                            <th>Last message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in _stats)
+                        {
+                            <tr class="bm-kafka-stats-row" @onclick="@(() => AppendPartitionFilter(s.Partition))">
+                                <td><span class="bm-kafka-mono">@s.Partition</span></td>
+                                <td><span class="bm-kafka-mono">@s.LowWatermark</span></td>
+                                <td><span class="bm-kafka-mono">@s.HighWatermark</span></td>
+                                <td><span class="bm-kafka-mono">@s.MessageCount.ToString("N0")</span></td>
+                                <td><span class="bm-kafka-mono bm-muted">@(s.FirstMessageTimestamp.HasValue ? DtSvc.Format(s.FirstMessageTimestamp.Value, "yyyy-MM-dd HH:mm:ss") : "—")</span></td>
+                                <td><span class="bm-kafka-mono bm-muted">@(s.LastMessageTimestamp.HasValue  ? DtSvc.Format(s.LastMessageTimestamp.Value,  "HH:mm:ss")             : "—")</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <span class="bm-muted" style="font-size:10px;padding:4px 8px;">Click a row to filter by partition</span>
+            }
+        </div>
+    }
 
     <!-- Message table + detail side by side -->
     <div class="bm-inspector-body">
         <div class="bm-table-wrap">
-            @if (_loading && _messages.Count == 0)
+            @if (_state == StreamState.Running && _messages.Count == 0)
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
             }
@@ -93,7 +147,8 @@
                     <MudTh Style="white-space:nowrap;">Offset</MudTh>
                     <MudTh Style="white-space:nowrap;">Part</MudTh>
                     <MudTh Style="white-space:nowrap;">Key</MudTh>
-                    <MudTh Style="width:100%;">Value</MudTh>
+                    <MudTh Style="white-space:nowrap;">Type</MudTh>
+                    <MudTh Style="width:100%;">Payload</MudTh>
                     <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -107,10 +162,14 @@
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-inspector-preview">@TruncateValue(context.Value)</span>
+                        <span class="bm-kafka-payload-type bm-kafka-type-@context.PayloadType.ToLower()">@context.PayloadType</span>
+                        <span class="bm-muted" style="font-size:10px;">@context.RawSizeBytes B</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-kafka-mono bm-muted">@context.Timestamp.ToString("HH:mm:ss.fff")</span>
+                        <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
                     </MudTd>
                 </RowTemplate>
             </MudTable>
@@ -124,13 +183,20 @@
                     <span class="bm-kafka-mono">
                         offset <strong>@_selected.Offset</strong>
                         &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
-                        &nbsp;·&nbsp; @_selected.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff") UTC
+                        &nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp, "yyyy-MM-dd HH:mm:ss.fff")@DtSvc.ZoneSuffix
+                        &nbsp;·&nbsp; <span class="bm-kafka-payload-type bm-kafka-type-@_selected.PayloadType.ToLower()">@_selected.PayloadType</span>
+                        &nbsp;·&nbsp; <span class="bm-muted">@_selected.RawSizeBytes B</span>
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
-                        <MudTooltip Text="Save as JSON">
-                            <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                        <MudTooltip Text="Download raw binary">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Download"
                                            Size="Size.Small"
                                            OnClick="@(() => DownloadMessageAsync(_selected))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Save JSON">
+                            <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SaveJsonAsync(_selected))" />
                         </MudTooltip>
                         <MudIconButton Icon="@Icons.Material.Outlined.Close"
                                        Size="Size.Small"
@@ -149,7 +215,7 @@
                             }
                         </div>
                     }
-                    <div class="bm-inspector-section-label">Value</div>
+                    <div class="bm-inspector-section-label">Payload</div>
                     <div @ref="_jsonRef"></div>
                 </div>
             </div>
@@ -162,120 +228,244 @@
     [Parameter] public string TopicName   { get; set; } = string.Empty;
     [Parameter] public string Environment { get; set; } = string.Empty;
 
-    private List<KafkaMessage> _messages    = new();
-    private List<KafkaMessage> _filtered    = new();
-    private KafkaMessage?      _selected    = null;
-    private ElementReference   _jsonRef;
-    private ElementReference   _detailRef;
-    private DotNetObjectReference<KafkaTopicInspector>? _selfRef;
-    private double             _detailWidth = 380;
-    private bool               _jsonDirty;
-    private bool               _running     = true;
-    private bool               _loading     = false;
-    private int                _maxMessages = 100;
-    private string             _filterText       = string.Empty;
-    private string?            _filterParseError = null;
-    private CancellationTokenSource _cts = new();
+    private enum StreamState { Idle, Running, Paused }
 
-    private static readonly string[] SearchableFields = ["Key", "Value"];
+    private List<KafkaMessage>                _messages  = [];
+    private List<KafkaMessage>                _filtered  = [];
+    private KafkaMessage?                     _selected;
+    private ElementReference                  _jsonRef;
+    private ElementReference                  _detailRef;
+    private DotNetObjectReference<KafkaTopicInspector>? _selfRef;
+    private double                            _detailWidth = 380;
+    private bool                              _jsonDirty;
+    private StreamState                       _state       = StreamState.Idle;
+    private CancellationTokenSource           _cts         = new();
+
+    private string  _filterText       = string.Empty;
+    private string? _filterParseError;
+
+    private bool                         _showStats   = false;
+    private bool                         _statsLoading= false;
+    private List<KafkaPartitionStats>    _stats       = [];
+
+    private static readonly string[] SearchableFields =
+        ["Key", "PayloadType", "Partition", "Offset", "Timestamp", "latest"];
+
     private static readonly FilterParser Parser = new(SearchableFields,
         new Dictionary<string, string>
         {
             ["key"]       = "Key",
             ["partition"] = "Partition",
             ["offset"]    = "Offset",
-            ["value"]     = "Value",
+            ["ts"]        = "Timestamp",
+            ["timestamp"] = "Timestamp",
+            ["type"]      = "PayloadType",
+            ["latest"]    = "latest",
         });
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("key",       "message key"),
-        ("partition", "partition number (e.g. partition:0)"),
-        ("offset",    "offset (e.g. offset:>1000)"),
-        ("value",     "value content (full text)"),
+        ("key",              "message key"),
+        ("partition",        "partition:0  /  partition:0,2,4  /  partition:0..3"),
+        ("offset",           "offset:>1000  /  offset:1000..2000"),
+        ("timestamp / ts",   "timestamp:>2024-01-15T10:00  /  timestamp:2024-01-01..2024-02-01"),
+        ("latest",           "latest:500  — fetch last N messages per partition"),
+        ("type",             "PayloadType: OrderEvent / PaymentEvent / ProtoMsg / unknown"),
+        ("<field>",          "any JSON payload field: orderId:abc  /  amount:>100"),
     ];
 
     protected override Task OnInitializedAsync()
     {
-        _ = StreamAsync();
+        _ = StartStreamAsync();
         return Task.CompletedTask;
     }
 
-    private async Task StreamAsync()
+    // ── Stream control ────────────────────────────────────────────────────────
+
+    private async Task StartStreamAsync()
     {
-        _loading = true;
+        _state = StreamState.Running;
         StateHasChanged();
+
+        var (directive, remaining) = ExtractDirective(_filterText);
+
         try
         {
-            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, _maxMessages, _cts.Token))
+            await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, _cts.Token))
             {
-                if (!_running) continue;
                 _messages.Insert(0, msg);
-                // In bounded mode cap the buffer; in live mode keep last N (use 500 as buffer cap)
-                var cap = _maxMessages > 0 ? _maxMessages : 500;
-                if (_messages.Count > cap)
-                    _messages.RemoveAt(_messages.Count - 1);
-                ApplyFilter();
-                StateHasChanged();
+                if (_messages.Count > 2_000) _messages.RemoveAt(_messages.Count - 1);
+                ApplyClientFilter(remaining);
+                await InvokeAsync(StateHasChanged);
             }
+            _state = _cts.IsCancellationRequested ? StreamState.Paused : StreamState.Idle;
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName); }
-        finally { _loading = false; StateHasChanged(); }
+        catch (OperationCanceledException) { _state = StreamState.Paused; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Kafka stream failed for topic {Topic}", TopicName);
+            _state = StreamState.Idle;
+        }
+
+        await InvokeAsync(StateHasChanged);
     }
 
-    private void ToggleRunning() => _running = !_running;
-
-    private void Clear()
+    private void ToggleStream()
     {
+        if (_state == StreamState.Running)
+        {
+            _cts.Cancel();
+            _state = StreamState.Paused;
+        }
+        else
+        {
+            _cts = new CancellationTokenSource();
+            _ = StartStreamAsync();
+        }
+    }
+
+    private void ResetStream()
+    {
+        _cts.Cancel();
+        _cts      = new CancellationTokenSource();
         _messages.Clear();
         _filtered.Clear();
         _selected = null;
+        _ = StartStreamAsync();
     }
 
-    private void Restart()
+    private void SetMode(string filterSnippet)
     {
-        _cts.Cancel();
-        _cts = new CancellationTokenSource();
-        _messages.Clear();
-        _filtered.Clear();
-        _selected  = null;
-        _running   = true;
-        _ = StreamAsync();
+        // Remove existing latest/offset/timestamp terms, append the new snippet
+        var cleaned = RemoveKafkaSeekTerms(_filterText);
+        _filterText = string.IsNullOrWhiteSpace(filterSnippet)
+            ? cleaned.Trim()
+            : (cleaned.Trim() + " " + filterSnippet).Trim();
+        _filterParseError = null;
+        ResetStream();
     }
 
-    private void OnMaxChanged(int max)
+    private static string RemoveKafkaSeekTerms(string text)
     {
-        _maxMessages = max;
-        Restart();
+        // Naive removal: strip tokens matching latest:N, offset:..., timestamp:...
+        var terms = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', terms.Where(t =>
+        {
+            var lower = t.ToLowerInvariant();
+            return !lower.StartsWith("latest:") &&
+                   !lower.StartsWith("offset:") &&
+                   !lower.StartsWith("timestamp:");
+        }));
     }
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
+
+    private async Task ToggleStats()
+    {
+        _showStats = !_showStats;
+        if (_showStats && _stats.Count == 0)
+            await LoadStatsAsync();
+    }
+
+    private async Task LoadStatsAsync()
+    {
+        _statsLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await KafkaSvc.GetPartitionStatsAsync(Environment, TopicName);
+            _stats = [.. result];
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName); }
+        finally { _statsLoading = false; StateHasChanged(); }
+    }
+
+    private void AppendPartitionFilter(int partition)
+    {
+        var cleaned = RemoveKafkaSeekTerms(_filterText).Replace($"partition:{partition}", "").Trim();
+        _filterText = (cleaned + $" partition:{partition}").Trim();
+        _filterParseError = null;
+        ResetStream();
+    }
+
+    // ── Filter ────────────────────────────────────────────────────────────────
 
     private void OnFilterChanged(string text)
     {
         _filterText       = text;
         _filterParseError = null;
-        ApplyFilter();
+
+        // Re-parse and re-apply client-side filter without restarting the stream
+        var (_, remaining) = ExtractDirective(text);
+        ApplyClientFilter(remaining);
     }
 
-    private void ApplyFilter()
+    private void ApplyClientFilter(FilterNode? node)
     {
-        if (string.IsNullOrWhiteSpace(_filterText))
-        {
-            _filtered = _messages;
-            return;
-        }
-        FilterNode? node = null;
-        try   { node = Parser.Parse(_filterText); }
-        catch (FilterParseException ex) { _filterParseError = ex.Message; _filtered = _messages; return; }
-
-        _filtered = _messages.Where(m => FilterEvaluator.Evaluate(node, m)).ToList();
+        _filtered = node is null
+            ? _messages
+            : _messages.Where(m => FilterEvaluator.Evaluate(node, m)).ToList();
     }
+
+    private (KafkaSeekDirective Directive, FilterNode? Remaining) ExtractDirective(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return (KafkaSeekDirective.Default, null);
+        try
+        {
+            var ast = Parser.Parse(text, DtSvc.UseUtc);
+            return KafkaFilterExtractor.Extract(ast);
+        }
+        catch (FilterParseException ex)
+        {
+            _filterParseError = ex.Message;
+            return (KafkaSeekDirective.Default, null);
+        }
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────
 
     private void OnRowSelected(KafkaMessage? msg)
     {
         _selected  = ReferenceEquals(_selected, msg) ? null : msg;
         _jsonDirty = _selected is not null;
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_jsonDirty && _selected is not null)
+        {
+            _jsonDirty = false;
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.JsonPayload ?? "{}"); }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Topic}", TopicName); }
+        }
+    }
+
+    // ── Download ──────────────────────────────────────────────────────────────
+
+    private async Task DownloadMessageAsync(KafkaMessage? msg)
+    {
+        if (msg is null) return;
+        try
+        {
+            var bytes    = await KafkaSvc.FetchRawBytesAsync(Environment, TopicName, msg.Partition, msg.Offset);
+            var filename = SanitizeFilename($"{msg.Key ?? $"offset-{msg.Offset}"}.bin");
+            if (bytes is not null)
+                await JS.InvokeVoidAsync("bmSaveBytes", filename, bytes, "application/octet-stream");
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "Download failed"); }
+    }
+
+    private async Task SaveJsonAsync(KafkaMessage? msg)
+    {
+        if (msg is null) return;
+        var json     = FormatJson(msg.JsonPayload ?? "{}");
+        var filename = SanitizeFilename($"{msg.Key ?? $"offset-{msg.Offset}"}.json");
+        await JS.InvokeVoidAsync("bmSaveFile", filename, json, "application/json");
+    }
+
+    // ── Resizer ───────────────────────────────────────────────────────────────
 
     private async Task OnResizerMouseDown(MouseEventArgs e)
     {
@@ -286,29 +476,10 @@
     [JSInvokable]
     public void SetDetailWidth(double w) => _detailWidth = Math.Clamp(w, 250, 900);
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (_jsonDirty && _selected is not null)
-        {
-            _jsonDirty = false;
-            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Value); }
-            catch (JSDisconnectedException) { }
-            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for topic {Topic}", TopicName); }
-        }
-    }
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task DownloadMessageAsync(KafkaMessage? msg)
-    {
-        if (msg is null) return;
-        var pretty   = FormatJson(msg.Value);
-        var filename = $"{(msg.Key ?? $"offset-{msg.Offset}")}.json";
-        // Sanitise: remove chars not valid in filenames
-        filename = string.Concat(filename.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        await JS.InvokeVoidAsync("bmSaveFile", filename, pretty, "application/json");
-    }
-
-    private static string TruncateValue(string v)
-        => v.Length > 120 ? v[..120] + "…" : v;
+    private static string? TruncateValue(string? v)
+        => v is null ? null : v.Length > 120 ? v[..120] + "…" : v;
 
     private static string FormatJson(string raw)
     {
@@ -321,6 +492,9 @@
         }
         catch { return raw; }
     }
+
+    private static string SanitizeFilename(string name) =>
+        string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
 
     public void Dispose()
     {

@@ -1,0 +1,18 @@
+{
+  "Kafka": {
+    "BootstrapServers": "kafka-prod-1:9092,kafka-prod-2:9092,kafka-prod-3:9092",
+    "TlsEnabled": true,
+    "TlsCaPath": "/etc/ssl/certs/kafka-prod-ca.pem",
+    "TlsCertificatePath": "/etc/ssl/certs/nxtui-prod.pem",
+    "TlsKeyPath": "/etc/ssl/private/nxtui-prod.key",
+    "SaslMechanism": "ScramSha512",
+    "SaslUsername": "nxtui-prod",
+    "SaslPassword": "change-me"
+  },
+  "Mongo": {
+    "ConnectionString": "mongodb+srv://mongo-prod-cluster.example.com/?replicaSet=rs0&tls=true",
+    "DatabasePrefix": "BatchMonitor",
+    "Username": "nxtui-prod",
+    "Password": "change-me"
+  }
+}

@@ -9,10 +9,33 @@ public interface IKafkaMonitor
     Task<IReadOnlyList<KafkaTopicSummary>>       GetTopicsAsync(string env, CancellationToken ct = default);
     Task<KafkaTopicConfig>                       GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default);
-    /// <param name="maxMessages">Cap on buffered messages. 0 = live/continuous — stream never ends until ct is cancelled.</param>
-    IAsyncEnumerable<KafkaMessage>               TailTopicAsync(string env, string topicName, int maxMessages, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaGroupTopicLag>>         GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Streams messages from a topic.
+    /// The <paramref name="directive"/> controls which partitions and offsets to seek to;
+    /// pass <see cref="KafkaSeekDirective.Default"/> to stream from the beginning.
+    /// The stream ends when the cancellation token is cancelled (Pause/Reset) or when a
+    /// bounded end condition in the directive is reached.
+    /// </summary>
+    IAsyncEnumerable<KafkaMessage> TailTopicAsync(
+        string env, string topicName, KafkaSeekDirective directive, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns watermark offsets and first/last message timestamps for each partition.
+    /// Used by the Stats popover in the topic inspector.
+    /// </summary>
+    Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
+        string env, string topicName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Re-fetches the raw <c>byte[]</c> payload for a single message by partition + offset.
+    /// Used for the download path — bytes are never cached between requests.
+    /// Returns null if the offset is no longer available (e.g. compacted away).
+    /// </summary>
+    Task<byte[]?> FetchRawBytesAsync(
+        string env, string topicName, int partition, long offset, CancellationToken ct = default);
 }
 
 /// <summary>Destructive Kafka admin operations. Inject only where mutations are explicitly needed.</summary>

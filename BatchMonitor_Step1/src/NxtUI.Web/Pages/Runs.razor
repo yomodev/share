@@ -2,6 +2,7 @@
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject DateTimeDisplayService DtSvc
 @using NxtUI.Filtering
 @implements IDisposable
 
@@ -81,7 +82,7 @@
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @context.Start.ToString("yyyy-MM-dd HH:mm:ss")
+                        @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                     </MudText>
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
@@ -213,7 +214,7 @@
         FilterNode? node = null;
         if (!string.IsNullOrWhiteSpace(text))
         {
-            try   { node = RunFilterParser.Parse(text); }
+            try   { node = RunFilterParser.Parse(text, DtSvc.UseUtc); }
             catch (FilterParseException ex) { _filterParseError = ex.Message; }
         }
 

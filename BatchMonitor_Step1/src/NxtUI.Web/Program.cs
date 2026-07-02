@@ -7,6 +7,7 @@ using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
+using NxtUI.Protos;
 using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
 
@@ -42,9 +43,22 @@ public class Program
         builder.Services.Configure<KafkaSettings>(
             builder.Configuration.GetSection(KafkaSettings.SectionName));
 
-        // ── Connection factories (singletons; swap services below to use these) ──
-        builder.Services.AddSingleton<MongoConnection>();
-        builder.Services.AddSingleton<KafkaConnection>();
+        // ── Per-environment config loader ─────────────────────────────────────
+        builder.Services.AddSingleton(new EnvironmentConfigOptions
+        {
+            BasePath = Path.Combine(builder.Environment.ContentRootPath, "config")
+        });
+        builder.Services.AddSingleton<EnvironmentConfigLoader>();
+
+        // ── Connection factories (shared client when settings fingerprint matches) ──
+        builder.Services.AddSingleton<MongoConnection>();       // legacy single-env; kept for existing code
+        builder.Services.AddSingleton<KafkaConnection>();       // legacy single-env; kept for existing code
+        builder.Services.AddSingleton<KafkaConnectionFactory>();
+        builder.Services.AddSingleton<MongoConnectionFactory>();
+
+        // ── Proto message registry + deserialization pipeline ─────────────────
+        builder.Services.AddSingleton<IMessageRegistry>(_ => MessageRegistry.CreateDefault());
+        builder.Services.AddSingleton<TopicDeserializerPipeline>();
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
@@ -131,6 +145,7 @@ public class Program
         builder.Services.AddScoped<EnvironmentSelectorService>();
         builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
+        builder.Services.AddScoped<DateTimeDisplayService>();
 
         builder.Services.AddHttpContextAccessor();
 

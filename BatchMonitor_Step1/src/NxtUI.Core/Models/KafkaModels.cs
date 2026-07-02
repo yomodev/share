@@ -52,12 +52,52 @@ public record KafkaGroupTopicLag
 
 public record KafkaMessage
 {
-    public long      Offset    { get; init; }
-    public int       Partition { get; init; }
-    public string?   Key       { get; init; }
-    public string    Value     { get; init; } = string.Empty;
-    public DateTime  Timestamp { get; init; }
+    public long     Offset      { get; init; }
+    public int      Partition   { get; init; }
+    public string?  Key         { get; init; }
+    public DateTime Timestamp   { get; init; }
     public Dictionary<string, string> Headers { get; init; } = new();
+
+    // ── Deserialized payload ─────────────────────────────────────────────────
+
+    /// <summary>JSON representation of the message payload after proto deserialization.</summary>
+    public string? JsonPayload { get; init; }
+
+    /// <summary>Resolved proto type name, "ProtoMsg", or "unknown".</summary>
+    public string PayloadType { get; init; } = "unknown";
+
+    /// <summary>Original byte size of the raw payload before deserialization.</summary>
+    public int RawSizeBytes { get; init; }
+}
+
+public record KafkaPartitionStats
+{
+    public int      Partition              { get; init; }
+    public long     LowWatermark           { get; init; }
+    public long     HighWatermark          { get; init; }
+    public long     MessageCount           => Math.Max(0, HighWatermark - LowWatermark);
+    public DateTime? FirstMessageTimestamp { get; init; }
+    public DateTime? LastMessageTimestamp  { get; init; }
+}
+
+/// <summary>
+/// Consumer seek directives extracted from the filter string by
+/// <see cref="NxtUI.Filtering.KafkaFilterExtractor"/>.
+/// </summary>
+public record KafkaSeekDirective
+{
+    public static readonly KafkaSeekDirective Default = new();
+
+    /// <summary>Explicit partition set. Null = all partitions.</summary>
+    public IReadOnlySet<int>? Partitions  { get; init; }
+
+    public long?     OffsetFrom     { get; init; }
+    public long?     OffsetTo       { get; init; }
+    public DateTime? TimestampFrom  { get; init; }
+    public DateTime? TimestampTo    { get; init; }
+
+    /// <summary>Fetch the last N messages per partition (overrides Offset/Timestamp).</summary>
+    public int? Latest { get; init; }
 }
 
 public record KafkaTopicSummary

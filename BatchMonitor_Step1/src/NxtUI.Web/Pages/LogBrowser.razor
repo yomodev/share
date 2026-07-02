@@ -11,6 +11,7 @@
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
 @inject ILogger<LogBrowser> Logger
+@inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -142,10 +143,10 @@
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
                             <MudTd DataLabel="Created" @ondblclick="@(() => OpenInViewer(context))">
-                                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd DataLabel="Last Updated" @ondblclick="@(() => OpenInViewer(context))">
-                                <MudText Typo="Typo.body2" Class="bm-monospace">@context.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                                <MudText Typo="Typo.body2" Class="bm-monospace">@DtSvc.Format(context.LastModifiedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd>
                                 <MudTooltip Text="Copy full path">
@@ -297,7 +298,7 @@
         _contentFilterStr   = v;
         _contentFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _contentFilterNode = null; return; }
-        try   { _contentFilterNode = LogLineParser.Parse(v); }
+        try   { _contentFilterNode = LogLineParser.Parse(v, DtSvc.UseUtc); }
         catch (Exception ex) { _contentFilterError = ex.Message; _contentFilterNode = null; }
     }
 

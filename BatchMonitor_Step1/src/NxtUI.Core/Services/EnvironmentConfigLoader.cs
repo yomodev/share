@@ -1,0 +1,61 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using NxtUI.Configuration;
+
+namespace NxtUI.Core.Services;
+
+public class EnvironmentConfigOptions
+{
+    public string BasePath { get; set; } = "config";
+}
+
+/// <summary>
+/// Loads per-environment connection settings from <c>config/{envId}.json</c>.
+/// Files are parsed once and cached for the lifetime of the process.
+/// Two environments that share identical connection details will reuse the same
+/// client instance via the connection factories.
+/// </summary>
+public sealed class EnvironmentConfigLoader(
+    EnvironmentConfigOptions options,
+    ILogger<EnvironmentConfigLoader> log)
+{
+    private readonly ConcurrentDictionary<string, EnvironmentConfig> _cache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly JsonSerializerOptions _json =
+        new() { PropertyNameCaseInsensitive = true };
+
+    public KafkaSettings  GetKafka(string envId) => Get(envId).Kafka;
+    public MongoSettings  GetMongo(string envId) => Get(envId).Mongo;
+
+    private EnvironmentConfig Get(string envId) =>
+        _cache.GetOrAdd(envId, Load);
+
+    private EnvironmentConfig Load(string envId)
+    {
+        var path = Path.Combine(options.BasePath, $"{envId.ToLowerInvariant()}.json");
+        if (!File.Exists(path))
+        {
+            log.LogWarning("No environment config at {Path} — using defaults", path);
+            return new EnvironmentConfig();
+        }
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<EnvironmentConfig>(json, _json) ?? new EnvironmentConfig();
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Failed to load environment config from {Path}", path);
+            return new EnvironmentConfig();
+        }
+    }
+}
+
+public sealed class EnvironmentConfig
+{
+    public KafkaSettings Kafka { get; set; } = new();
+    public MongoSettings Mongo { get; set; } = new();
+}

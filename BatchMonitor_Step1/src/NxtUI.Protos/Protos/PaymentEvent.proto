@@ -1,0 +1,25 @@
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Protos";
+package nxtui;
+
+import "google/protobuf/timestamp.proto";
+
+enum PaymentStatus {
+  PAYMENT_STATUS_UNKNOWN   = 0;
+  PAYMENT_STATUS_PENDING   = 1;
+  PAYMENT_STATUS_AUTHORISED= 2;
+  PAYMENT_STATUS_CAPTURED  = 3;
+  PAYMENT_STATUS_FAILED    = 4;
+  PAYMENT_STATUS_REFUNDED  = 5;
+}
+
+message PaymentEvent {
+  string        payment_id  = 1;
+  string        order_id    = 2;
+  PaymentStatus status      = 3;
+  double        amount      = 4;
+  string        currency    = 5;
+  string        provider    = 6;
+  string        reference   = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}

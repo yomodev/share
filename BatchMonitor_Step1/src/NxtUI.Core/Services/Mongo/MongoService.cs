@@ -156,7 +156,7 @@ public class MongoService : IMongoService
         string env, string database, string collection,
         string? search, int skip, int limit,
         string? sortField = null, bool sortDesc = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool useUtc = true)
     {
         _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search} sort={Sort}{Desc}",
             env, database, collection, skip, limit, search, sortField, sortDesc ? " desc" : "");
@@ -164,7 +164,7 @@ public class MongoService : IMongoService
         var db  = _connection.Client.GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
-        var filter = BuildDocumentFilter(search);
+        var filter = BuildDocumentFilter(search, useUtc);
 
         var total = await col.CountDocumentsAsync(filter, cancellationToken: ct);
 
@@ -202,7 +202,7 @@ public class MongoService : IMongoService
 
     // ── Filter builder ─────────────────────────────────────────────────────────
 
-    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search)
+    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(search))
         {
@@ -227,7 +227,7 @@ public class MongoService : IMongoService
         // Field:value filter language → AST → MongoDB filter
         try
         {
-            var node = DocFilterParser.Parse(s);
+            var node = DocFilterParser.Parse(s, useUtc);
             return MongoFilterBuilder.Build(node);
         }
         catch
