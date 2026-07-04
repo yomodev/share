@@ -498,6 +498,8 @@
         _selectedGroup = group;
         _topicLags     = null;
         _loadingDetail = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -506,7 +508,13 @@
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId); }
-        finally { _loadingDetail = false; StateHasChanged(); }
+        finally
+        {
+            _loadingDetail = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private async Task<bool> ConfirmAsync(string message, string confirmText = "Delete")

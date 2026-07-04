@@ -3,6 +3,7 @@
 @inject TabService TabService
 @inject ISnackbar Snackbar
 @inject DateTimeDisplayService DtSvc
+@inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @using NxtUI.Filtering
 @implements IDisposable
 
@@ -21,6 +22,7 @@
             <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                            Size="Size.Small"
                            OnClick="RefreshAsync"
+                           Disabled="@_result.IsLoading"
                            Class="bm-refresh-btn" />
         </MudTooltip>
     </div>
@@ -47,32 +49,12 @@
                   Height="100%">
             <HeaderContent>
                 <MudTh Style="width:36px;"></MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.Name)">Name</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.RunId)">Run ID</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.Type)">Type</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.Start)" InitialDirection="SortDirection.Descending">
-                        Started (UTC)
-                    </MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.Duration)">Duration</MudTableSortLabel>
-                </MudTh>
-                <MudTh>
-                    <MudTableSortLabel T="RunSummary"
-                                       SortBy="@(b => b.Status)">Status</MudTableSortLabel>
-                </MudTh>
+                <MudTh>@SortableHeader("Run ID", "RunId")</MudTh>
+                <MudTh>@SortableHeader("Description", "Description")</MudTh>
+                <MudTh>@SortableHeader("Type", "Type")</MudTh>
+                <MudTh>@SortableHeader("Started (UTC)", "StartTime")</MudTh>
+                <MudTh>Duration</MudTh>
+                <MudTh>@SortableHeader("Status", "Status")</MudTh>
                 <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -80,10 +62,10 @@
                     <StatusIcon Status="@context.Status" />
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2">@context.Name</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
+                    <MudText Typo="Typo.body2">@context.Description</MudText>
                 </MudTd>
                 <MudTd @ondblclick="@(() => OpenDetail(context))">
                     <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
@@ -133,7 +115,7 @@
     <!-- ── Footer: count + rows per page + pagination ────────────────── -->
     <div class="bm-batch-footer">
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_filtered.Count results
+            @_all.Count results
         </MudText>
 
         <BmPagination Count="@_totalPages"
@@ -168,17 +150,22 @@
     private int _page     = 1;
     private int _pageSize = 25;
     private Result<List<RunSummary>> _result;
-    private string      _filterText       = string.Empty;
+
+    // Default filter: last 10 days — the query always runs server-side, so this
+    // is the first WHERE clause SQL sees, not a client-side post-filter.
+    private const string DefaultFilterText = "start:>=-10d";
+
+    private string      _filterText       = DefaultFilterText;
     private string?     _filterParseError = null;
     private FilterNode? _filterAst        = null;
 
-    private static readonly string[] RunSearchableFields = ["Name", "RunId", "Type", "Status"];
+    private static readonly string[] RunSearchableFields = ["RunId", "Description", "Type", "Status"];
     private static readonly FilterParser RunFilterParser   = new(RunSearchableFields);
 
     private static readonly (string Aliases, string Label)[] _runFieldHints =
     [
-        ("name",                        "run name"),
         ("run / runid",                 "run identifier"),
+        ("requestid / reqid",           "request identifier (int)"),
         ("type",                        "run type"),
         ("status",                      "Running / Completed / Failed"),
         ("start / started",             "start time"),
@@ -186,15 +173,21 @@
         ("desc / description",          "description"),
     ];
 
-    private List<RunSummary> _all      = new();
-    private List<RunSummary> _filtered = new();
-    private List<RunSummary> _paged    = new();
-    private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
+    private List<RunSummary> _all   = new();
+    private List<RunSummary> _paged = new();
+    private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_all.Count / _pageSize));
+
+    // Server-side sort — every column click re-queries, same as filter changes.
+    private string _sortField      = "StartTime";
+    private bool   _sortDescending = true;
 
     private CancellationTokenSource _cts = new();
 
-    protected override async Task OnInitializedAsync() =>
+    protected override async Task OnInitializedAsync()
+    {
+        ParseFilterText(DefaultFilterText);
         await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -205,10 +198,16 @@
         try
         {
             _all = await RunService.GetRunsAsync(
-                Environment, DateTime.UtcNow, 200,
-                filter: new RunFilter { FilterAst = _filterAst },
+                Environment, DateTime.UtcNow, RunsOptions.Value.MaxResults,
+                filter: new RunFilter
+                {
+                    FilterAst      = _filterAst,
+                    SortField      = _sortField,
+                    SortDescending = _sortDescending,
+                },
                 ct: _cts.Token);
-            ApplyFilter();
+            _page = 1;
+            RebuildPage();
             _result = Result<List<RunSummary>>.Ok(_all);
         }
         catch (OperationCanceledException) { }
@@ -223,7 +222,7 @@
         }
     }
 
-    private void OnFilterChanged(string text)
+    private void ParseFilterText(string text)
     {
         _filterText = text;
         _filterParseError = null;
@@ -236,20 +235,40 @@
         }
 
         _filterAst = node;
-
-        _filtered = node is null
-            ? _all
-            : _all.Where(b => FilterEvaluator.Evaluate(node, b)).ToList();
-
-        _page = 1;
-        RebuildPage();
-        StateHasChanged();
     }
 
-    private void ApplyFilter() => OnFilterChanged(_filterText);
+    // Every filter change re-queries the server — SQL applies the WHERE clause,
+    // never a client-side re-filter of an already-fetched page.
+    private async Task OnFilterChanged(string text)
+    {
+        ParseFilterText(text);
+        if (_filterParseError is not null) { StateHasChanged(); return; }
+        await LoadAsync();
+    }
+
+    // Clicking a column header re-queries the server with the new sort — same
+    // principle as filtering: the client never re-orders an already-fetched page.
+    private async Task OnSort(string field)
+    {
+        if (_sortField == field) _sortDescending = !_sortDescending;
+        else { _sortField = field; _sortDescending = true; }
+        await LoadAsync();
+    }
+
+    private RenderFragment SortableHeader(string label, string field) => @<MudLink Underline="Underline.Hover"
+                 Color="Color.Inherit"
+                 OnClick="@(() => OnSort(field))"
+                 Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+        @label
+        @if (_sortField == field)
+        {
+            <MudIcon Icon="@(_sortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                      Size="Size.Small" />
+        }
+    </MudLink>;
 
     private void RebuildPage() =>
-        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged = _all.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
     private void OnPageChanged(int page) { _page = page; RebuildPage(); }
 
@@ -257,15 +276,12 @@
 
     private async Task RefreshAsync()
     {
-        _filterText       = string.Empty;
-        _filterParseError = null;
-        _filterAst        = null;
         await LoadAsync();
         Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }
 
     private void OpenDetail(RunSummary b) =>
-        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, Environment));
+        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, Environment));
 
     private void OpenTimeline(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateTimeline(b.RunId, Environment));
@@ -275,7 +291,7 @@
         var ok = await RunService.CancelRunAsync(Environment, b.RunId, _cts.Token);
         if (ok)
         {
-            Snackbar.Add($"Stop requested for {b.Name}", Severity.Warning);
+            Snackbar.Add($"Stop requested for {b.RunId}", Severity.Warning);
             await LoadAsync();
         }
         else

@@ -53,17 +53,21 @@
         </div>
 
         <div class="bm-svc-toolbar-right">
+            @if (_lastUpdated.HasValue)
+            {
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">Updated</span>
+                    <span class="bm-infra-time bm-muted">@_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
+            }
+
             <MudTooltip Text="Refresh">
                 <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
                                Size="Size.Small"
                                OnClick="RefreshAsync"
+                               Disabled="@_loading"
                                Class="bm-refresh-btn" />
             </MudTooltip>
-
-            @if (_lastUpdated.HasValue)
-            {
-                <span class="bm-toolbar-hint">Updated @_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-            }
         </div>
 
     </div>
@@ -571,10 +575,7 @@
 
     private async Task RefreshAsync()
     {
-        _filterText       = string.Empty;
-        _filterParseError = null;
         await LoadFromMongoAsync();
-        Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
     }
 
     private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>

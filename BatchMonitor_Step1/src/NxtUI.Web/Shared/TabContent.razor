@@ -65,7 +65,7 @@
                 @<TimelineTab Tab="@Tab" Environment="@env" InitialRunId="@Tab.EntityId" IsFocused="@Tab.IsActive" />,
 
             TabType.KafkaMessages =>
-                @<KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" />,
+                @<KafkaTopicInspector TopicName="@(Tab.EntityId ?? string.Empty)" Environment="@env" Tab="@Tab" />,
 
             TabType.FilterHelp =>
                 @<FilterHelp />,

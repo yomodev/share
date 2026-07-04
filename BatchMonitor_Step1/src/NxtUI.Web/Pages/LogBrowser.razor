@@ -35,6 +35,14 @@
                        Placeholder="Content filter…"
                        FieldHints="@ContentFieldHints" />
 
+            @if (_lastScan.HasValue)
+            {
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
+                    <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
+            }
+
             <MudTooltip Text="@(_isSearching ? "Stop" : (_isSearchRequested ? "Search" : "Refresh"))">
                 <MudIconButton Icon="@(_isSearching
                                         ? Icons.Material.Outlined.Stop
@@ -43,13 +51,9 @@
                                             : Icons.Material.Outlined.Refresh))"
                                Color="@(_isSearching ? Color.Error : Color.Default)"
                                Size="Size.Small"
+                               Disabled="@(!_isSearching && _loadingFiles)"
                                OnClick="OnActionButtonClickAsync" />
             </MudTooltip>
-
-            @if (_lastScan.HasValue)
-            {
-                <span class="bm-toolbar-hint">@(_isSearchMode ? "Found" : "Scanned") @_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-            }
 
         </div>
     </div>
@@ -386,6 +390,8 @@
             {
                 _loadingNodes.Add(node.RelativePath);
                 _loadingFiles = true;
+                Tab?.BeginLoading();
+                TabService.NotifyChanged();
                 StateHasChanged();
                 await Task.Yield();
                 try
@@ -397,6 +403,8 @@
                 {
                     _loadingNodes.Remove(node.RelativePath);
                     _loadingFiles = _loadingNodes.Count > 0;
+                    Tab?.EndLoading();
+                    TabService.NotifyChanged();
                     StateHasChanged();
                 }
             }
@@ -488,6 +496,8 @@
 
         var path    = _selectedPath; // capture — user may change selection while awaiting
         var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         try
         {
             // Collect all servers in parallel without touching _files mid-flight.
@@ -513,6 +523,8 @@
                 _loadingFiles = _loadingNodes.Count > 0;
                 await InvokeAsync(StateHasChanged);
             }
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
     }
 
@@ -566,6 +578,10 @@
 
     private async Task RefreshAsync()
     {
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
+        {
         if (_selectedPath is not null)
         {
             // Invalidate only the selected node's child cache entry and reload its files.
@@ -581,6 +597,12 @@
             _rootNodes = roots.ToList();
             _lastScan  = DateTime.UtcNow;
             StateHasChanged();
+        }
+        }
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
         }
     }
 

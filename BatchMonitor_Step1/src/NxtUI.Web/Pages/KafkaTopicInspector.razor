@@ -6,6 +6,7 @@
 @inject IJSRuntime JS
 @inject ILogger<KafkaTopicInspector> Logger
 @inject DateTimeDisplayService DtSvc
+@inject TabService TabService
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -51,7 +52,8 @@
 
         <!-- Mode select -->
         <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
-                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense" Style="width:180px">
+                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
+                   Style="width:max-content; min-width:140px;">
             <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
             <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
             <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
@@ -194,6 +196,16 @@
                         &nbsp;·&nbsp; <span class="bm-muted">@_selected.RawSizeBytes B</span>
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
+                        <MudTooltip Text="Expand all">
+                            <MudIconButton Icon="@Icons.Material.Outlined.UnfoldMore"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SetJsonCollapsedAsync(false))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Collapse all">
+                            <MudIconButton Icon="@Icons.Material.Outlined.UnfoldLess"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SetJsonCollapsedAsync(true))" />
+                        </MudTooltip>
                         <MudTooltip Text="Download raw binary">
                             <MudIconButton Icon="@Icons.Material.Outlined.Download"
                                            Size="Size.Small"
@@ -233,8 +245,14 @@
 @code {
     [Parameter] public string TopicName   { get; set; } = string.Empty;
     [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public TabModel? Tab      { get; set; }
 
     private enum StreamState { Idle, Running, Paused }
+
+    // Live streams (e.g. "from beginning") never stop growing on their own — without
+    // a cap, a long-running session leaves thousands of real MudTable rows in the DOM,
+    // which is both slow to render and slow to tear down when the tab is closed.
+    private const int MaxBufferedMessages = 3_000;
 
     private List<KafkaMessage>                _messages  = [];
     private List<KafkaMessage>                _filtered  = [];
@@ -297,6 +315,8 @@
     {
         var ct = _cts.Token; // captured — lets us detect if a newer action (Clear/Reset/Toggle) supersedes us
         _state = StreamState.Running;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
 
         var (directive, remaining) = ExtractDirective(_filterText);
@@ -307,6 +327,8 @@
             await foreach (var msg in KafkaSvc.TailTopicAsync(Environment, TopicName, directive, ct))
             {
                 _messages.Insert(0, msg);
+                if (_messages.Count > MaxBufferedMessages)
+                    _messages.RemoveRange(MaxBufferedMessages, _messages.Count - MaxBufferedMessages);
 
                 var now = DateTime.UtcNow;
                 if ((now - lastRender).TotalMilliseconds < StreamRenderIntervalMs) continue;
@@ -323,6 +345,8 @@
             {
                 if (ct.IsCancellationRequested) return; // superseded by a newer action
                 _state = StreamState.Idle;
+                Tab?.EndLoading();
+                TabService.NotifyChanged();
                 StateHasChanged();
             });
         }
@@ -333,6 +357,8 @@
             {
                 if (_cts.Token != ct) return; // a newer Clear/Reset/Toggle already set the desired state
                 _state = StreamState.Paused;
+                Tab?.EndLoading();
+                TabService.NotifyChanged();
                 StateHasChanged();
             });
         }
@@ -343,6 +369,8 @@
             {
                 if (_cts.Token != ct) return;
                 _state = StreamState.Idle;
+                Tab?.EndLoading();
+                TabService.NotifyChanged();
                 StateHasChanged();
             });
         }
@@ -354,6 +382,8 @@
         {
             _cts.Cancel();
             _state = StreamState.Paused;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
             StateHasChanged();
         }
         else
@@ -442,6 +472,8 @@
     private async Task LoadStatsAsync()
     {
         _statsLoading = true;
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -449,7 +481,13 @@
             _stats = [.. result];
         }
         catch (Exception ex) { Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName); }
-        finally { _statsLoading = false; StateHasChanged(); }
+        finally
+        {
+            _statsLoading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+            StateHasChanged();
+        }
     }
 
     private void ApplyPartitionFilter(int partition)
@@ -538,6 +576,12 @@
         var json     = FormatJson(msg.JsonPayload ?? "{}");
         var filename = SanitizeFilename($"{msg.Key ?? $"offset-{msg.Offset}"}.json");
         await JS.InvokeVoidAsync("bmSaveFile", filename, json, "application/json");
+    }
+
+    private async Task SetJsonCollapsedAsync(bool collapsed)
+    {
+        try { await JS.InvokeVoidAsync("bmJsonViewer.setAllCollapsed", _jsonRef, collapsed); }
+        catch (JSDisconnectedException) { }
     }
 
     // ── Resizer ───────────────────────────────────────────────────────────────

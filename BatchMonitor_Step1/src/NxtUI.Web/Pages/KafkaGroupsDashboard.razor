@@ -222,6 +222,8 @@
         }
         _selected     = group;
         _detailResult = default; // loading
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
         try
         {
@@ -234,6 +236,8 @@
             Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
             _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
         }
+        Tab?.EndLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
     }
 
