@@ -134,7 +134,7 @@
         <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
             @if (!_mapReady)
             {
-                <div class="bm-section-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
             }
             else
             {
@@ -151,7 +151,7 @@
         <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenRunsDashboard" title="View more runs">
             @if (!_runsReady || _runsLoading)
             {
-                <div class="bm-section-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
             }
             else
             {

@@ -115,7 +115,7 @@
         @if (_isLoading)
         {
             <div class="bm-lv-loading-overlay">
-                <div class="bm-lv-loading-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
                 <span class="bm-lv-loading-label">@_loadingLabel</span>
             </div>
         }

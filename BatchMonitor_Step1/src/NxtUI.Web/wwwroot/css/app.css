@@ -1824,15 +1824,8 @@ html, body {
 
 /* ── Home dashboard: per-section header spinner (replaces the section icon
    until that section has loaded, or while it's actively refreshing) ──── */
-.bm-section-spinner {
-    width: 15px;
-    height: 15px;
-    flex-shrink: 0;
-    border: 2px solid rgba(128, 128, 128, 0.25);
-    border-top-color: var(--mud-palette-primary);
-    border-radius: 50%;
-    animation: bm-spin 0.8s linear infinite;
-}
+.bm-section-spinner { flex-shrink: 0; }
+.bm-section-spinner.mud-progress-circular { width: 15px; height: 15px; }
 
 .bm-section-title-link {
     cursor: pointer;
