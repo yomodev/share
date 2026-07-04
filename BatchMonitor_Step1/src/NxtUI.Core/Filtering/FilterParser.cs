@@ -352,17 +352,29 @@ public sealed class FilterParser
         if (exact && value is StringValue sv && MongoFilterBuilder.HasWildcard(sv.Value))
             throw new FilterParseException($"Wildcards are not allowed with exact match (:=): '{sv.Value}'");
 
-        // Validate: booleans only support equality — comparison operators and ranges
-        // ("field:>true", "field:true..false") have no meaning for a true/false value.
-        if (value is BoolValue && (cmpOp.HasValue || ctx.Current.Kind == TK.DotDot))
-            throw new FilterParseException("Comparison operators and ranges are not supported for true/false values");
+        // Comparison operators and ranges only make sense for orderable values
+        // (number/date/time-of-day). Reject strings/bools/null here rather than
+        // silently falling through to inconsistent per-backend defaults (Mongo
+        // matches everything, SQL drops the clause, the in-memory evaluator
+        // matches nothing) for the same unsupported input.
+        if (cmpOp.HasValue && !IsComparable(value))
+            throw new FilterParseException(
+                $"Comparison operators are only supported for numbers, dates, and times, not {DescribeValueKind(value)}: '{field}'");
 
         // Range: value '..' value
         if (!cmpOp.HasValue && !exact && ctx.Current.Kind == TK.DotDot)
         {
+            if (!IsComparable(value))
+                throw new FilterParseException(
+                    $"Ranges are only supported for numbers, dates, and times, not {DescribeValueKind(value)}: '{field}'");
+
             ctx.Consume();
             var (high, _) = ParseValueAtom(ctx);
             if (high is null) throw new FilterParseException("Expected value after '..'");
+            if (!IsComparable(high))
+                throw new FilterParseException(
+                    $"Ranges are only supported for numbers, dates, and times, not {DescribeValueKind(high)}: '{field}'");
+
             return new FieldTermNode(field, MatchType.Between, false, new RangeValue(value, high));
         }
 
@@ -384,6 +396,16 @@ public sealed class FilterParser
         // Number or Date with no comparison operator → exact equality.
         return new FieldTermNode(field, MatchType.Exact, false, value);
     }
+
+    private static bool IsComparable(FilterValue v) => v is NumberValue or DateValue or TimeOfDayValue;
+
+    private static string DescribeValueKind(FilterValue v) => v switch
+    {
+        StringValue => "a string",
+        BoolValue   => "a true/false value",
+        NullValue   => "null",
+        _           => "this value",
+    };
 
     // Parses a bare term (no field prefix) and expands it across searchable fields.
     private FilterNode? ParseBareTerm(ParseContext ctx)

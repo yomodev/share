@@ -442,4 +442,80 @@ public class FilterParserTests
         var act = () => Parse("ChunkId:true..false");
         act.Should().Throw<FilterParseException>();
     }
+
+    // ── Comparison operators only valid on orderable values ─────────────────
+
+    [Theory]
+    [InlineData("ChunkId:>abc")]
+    [InlineData("ChunkId:>=abc")]
+    [InlineData("ChunkId:<abc")]
+    [InlineData("ChunkId:<=abc")]
+    public void Comparison_operator_on_plain_string_throws(string input)
+    {
+        var act = () => Parse(input);
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Comparison_operator_on_null_throws()
+    {
+        var act = () => Parse("ChunkId:>null");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Comparison_operator_on_number_still_works()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var node = numParser.Parse("Count:>5") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+    }
+
+    [Fact]
+    public void Comparison_operator_on_date_still_works()
+    {
+        var dateParser = new FilterParser(["StartTime"]);
+        var node = dateParser.Parse("StartTime:>2024-01-01") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+        node.Value.Should().BeOfType<DateValue>();
+    }
+
+    // ── Ranges only valid between orderable values ──────────────────────────
+
+    [Fact]
+    public void Range_between_plain_strings_throws()
+    {
+        var act = () => Parse("ChunkId:abc..xyz");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_with_number_low_and_bool_high_throws()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var act = () => numParser.Parse("Count:5..true");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_with_bool_low_and_number_high_throws()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var act = () => numParser.Parse("Count:true..5");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_between_numbers_still_works()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var node = numParser.Parse("Count:1..10") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var range = node.Value.Should().BeOfType<RangeValue>().Subject;
+        range.Low.Should().BeOfType<NumberValue>().Which.Value.Should().Be(1);
+        range.High.Should().BeOfType<NumberValue>().Which.Value.Should().Be(10);
+    }
 }

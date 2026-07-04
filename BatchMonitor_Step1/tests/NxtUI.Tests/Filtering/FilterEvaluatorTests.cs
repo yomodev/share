@@ -344,4 +344,27 @@ public class FilterEvaluatorTests
         var act = () => BoolParser.Parse("IsOnline:true..false");
         act.Should().Throw<FilterParseException>();
     }
+
+    // ── Comparison/range only valid on orderable values ─────────────────────
+
+    [Fact]
+    public void Comparison_operator_on_string_field_throws_at_parse_time()
+    {
+        var act = () => Parser.Parse("ChunkId:>abc");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_between_strings_throws_at_parse_time()
+    {
+        var act = () => Parser.Parse("ChunkId:abc..xyz");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Mixed_type_range_throws_at_parse_time()
+    {
+        var act = () => BoolParser.Parse("IsOnline:5..true");
+        act.Should().Throw<FilterParseException>();
+    }
 }
