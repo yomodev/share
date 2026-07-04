@@ -1,0 +1,163 @@
+@namespace NxtUI.Web.Components
+@using NxtUI.Core.Models
+@using NxtUI.Web.Services
+@inject DateTimeDisplayService DtSvc
+
+<div class="bm-table-wrap">
+    <MudTable T="RunSummary"
+              Items="@Rows"
+              Loading="@Loading"
+              LoadingProgressColor="Color.Primary"
+              Dense="true"
+              Hover="true"
+              Elevation="0"
+              Striped="true"
+              Class="bm-batch-table"
+              FixedHeader="@FixedHeader"
+              Height="@(FixedHeader ? "100%" : null)">
+        <HeaderContent>
+            <MudTh Style="width:36px;"></MudTh>
+            <MudTh>@HeaderContent("Run ID", "RunId")</MudTh>
+            <MudTh>@HeaderContent("Description", "Description")</MudTh>
+            <MudTh>@HeaderContent("Type", "Type")</MudTh>
+            <MudTh>@HeaderContent("Started (UTC)", "StartTime")</MudTh>
+            <MudTh>Duration</MudTh>
+            <MudTh>@HeaderContent("Status", "Status")</MudTh>
+            <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="padding-left:12px;" @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <StatusIcon Status="@context.Status" />
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2">@context.Description</MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                    @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
+                </MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace">
+                    @FormatDuration(context.Duration)
+                </MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
+                    @context.Status
+                </span>
+            </MudTd>
+            <MudTd Style="text-align:center;">
+                <div class="bm-row-actions">
+                    <MudTooltip Text="Open Detail">
+                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Open Timeline">
+                        <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
+                    </MudTooltip>
+                    <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
+                        <span>
+                            <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           Disabled="@(context.Status != RunStatus.Running)"
+                                           OnClick="@(() => OnStopRun.InvokeAsync(context))" />
+                        </span>
+                    </MudTooltip>
+                </div>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+</div>
+
+@if (ShowPaginationAndFilter)
+{
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @TotalCount results
+        </MudText>
+
+        <BmPagination Count="@TotalPages"
+                      Selected="@Page"
+                      SelectedChanged="@(p => PageChanged.InvokeAsync(p))" />
+
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int"
+                       Value="@PageSize"
+                       ValueChanged="@(sz => PageSizeChanged.InvokeAsync(sz))"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Style="width:90px">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
+            </MudSelect>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<RunSummary> Rows { get; set; } = new();
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool FixedHeader { get; set; } = true;
+
+    // When false (Home's "recent runs" use case), no footer/pagination is shown
+    // and no header sort links are wired — just the same columns/actions as
+    // the full Runs page, with whatever rows the caller already fetched.
+    [Parameter] public bool ShowPaginationAndFilter { get; set; } = true;
+
+    [Parameter] public int TotalCount { get; set; }
+    [Parameter] public int Page { get; set; } = 1;
+    [Parameter] public int PageSize { get; set; } = 25;
+    [Parameter] public int TotalPages { get; set; } = 1;
+    [Parameter] public EventCallback<int> PageChanged { get; set; }
+    [Parameter] public EventCallback<int> PageSizeChanged { get; set; }
+
+    // Server-side sort state — only meaningful when ShowPaginationAndFilter is true.
+    [Parameter] public string? SortField { get; set; }
+    [Parameter] public bool SortDescending { get; set; }
+    [Parameter] public EventCallback<string> OnSort { get; set; }
+
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenDetail { get; set; }
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnStopRun { get; set; }
+
+    private RenderFragment HeaderContent(string label, string field)
+    {
+        if (!ShowPaginationAndFilter || !OnSort.HasDelegate)
+        {
+            return @<text>@label</text>;
+        }
+
+        return @<MudLink Underline="Underline.Hover"
+                 Color="Color.Inherit"
+                 OnClick="@(() => OnSort.InvokeAsync(field))"
+                 Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+            @label
+            @if (SortField == field)
+            {
+                <MudIcon Icon="@(SortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                          Size="Size.Small" />
+            }
+        </MudLink>;
+    }
+
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+}

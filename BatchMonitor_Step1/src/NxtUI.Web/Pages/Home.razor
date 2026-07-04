@@ -10,6 +10,7 @@
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<RunsSettings> RunsOpts
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-home">
@@ -161,52 +162,13 @@
     </div>
 
     <MudPaper Elevation="0" Class="bm-mini-summary">
-
-        <MudTable T="RunSummary"
-                  Items="@_recent"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  Class="bm-mini-table">
-            <HeaderContent>
-                <MudTh Style="width:36px;"></MudTh>
-                <MudTh>Run ID</MudTh>
-                <MudTh>Description</MudTh>
-                <MudTh>Type</MudTh>
-                <MudTh>Started</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh Style="width:80px;"></MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd><StatusIcon Status="@context.Status" /></MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2">@context.Description</MudText>
-                </MudTd>
-                <MudTd>
-                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
-                    </MudText>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @FormatDuration(context.Duration)
-                    </MudText>
-                </MudTd>
-                <MudTd Style="text-align:right;">
-                    <MudTooltip Text="Open Detail">
-                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OpenDetail(context))" />
-                    </MudTooltip>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
+        <BmRunsTable Rows="@_recent"
+                     Loading="@_runsLoading"
+                     FixedHeader="false"
+                     ShowPaginationAndFilter="false"
+                     OnOpenDetail="@(r => OpenDetail(r))"
+                     OnOpenTimeline="@(r => OpenTimeline(r))"
+                     OnStopRun="@(r => StopRunAsync(r))" />
     </MudPaper>
 
 </div>
@@ -396,6 +358,21 @@
     private void OpenDetail(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, EnvService.SelectedId));
 
+    private void OpenTimeline(RunSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateTimeline(b.RunId, EnvService.SelectedId));
+
+    private async Task StopRunAsync(RunSummary b)
+    {
+        var ok = await RunService.CancelRunAsync(EnvService.SelectedId, b.RunId, _cts.Token);
+        if (ok)
+        {
+            Snackbar.Add($"Stop requested for {b.RunId}", Severity.Warning);
+            await LoadRunsAsync();
+        }
+        else
+            Snackbar.Add("Could not stop run", Severity.Error);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private static string StatusCss(HealthStatus? s) => s switch
@@ -406,11 +383,6 @@
         HealthStatus.Checking => "checking",
         _                     => "unknown",
     };
-
-    private static string FormatDuration(TimeSpan ts) =>
-        ts.TotalHours >= 1
-            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 
     public void Dispose()
     {

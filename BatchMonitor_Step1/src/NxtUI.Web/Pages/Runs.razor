@@ -27,119 +27,28 @@
         </MudTooltip>
     </div>
 
-    <!-- ── Table ─────────────────────────────────────────────────────── -->
-    <div class="bm-table-wrap">
-        @if (_result.IsFailed)
-        {
-            <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
-        }
-        <!-- Table shell (headers, toolbar, pagination) renders immediately; only
-             the rows populate progressively. Loading="" shows MudTable's own
-             progress bar without hiding the structure underneath. -->
-        <MudTable T="RunSummary"
-                  Items="@_paged"
-                  Loading="@_result.IsLoading"
-                  LoadingProgressColor="Color.Primary"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  Striped="true"
-                  Class="bm-batch-table"
-                  FixedHeader="true"
-                  Height="100%">
-            <HeaderContent>
-                <MudTh Style="width:36px;"></MudTh>
-                <MudTh>@SortableHeader("Run ID", "RunId")</MudTh>
-                <MudTh>@SortableHeader("Description", "Description")</MudTh>
-                <MudTh>@SortableHeader("Type", "Type")</MudTh>
-                <MudTh>@SortableHeader("Started (UTC)", "StartTime")</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh>@SortableHeader("Status", "Status")</MudTh>
-                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenDetail(context))">
-                    <StatusIcon Status="@context.Status" />
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2">@context.Description</MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
-                    </MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace">
-                        @FormatDuration(context.Duration)
-                    </MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
-                        @context.Status
-                    </span>
-                </MudTd>
-                <MudTd Style="text-align:center;">
-                    <div class="bm-row-actions">
-                        <MudTooltip Text="Open Detail">
-                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenDetail(context))" />
-                        </MudTooltip>
-                        <MudTooltip Text="Open Timeline">
-                            <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenTimeline(context))" />
-                        </MudTooltip>
-                        <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
-                            <span>
-                                <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
-                                               Size="Size.Small"
-                                               Color="Color.Error"
-                                               Disabled="@(context.Status != RunStatus.Running)"
-                                               OnClick="@(() => StopRunAsync(context))" />
-                            </span>
-                        </MudTooltip>
-                    </div>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </div>
+    @if (_result.IsFailed)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
+    }
 
-    <!-- ── Footer: count + rows per page + pagination ────────────────── -->
-    <div class="bm-batch-footer">
-        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_all.Count results
-        </MudText>
-
-        <BmPagination Count="@_totalPages"
-                      Selected="@_page"
-                      SelectedChanged="OnPageChanged" />
-
-        <div class="bm-rows-select">
-            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
-            <MudSelect T="int"
-                       Value="@_pageSize"
-                       ValueChanged="OnPageSizeChanged"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Margin="Margin.Dense"
-                       Style="width:90px">
-                <MudSelectItem Value="10">10</MudSelectItem>
-                <MudSelectItem Value="25">25</MudSelectItem>
-                <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-            </MudSelect>
-        </div>
-    </div>
+    <!-- Table shell (headers, toolbar, pagination) renders immediately; only
+         the rows populate progressively. Loading="" shows MudTable's own
+         progress bar without hiding the structure underneath. -->
+    <BmRunsTable Rows="@_paged"
+                 Loading="@_result.IsLoading"
+                 TotalCount="@_all.Count"
+                 Page="@_page"
+                 PageSize="@_pageSize"
+                 TotalPages="@_totalPages"
+                 PageChanged="OnPageChanged"
+                 PageSizeChanged="OnPageSizeChanged"
+                 SortField="@_sortField"
+                 SortDescending="@_sortDescending"
+                 OnSort="OnSort"
+                 OnOpenDetail="@(r => OpenDetail(r))"
+                 OnOpenTimeline="@(r => OpenTimeline(r))"
+                 OnStopRun="@(r => StopRunAsync(r))" />
 
 </div>
 
@@ -255,18 +164,6 @@
         await LoadAsync();
     }
 
-    private RenderFragment SortableHeader(string label, string field) => @<MudLink Underline="Underline.Hover"
-                 Color="Color.Inherit"
-                 OnClick="@(() => OnSort(field))"
-                 Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
-        @label
-        @if (_sortField == field)
-        {
-            <MudIcon Icon="@(_sortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
-                      Size="Size.Small" />
-        }
-    </MudLink>;
-
     private void RebuildPage() =>
         _paged = _all.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
@@ -293,11 +190,6 @@
         else
             Snackbar.Add("Could not stop run", Severity.Error);
     }
-
-    private static string FormatDuration(TimeSpan ts) =>
-        ts.TotalHours >= 1
-            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 
     public void Dispose() => _cts.Cancel();
 }
