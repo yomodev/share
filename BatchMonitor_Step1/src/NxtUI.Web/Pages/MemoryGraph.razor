@@ -115,6 +115,13 @@
     private DateTime?            _lastUpdated;
     private List<ServiceStatus>  _services = [];
 
+    // OnMetricsUpdated now fires per-service (progressively) rather than once per
+    // env-wide poll batch — debounce so a burst of per-service updates collapses
+    // into a single rebuild/render instead of one per service.
+    private readonly object _renderGate      = new();
+    private bool             _renderScheduled;
+    private bool             _disposed;
+
     private sealed class LegendItem
     {
         public string  Key       { get; init; } = "";
@@ -211,12 +218,33 @@
     private void OnMetricsUpdated(string env)
     {
         if (env != Env || _paused) return;
-        _ = InvokeAsync(async () =>
+
+        lock (_renderGate)
         {
-            _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-            Rebuild();
-            StateHasChanged();
-        });
+            if (_renderScheduled || _disposed) return;
+            _renderScheduled = true;
+        }
+        _ = DebouncedRebuildAsync();
+    }
+
+    private async Task DebouncedRebuildAsync()
+    {
+        try
+        {
+            await Task.Delay(400);
+            lock (_renderGate) { _renderScheduled = false; }
+            if (_disposed) return;
+
+            await InvokeAsync(async () =>
+            {
+                _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+                Rebuild();
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)    { }
+        catch (JSDisconnectedException)    { }
+        catch (OperationCanceledException) { }
     }
 
     private void TogglePaused()
@@ -415,6 +443,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        lock (_renderGate) { _disposed = true; }
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
         try { await JS.InvokeVoidAsync("memoryLineChart.destroy", _chartRef); }

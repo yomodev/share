@@ -184,107 +184,131 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         }
     }
 
+    // Coalesced rerun flag: set when a trigger (timer / subscribe / path-resolved)
+    // arrives while a poll for that env is already running. Instead of dropping
+    // the trigger outright, the in-flight poll checks this after it finishes and
+    // runs once more immediately — so a burst of triggers during a busy poll
+    // results in exactly one extra pass, not zero (silently dropped) and not N
+    // (queued/piled up).
+    private readonly ConcurrentDictionary<string, bool> _envRerunPending = new();
+
     private async Task PollEnvAsync(string env, CancellationToken ct)
     {
         if (!HasSubscribers(env)) return;
         if (string.IsNullOrWhiteSpace(_paths.MetricsFileName)) return;
 
-        // Skip if a poll for this env is already in flight (timer vs immediate-subscribe).
         var gate = _envGates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
-        if (!await gate.WaitAsync(0, ct)) return;
+        if (!await gate.WaitAsync(0, ct))
+        {
+            _envRerunPending[env] = true;
+            return;
+        }
+
         try
         {
-            var services = _heartbeatMonitor.GetServices(env);
-            if (services is null)
+            do
             {
-                _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
-                return;
+                _envRerunPending[env] = false;
+                await PollEnvOnceAsync(env, ct);
             }
-
-            _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
-
-            var changed = 0;
-            var parsed  = 0;
-
-            await Task.WhenAll(services.Select(async svc =>
-            {
-                var key   = LogPathDiscoveryService.CacheKey(svc, env);
-                var entry = _entries.GetOrAdd(key, _ => new Entry());
-
-                // Resolve and cache the file path once; never re-search after that.
-                if (entry.FilePath is null)
-                {
-                    var folder = _discovery.GetCachedPath(svc, env);
-                    if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
-                    entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
-                }
-
-                var file = entry.FilePath;
-
-                // Cheap stat — skip the read entirely if the file hasn't changed.
-                // Runs unthrottled because a stat is far cheaper than a read.
-                DateTime mtime;
-                try
-                {
-                    mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
-                }
-                catch { return; }
-
-                lock (entry.Sync)
-                {
-                    if (mtime <= entry.LastWriteUtc) return;
-                }
-
-                // File changed — throttle concurrent reads to avoid saturating servers.
-                long offset;
-                lock (entry.Sync) offset = entry.Offset;
-
-                await _ioGate.WaitAsync(ct);
-                IncrementalFileReader.Result result;
-                try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                      { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
-                finally { _ioGate.Release(); }
-
-                if (result.Lines.Count == 0)
-                {
-                    lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
-                    return;
-                }
-
-                lock (entry.Sync)
-                {
-                    entry.Offset      = result.NewOffset;
-                    entry.LastWriteUtc = mtime;
-                    foreach (var line in result.Lines)
-                    {
-                        if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
-                        entry.Latest = sample;
-                        entry.History.Add(sample);
-                        if (entry.History.Count > MaxHistory)
-                            entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
-                        Interlocked.Increment(ref changed);
-                        Interlocked.Increment(ref parsed);
-                    }
-                }
-            }));
-
-            if (parsed > 0)
-                _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
-
-            // Prune entries for services no longer reported by heartbeat.
-            var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
-            foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
-            {
-                _entries.TryRemove(key, out _);
-                _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
-            }
-
-            if (changed > 0) OnMetricsUpdated?.Invoke(env);
+            while (_envRerunPending.TryGetValue(env, out var pending) && pending && HasSubscribers(env));
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    private async Task PollEnvOnceAsync(string env, CancellationToken ct)
+    {
+        var services = _heartbeatMonitor.GetServices(env);
+        if (services is null)
+        {
+            _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
+            return;
+        }
+
+        _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
+
+        var parsed = 0;
+
+        await Task.WhenAll(services.Select(async svc =>
+        {
+            var key   = LogPathDiscoveryService.CacheKey(svc, env);
+            var entry = _entries.GetOrAdd(key, _ => new Entry());
+
+            // Resolve and cache the file path once; never re-search after that.
+            if (entry.FilePath is null)
+            {
+                var folder = _discovery.GetCachedPath(svc, env);
+                if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
+                entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
+            }
+
+            var file = entry.FilePath;
+
+            // Cheap stat — skip the read entirely if the file hasn't changed.
+            // Runs unthrottled because a stat is far cheaper than a read.
+            DateTime mtime;
+            try
+            {
+                mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
+            }
+            catch { return; }
+
+            lock (entry.Sync)
+            {
+                if (mtime <= entry.LastWriteUtc) return;
+            }
+
+            // File changed — throttle concurrent reads to avoid saturating servers.
+            long offset;
+            lock (entry.Sync) offset = entry.Offset;
+
+            await _ioGate.WaitAsync(ct);
+            IncrementalFileReader.Result result;
+            try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+                  { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+            finally { _ioGate.Release(); }
+
+            if (result.Lines.Count == 0)
+            {
+                lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
+                return;
+            }
+
+            var parsedAny = false;
+            lock (entry.Sync)
+            {
+                entry.Offset      = result.NewOffset;
+                entry.LastWriteUtc = mtime;
+                foreach (var line in result.Lines)
+                {
+                    if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
+                    entry.Latest = sample;
+                    entry.History.Add(sample);
+                    if (entry.History.Count > MaxHistory)
+                        entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
+                    parsedAny = true;
+                    Interlocked.Increment(ref parsed);
+                }
+            }
+
+            // Report this service's update the moment it's parsed, instead of
+            // waiting for every other service in the env to finish reading too.
+            if (parsedAny) OnMetricsUpdated?.Invoke(env);
+        }));
+
+        if (parsed > 0)
+            _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
+
+        // Prune entries for services no longer reported by heartbeat.
+        var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
+        foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+        {
+            _entries.TryRemove(key, out _);
+            _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
         }
     }
 
