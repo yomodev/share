@@ -7,6 +7,13 @@ public interface IMongoReader
 {
     /// <summary>Returns database names only — no stats. Fast even with 100+ databases.</summary>
     Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default);
+
+    /// <summary>
+    /// The database this environment is actually configured to use (Mongo:DatabaseName),
+    /// as opposed to just any database visible on the server. Pure config lookup, no I/O —
+    /// null if the environment has no configured default (e.g. mock/dev mode).
+    /// </summary>
+    string? GetDefaultDatabaseName(string env);
     Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<string>>                 GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
     Task<MongoCollectionSummary?>               GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);

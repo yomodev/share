@@ -192,6 +192,10 @@ public class MockMongoService : IMongoService
         return Task.FromResult(names);
     }
 
+    // No per-env configured database in mock mode — caller falls back to picking
+    // one from GetDatabaseNamesAsync.
+    public string? GetDefaultDatabaseName(string env) => null;
+
     public Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
         string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
     {

@@ -182,7 +182,12 @@
         _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
         if (_databaseNames.Count > 0)
         {
-            _selectedDb = _databaseNames[0];
+            // Prefer the environment's actually-configured database (Mongo:DatabaseName)
+            // over whichever one happens to sort first alphabetically.
+            var defaultDb = MongoSvc.GetDefaultDatabaseName(Environment);
+            _selectedDb = defaultDb is not null && _databaseNames.Contains(defaultDb)
+                ? defaultDb
+                : _databaseNames[0];
             await LoadCollectionsAsync();
         }
     }

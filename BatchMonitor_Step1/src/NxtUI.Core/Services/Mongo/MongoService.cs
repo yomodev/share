@@ -17,6 +17,9 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
         searchableFields: ["_id"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
+    public string? GetDefaultDatabaseName(string env) =>
+        factory.GetDatabase(env).DatabaseNamespace.DatabaseName;
+
     public async Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
     {
         log.LogDebug("mongo [{Env}]: listing databases", env);
