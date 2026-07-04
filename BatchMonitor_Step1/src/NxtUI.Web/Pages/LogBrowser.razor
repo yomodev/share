@@ -16,67 +16,73 @@
 
 <div class="bm-page bm-page-fill bm-lb-page">
 
-    <!-- ── Toolbar row 1: open / search toggle / row filter / refresh ─── -->
-    <div class="bm-lb-filter-toolbar">
-        <MudTooltip Text="Open file...">
-            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                           Size="Size.Small"
-                           OnClick="OpenLocalFileAsync" />
-        </MudTooltip>
+    <!-- ── Toolbar: open / search toggle / row filter / refresh, plus a
+         collapsible second line for the search fields (same container so
+         the collapsed state leaves no visible border/sliver). ─────────── -->
+    <div class="bm-lb-filter-toolbar bm-lb-toolbar-multiline">
+        <div class="bm-lb-toolbar-row">
+            <MudTooltip Text="Open file...">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small"
+                               OnClick="OpenLocalFileAsync" />
+            </MudTooltip>
 
-        <MudTooltip Text="@(_searchBarOpen ? "Hide search" : "Show search")">
-            <MudIconButton Icon="@(_searchBarOpen ? Icons.Material.Outlined.SearchOff : Icons.Material.Outlined.ManageSearch)"
-                           Color="@(_searchBarOpen ? Color.Primary : Color.Default)"
-                           Size="Size.Small"
-                           OnClick="ToggleSearchBarAsync" />
-        </MudTooltip>
+            <MudTooltip Text="@(_searchBarOpen ? "Hide search" : "Show search")">
+                <MudIconButton Icon="@(_searchBarOpen ? Icons.Material.Outlined.SearchOff : Icons.Material.Outlined.ManageSearch)"
+                               Color="@(_searchBarOpen ? Color.Primary : Color.Default)"
+                               Size="Size.Small"
+                               OnClick="ToggleSearchBarAsync" />
+            </MudTooltip>
 
-        <FilterBox Value="@_rowFilterText"
-                   OnFilterChanged="OnRowFilterChanged"
-                   ParseError="@_rowFilterError"
-                   Placeholder="Filter files…"
-                   Class="bm-filter-input"
-                   FieldHints="@RowFieldHints" />
+            <FilterBox Value="@_rowFilterText"
+                       OnFilterChanged="OnRowFilterChanged"
+                       ParseError="@_rowFilterError"
+                       Placeholder="Filter files…"
+                       Class="bm-filter-input"
+                       FieldHints="@RowFieldHints" />
 
-        @if (_lastScan.HasValue)
+            @if (_lastScan.HasValue)
+            {
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
+                    <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
+            }
+
+            <MudTooltip Text="Refresh">
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                               Size="Size.Small"
+                               Disabled="@(_isSearching || _loadingFiles)"
+                               OnClick="RefreshAsync"
+                               Class="bm-refresh-btn" />
+            </MudTooltip>
+        </div>
+
+        @if (_searchBarOpen)
         {
-            <div class="bm-infra-lastupdate">
-                <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
-                <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            <div class="bm-lb-toolbar-row">
+                <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
+                              Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                              Class="bm-lb-search-half" />
+
+                <FilterBox Value="@_contentFilterStr"
+                           OnFilterChanged="OnContentFilterChanged"
+                           ParseError="@_contentFilterError"
+                           Placeholder="Content filter…"
+                           Class="bm-lb-search-half"
+                           FieldHints="@ContentFieldHints" />
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@(_isSearching ? Color.Error : Color.Primary)"
+                           Size="Size.Small"
+                           Disabled="@(!_isSearching && _selectedPath is null)"
+                           OnClick="OnSearchButtonClickAsync"
+                           Class="bm-lb-search-btn">
+                    @(_isSearching ? "Stop" : "Start Search")
+                </MudButton>
             </div>
         }
-
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                           Size="Size.Small"
-                           Disabled="@(_isSearching || _loadingFiles)"
-                           OnClick="RefreshAsync"
-                           Class="bm-refresh-btn" />
-        </MudTooltip>
-    </div>
-
-    <!-- ── Toolbar row 2: collapsible search bar ─────────────────────── -->
-    <div class="bm-lb-search-row @(_searchBarOpen ? "bm-lb-search-row-open" : "")">
-        <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
-                      Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
-                      Class="bm-lb-search-half" />
-
-        <FilterBox Value="@_contentFilterStr"
-                   OnFilterChanged="OnContentFilterChanged"
-                   ParseError="@_contentFilterError"
-                   Placeholder="Content filter…"
-                   Class="bm-lb-search-half"
-                   FieldHints="@ContentFieldHints" />
-
-        <MudButton Variant="Variant.Filled"
-                   Color="@(_isSearching ? Color.Error : Color.Primary)"
-                   Size="Size.Small"
-                   Disabled="@(!_isSearching && _selectedPath is null)"
-                   OnClick="OnSearchButtonClickAsync"
-                   Class="bm-lb-search-btn">
-            @(_isSearching ? "Stop" : "Start Search")
-        </MudButton>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
@@ -128,6 +134,7 @@
                        ParseError="@_treeFilterError"
                        Placeholder="Filter folders…"
                        Class="bm-lb-tree-filter"
+                       ShowHint="false"
                        FieldHints="@TreeFieldHints" />
         </div>
 

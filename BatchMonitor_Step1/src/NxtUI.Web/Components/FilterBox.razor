@@ -29,6 +29,8 @@
                       Style="flex:1;min-width:0;" />
     </MudTooltip>
 
+    @if (ShowHint)
+    {
     <MudMenu @ref="_menu"
              AnchorOrigin="Origin.BottomRight"
              TransformOrigin="Origin.TopRight"
@@ -102,6 +104,7 @@
             </div>
         </ChildContent>
     </MudMenu>
+    }
 
 </div>
 
@@ -112,6 +115,7 @@
     [Parameter] public string? Class           { get; set; }
     [Parameter] public int     DebounceMs      { get; set; } = 300;
     [Parameter] public string  Placeholder     { get; set; } = "Filter…";
+    [Parameter] public bool    ShowHint        { get; set; } = true;
 
     [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
 

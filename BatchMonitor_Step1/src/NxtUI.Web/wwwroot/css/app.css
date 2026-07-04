@@ -2318,34 +2318,23 @@ tr.bm-row-searching td:first-child {
 /* ── Log Browser ──────────────────────────────────────────────────── */
 .bm-lb-page { display: flex; flex-direction: column; }
 
-.bm-lb-filter-toolbar {
+/* bm-lb-toolbar-multiline: same bordered container as before, but now holds
+   one or two .bm-lb-toolbar-row lines (main row + optional search row) so a
+   collapsed search row leaves no border/height artifact behind. */
+.bm-lb-filter-toolbar.bm-lb-toolbar-multiline {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
 }
-
-/* Collapsible second row: filename glob + content filter + Start Search/Stop.
-   Hidden by default, expands with a height/opacity transition when toggled. */
-.bm-lb-search-row {
+.bm-lb-toolbar-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 12px;
-    max-height: 0;
-    opacity: 0;
-    overflow: hidden;
-    border-bottom: 1px solid transparent;
-    transition: max-height 0.2s ease, opacity 0.15s ease, padding 0.2s ease, border-color 0.2s ease;
 }
-.bm-lb-search-row-open {
-    max-height: 56px;
-    opacity: 1;
-    padding: 8px 12px;
-    border-bottom-color: var(--mud-palette-divider);
-}
+
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
 .bm-lb-search-btn  { flex-shrink: 0; white-space: nowrap; }
 
