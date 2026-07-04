@@ -4,10 +4,12 @@
 @inject DateTimeDisplayService DtSvc
 
 <div class="bm-table-wrap">
+    @if (Loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+    }
     <MudTable T="RunSummary"
               Items="@Rows"
-              Loading="@Loading"
-              LoadingProgressColor="Color.Primary"
               Dense="true"
               Hover="true"
               Elevation="0"

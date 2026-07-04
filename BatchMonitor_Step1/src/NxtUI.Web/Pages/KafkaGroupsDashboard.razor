@@ -34,10 +34,12 @@
         {
             <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
         }
+        @if (_result.IsLoading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
-                  Loading="@_result.IsLoading"
-                  LoadingProgressColor="Color.Primary"
                   Dense="true"
                   Hover="true"
                   Elevation="0"

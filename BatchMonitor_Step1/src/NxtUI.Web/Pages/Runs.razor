@@ -33,8 +33,9 @@
     }
 
     <!-- Table shell (headers, toolbar, pagination) renders immediately; only
-         the rows populate progressively. Loading="" shows MudTable's own
-         progress bar without hiding the structure underneath. -->
+         the rows populate progressively. BmRunsTable shows the shared
+         bottom-anchored loading bar (not MudTable's own) so it's consistent
+         with every other page. -->
     <BmRunsTable Rows="@_paged"
                  Loading="@_result.IsLoading"
                  TotalCount="@_all.Count"
