@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using AwesomeAssertions;
 using NxtUI.Web.Services;
 
 namespace NxtUI.Tests.Services;
@@ -64,19 +65,19 @@ public sealed class LogFormatGrammarContractTests
 
         if (!testCase.Valid)
         {
-            Assert.Null(compiled);
+            compiled.Should().BeNull();
             return;
         }
 
-        Assert.NotNull(compiled);
+        compiled.Should().NotBeNull();
         var match = compiled!.Regex.Match(testCase.Line);
-        Assert.True(match.Success, $"[{testCase.Name}] format did not match sample line");
+        match.Success.Should().BeTrue($"[{testCase.Name}] format did not match sample line");
 
         foreach (var (field, expectedValue) in testCase.Expected!)
         {
             var group = match.Groups[field];
-            Assert.True(group.Success, $"[{testCase.Name}] field '{field}' did not capture");
-            Assert.Equal(expectedValue, group.Value);
+            group.Success.Should().BeTrue($"[{testCase.Name}] field '{field}' did not capture");
+            group.Value.Should().Be(expectedValue);
         }
     }
 }

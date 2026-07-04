@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using FluentAssertions;
+using AwesomeAssertions;
 using NxtUI.Web.Services;
 
 namespace NxtUI.Tests.Performance;

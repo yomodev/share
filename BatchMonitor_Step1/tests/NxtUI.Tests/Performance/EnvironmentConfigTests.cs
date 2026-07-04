@@ -1,3 +1,4 @@
+using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -24,13 +25,13 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         out_.WriteLine($"Configured: {settings.Environments.Count} environments");
         out_.WriteLine($"Returned:   {all.Count} environments");
 
-        Assert.Equal(settings.Environments.Count, all.Count);
+        all.Count.Should().Be(settings.Environments.Count);
 
         foreach (var def in settings.Environments)
         {
             var found = all.FirstOrDefault(e => e.Id.Equals(def.Id, StringComparison.OrdinalIgnoreCase));
             out_.WriteLine($"  {def.Id} ({def.Tier}): {(found is not null ? "found" : "MISSING")}");
-            Assert.NotNull(found);
+            found.Should().NotBeNull();
         }
     }
 
@@ -44,7 +45,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         {
             var servers = envSvc.GetServers(def.Id);
             out_.WriteLine($"  {def.Id}: {servers.Count} servers (expected {def.Servers.Count})");
-            Assert.Equal(def.Servers.Count, servers.Count);
+            servers.Count.Should().Be(def.Servers.Count);
         }
     }
 
@@ -60,7 +61,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
             foreach (var expected in def.Servers)
             {
                 out_.WriteLine($"  {def.Id}: checking for '{expected}'");
-                Assert.Contains(expected, actual, StringComparer.OrdinalIgnoreCase);
+                actual.Should().Contain(s => s.Equals(expected, StringComparison.OrdinalIgnoreCase));
             }
         }
     }
@@ -70,7 +71,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     {
         var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var result = envSvc.GetServers("__nonexistent_env__");
-        Assert.Empty(result);
+        result.Should().BeEmpty();
     }
 
     [Fact]
@@ -82,11 +83,11 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         foreach (var def in settings.Environments)
         {
             var env = envSvc.GetById(def.Id);
-            Assert.NotNull(env);
-            Assert.Equal(def.Id, env.Id, StringComparer.OrdinalIgnoreCase);
+            env.Should().NotBeNull();
+            env!.Id.Equals(def.Id, StringComparison.OrdinalIgnoreCase).Should().BeTrue();
             out_.WriteLine($"  {def.Id}: label='{env.Label}', tier='{def.Tier}'");
         }
 
-        Assert.Null(envSvc.GetById("__nonexistent__"));
+        envSvc.GetById("__nonexistent__").Should().BeNull();
     }
 }

@@ -1,3 +1,4 @@
+using AwesomeAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -48,8 +49,8 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("a.log", results);
-        Assert.DoesNotContain("b.log", results);
+        results.Should().Contain("a.log");
+        results.Should().NotContain("b.log");
     }
 
     [Fact]
@@ -64,8 +65,8 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("thread5.log", results);
-        Assert.DoesNotContain("thread9.log", results);
+        results.Should().Contain("thread5.log");
+        results.Should().NotContain("thread9.log");
     }
 
     [Fact]
@@ -79,7 +80,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("legacy.log", results);
+        results.Should().Contain("legacy.log");
     }
 
     private static FilterParser LogLineParser() => new(

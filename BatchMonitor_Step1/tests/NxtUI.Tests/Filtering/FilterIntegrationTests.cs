@@ -1,6 +1,6 @@
 using NxtUI.Core.Models;
 using NxtUI.Filtering;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace NxtUI.Tests.Filtering;
 

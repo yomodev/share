@@ -1,5 +1,5 @@
 using NxtUI.Filtering;
-using FluentAssertions;
+using AwesomeAssertions;
 using MatchType = NxtUI.Filtering.MatchType;
 
 namespace NxtUI.Tests.Filtering;

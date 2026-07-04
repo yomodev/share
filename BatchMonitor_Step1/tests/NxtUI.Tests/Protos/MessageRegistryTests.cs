@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using FluentAssertions;
+using AwesomeAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using NxtUI.Protos;
