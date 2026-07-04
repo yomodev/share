@@ -58,31 +58,32 @@
             </MudTooltip>
         </div>
 
-        @if (_searchBarOpen)
-        {
-            <div class="bm-lb-toolbar-row">
-                <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
-                              Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
-                              Class="bm-lb-search-half" />
+        <div class="bm-lb-search-collapse @(_searchBarOpen ? "bm-lb-search-collapse-open" : "")">
+            <div class="bm-lb-search-collapse-inner">
+                <div class="bm-lb-toolbar-row">
+                    <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
+                                  Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                                  Class="bm-lb-search-half" />
 
-                <FilterBox Value="@_contentFilterStr"
-                           OnFilterChanged="OnContentFilterChanged"
-                           ParseError="@_contentFilterError"
-                           Placeholder="Content filter…"
-                           Class="bm-lb-search-half"
-                           FieldHints="@ContentFieldHints" />
+                    <FilterBox Value="@_contentFilterStr"
+                               OnFilterChanged="OnContentFilterChanged"
+                               ParseError="@_contentFilterError"
+                               Placeholder="Content filter…"
+                               Class="bm-lb-search-half"
+                               FieldHints="@ContentFieldHints" />
 
-                <MudButton Variant="Variant.Filled"
-                           Color="@(_isSearching ? Color.Error : Color.Primary)"
-                           Size="Size.Small"
-                           Disabled="@(!_isSearching && _selectedPath is null)"
-                           OnClick="OnSearchButtonClickAsync"
-                           Class="bm-lb-search-btn">
-                    @(_isSearching ? "Stop" : "Start Search")
-                </MudButton>
+                    <MudButton Variant="Variant.Filled"
+                               Color="@(_isSearching ? Color.Error : Color.Primary)"
+                               Size="Size.Small"
+                               Disabled="@(!_isSearching && _selectedPath is null)"
+                               OnClick="OnSearchButtonClickAsync"
+                               Class="bm-lb-search-btn">
+                        @(_isSearching ? "Stop" : "Start Search")
+                    </MudButton>
+                </div>
             </div>
-        }
+        </div>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->

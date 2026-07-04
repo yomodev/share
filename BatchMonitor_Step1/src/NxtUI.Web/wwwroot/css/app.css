@@ -2315,13 +2315,15 @@ tr.bm-row-searching td:first-child {
 /* ── Log Browser ──────────────────────────────────────────────────── */
 .bm-lb-page { display: flex; flex-direction: column; }
 
-/* bm-lb-toolbar-multiline: same bordered container as before, but now holds
-   one or two .bm-lb-toolbar-row lines (main row + optional search row) so a
-   collapsed search row leaves no border/height artifact behind. */
+/* bm-lb-toolbar-multiline: same bordered container as before, holding one or
+   two .bm-lb-toolbar-row lines (main row + animated search row) — the second
+   row lives inside .bm-lb-search-collapse so it can grow/shrink smoothly
+   without ever leaving a border/height artifact behind when collapsed.
+   No `gap` on the container itself — the search row supplies its own
+   top margin only while open, so a collapsed row leaves zero residual space. */
 .bm-lb-filter-toolbar.bm-lb-toolbar-multiline {
     display: flex;
     flex-direction: column;
-    gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
@@ -2330,6 +2332,28 @@ tr.bm-row-searching td:first-child {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Animated reveal: grid-template-rows 0fr -> 1fr lets the row expand to its
+   natural content height (no hardcoded max-height guess), with a quick
+   opacity fade so the fields don't just snap into view. */
+.bm-lb-search-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.22s ease;
+}
+.bm-lb-search-collapse-open {
+    grid-template-rows: 1fr;
+    margin-top: 8px;
+}
+.bm-lb-search-collapse-inner {
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.bm-lb-search-collapse-open .bm-lb-search-collapse-inner {
+    opacity: 1;
+    transition-delay: 0.05s;
 }
 
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
