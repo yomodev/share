@@ -123,10 +123,12 @@
                                     OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
                                     OnItemClick="@OnItemClickAsync" />
             </div>
-            <MudTextField T="string" Value="@_treeFilterText" ValueChanged="@(v => _treeFilterText = v)"
-                          Placeholder="Filter folders…" Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
-                          Class="bm-lb-tree-filter" Immediate="true" DebounceInterval="200" />
+            <FilterBox Value="@_treeFilterText"
+                       OnFilterChanged="OnTreeFilterChanged"
+                       ParseError="@_treeFilterError"
+                       Placeholder="Filter folders…"
+                       Class="bm-lb-tree-filter"
+                       FieldHints="@TreeFieldHints" />
         </div>
 
         <!-- drag handle -->
@@ -286,17 +288,37 @@
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
-    // Sidebar tree name filter — only filters nodes already loaded (root + expanded
-    // branches' cached children); deeper unexpanded branches aren't fetched eagerly.
-    private string _treeFilterText = "";
+    // Sidebar tree name filter — same shared filter grammar as every other filter box
+    // (AND/OR/NOT/parens, see docs/08_FilterSyntax.md), evaluated against LogFolderNode.Name.
+    // Only filters nodes already loaded (root + expanded branches' cached children);
+    // deeper unexpanded branches aren't fetched eagerly.
+    private static readonly FilterParser TreeFilterParser = new(searchableFields: ["Name"]);
+
+    private static readonly (string Aliases, string Label)[] TreeFieldHints =
+    [
+        ("name", "folder name"),
+    ];
+
+    private string      _treeFilterText  = "";
+    private string?     _treeFilterError;
+    private FilterNode? _treeFilterNode;
+
+    private void OnTreeFilterChanged(string v)
+    {
+        _treeFilterText  = v;
+        _treeFilterError = null;
+        if (string.IsNullOrWhiteSpace(v)) { _treeFilterNode = null; return; }
+        try   { _treeFilterNode = TreeFilterParser.Parse(v, DtSvc.UseUtc); }
+        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; }
+    }
 
     private List<LogFolderNode> FilteredRootNodes =>
-        string.IsNullOrWhiteSpace(_treeFilterText)
+        _treeFilterNode is null
             ? _rootNodes
             : _rootNodes.Where(MatchesTreeFilter).ToList();
 
     private Dictionary<string, IReadOnlyList<LogFolderNode>> FilteredChildCache =>
-        string.IsNullOrWhiteSpace(_treeFilterText)
+        _treeFilterNode is null
             ? _childCache
             : _childCache.ToDictionary(
                 kv => kv.Key,
@@ -304,7 +326,7 @@
                 StringComparer.OrdinalIgnoreCase);
 
     private bool MatchesTreeFilter(LogFolderNode n) =>
-        n.Name.Contains(_treeFilterText, StringComparison.OrdinalIgnoreCase);
+        FilterEvaluator.Evaluate(_treeFilterNode, n);
 
     // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
