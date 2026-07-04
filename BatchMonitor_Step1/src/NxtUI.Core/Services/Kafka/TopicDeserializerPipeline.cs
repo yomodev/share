@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 
 namespace NxtUI.Core.Services.Kafka;
 

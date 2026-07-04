@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace NxtUI.Configuration;
+namespace NxtUI.Core.Configuration;
 
 public class KafkaSettings
 {

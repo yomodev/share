@@ -2,7 +2,7 @@ using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Kafka;

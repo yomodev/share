@@ -4,6 +4,7 @@ using MudBlazor.Services;
 using NLog;
 using NLog.Web;
 using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;

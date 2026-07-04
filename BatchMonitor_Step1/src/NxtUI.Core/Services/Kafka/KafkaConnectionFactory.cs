@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using Confluent.Kafka;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 
 namespace NxtUI.Core.Services.Kafka;
 

@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace NxtUI.Configuration;
+namespace NxtUI.Core.Configuration;
 
 /// <summary>
 /// MongoDB connection settings — bound from appsettings.json "Mongo" section.
@@ -11,19 +11,24 @@ public class MongoSettings
     public const string SectionName = "Mongo";
 
     /// <summary>MongoDB connection string, e.g. "mongodb://localhost:27017"</summary>
-    public string ConnectionString { get; set; } = "mongodb://localhost:27017";
+    public string? ConnectionString { get; set; }
+
+    public string? ServerName { get; set; }
+
+    public string? DatabaseName { get; set; }
+
 
     /// <summary>
     /// Database name prefix. The actual database name is built as
     /// "{DatabasePrefix}_{environmentId}" so each environment has its own database.
     /// </summary>
-    public string DatabasePrefix { get; set; } = "BatchMonitor";
+    public string DatabasePrefix { get; set; } = string.Empty;
 
     /// <summary>Name of the PerformanceTracker collection within each environment database.</summary>
     public string PerformanceTrackerCollection { get; set; } = "PerformanceTracker";
 
     /// <summary>Name of the Heartbeats collection within each environment database.</summary>
-    public string HeartbeatsCollection { get; set; } = "Heartbeats";
+    public string? HeartbeatsCollection { get; set; }
 
     // ── Optional credential override ─────────────────────────────────────────
     // Leave blank to use whatever is already in ConnectionString.

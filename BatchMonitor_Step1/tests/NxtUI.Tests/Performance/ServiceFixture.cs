@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;

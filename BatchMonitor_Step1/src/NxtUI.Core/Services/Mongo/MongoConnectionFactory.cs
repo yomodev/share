@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using MongoDB.Driver;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 
 namespace NxtUI.Core.Services.Mongo;
 
