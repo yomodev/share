@@ -18,6 +18,12 @@
             @TopicName
         </span>
 
+        <MudTooltip Text="Browse topics">
+            <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
+                           Size="Size.Small"
+                           OnClick="@(() => TabService.OpenOrFocus(TabModel.CreateKafkaDashboard(Environment)))" />
+        </MudTooltip>
+
         <!-- Start / Pause -->
         <MudTooltip Text="@(_state == StreamState.Running ? "Pause" : "Start")">
             <MudIconButton Icon="@(_state == StreamState.Running

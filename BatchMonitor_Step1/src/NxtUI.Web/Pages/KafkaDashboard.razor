@@ -117,7 +117,7 @@
                                                OnClick="@(() => OpenGroupsDialog(context.Name))" />
                             </MudTooltip>
                             <MudTooltip Text="Inspect messages">
-                                <MudIconButton Icon="@Icons.Material.Outlined.MoveToInbox"
+                                <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
                                                Size="Size.Small"
                                                OnClick="@(() => OpenInspector(context.Name))" />
                             </MudTooltip>
@@ -309,13 +309,15 @@
     private bool _loadingDetail = false;
 
     // Filter parsers
-    private static readonly FilterParser TopicParser = new(["Name", "CleanupPolicy"],
+    private static readonly FilterParser TopicParser = new(["Name", "PartitionCount", "MessageCount"],
         new Dictionary<string, string>
         {
-            ["name"]    = "Name",
-            ["topic"]   = "Name",
-            ["cleanup"] = "CleanupPolicy",
-            ["policy"]  = "CleanupPolicy",
+            ["name"]       = "Name",
+            ["topic"]      = "Name",
+            ["partitions"] = "PartitionCount",
+            ["parts"]      = "PartitionCount",
+            ["messages"]   = "MessageCount",
+            ["msgs"]       = "MessageCount",
         });
 
     private static readonly FilterParser GroupParser = new(["GroupId", "State"],
@@ -328,8 +330,9 @@
 
     private static readonly (string Aliases, string Label)[] _topicFieldHints =
     [
-        ("name / topic",     "topic name"),
-        ("cleanup / policy", "cleanup policy (delete / compact)"),
+        ("name / topic",         "topic name"),
+        ("partitions / parts",   "partition count (supports >, >=, <, <=, ..)"),
+        ("messages / msgs",      "message count (supports >, >=, <, <=, ..)"),
     ];
 
     private static readonly (string Aliases, string Label)[] _groupFieldHints =
