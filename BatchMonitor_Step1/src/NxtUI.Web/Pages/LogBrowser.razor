@@ -384,7 +384,7 @@
 
     private CancellationTokenSource  _cts        = new();
     private CancellationTokenSource? _searchCts;
-    private CancellationTokenSource? _pollCts;
+    private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
     private DateTime                 _lastManualPoll = DateTime.MinValue;
 
@@ -392,6 +392,14 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
+        _poller = new FocusGatedPoller(interval, async ct =>
+        {
+            // Skip auto-refresh while a search is running.
+            if (_selectedPath is not null && !_isSearching && !_isSearchMode)
+                await InvokeAsync(LoadFilesAsync);
+        }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
+
         Tab?.BeginLoading();
         TabService.NotifyChanged();
         try
@@ -447,7 +455,7 @@
         }
         else
         {
-            StopPolling();
+            _poller?.Stop();
         }
     }
 
@@ -455,8 +463,7 @@
     // the search bar isn't open (composing/viewing a search is a snapshot, not live).
     private void RestartPollingIfBrowsing()
     {
-        if (IsFocused && _selectedPath is not null && !_searchBarOpen) StartPolling();
-        else StopPolling();
+        _poller?.SetActive(IsFocused && _selectedPath is not null && !_searchBarOpen);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -590,7 +597,7 @@
         _isSearchMode = false;
         _selectedPath = null;
         _files.Clear();
-        StopPolling();
+        _poller?.Stop();
         StateHasChanged();
     }
 
@@ -742,39 +749,6 @@
         }
     }
 
-    private void StartPolling()
-    {
-        if (_pollCts is not null) return; // already running
-        _pollCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-        _ = PollLoopAsync(_pollCts.Token);
-    }
-
-    private void StopPolling()
-    {
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
-        _pollCts = null;
-    }
-
-    private async Task PollLoopAsync(CancellationToken ct)
-    {
-        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
-        using var timer = new PeriodicTimer(interval);
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                // Skip auto-refresh while a search is running.
-                if (_selectedPath is not null && !_isSearching && !_isSearchMode)
-                {
-                    try { await InvokeAsync(LoadFilesAsync); }
-                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser auto-refresh failed"); }
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-    }
-
     // ── helpers ───────────────────────────────────────────────────────────
 
     private void OpenInViewer(LogFileEntry file) =>
@@ -817,7 +791,7 @@
     public async ValueTask DisposeAsync()
     {
         StopSearch();
-        StopPolling();
+        _poller?.Stop();
         _selfRef?.Dispose();
         await _cts.CancelAsync();
         _cts.Dispose();

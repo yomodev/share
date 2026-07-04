@@ -186,7 +186,7 @@
     // Controls the Runs polling loop's lifetime independently of _cts — started
     // only while Home is visible, cancelled the moment it isn't, so no polling
     // happens in the background while a tab is focused.
-    private CancellationTokenSource? _pollCts;
+    private FocusGatedPoller? _poller;
 
     // Home is visible only when no tab is active. Track the previous state so
     // we can trigger a data refresh when the user switches back to Home.
@@ -202,6 +202,13 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var interval = TimeSpan.FromSeconds(RunsOpts.Value.PollingIntervalSeconds);
+        _poller = new FocusGatedPoller(interval, async ct =>
+        {
+            await LoadRunsAsync();
+            await InvokeAsync(StateHasChanged);
+        }, ex => Logger.LogError(ex, "Runs polling failed"));
+
         EnvService.OnChange         += OnEnvExternalChange;
         HealthCache.OnHealthUpdated += OnHealthUpdated;
         TabService.OnChange         += OnTabVisibilityChanged;
@@ -209,26 +216,12 @@
         HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         _runsReady = true;
-        if (IsVisible) StartPolling();
+        if (IsVisible) _poller.Start();
     }
 
     private void OnMapDataLoaded() => _ = InvokeAsync(() => { _mapReady = true; StateHasChanged(); });
 
     private bool IsVisible => TabService.ActiveTab is null;
-
-    private void StartPolling()
-    {
-        if (_pollCts is not null) return; // already running
-        _pollCts = new CancellationTokenSource();
-        _ = PollRunsAsync(_pollCts.Token);
-    }
-
-    private void StopPolling()
-    {
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
-        _pollCts = null;
-    }
 
     private void OnTabVisibilityChanged()
     {
@@ -236,7 +229,7 @@
         if (visible && !_wasVisible)
         {
             // Home just became visible — refresh stale data, render, then resume polling.
-            StartPolling();
+            _poller?.Start();
             _ = InvokeAsync(async () =>
             {
                 try
@@ -251,7 +244,7 @@
         else if (!visible && _wasVisible)
         {
             // Home just became hidden — stop polling entirely, not just the render.
-            StopPolling();
+            _poller?.Stop();
         }
         _wasVisible = visible;
     }
@@ -269,22 +262,6 @@
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
         finally { _runsLoading = false; }
-    }
-
-    private async Task PollRunsAsync(CancellationToken ct)
-    {
-        var interval = TimeSpan.FromSeconds(RunsOpts.Value.PollingIntervalSeconds);
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(interval, ct);
-                await LoadRunsAsync();
-                await InvokeAsync(StateHasChanged);
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Logger.LogError(ex, "Runs polling failed"); }
-        }
     }
 
     // ── Health ────────────────────────────────────────────────────────────
@@ -389,7 +366,7 @@
         EnvService.OnChange         -= OnEnvExternalChange;
         HealthCache.OnHealthUpdated -= OnHealthUpdated;
         TabService.OnChange         -= OnTabVisibilityChanged;
-        StopPolling();
+        _poller?.Stop();
         _cts.Cancel();
     }
 }
