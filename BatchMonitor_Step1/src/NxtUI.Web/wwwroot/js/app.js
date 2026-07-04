@@ -1,5 +1,18 @@
 // Batch Monitor — client-side utilities
 
+// ── prevent text selection on double/triple-click in data tables ──────────
+// Runs once at module load (the browser only evaluates an ES module once no
+// matter how many times components dynamically import it). Only suppresses
+// the browser's native "select word/paragraph" behavior on repeat clicks
+// (e.detail > 1) so rows can still use @ondblclick for row actions without
+// also selecting the cell's text — a plain single click still selects text
+// normally.
+document.addEventListener('mousedown', (e) => {
+    if (e.detail > 1 && e.target.closest('.bm-batch-table')) {
+        e.preventDefault();
+    }
+});
+
 // ── localStorage helpers ──────────────────────────────────────────────────
 
 /** @param {string} key @returns {string|null} */

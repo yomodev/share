@@ -176,7 +176,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
     }
 
     private void SetMode(ThemeMode mode)
