@@ -16,7 +16,7 @@
 
 <div class="bm-page bm-page-fill bm-lb-page">
 
-    <!-- ── Toolbar row 1: filters + search/stop ──────────────────────── -->
+    <!-- ── Toolbar row 1: open / search toggle / row filter / refresh ─── -->
     <div class="bm-lb-filter-toolbar">
         <MudTooltip Text="Open file...">
             <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
@@ -24,38 +24,59 @@
                            OnClick="OpenLocalFileAsync" />
         </MudTooltip>
 
+        <MudTooltip Text="@(_searchBarOpen ? "Hide search" : "Show search")">
+            <MudIconButton Icon="@(_searchBarOpen ? Icons.Material.Outlined.SearchOff : Icons.Material.Outlined.Search)"
+                           Color="@(_searchBarOpen ? Color.Primary : Color.Default)"
+                           Size="Size.Small"
+                           OnClick="ToggleSearchBarAsync" />
+        </MudTooltip>
+
+        <FilterBox Value="@_rowFilterText"
+                   OnFilterChanged="OnRowFilterChanged"
+                   ParseError="@_rowFilterError"
+                   Placeholder="Filter files…"
+                   Class="bm-filter-input"
+                   FieldHints="@RowFieldHints" />
+
+        @if (_lastScan.HasValue)
+        {
+            <div class="bm-infra-lastupdate">
+                <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
+                <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            </div>
+        }
+
+        <MudTooltip Text="Refresh">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                           Size="Size.Small"
+                           Disabled="@(_isSearching || _loadingFiles)"
+                           OnClick="RefreshAsync"
+                           Class="bm-refresh-btn" />
+        </MudTooltip>
+    </div>
+
+    <!-- ── Toolbar row 2: collapsible search bar ─────────────────────── -->
+    <div class="bm-lb-search-row @(_searchBarOpen ? "bm-lb-search-row-open" : "")">
         <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
                       Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt" />
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                      Class="bm-lb-search-half" />
 
-        <div class="bm-lb-toolbar-right">
-            <FilterBox Value="@_contentFilterStr"
-                       OnFilterChanged="OnContentFilterChanged"
-                       ParseError="@_contentFilterError"
-                       Placeholder="Content filter…"
-                       FieldHints="@ContentFieldHints" />
+        <FilterBox Value="@_contentFilterStr"
+                   OnFilterChanged="OnContentFilterChanged"
+                   ParseError="@_contentFilterError"
+                   Placeholder="Content filter…"
+                   Class="bm-lb-search-half"
+                   FieldHints="@ContentFieldHints" />
 
-            @if (_lastScan.HasValue)
-            {
-                <div class="bm-infra-lastupdate">
-                    <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
-                    <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-                </div>
-            }
-
-            <MudTooltip Text="@(_isSearching ? "Stop" : (_isSearchRequested ? "Search" : "Refresh"))">
-                <MudIconButton Icon="@(_isSearching
-                                        ? Icons.Material.Outlined.Stop
-                                        : (_isSearchRequested
-                                            ? Icons.Material.Outlined.ManageSearch
-                                            : Icons.Material.Outlined.Refresh))"
-                               Color="@(_isSearching ? Color.Error : Color.Default)"
-                               Size="Size.Small"
-                               Disabled="@(!_isSearching && _loadingFiles)"
-                               OnClick="OnActionButtonClickAsync" />
-            </MudTooltip>
-
-        </div>
+        <MudButton Variant="Variant.Filled"
+                   Color="@(_isSearching ? Color.Error : Color.Primary)"
+                   Size="Size.Small"
+                   Disabled="@(!_isSearching && _selectedPath is null)"
+                   OnClick="OnSearchButtonClickAsync"
+                   Class="bm-lb-search-btn">
+            @(_isSearching ? "Stop" : "Start Search")
+        </MudButton>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
@@ -89,17 +110,23 @@
 
         <!-- left: folder tree -->
         <div class="bm-lb-tree-panel" @ref="_treePanelRef" style="width:@(_treePanelWidth)px">
-            <LogBrowserFileTree Servers="@_servers"
-                                RootNodes="@_rootNodes"
-                                ChildCache="@_childCache"
-                                Expanded="@_expanded"
-                                LoadingNodes="@_loadingNodes"
-                                Initialized="@_initialized"
-                                LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
-                                InitError="@_initError"
-                                OnTreeNodeSelected="@OnTreeNodeSelectedAsync"
-                                OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
-                                OnItemClick="@OnItemClickAsync" />
+            <div class="bm-lb-tree-scroll">
+                <LogBrowserFileTree Servers="@_servers"
+                                    RootNodes="@FilteredRootNodes"
+                                    ChildCache="@FilteredChildCache"
+                                    Expanded="@_expanded"
+                                    LoadingNodes="@_loadingNodes"
+                                    Initialized="@_initialized"
+                                    LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
+                                    InitError="@_initError"
+                                    OnTreeNodeSelected="@OnTreeNodeSelectedAsync"
+                                    OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
+                                    OnItemClick="@OnItemClickAsync" />
+            </div>
+            <MudTextField T="string" Value="@_treeFilterText" ValueChanged="@(v => _treeFilterText = v)"
+                          Placeholder="Filter folders…" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                          Class="bm-lb-tree-filter" Immediate="true" DebounceInterval="200" />
         </div>
 
         <!-- drag handle -->
@@ -120,15 +147,15 @@
                 {
                     <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-lb-files-progress" />
                 }
-                @if (!_loadingFiles && _files.Count == 0)
+                @if (!_loadingFiles && FilteredFiles.Count == 0)
                 {
                     <div class="bm-lb-empty">
                         <MudText Typo="Typo.body2" Class="bm-muted">No files found.</MudText>
                     </div>
                 }
-                else if (_files.Count > 0)
+                else if (FilteredFiles.Count > 0)
                 {
-                    <MudTable Items="@_files" Dense="true" Hover="true" Striped="true"
+                    <MudTable Items="@FilteredFiles" Dense="true" Hover="true" Striped="true"
                               Class="bm-lb-file-table" FixedHeader="true" Height="100%"
                               RowClass="bm-lb-file-row"
                               SortLabel="Sort by">
@@ -206,6 +233,33 @@
         ("caller",         "calling method"),
     ];
 
+    // ── filter grammar for the always-visible row filter (filters the file table
+    // itself — Server/FileName/Size/dates — distinct from the content filter above,
+    // which filters log LINES inside files during a recursive search). ──────────
+    private static readonly FilterParser FileRowParser = new(
+        searchableFields: ["Server", "FileName"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["server"]   = "Server",
+            ["host"]     = "Server",
+            ["file"]     = "FileName",
+            ["filename"] = "FileName",
+            ["name"]     = "FileName",
+            ["size"]     = "SizeBytes",
+            ["created"]  = "CreatedUtc",
+            ["updated"]  = "LastModifiedUtc",
+            ["modified"] = "LastModifiedUtc",
+        });
+
+    private static readonly (string Aliases, string Label)[] RowFieldHints =
+    [
+        ("server / host",         "server / machine name"),
+        ("file / filename / name", "file name"),
+        ("size",                  "file size (bytes)"),
+        ("created",               "creation time"),
+        ("updated / modified",    "last modified time"),
+    ];
+
     // ── panel resize ─────────────────────────────────────────────────────
     private ElementReference _bodyRef;
     private ElementReference _treePanelRef;
@@ -232,6 +286,26 @@
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
+    // Sidebar tree name filter — only filters nodes already loaded (root + expanded
+    // branches' cached children); deeper unexpanded branches aren't fetched eagerly.
+    private string _treeFilterText = "";
+
+    private List<LogFolderNode> FilteredRootNodes =>
+        string.IsNullOrWhiteSpace(_treeFilterText)
+            ? _rootNodes
+            : _rootNodes.Where(MatchesTreeFilter).ToList();
+
+    private Dictionary<string, IReadOnlyList<LogFolderNode>> FilteredChildCache =>
+        string.IsNullOrWhiteSpace(_treeFilterText)
+            ? _childCache
+            : _childCache.ToDictionary(
+                kv => kv.Key,
+                kv => (IReadOnlyList<LogFolderNode>)kv.Value.Where(MatchesTreeFilter).ToList(),
+                StringComparer.OrdinalIgnoreCase);
+
+    private bool MatchesTreeFilter(LogFolderNode n) =>
+        n.Name.Contains(_treeFilterText, StringComparison.OrdinalIgnoreCase);
+
     // ── file / search state ───────────────────────────────────────────────
     private string?            _selectedPath;
     private List<LogFileEntry> _files        = new();
@@ -244,6 +318,33 @@
     private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
     private string?  _lastManualPollPath;
 
+    // always-visible row filter — filters the currently-loaded file table itself
+    private string      _rowFilterText  = "";
+    private string?     _rowFilterError;
+    private FilterNode? _rowFilterNode;
+
+    private List<LogFileEntry> FilteredFiles =>
+        _rowFilterNode is null ? _files : _files.Where(f => FilterEvaluator.Evaluate(_rowFilterNode, f)).ToList();
+
+    private void OnRowFilterChanged(string v)
+    {
+        _rowFilterText  = v;
+        _rowFilterError = null;
+        if (string.IsNullOrWhiteSpace(v)) { _rowFilterNode = null; return; }
+        try   { _rowFilterNode = FileRowParser.Parse(v, DtSvc.UseUtc); }
+        catch (Exception ex) { _rowFilterError = ex.Message; _rowFilterNode = null; }
+    }
+
+    // collapsible search bar (second toolbar row)
+    private bool _searchBarOpen;
+
+    private async Task ToggleSearchBarAsync()
+    {
+        _searchBarOpen = !_searchBarOpen;
+        RestartPollingIfBrowsing();
+        await Task.CompletedTask;
+    }
+
     // search
     private string    _fileGlob           = "*.log";
     private string    _contentFilterStr   = "";
@@ -251,9 +352,6 @@
     private string?   _contentFilterError;
     private bool      _isSearching;
     private bool      _isSearchMode;      // true = table shows recursive search results
-
-    private bool _isSearchRequested =>
-        _fileGlob != "*.log" || !string.IsNullOrEmpty(_contentFilterStr);
 
     private CancellationTokenSource  _cts        = new();
     private CancellationTokenSource? _searchCts;
@@ -281,7 +379,8 @@
             _initialized = true;
             _lastScan    = DateTime.UtcNow;
             _previousIsFocused = IsFocused;
-            if (IsFocused) StartPolling();
+            // No auto-start here — polling only begins once the user actually selects a
+            // folder or toggles the search bar (see RestartPollingIfBrowsing).
 
             // Auto-navigate to today's date folder if one exists at the root.
             var todayName = DateTime.Today.ToString("yyyy-MM-dd");
@@ -306,7 +405,10 @@
 
         if (IsFocused)
         {
-            StartPolling();
+            // Resume auto-refresh only if the user had already selected a folder before
+            // navigating away and isn't composing a search — don't restart polling just
+            // because the tab regained focus.
+            RestartPollingIfBrowsing();
             if (_initialized && _selectedPath is not null && !_isSearching && !_isSearchMode)
                 _ = InvokeAsync(async () =>
                 {
@@ -318,6 +420,14 @@
         {
             StopPolling();
         }
+    }
+
+    // Auto-refresh only runs while the user is actively browsing a selected folder and
+    // the search bar isn't open (composing/viewing a search is a snapshot, not live).
+    private void RestartPollingIfBrowsing()
+    {
+        if (IsFocused && _selectedPath is not null && !_searchBarOpen) StartPolling();
+        else StopPolling();
     }
 
     protected override async Task OnParametersSetAsync()
@@ -343,22 +453,12 @@
         catch (Exception ex) { _contentFilterError = ex.Message; _contentFilterNode = null; }
     }
 
-    // ── toolbar button: search / stop / refresh ───────────────────────────
+    // ── search bar: Start Search / Stop button ─────────────────────────────
 
-    private async Task OnActionButtonClickAsync()
+    private async Task OnSearchButtonClickAsync()
     {
-        if (_isSearching)
-        {
-            StopSearch();
-        }
-        else if (_isSearchRequested)
-        {
-            await StartSearchAsync();
-        }
-        else
-        {
-            await RefreshAsync();
-        }
+        if (_isSearching) StopSearch();
+        else               await StartSearchAsync();
     }
 
     // ── tree interaction ──────────────────────────────────────────────────
@@ -372,6 +472,7 @@
         _isSearchMode = false;
 
         await SelectPathAsync(node.RelativePath);
+        RestartPollingIfBrowsing();
     }
 
     private async Task OnItemClickAsync(LogFolderNode node)
@@ -451,6 +552,7 @@
         if (_isSearching) StopSearch();
         _isSearchMode = false;
         await SelectPathAsync(relativePath);
+        RestartPollingIfBrowsing();
     }
 
     private void ClearSelection()
@@ -459,6 +561,7 @@
         _isSearchMode = false;
         _selectedPath = null;
         _files.Clear();
+        StopPolling();
         StateHasChanged();
     }
 
@@ -542,6 +645,8 @@
         _isSearchMode = true;
         _loadingFiles = true;
         _files.Clear();
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
         StateHasChanged();
 
         var path   = _selectedPath;
@@ -562,6 +667,8 @@
         {
             _isSearching  = false;
             _loadingFiles = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
             await InvokeAsync(StateHasChanged);
         }
     }

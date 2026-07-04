@@ -2322,11 +2322,27 @@ tr.bm-row-searching td:first-child {
     flex-shrink: 0;
 }
 
-/* Glob filter field — fixed width so the icon button and right toolbar stay in one row */
-.bm-lb-filter-toolbar > .mud-input-control {
-    flex: 0 0 300px;
+/* Collapsible second row: filename glob + content filter + Start Search/Stop.
+   Hidden by default, expands with a height/opacity transition when toggled. */
+.bm-lb-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    border-bottom: 1px solid transparent;
+    transition: max-height 0.2s ease, opacity 0.15s ease, padding 0.2s ease, border-color 0.2s ease;
 }
-.bm-lb-toolbar-right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.bm-lb-search-row-open {
+    max-height: 56px;
+    opacity: 1;
+    padding: 8px 12px;
+    border-bottom-color: var(--mud-palette-divider);
+}
+.bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
+.bm-lb-search-btn  { flex-shrink: 0; white-space: nowrap; }
 
 .bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
 .bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
@@ -2342,8 +2358,22 @@ tr.bm-row-searching td:first-child {
 
 .bm-lb-tree-panel {
     width: 280px;
-    overflow: auto;
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.bm-lb-tree-scroll {
+    flex: 1 1 0;
+    overflow: auto;
+    min-height: 0;
+}
+
+.bm-lb-tree-filter {
+    flex-shrink: 0;
+    padding: 6px 8px;
+    border-top: 1px solid var(--mud-palette-divider);
 }
 
 .bm-lb-resizer {
