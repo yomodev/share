@@ -97,8 +97,7 @@
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        @if (context.ConfigLoaded) { <span>@context.PartitionCount</span> }
-                        else { <span class="bm-muted">—</span> }
+                        <span>@context.PartitionCount</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
                         @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
@@ -367,35 +366,24 @@
                 ApplyFilter();
                 _loading   = false;
                 _enriching = true;
-                StateHasChanged(); // show topic table while config enriches
+                StateHasChanged(); // show topic table (partitions already known) while enrichment loads
 
-                // Phase 2 — per-topic config: cleanup policy + retention.
-                // Skip topics whose config is already known (e.g. mock service).
-                var needsConfig = _allTopics
-                    .Select((t, i) => (t, i))
-                    .Where(x => !x.t.ConfigLoaded)
-                    .ToList();
-
-                if (needsConfig.Count > 0)
+                // Phase 2 — cleanup policy (for the "~" compacted marker) + an estimated
+                // message count, for every topic in one batched call (a handful of broker
+                // round trips total, not one AdminClient + one-or-two round trips per topic).
+                var enrichment = await KafkaSvc.GetTopicEnrichmentAsync(Environment, _allTopics, ct);
+                if (!ct.IsCancellationRequested)
                 {
-                    var enrichTask = Task.WhenAll(needsConfig.Select(async x =>
+                    for (var i = 0; i < _allTopics.Count; i++)
                     {
-                        var cfg = await KafkaSvc.GetTopicConfigAsync(Environment, x.t.Name, ct);
-                        if (ct.IsCancellationRequested) return;
-                        _allTopics[x.i] = _allTopics[x.i] with
+                        if (!enrichment.TryGetValue(_allTopics[i].Name, out var e)) continue;
+                        _allTopics[i] = _allTopics[i] with
                         {
-                            CleanupPolicy = cfg.CleanupPolicy,
-                            RetentionMs   = cfg.RetentionMs,
+                            CleanupPolicy = e.CleanupPolicy,
+                            MessageCount  = e.MessageCount,
                             ConfigLoaded  = true,
                         };
-                    }));
-
-                    while (!enrichTask.IsCompleted)
-                    {
-                        await Task.WhenAny(enrichTask, Task.Delay(300, ct));
-                        if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
                     }
-                    await enrichTask;
                     ApplyFilter();
                 }
             }

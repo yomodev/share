@@ -8,6 +8,16 @@ public interface IKafkaMonitor
     Task<KafkaClusterInfo>                       GetClusterInfoAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicSummary>>       GetTopicsAsync(string env, CancellationToken ct = default);
     Task<KafkaTopicConfig>                       GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Cheap, batched enrichment for a whole topic list — cleanup policy (for the "~"
+    /// compacted-topic marker) and an estimated message count (sum of high-low watermark
+    /// per partition; a live snapshot, not a total-ever-produced count). Uses one shared
+    /// admin client and a small constant number of broker round trips regardless of how
+    /// many topics are passed in — unlike calling GetTopicConfigAsync once per topic.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaGroupTopicLag>>         GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);

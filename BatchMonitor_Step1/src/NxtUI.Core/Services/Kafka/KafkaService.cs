@@ -83,6 +83,69 @@ public class KafkaService(
         };
     }
 
+    public async Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
+    {
+        var withPartitions = topics.Where(t => t.PartitionCount > 0).ToList();
+        if (withPartitions.Count == 0) return new Dictionary<string, KafkaTopicEnrichment>();
+
+        // Partitions are numbered contiguously from 0, so the list can be built from
+        // the partition count everyone already has — no metadata round trip needed.
+        var partitions = new List<TopicPartition>();
+        foreach (var t in withPartitions)
+            for (var p = 0; p < t.PartitionCount; p++)
+                partitions.Add(new TopicPartition(t.Name, new Partition(p)));
+
+        log.LogDebug("kafka [{Env}]: enriching {TopicCount} topics ({PartitionCount} partitions) — 3 round trips total",
+            env, withPartitions.Count, partitions.Count);
+
+        using var admin = BuildAdmin(env);
+        var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
+
+        // One batched DescribeConfigs call for every topic's cleanup.policy (result list
+        // is index-aligned with the request list — DescribeConfigsResult carries no
+        // topic name of its own), and one batched ListOffsets call each for the earliest
+        // and latest offset of every partition — 3 broker round trips total, regardless
+        // of topic/partition count, instead of up to 2 per topic.
+        var configsTask = admin.DescribeConfigsAsync(
+            withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
+        var earliestTask = admin.ListOffsetsAsync(
+            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
+            timeout);
+        var latestTask = admin.ListOffsetsAsync(
+            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
+            timeout);
+
+        await Task.WhenAll(configsTask, earliestTask, latestTask);
+
+        var configs = configsTask.Result;
+        var earliest = earliestTask.Result.ResultInfos.ToDictionary(
+            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+        var latest = latestTask.Result.ResultInfos.ToDictionary(
+            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+
+        var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
+        for (var i = 0; i < withPartitions.Count; i++)
+        {
+            var t   = withPartitions[i];
+            var cfg = i < configs.Count ? configs[i] : null;
+            var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
+                ? e.Value : "delete";
+
+            long messageCount = 0;
+            for (var p = 0; p < t.PartitionCount; p++)
+            {
+                var tp = new TopicPartition(t.Name, new Partition(p));
+                if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
+                    messageCount += Math.Max(0, hi - lo);
+            }
+
+            result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
+        }
+
+        return result;
+    }
+
     public async Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
         string env, string topicName, CancellationToken ct = default)
     {

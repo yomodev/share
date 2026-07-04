@@ -53,6 +53,15 @@ public class MockKafkaService : IKafkaService
         return Task.FromResult(result);
     }
 
+    public Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
+    {
+        IReadOnlyDictionary<string, KafkaTopicEnrichment> result = topics.ToDictionary(
+            t => t.Name,
+            t => new KafkaTopicEnrichment(t.CleanupPolicy, t.MessageCount));
+        return Task.FromResult(result);
+    }
+
     public Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
     {
         var t = _topics.FirstOrDefault(x => x.Name == topicName);

@@ -116,3 +116,6 @@ public record KafkaTopicSummary
     /// <summary>False until per-topic config has been loaded from the broker.</summary>
     public bool ConfigLoaded { get; init; }
 }
+
+/// <summary>Cheap, batched per-topic enrichment — see IKafkaMonitor.GetTopicEnrichmentAsync.</summary>
+public record KafkaTopicEnrichment(string CleanupPolicy, long MessageCount);
