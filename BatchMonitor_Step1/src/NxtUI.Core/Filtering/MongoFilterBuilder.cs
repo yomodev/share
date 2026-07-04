@@ -51,6 +51,11 @@ public static class MongoFilterBuilder
             (MatchType.Exact, StringValue sv) =>
                 B.Regex(t.Field, ExactRegex(sv.Value, t.CaseSensitive)),
 
+            // A bare number/date with no operator parses to Exact (equality) —
+            // see FilterParser's "Number or Date with no comparison operator".
+            (MatchType.Exact, NumberValue nv) => B.Eq(t.Field, nv.Value),
+            (MatchType.Exact, DateValue dv)   => B.Eq(t.Field, dv.Value),
+
             // ── Numeric comparisons ────────────────────────────────────────
             (MatchType.GreaterThan,        NumberValue nv) => B.Gt(t.Field,  nv.Value),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => B.Gte(t.Field, nv.Value),
