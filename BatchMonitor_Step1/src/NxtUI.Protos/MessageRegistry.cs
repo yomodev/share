@@ -224,7 +224,9 @@ public sealed class MessageRegistry : IMessageRegistry
                 return Encoding.UTF8.GetString(bytes);
 
             case FieldDescriptorProto.Type.TypeBytes:
-                return Convert.ToBase64String(bytes);
+                // Raw bytes are opaque and often large — surfacing the base64 blob in
+                // the JSON viewer is noise, not signal. Show just the length instead.
+                return $"byte[{bytes.Length}]";
 
             case FieldDescriptorProto.Type.TypeMessage:
                 var nested = ResolveMessage(field.TypeName);
@@ -330,7 +332,7 @@ public sealed class MessageRegistry : IMessageRegistry
     private static JsonNode? DefaultWrapperValue(string typeName) => typeName switch
     {
         ".google.protobuf.StringValue" => JsonValue.Create(""),
-        ".google.protobuf.BytesValue"  => JsonValue.Create(""),
+        ".google.protobuf.BytesValue"  => JsonValue.Create("byte[0]"),
         ".google.protobuf.BoolValue"   => JsonValue.Create(false),
         ".google.protobuf.FloatValue"  => JsonValue.Create(0f),
         ".google.protobuf.DoubleValue" => JsonValue.Create(0d),

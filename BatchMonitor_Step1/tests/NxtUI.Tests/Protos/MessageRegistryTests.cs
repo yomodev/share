@@ -91,10 +91,23 @@ public class MessageRegistryTests
 
         var node = JsonNode.Parse(json!)!;
         node["typeUrl"]!.GetValue<string>().Should().Be("type.googleapis.com/nxtui.OrderEvent");
-        node["payload"]!.GetValue<string>().Should().Be(Convert.ToBase64String([1, 2, 3]));
+        node["payload"]!.GetValue<string>().Should().Be("byte[3]");
         var metadata = node["metadata"]!.AsObject();
         metadata["source"]!.GetValue<string>().Should().Be("unit-test");
         metadata["version"]!.GetValue<string>().Should().Be("1");
+    }
+
+    [Fact]
+    public void Bytes_field_renders_as_length_placeholder_not_base64_blob()
+    {
+        var msg = new global::NxtUI.Protos.ProtoMsg
+        {
+            TypeUrl = "type.googleapis.com/nxtui.OrderEvent",
+            Payload = ByteString.CopyFrom(new byte[128]),
+        };
+
+        AppRegistry.TryParseToJson("ProtoMsg", msg.ToByteArray(), out var json).Should().BeTrue();
+        JsonNode.Parse(json!)!["payload"]!.GetValue<string>().Should().Be("byte[128]");
     }
 
     // ── Lookup failure paths ─────────────────────────────────────────────────
