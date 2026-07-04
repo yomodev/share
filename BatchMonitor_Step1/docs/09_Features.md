@@ -27,8 +27,9 @@ The landing page (no tab selected). Shows, top to bottom:
 - **Kafka / Mongo health strip** (top right) — a row of colored dots, one per
   broker/node, plus an overall status label and last-checked time.
 - **Memory** — a treemap of every service process across all hosts, one tile
-  per process, colored on a blue → green → yellow → orange → red → deeppink
-  gradient by RAM usage (grey = no sample yet, dim red = offline). Click a
+  per process, colored on a blue (0 MB) → green (128 MB) → yellow (512 MB)
+  → orange (2048 MB) → red (4096 MB) → deeppink (8196+ MB) gradient by RAM
+  usage (grey = no sample yet, dim red = offline). Click a
   tile to jump to that process in the Memory Graph. A big spinner covers this
   section (plus Recent Runs below it) until both have loaded for the first
   time; after that, switching away and back doesn't re-show the spinner —
