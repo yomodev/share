@@ -104,6 +104,17 @@ public static class SqlFilterBuilder
             (MatchType.Exact, StringValue sv) =>
                 EqualTerm(col, sv.Value, ctx),
 
+            // A bare number/date with no operator parses to Exact (equality) —
+            // see FilterParser's "Number or Date with no comparison operator".
+            (MatchType.Exact, NumberValue nv) => EqualTerm(col, nv.Value, ctx),
+            (MatchType.Exact, DateValue dv)   => EqualTerm(col, dv.Value, ctx),
+
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => EqualTerm(col, bv.Value, ctx),
+            (MatchType.Contains, BoolValue bv) => EqualTerm(col, bv.Value, ctx),
+
             (MatchType.GreaterThan,        NumberValue nv) => CompareTerm(col, ">",  nv.Value, ctx),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => CompareTerm(col, ">=", nv.Value, ctx),
             (MatchType.LessThan,           NumberValue nv) => CompareTerm(col, "<",  nv.Value, ctx),
@@ -134,7 +145,7 @@ public static class SqlFilterBuilder
         return $"({col} LIKE {p} ESCAPE '\\')";
     }
 
-    private static string EqualTerm(string col, string value, BuildContext ctx)
+    private static string EqualTerm(string col, object value, BuildContext ctx)
     {
         var p = ctx.Add(value);
         return $"({col} = {p})";

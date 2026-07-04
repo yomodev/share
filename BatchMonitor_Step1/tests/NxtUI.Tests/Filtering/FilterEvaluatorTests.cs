@@ -286,4 +286,62 @@ public class FilterEvaluatorTests
         FilterEvaluator.Evaluate(ast, new NumObj(0)).Should().BeFalse();
         FilterEvaluator.Evaluate(ast, new NumObj(10)).Should().BeFalse();
     }
+
+    // ── Boolean values ──────────────────────────────────────────────────────
+
+    private record Flagged(bool IsOnline);
+    private static readonly FilterParser BoolParser = new(["IsOnline"]);
+
+    [Fact]
+    public void Bool_true_matches_true_property()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:true"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:true"), new Flagged(false)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Bool_false_matches_false_property()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:false"), new Flagged(false)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:false"), new Flagged(true)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Bool_is_case_insensitive_keyword()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:TRUE"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:False"), new Flagged(false)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NOT_negates_bool_match()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("!IsOnline:true"), new Flagged(false)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("!IsOnline:true"), new Flagged(true)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Explicit_exact_operator_works_the_same_for_bool()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:=true"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:=true"), new Flagged(false)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(">true")]
+    [InlineData(">=false")]
+    [InlineData("<true")]
+    [InlineData("<=false")]
+    public void Comparison_operators_are_rejected_for_bool(string expr)
+    {
+        var act = () => BoolParser.Parse($"IsOnline:{expr}");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_is_rejected_for_bool()
+    {
+        var act = () => BoolParser.Parse("IsOnline:true..false");
+        act.Should().Throw<FilterParseException>();
+    }
 }

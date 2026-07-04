@@ -352,6 +352,11 @@ public sealed class FilterParser
         if (exact && value is StringValue sv && MongoFilterBuilder.HasWildcard(sv.Value))
             throw new FilterParseException($"Wildcards are not allowed with exact match (:=): '{sv.Value}'");
 
+        // Validate: booleans only support equality — comparison operators and ranges
+        // ("field:>true", "field:true..false") have no meaning for a true/false value.
+        if (value is BoolValue && (cmpOp.HasValue || ctx.Current.Kind == TK.DotDot))
+            throw new FilterParseException("Comparison operators and ranges are not supported for true/false values");
+
         // Range: value '..' value
         if (!cmpOp.HasValue && !exact && ctx.Current.Kind == TK.DotDot)
         {
@@ -433,6 +438,12 @@ public sealed class FilterParser
         // null keyword
         if (text.Equals("null", StringComparison.OrdinalIgnoreCase))
             return new NullValue();
+
+        // Bare true/false keyword
+        if (text.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return new BoolValue(true);
+        if (text.Equals("false", StringComparison.OrdinalIgnoreCase))
+            return new BoolValue(false);
 
         // Number
         if (TryParseNumber(text, out var num))

@@ -401,4 +401,45 @@ public class FilterParserTests
             case NotNode not: Collect(not.Operand, acc); break;
         }
     }
+
+    // ── Boolean values ──────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("true",  true)]
+    [InlineData("TRUE",  true)]
+    [InlineData("False", false)]
+    [InlineData("false", false)]
+    public void Bare_true_false_keyword_produces_BoolValue(string literal, bool expected)
+    {
+        var node = Parse($"ChunkId:{literal}") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Exact);
+        node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Explicit_exact_operator_also_produces_BoolValue()
+    {
+        var node = Parse("ChunkId:=true") as FieldTermNode;
+        node!.MatchType.Should().Be(MatchType.Exact);
+        node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("ChunkId:>true")]
+    [InlineData("ChunkId:>=true")]
+    [InlineData("ChunkId:<true")]
+    [InlineData("ChunkId:<=false")]
+    public void Comparison_operator_on_bool_throws(string input)
+    {
+        var act = () => Parse(input);
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_on_bool_throws()
+    {
+        var act = () => Parse("ChunkId:true..false");
+        act.Should().Throw<FilterParseException>();
+    }
 }

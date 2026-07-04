@@ -37,6 +37,7 @@ public record FieldTermNode(
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(StringValue),     "string")]
 [JsonDerivedType(typeof(NumberValue),     "number")]
+[JsonDerivedType(typeof(BoolValue),       "bool")]
 [JsonDerivedType(typeof(DateValue),       "date")]
 [JsonDerivedType(typeof(TimeOfDayValue),  "time")]
 [JsonDerivedType(typeof(NullValue),       "null")]
@@ -45,6 +46,11 @@ public abstract record FilterValue;
 
 public record StringValue(string Value) : FilterValue;
 public record NumberValue(double Value) : FilterValue;
+
+/// <summary>A bare `true`/`false` literal — always resolves to MatchType.Exact
+/// (equality); comparison operators and ranges are rejected for it at parse time
+/// since "greater than true" etc. has no meaning.</summary>
+public record BoolValue(bool Value) : FilterValue;
 
 /// <summary>UTC instant. Both the JS and C# parsers convert local literals to UTC before
 /// storing them here so the MongoDB builder never has to think about time zones.</summary>

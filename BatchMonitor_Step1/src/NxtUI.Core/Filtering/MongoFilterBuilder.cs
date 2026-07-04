@@ -56,6 +56,12 @@ public static class MongoFilterBuilder
             (MatchType.Exact, NumberValue nv) => B.Eq(t.Field, nv.Value),
             (MatchType.Exact, DateValue dv)   => B.Eq(t.Field, dv.Value),
 
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => B.Eq(t.Field, bv.Value),
+            (MatchType.Contains, BoolValue bv) => B.Eq(t.Field, bv.Value),
+
             // ── Numeric comparisons ────────────────────────────────────────
             (MatchType.GreaterThan,        NumberValue nv) => B.Gt(t.Field,  nv.Value),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => B.Gte(t.Field, nv.Value),

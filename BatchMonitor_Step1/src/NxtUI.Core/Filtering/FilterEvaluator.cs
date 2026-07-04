@@ -49,6 +49,12 @@ public static class FilterEvaluator
             // A bare number with no comparison operator (e.g. "thread:5") means exact equality.
             (MatchType.Exact, NumberValue nv) => ToDouble(raw) == nv.Value,
 
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => ToBool(raw) == bv.Value,
+            (MatchType.Contains, BoolValue bv) => ToBool(raw) == bv.Value,
+
             (MatchType.Glob, StringValue sv) =>
                 GlobMatch(raw.ToString() ?? "", sv.Value, t.CaseSensitive),
 
@@ -150,6 +156,15 @@ public static class FilterEvaluator
         JsonValueKind.False   => false,
         JsonValueKind.Null    => null,
         _                     => elem.GetRawText(),
+    };
+
+    private static bool ToBool(object? v) => v switch
+    {
+        bool b   => b,
+        int i    => i != 0,
+        long l   => l != 0,
+        string s => bool.TryParse(s, out var b2) ? b2 : s == "1",
+        _        => false,
     };
 
     private static double ToDouble(object? v) => v switch
