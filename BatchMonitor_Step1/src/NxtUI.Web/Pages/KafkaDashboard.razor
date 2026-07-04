@@ -347,8 +347,7 @@
     {
         _loading   = true;
         _enriching = false;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -420,8 +419,6 @@
         {
             _loading   = false;
             _enriching = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             StateHasChanged();
         }
     }
@@ -491,8 +488,7 @@
         _selectedGroup = group;
         _topicLags     = null;
         _loadingDetail = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -504,8 +500,6 @@
         finally
         {
             _loadingDetail = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             StateHasChanged();
         }
     }

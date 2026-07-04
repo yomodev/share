@@ -101,8 +101,7 @@
     private async Task LoadAsync()
     {
         _result = default; // loading
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -123,11 +122,6 @@
         catch (Exception ex)
         {
             _result = Result<List<RunSummary>>.Fail(ex.Message);
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
     }
 

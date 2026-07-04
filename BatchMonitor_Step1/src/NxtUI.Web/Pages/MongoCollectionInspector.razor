@@ -192,8 +192,7 @@
         var ct = _cts.Token;
 
         _loading = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -211,8 +210,6 @@
         finally
         {
             _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
 
         StateHasChanged();

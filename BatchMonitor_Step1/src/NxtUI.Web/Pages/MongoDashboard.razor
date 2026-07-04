@@ -177,22 +177,13 @@
 
     protected override async Task OnInitializedAsync()
     {
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        try
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
+        // Load database names only — fast even with 100+ databases (no dbStats).
+        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+        if (_databaseNames.Count > 0)
         {
-            // Load database names only — fast even with 100+ databases (no dbStats).
-            _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
-            if (_databaseNames.Count > 0)
-            {
-                _selectedDb = _databaseNames[0];
-                await LoadCollectionsAsync();
-            }
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
+            _selectedDb = _databaseNames[0];
+            await LoadCollectionsAsync();
         }
     }
 
@@ -211,8 +202,7 @@
         var ct = _cts.Token;
 
         _loading = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -235,8 +225,6 @@
         finally
         {
             _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
         StateHasChanged();
     }

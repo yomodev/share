@@ -400,37 +400,28 @@
                 await InvokeAsync(LoadFilesAsync);
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
+        _servers = EnvironmentService.GetServers(Env).ToList();
+
         try
         {
-            _servers = EnvironmentService.GetServers(Env).ToList();
-
-            try
-            {
-                var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-                _rootNodes = roots.ToList();
-            }
-            catch (Exception ex) { _initError = ex.Message; }
-
-            _initialized = true;
-            _lastScan    = DateTime.UtcNow;
-            _previousIsFocused = IsFocused;
-            // No auto-start here — polling only begins once the user actually selects a
-            // folder or toggles the search bar (see RestartPollingIfBrowsing).
-
-            // Auto-navigate to today's date folder if one exists at the root.
-            var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-            var todayNode = _rootNodes.FirstOrDefault(n =>
-                n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-            if (todayNode is not null)
-                await OnExpandedChangedAsync(todayNode, true);
+            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+            _rootNodes = roots.ToList();
         }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-        }
+        catch (Exception ex) { _initError = ex.Message; }
+
+        _initialized = true;
+        _lastScan    = DateTime.UtcNow;
+        _previousIsFocused = IsFocused;
+        // No auto-start here — polling only begins once the user actually selects a
+        // folder or toggles the search bar (see RestartPollingIfBrowsing).
+
+        // Auto-navigate to today's date folder if one exists at the root.
+        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+        var todayNode = _rootNodes.FirstOrDefault(n =>
+            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+        if (todayNode is not null)
+            await OnExpandedChangedAsync(todayNode, true);
     }
 
     // Synchronous and separate from OnParametersSetAsync below — this must not
@@ -527,8 +518,7 @@
             {
                 _loadingNodes.Add(node.RelativePath);
                 _loadingFiles = true;
-                Tab?.BeginLoading();
-                TabService.NotifyChanged();
+                using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
                 StateHasChanged();
                 await Task.Yield();
                 try
@@ -540,8 +530,6 @@
                 {
                     _loadingNodes.Remove(node.RelativePath);
                     _loadingFiles = _loadingNodes.Count > 0;
-                    Tab?.EndLoading();
-                    TabService.NotifyChanged();
                     StateHasChanged();
                 }
             }
@@ -635,8 +623,7 @@
 
         var path    = _selectedPath; // capture — user may change selection while awaiting
         var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         try
         {
             // Collect all servers in parallel without touching _files mid-flight.
@@ -662,8 +649,6 @@
                 _loadingFiles = _loadingNodes.Count > 0;
                 await InvokeAsync(StateHasChanged);
             }
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
     }
 
@@ -681,8 +666,7 @@
         _isSearchMode = true;
         _loadingFiles = true;
         _files.Clear();
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
         var path   = _selectedPath;
@@ -703,8 +687,6 @@
         {
             _isSearching  = false;
             _loadingFiles = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -721,10 +703,7 @@
 
     private async Task RefreshAsync()
     {
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        try
-        {
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         if (_selectedPath is not null)
         {
             // Invalidate only the selected node's child cache entry and reload its files.
@@ -740,12 +719,6 @@
             _rootNodes = roots.ToList();
             _lastScan  = DateTime.UtcNow;
             StateHasChanged();
-        }
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
     }
 

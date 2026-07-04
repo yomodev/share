@@ -175,8 +175,7 @@
         _result       = default; // loading
         _selected     = null;
         _detailResult = default;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -187,11 +186,6 @@
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-        }
     }
 
     private void OnFilterChanged(string text)
@@ -222,22 +216,21 @@
         }
         _selected     = group;
         _detailResult = default; // loading
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        StateHasChanged();
-        try
+        using (TabLoadingScope.Begin(Tab, TabService))
         {
-            var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
-            _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
+            StateHasChanged();
+            try
+            {
+                var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+                _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+                _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
+            }
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
-            _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
-        }
-        Tab?.EndLoading();
-        TabService.NotifyChanged();
         StateHasChanged();
     }
 
