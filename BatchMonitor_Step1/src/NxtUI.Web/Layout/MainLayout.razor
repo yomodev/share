@@ -6,6 +6,8 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IConfiguration Config
+@inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
@@ -65,10 +67,23 @@
         TabService.OnChange   += OnTabsChanged;
         Nav.LocationChanged   += OnLocationChanged;
         EnvService.OnChange   += OnEnvChanged;
+        Notifications.OnError += OnErrorReported;
 
         // Open the tab that matches the initial URL (e.g. shared link / browser refresh).
         SyncTabFromUrl(Nav.Uri);
     }
+
+    // Deferred via InvokeAsync — errors can be reported from a hub filter running
+    // outside the renderer's synchronization context, and from deep inside another
+    // component's lifecycle (same reentrancy hazard as TabService.OnChange).
+    private void OnErrorReported(ErrorNotificationEntry entry) => InvokeAsync(() =>
+    {
+        Snackbar.Add(entry.Message, Severity.Error, cfg =>
+        {
+            cfg.ShowCloseIcon        = true;
+            cfg.VisibleStateDuration = 10_000;
+        });
+    });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -178,6 +193,7 @@
         TabService.OnChange   -= OnTabsChanged;
         Nav.LocationChanged   -= OnLocationChanged;
         EnvService.OnChange   -= OnEnvChanged;
+        Notifications.OnError -= OnErrorReported;
         _dotnetRef?.Dispose();
         if (_appModule is not null)
         {

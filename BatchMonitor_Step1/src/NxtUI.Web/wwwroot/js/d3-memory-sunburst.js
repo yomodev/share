@@ -39,10 +39,9 @@ const MemorySunburst = (() => {
 
         // tooltip
         const tip = d3.select(container).append('div')
+            .attr('class', 'bm-chart-tip')
             .style('position', 'absolute')
             .style('pointer-events', 'none')
-            .style('background', 'rgba(20,20,20,0.85)')
-            .style('color', '#e8e8e8')
             .style('padding', '6px 10px')
             .style('border-radius', '4px')
             .style('font-size', '12px')
@@ -156,7 +155,15 @@ window.memoryLineChart = (() => {
 
     function fmtY(v) { return v >= 1000 ? (v / 1024).toFixed(1) + 'G' : v.toFixed(0) + 'M'; }
 
+    // Cached per-container so a ResizeObserver-triggered repaint (container size
+    // changed — e.g. dragging the legend panel wider, or a browser resize) can
+    // redraw at the new dimensions without needing a fresh call from Blazor.
+    const _mgState = new WeakMap();
+
     function render(mainCt, brushCt, series, windowHours) {
+        _mgState.set(mainCt, { brushCt, series, windowHours });
+        wireResizeObserver(mainCt);
+
         d3.select(mainCt).selectAll('*').remove();
         d3.select(brushCt).selectAll('*').remove();
         if (!series || series.length === 0) return;
@@ -233,8 +240,8 @@ window.memoryLineChart = (() => {
 
         // Tooltip + crosshair
         const tip = d3.select(mainCt).append('div')
+            .attr('class', 'bm-chart-tip')
             .style('position', 'absolute').style('pointer-events', 'none')
-            .style('background', 'rgba(18,18,18,0.92)').style('color', '#e8e8e8')
             .style('padding', '6px 10px').style('border-radius', '4px')
             .style('font-size', '11px').style('line-height', '1.7').style('display', 'none')
             .style('z-index', '9999').style('font-family', MONO);
@@ -242,82 +249,142 @@ window.memoryLineChart = (() => {
         const vline = gM.append('line').attr('y1', 0).attr('y2', iH)
             .attr('stroke', 'rgba(160,160,160,0.4)').attr('stroke-width', 1).attr('display', 'none');
 
-        gM.append('rect').attr('width', iW).attr('height', iH)
-          .attr('fill', 'transparent').style('cursor', 'crosshair')
-          .on('mousemove', event => {
-              const [mx] = d3.pointer(event);
-              const hover = xM.invert(mx);
-              vline.attr('x1', mx).attr('x2', mx).attr('display', null);
-              const rows = parsed.map(s => {
-                  const closest = s.points.reduce((a, b) =>
-                      Math.abs(b.t - hover) < Math.abs(a.t - hover) ? b : a, s.points[0]);
-                  const lbl = s.label || s.name;
-                  const opacity = s.isFaded ? '0.5' : '1';
-                  return `<span style="color:${s.color};opacity:${opacity}">■</span> ${lbl}: ${closest.v.toFixed(1)} MB`;
-              }).join('<br>');
-              tip.style('display', 'block')
-                 .html(`<strong>${d3.timeFormat('%H:%M:%S')(hover)}</strong><br>${rows}`);
-              const cr = mainCt.getBoundingClientRect();
-              let lx = event.clientX - cr.left + 14;
-              if (lx + 210 > W) lx = event.clientX - cr.left - 220;
-              tip.style('left', lx + 'px').style('top', (event.clientY - cr.top - 20) + 'px');
-          })
-          .on('mouseleave', () => { vline.attr('display', 'none'); tip.style('display', 'none'); });
+        function redraw() {
+            drawAxes();
+            parsed.forEach(s => paths[s.name].attr('d', lineGen));
+        }
+
+        function showTooltip(event) {
+            const [mx] = d3.pointer(event);
+            const hover = xM.invert(mx);
+            vline.attr('x1', mx).attr('x2', mx).attr('display', null);
+            const rows = parsed.map(s => {
+                const closest = s.points.reduce((a, b) =>
+                    Math.abs(b.t - hover) < Math.abs(a.t - hover) ? b : a, s.points[0]);
+                const lbl = s.label || s.name;
+                const opacity = s.isFaded ? '0.5' : '1';
+                return `<span style="color:${s.color};opacity:${opacity}">■</span> ${lbl}: ${closest.v.toFixed(1)} MB`;
+            }).join('<br>');
+            tip.style('display', 'block')
+               .html(`<strong>${d3.timeFormat('%H:%M:%S')(hover)}</strong><br>${rows}`);
+            const cr = mainCt.getBoundingClientRect();
+            let lx = event.clientX - cr.left + 14;
+            if (lx + 210 > W) lx = event.clientX - cr.left - 220;
+            tip.style('left', lx + 'px').style('top', (event.clientY - cr.top - 20) + 'px');
+        }
+        function hideTooltip() { vline.attr('display', 'none'); tip.style('display', 'none'); }
 
         // ── Brush / time-range navigator ──────────────────────────────────
-        if (!brushCt) return;
-        const bR  = brushCt.getBoundingClientRect();
-        const bW  = bR.width  || W;
-        const bH  = bR.height || 28;
-        const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
-        const biW = bW - bL - bRt2;
-        const biH = bH - bT - bB;
+        let brushX = null, brushG = null, xB = null;
+        if (brushCt) {
+            const bR  = brushCt.getBoundingClientRect();
+            const bW  = bR.width  || W;
+            const bH  = bR.height || 28;
+            const bL  = mL, bRt2 = mRt, bT = 4, bB = 22;
+            const biW = bW - bL - bRt2;
+            const biH = bH - bT - bB;
 
-        const svgB = d3.select(brushCt).append('svg').attr('width', bW).attr('height', bH);
-        const gB   = svgB.append('g').attr('transform', `translate(${bL},${bT})`);
+            const svgB = d3.select(brushCt).append('svg').attr('width', bW).attr('height', bH);
+            const gB   = svgB.append('g').attr('transform', `translate(${bL},${bT})`);
 
-        const xB = d3.scaleTime().domain([tMin, tMax]).range([0, biW]);
+            xB = d3.scaleTime().domain([tMin, tMax]).range([0, biW]);
 
-        // Subtle background track
-        gB.append('rect')
-          .attr('width', biW).attr('height', biH)
-          .attr('fill', 'rgba(128,128,128,0.06)')
-          .attr('rx', 2);
+            // Subtle background track
+            gB.append('rect')
+              .attr('width', biW).attr('height', biH)
+              .attr('fill', 'rgba(128,128,128,0.06)')
+              .attr('rx', 2);
 
-        // Time axis
-        gB.append('g').attr('transform', `translate(0,${biH})`)
-          .call(d3.axisBottom(xB).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
-          .selectAll('text').attr('font-size', '9px');
-        gB.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.25)');
-        gB.selectAll('.tick line').attr('stroke', 'rgba(128,128,128,0.25)');
+            // Time axis
+            gB.append('g').attr('transform', `translate(0,${biH})`)
+              .call(d3.axisBottom(xB).ticks(8).tickFormat(d3.timeFormat('%H:%M')))
+              .selectAll('text').attr('font-size', '9px');
+            gB.selectAll('.domain').attr('stroke', 'rgba(128,128,128,0.25)');
+            gB.selectAll('.tick line').attr('stroke', 'rgba(128,128,128,0.25)');
 
-        // Brush
-        const brushX = d3.brushX()
-            .extent([[0, 0], [biW, biH]])
-            .on('brush end', ({ selection, sourceEvent }) => {
-                if (!selection || !sourceEvent) return;
-                const [d0, d1] = selection.map(xB.invert);
-                xM.domain([d0, d1]);
-                drawAxes();
-                parsed.forEach(s => paths[s.name].attr('d', lineGen));
-                vline.attr('display', 'none');
+            brushX = d3.brushX()
+                .extent([[0, 0], [biW, biH]])
+                .on('brush end', ({ selection, sourceEvent }) => {
+                    if (!selection || !sourceEvent || suppressSync) return;
+                    const [d0, d1] = selection.map(xB.invert);
+                    xM.domain([d0, d1]);
+                    redraw();
+                    hideTooltip();
+                    // Keep the zoom transform in sync so a wheel-zoom right after a
+                    // brush drag continues smoothly instead of jumping back.
+                    suppressSync = true;
+                    const k = (tMax - tMin) / (d1 - d0);
+                    overlay.call(zoom.transform, d3.zoomIdentity.scale(k).translate(-xFull(d0), 0));
+                    suppressSync = false;
+                });
+
+            brushG = gB.append('g').call(brushX);
+
+            brushG.select('.selection')
+                  .attr('fill', 'rgba(100,150,255,0.15)')
+                  .attr('stroke', 'rgba(100,150,255,0.5)')
+                  .attr('stroke-width', 1);
+            brushG.selectAll('.handle')
+                  .attr('fill', 'rgba(120,160,255,0.75)')
+                  .attr('rx', 3);
+
+            // Set initial selection without triggering brush event
+            brushG.call(brushX.move, [xB(winStart), xB(winEnd)]);
+        }
+
+        // ── Zoom (wheel) + pan (drag) on the main chart ────────────────────
+        // xFull is a fixed reference spanning the whole data range — zoom
+        // transforms are always expressed relative to it, never to the
+        // (mutable) current xM, so repeated zoom/pan gestures stay consistent.
+        let suppressSync = false;
+        const xFull = d3.scaleTime().domain([tMin, tMax]).range([0, iW]);
+
+        const zoom = d3.zoom()
+            .scaleExtent([1, 500])
+            .translateExtent([[0, 0], [iW, iH]])
+            .extent([[0, 0], [iW, iH]])
+            .on('zoom', event => {
+                if (suppressSync) return;
+                const rescaled = event.transform.rescaleX(xFull);
+                xM.domain(rescaled.domain());
+                redraw();
+                hideTooltip();
+                if (brushX && brushG) {
+                    suppressSync = true;
+                    brushG.call(brushX.move, xM.domain().map(xB));
+                    suppressSync = false;
+                }
             });
 
-        const brushG = gB.append('g').call(brushX);
-
-        brushG.select('.selection')
-              .attr('fill', 'rgba(100,150,255,0.15)')
-              .attr('stroke', 'rgba(100,150,255,0.5)')
-              .attr('stroke-width', 1);
-        brushG.selectAll('.handle')
-              .attr('fill', 'rgba(120,160,255,0.75)')
-              .attr('rx', 3);
-
-        // Set initial selection without triggering brush event
-        brushG.call(brushX.move, [xB(winStart), xB(winEnd)]);
+        const overlay = gM.append('rect').attr('width', iW).attr('height', iH)
+          .attr('fill', 'transparent').style('cursor', 'crosshair')
+          .call(zoom)
+          .on('mousemove', showTooltip)
+          .on('mouseleave', hideTooltip);
     }
 
-    return { render };
+    function wireResizeObserver(mainCt) {
+        if (mainCt._mgResizeObserver) return;
+        let timer = null;
+        mainCt._mgResizeObserver = new ResizeObserver(() => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                const cached = _mgState.get(mainCt);
+                if (cached && mainCt.isConnected) render(mainCt, cached.brushCt, cached.series, cached.windowHours);
+            }, 120);
+        });
+        mainCt._mgResizeObserver.observe(mainCt);
+    }
+
+    function destroy(mainCt) {
+        if (mainCt && mainCt._mgResizeObserver) {
+            mainCt._mgResizeObserver.disconnect();
+            delete mainCt._mgResizeObserver;
+        }
+        if (mainCt) _mgState.delete(mainCt);
+    }
+
+    return { render, destroy };
 })();
 
 // ── Legend panel resize (right side drag handle) ──────────────────────────────

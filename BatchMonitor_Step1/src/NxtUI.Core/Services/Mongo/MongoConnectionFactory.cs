@@ -26,6 +26,23 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
         return GetClient(envId).GetDatabase(settings.GetDatabaseName(envId));
     }
 
+    public IMongoDatabase GetHeartbeatsDatabase(string envId)
+    {
+        var settings = loader.GetMongo(envId);
+        return GetClient(envId).GetDatabase(settings.GetHeartbeatsDatabaseName(envId));
+    }
+
+    /// <summary>
+    /// False when the connection string is the default localhost placeholder,
+    /// meaning no real MongoDB has been configured for this environment.
+    /// </summary>
+    public bool IsConfigured(string envId)
+    {
+        var cs = loader.GetMongo(envId).ConnectionString;
+        return !string.IsNullOrWhiteSpace(cs) &&
+               !cs.Equals("mongodb://localhost:27017", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IMongoClient Build(MongoSettings s)
     {
         var url  = new MongoUrl(s.ConnectionString);

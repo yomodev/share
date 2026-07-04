@@ -3,6 +3,7 @@
 @inject ThemeService ThemeService
 @inject DateTimeDisplayService DtSvc
 @inject IJSRuntime JS
+@inject ErrorNotificationService Notifications
 @using Microsoft.JSInterop
 
 <div class="bm-settings-page">
@@ -97,17 +98,79 @@
             </MudPaper>
         </MudItem>
 
+        <MudItem xs="12">
+            <MudPaper Elevation="0" Class="bm-settings-section">
+                <div class="bm-settings-row mb-4">
+                    <MudText Typo="Typo.subtitle2" Class="bm-section-title">
+                        Errors this session
+                        @if (_errors.Count > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="ml-2">@_errors.Count</MudChip>
+                        }
+                    </MudText>
+                    <MudButton StartIcon="@Icons.Material.Outlined.ClearAll"
+                               Size="Size.Small"
+                               Disabled="@(_errors.Count == 0)"
+                               OnClick="ClearErrors">
+                        Clear
+                    </MudButton>
+                </div>
+
+                @if (_errors.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="bm-muted">No errors reported since this session started.</MudText>
+                }
+                else
+                {
+                    <MudTable Items="@_errors" Dense="true" Hover="true" Elevation="0" Class="bm-batch-table">
+                        <HeaderContent>
+                            <MudTh Style="white-space:nowrap;">Time</MudTh>
+                            <MudTh Style="width:110px;">Source</MudTh>
+                            <MudTh Style="width:100%;">Message</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd Style="white-space:nowrap;">
+                                <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.TimestampUtc, "HH:mm:ss")</span>
+                            </MudTd>
+                            <MudTd>
+                                <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@(context.Source ?? "—")</MudChip>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.body2" Style="white-space:pre-wrap;">@context.Message</MudText>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudItem>
+
     </MudGrid>
 </div>
 
 @code {
     private ThemeMode _mode;
     private IJSObjectReference? _appModule;
+    private List<ErrorNotificationEntry> _errors = [];
 
     protected override void OnInitialized()
     {
         _mode = ThemeService.Mode;
         ThemeService.OnChange += OnThemeExternallyChanged;
+
+        _errors = Notifications.History.OrderByDescending(e => e.TimestampUtc).ToList();
+        Notifications.OnError += OnErrorReported;
+    }
+
+    private void OnErrorReported(ErrorNotificationEntry entry) => InvokeAsync(() =>
+    {
+        _errors.Insert(0, entry);
+        StateHasChanged();
+    });
+
+    private void ClearErrors()
+    {
+        Notifications.Clear();
+        _errors = [];
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -150,6 +213,7 @@
     public async ValueTask DisposeAsync()
     {
         ThemeService.OnChange -= OnThemeExternallyChanged;
+        Notifications.OnError -= OnErrorReported;
         if (_appModule is not null)
         {
             try { await _appModule.DisposeAsync(); }

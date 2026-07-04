@@ -8,7 +8,7 @@ using NxtUI.Core.Models;
 namespace NxtUI.Core.Services.Mongo;
 
 public class MongoHeartbeatService(
-    MongoConnection connection,
+    MongoConnectionFactory factory,
     IOptions<HeartbeatSettings> heartbeat,
     ILogger<MongoHeartbeatService> log) : IHeartbeatService
 {
@@ -22,7 +22,7 @@ public class MongoHeartbeatService(
         log.LogDebug("heartbeat [{Env}]: querying '{Col}' updated since {Since:HH:mm:ss}",
             env, _heartbeat.CollectionName, since.Value);
 
-        var db = connection.GetHeartbeatsDatabase(env);
+        var db = factory.GetHeartbeatsDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
         var sw = Stopwatch.StartNew();

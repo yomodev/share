@@ -47,6 +47,13 @@
 
         <div class="bm-mg-toolbar-spacer"></div>
 
+        <MudTooltip Text="@(_paused ? "Resume refreshing" : "Pause refreshing")">
+            <MudIconButton Icon="@(_paused ? Icons.Material.Outlined.PlayArrow : Icons.Material.Outlined.Pause)"
+                           Size="Size.Small"
+                           Color="@(_paused ? Color.Warning : Color.Default)"
+                           OnClick="TogglePaused" />
+        </MudTooltip>
+
         @if (_lastUpdated.HasValue)
         {
             <span class="bm-toolbar-hint">Updated @_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
@@ -102,6 +109,7 @@
     private double?   _windowHours = 1.0;   // null = show all; default to last 1 h
     private int       _lastClickedIndex = -1;
     private bool      _splitView = false;
+    private bool      _paused = false;
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -173,7 +181,7 @@
         _lastHint = NavigationHint;
         if (string.IsNullOrEmpty(NavigationHint)) return;
 
-        // Hint format: "ServiceName|ProcessId" — the exact key used in GroupBy.None.
+        // Hint format: "HostName|ServiceName|ProcessId" — the exact key used in GroupBy.None.
         _groupBy = GroupBy.None;
         Rebuild();
 
@@ -202,13 +210,19 @@
 
     private void OnMetricsUpdated(string env)
     {
-        if (env != Env) return;
+        if (env != Env || _paused) return;
         _ = InvokeAsync(async () =>
         {
             _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
             Rebuild();
             StateHasChanged();
         });
+    }
+
+    private void TogglePaused()
+    {
+        _paused = !_paused;
+        StateHasChanged();
     }
 
     // ── grouping / chart type ─────────────────────────────────────────────
@@ -287,7 +301,10 @@
             {
                 GroupBy.Host    => svc.HostName,
                 GroupBy.Service => svc.ServiceName,
-                _               => svc.ServiceName + "|" + svc.ProcessId   // None = individual
+                // None = individual process. PIDs are only unique per host, so two
+                // different hosts can report the same service name + PID — host must
+                // be part of the key or their memory samples get silently merged.
+                _               => svc.HostName + "|" + svc.ServiceName + "|" + svc.ProcessId
             };
             if (!result.TryGetValue(key, out var list))
                 result[key] = list = [];
@@ -374,8 +391,8 @@
     private string FormatLegendName(string key)
     {
         if (_groupBy != GroupBy.None) return key;
-        int sep = key.IndexOf('|');
-        return sep > 0 ? $"{key[..sep]} ({key[(sep + 1)..]})": key;
+        var parts = key.Split('|', 3); // Host|ServiceName|ProcessId
+        return parts.Length == 3 ? $"{parts[1]} ({parts[2]}) · {parts[0]}" : key;
     }
 
     private string LegendTitle => _groupBy switch
@@ -396,10 +413,11 @@
 
     // ── disposal ─────────────────────────────────────────────────────────
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
-        return ValueTask.CompletedTask;
+        try { await JS.InvokeVoidAsync("memoryLineChart.destroy", _chartRef); }
+        catch (JSDisconnectedException) { }
     }
 }

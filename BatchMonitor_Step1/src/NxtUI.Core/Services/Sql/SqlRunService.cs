@@ -17,8 +17,8 @@ public class SqlRunService(
     ILogger<SqlRunService>  log)
     : IRunService
 {
-    // Fields bare filter terms expand to (e.g. "myrun" → matches RunId OR Name OR Description).
-    private static readonly string[] SearchableFields = ["RunId", "Name", "Description"];
+    // Fields bare filter terms expand to (e.g. "myrun" → matches RunId OR Description).
+    private static readonly string[] SearchableFields = ["RunId", "Description"];
     private static readonly FilterParser _parser = new(SearchableFields);
 
     public async Task<List<RunSummary>> GetRunsAsync(
@@ -33,7 +33,12 @@ public class SqlRunService(
         }
 
         var windowStart    = before.AddMonths(-runsSettings.WindowMonths);
-        var effectiveCount = count > 0 ? count : runsSettings.PageSize;
+        var effectiveCount = Math.Min(count > 0 ? count : runsSettings.PageSize, runsSettings.MaxResults);
+
+        // An explicit StartTime term in the filter (e.g. "start:2024-01-01..2024-03-01") means the
+        // user is deliberately reaching outside the default lookback window — honor it instead of
+        // silently clipping to @windowStart.
+        var hasExplicitStartFilter = SqlFilterBuilder.ReferencesField(filter?.FilterAst, "StartTime");
 
         // ── Build WHERE fragments ──────────────────────────────────────────────
 
@@ -41,14 +46,18 @@ public class SqlRunService(
         {
             new("@count",       effectiveCount),
             new("@before",      before.ToUniversalTime()),
-            new("@windowStart", windowStart.ToUniversalTime()),
         };
 
         var clauses = new List<string>
         {
             "r.StartTime < @before",
-            "r.StartTime >= @windowStart",
         };
+
+        if (!hasExplicitStartFilter)
+        {
+            clauses.Add("r.StartTime >= @windowStart");
+            allParams.Add(new SqlParameter("@windowStart", windowStart.ToUniversalTime()));
+        }
 
         // FilterAst — full AST-based WHERE (when the caller passes a parsed filter)
         if (filter?.FilterAst is not null)
@@ -67,7 +76,7 @@ public class SqlRunService(
             if (!string.IsNullOrWhiteSpace(filter?.SearchText))
             {
                 var pat = $"%{EscapeLike(filter.SearchText)}%";
-                clauses.Add("(r.RunId LIKE @txt ESCAPE '\\' OR r.Name LIKE @txt ESCAPE '\\' OR r.Description LIKE @txt ESCAPE '\\')");
+                clauses.Add("(r.RunId LIKE @txt ESCAPE '\\' OR r.Description LIKE @txt ESCAPE '\\')");
                 allParams.Add(new SqlParameter("@txt", pat));
             }
 
@@ -98,11 +107,15 @@ public class SqlRunService(
 
         // ── Assemble query ────────────────────────────────────────────────────
 
+        // Sort column comes from an allow-listed lookup (SqlFilterBuilder.TryGetColumn) —
+        // never interpolate the caller-supplied field name directly into ORDER BY.
+        var sortColumn = SqlFilterBuilder.TryGetColumn(filter?.SortField, out var col) ? col : "r.StartTime";
+        var sortDir    = (filter?.SortDescending ?? true) ? "DESC" : "ASC";
+
         var where = string.Join("\n  AND ", clauses);
         var sql = $"""
             SELECT TOP (@count)
                 r.RunId,
-                r.Name,
                 r.Status,
                 r.Type,
                 r.Description,
@@ -110,7 +123,7 @@ public class SqlRunService(
                 r.EndTime
             FROM [{sqlCfg.Schema}].[{sqlCfg.RunsTable}] r
             WHERE {where}
-            ORDER BY r.StartTime DESC
+            ORDER BY {sortColumn} {sortDir}
             """;
 
         // ── Execute ────────────────────────────────────────────────────────────
@@ -129,13 +142,12 @@ public class SqlRunService(
             results.Add(new RunSummary
             {
                 RunId       = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Name        = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                Status      = ParseStatus(reader.IsDBNull(2) ? null : reader.GetString(2)),
-                Type        = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                Description = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                Start       = DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
-                End         = reader.IsDBNull(6) ? null
-                              : DateTime.SpecifyKind(reader.GetDateTime(6), DateTimeKind.Utc),
+                Status      = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                Type        = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                Start       = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
+                End         = reader.IsDBNull(5) ? null
+                              : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
             });
         }
 

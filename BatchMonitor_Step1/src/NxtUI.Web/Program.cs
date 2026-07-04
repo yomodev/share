@@ -56,8 +56,6 @@ public class Program
         builder.Services.AddSingleton<EnvironmentConfigLoader>();
 
         // ── Connection factories (shared client when settings fingerprint matches) ──
-        builder.Services.AddSingleton<MongoConnection>();       // legacy single-env; kept for existing code
-        builder.Services.AddSingleton<KafkaConnection>();       // legacy single-env; kept for existing code
         builder.Services.AddSingleton<KafkaConnectionFactory>();
         builder.Services.AddSingleton<MongoConnectionFactory>();
 
@@ -84,11 +82,22 @@ public class Program
         // BlazorCircuitFilter is conditionally added below after config is read.
         var signalRBuilder = builder.Services.AddSignalR();
 
+        // Always on (unlike BlazorCircuitFilter): reports unhandled UI-event-handler
+        // exceptions as a toast + Settings history entry instead of crashing the circuit.
+        builder.Services.AddScoped<ErrorNotificationHubFilter>();
+        signalRBuilder.AddHubOptions<Microsoft.AspNetCore.SignalR.Hub>(o =>
+            o.AddFilter<ErrorNotificationHubFilter>());
+
         // ── Batch / Run service ──────────────────────────────────────────────
         // Mock: fast demo without any backend.  Swap comment for a real backend.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
-            new MockRunService(sp.GetRequiredService<IHubContext<RunEventsHub>>()));
-        // builder.Services.AddSingleton<IRunService, MongoRunService>();
+            new MockRunService(
+                sp.GetRequiredService<IHubContext<RunEventsHub>>(),
+                sp.GetRequiredService<IOptions<RunsSettings>>().Value));
+        // builder.Services.AddSingleton<IRunService>(sp => new MongoRunService(
+        //     sp.GetRequiredService<MongoConnectionFactory>(),
+        //     sp.GetRequiredService<IOptions<MongoSettings>>(),
+        //     sp.GetRequiredService<IOptions<RunsSettings>>().Value));
         // builder.Services.AddSingleton<IRunService>(sp => new SqlRunService(
         //     sp.GetRequiredService<EnvironmentConfigLoader>(),
         //     sp.GetRequiredService<IOptions<RunsSettings>>().Value,
@@ -158,6 +167,7 @@ public class Program
         builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<DateTimeDisplayService>();
+        builder.Services.AddScoped<ErrorNotificationService>();
 
         builder.Services.AddHttpContextAccessor();
 

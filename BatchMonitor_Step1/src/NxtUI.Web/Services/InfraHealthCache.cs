@@ -16,8 +16,8 @@ public sealed class InfraHealthCache : BackgroundService
 {
     private const int PollIntervalSeconds = 30;
 
-    private readonly IKafkaMonitor    _kafka;
-    private readonly MongoConnection  _mongoConnection;
+    private readonly IKafkaMonitor          _kafka;
+    private readonly MongoConnectionFactory _mongoFactory;
     private readonly ILogger<InfraHealthCache> _log;
     private readonly OperationTracker _ops;
 
@@ -28,12 +28,12 @@ public sealed class InfraHealthCache : BackgroundService
 
     public event Action<string>? OnHealthUpdated;
 
-    public InfraHealthCache(IKafkaMonitor kafka, MongoConnection mongo, ILogger<InfraHealthCache> log, OperationTracker ops)
+    public InfraHealthCache(IKafkaMonitor kafka, MongoConnectionFactory mongoFactory, ILogger<InfraHealthCache> log, OperationTracker ops)
     {
-        _kafka           = kafka;
-        _mongoConnection = mongo;
-        _log             = log;
-        _ops             = ops;
+        _kafka        = kafka;
+        _mongoFactory = mongoFactory;
+        _log          = log;
+        _ops          = ops;
     }
 
     public KafkaHealth GetKafka(string env)
@@ -119,34 +119,32 @@ public sealed class InfraHealthCache : BackgroundService
         lock (_lock) _kafkaCache[env] = result;
     }
 
-    // All envs share the same MongoDB server — one ping is enough.
-    // Skipped entirely when no real connection string has been configured.
-    private async Task PollMongoAllAsync(string[] envs, CancellationToken ct)
+    // Each environment may point at a different Mongo server, so ping per env —
+    // MongoConnectionFactory caches clients by settings fingerprint, so envs that
+    // genuinely share one server still reuse a single underlying connection.
+    private async Task PollMongoAllAsync(string[] envs, CancellationToken ct) =>
+        await Task.WhenAll(envs.Select(env => PollMongoAsync(env, ct)));
+
+    private async Task PollMongoAsync(string env, CancellationToken ct)
     {
-        if (!_mongoConnection.IsConfigured || envs.Length == 0)
+        if (!_mongoFactory.IsConfigured(env))
             return;
 
-        using var op = _ops.Track($"InfraHealthCache.Mongo(ping)");
+        using var op = _ops.Track($"InfraHealthCache.Mongo({env})");
 
         MongoHealth result;
         try
         {
-            var db = _mongoConnection.Client.GetDatabase("admin");
+            var db = _mongoFactory.GetClient(env).GetDatabase("admin");
             await db.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: ct);
             result = new MongoHealth { Status = HealthStatus.Healthy, CheckedAt = DateTime.UtcNow };
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed");
+            _log.LogWarning(ex, "InfraHealthCache: Mongo poll failed for {Env}", env);
             result = new MongoHealth { Status = HealthStatus.Down, CheckedAt = DateTime.UtcNow, Error = ex.Message };
         }
 
-        lock (_lock)
-        {
-            foreach (var env in envs)
-            {
-                _mongoCache[env] = result;
-            }
-        }
+        lock (_lock) _mongoCache[env] = result;
     }
 }

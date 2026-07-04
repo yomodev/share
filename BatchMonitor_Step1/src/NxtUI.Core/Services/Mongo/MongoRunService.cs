@@ -14,19 +14,21 @@ namespace NxtUI.Core.Services.Mongo;
 public class MongoRunService : IRunService
 {
     private readonly MongoSettings  _settings;
-    private readonly MongoConnection _connection;
+    private readonly MongoConnectionFactory _factory;
+    private readonly RunsSettings _runsSettings;
 
-    public MongoRunService(MongoConnection connection, IOptions<MongoSettings> settings)
+    public MongoRunService(MongoConnectionFactory factory, IOptions<MongoSettings> settings, RunsSettings runsSettings)
     {
-        _connection = connection;
-        _settings   = settings.Value;
+        _factory      = factory;
+        _settings     = settings.Value;
+        _runsSettings = runsSettings;
     }
 
     public async Task<List<RunSummary>> GetRunsAsync(
         string env, DateTime before, int count,
         RunFilter? filter = null, CancellationToken ct = default)
     {
-        var db         = _connection.GetDatabase(env);
+        var db         = _factory.GetDatabase(env);
         var collection = db.GetCollection<BsonDocument>(_settings.PerformanceTrackerCollection);
 
         // Build filter — adapt field names to match your actual MongoDB schema
@@ -40,7 +42,6 @@ public class MongoRunService : IRunService
                 var text = filter.SearchText.Trim();
                 var textFilter = builder.Or(
                     builder.Regex("RunId",     new BsonRegularExpression(text, "i")),
-                    builder.Regex("Name", new BsonRegularExpression(text, "i")),
                     builder.Regex("RequestId", new BsonRegularExpression(text, "i")));
                 baseFilter &= textFilter;
             }
@@ -53,12 +54,24 @@ public class MongoRunService : IRunService
                 baseFilter &= builder.In("Type", filter.Types);
         }
 
-        var sort = Builders<BsonDocument>.Sort.Descending("Start");
+        // Allow-listed sort field — canonical "StartTime"/"EndTime" map to this collection's
+        // actual "Start"/"End" fields; anything else must match a real document field name.
+        var sortField = filter?.SortField switch
+        {
+            "StartTime" or null => "Start",
+            "EndTime"            => "End",
+            var f                => f,
+        };
+        var sort = (filter?.SortDescending ?? true)
+            ? Builders<BsonDocument>.Sort.Descending(sortField)
+            : Builders<BsonDocument>.Sort.Ascending(sortField);
+
+        var effectiveCount = Math.Min(count > 0 ? count : _runsSettings.PageSize, _runsSettings.MaxResults);
 
         var docs = await collection
             .Find(baseFilter)
             .Sort(sort)
-            .Limit(count)
+            .Limit(effectiveCount)
             .ToListAsync(ct);
 
         return docs.Select(MapToRunSummary).ToList();
@@ -110,7 +123,6 @@ public class MongoRunService : IRunService
         return new RunSummary
         {
             RunId     = doc.GetValue("RunId",     BsonNull.Value).AsString     ?? string.Empty,
-            Name = doc.GetValue("Name", BsonNull.Value).AsString    ?? string.Empty,
             Type      = doc.GetValue("Type",      BsonNull.Value).AsString     ?? string.Empty,
             Status    = ParseStatus(doc.GetValue("Status", BsonNull.Value).AsString ?? string.Empty),
             Start     = doc.GetValue("Start",     BsonNull.Value).ToUniversalTime(),

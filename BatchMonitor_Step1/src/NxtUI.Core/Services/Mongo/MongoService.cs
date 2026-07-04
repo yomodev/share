@@ -16,19 +16,19 @@ public class MongoService : IMongoService
         searchableFields: ["_id"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
-    private readonly MongoConnection               _connection;
+    private readonly MongoConnectionFactory        _factory;
     private readonly ILogger<MongoService>         _log;
 
-    public MongoService(MongoConnection connection, ILogger<MongoService> log)
+    public MongoService(MongoConnectionFactory factory, ILogger<MongoService> log)
     {
-        _connection = connection;
-        _log        = log;
+        _factory = factory;
+        _log     = log;
     }
 
     public async Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing databases", env);
-        var db     = _connection.GetDatabase(env);
+        var db     = _factory.GetDatabase(env);
         var client = db.Client;
 
         var names = await (await client.ListDatabaseNamesAsync(ct)).ToListAsync(ct);
@@ -60,7 +60,7 @@ public class MongoService : IMongoService
     public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing database names", env);
-        var names = await (await _connection.Client.ListDatabaseNamesAsync(ct)).ToListAsync(ct);
+        var names = await (await _factory.GetClient(env).ListDatabaseNamesAsync(ct)).ToListAsync(ct);
         return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -70,7 +70,7 @@ public class MongoService : IMongoService
         _log.LogDebug("mongo [{Env}]: listing collections in '{Db}' search={Search} skip={Skip} limit={Limit}",
             env, database, search, skip, limit);
 
-        var db = _connection.Client.GetDatabase(database);
+        var db = _factory.GetClient(env).GetDatabase(database);
 
         // Build optional name filter using a case-insensitive regex.
         // ListCollectionsAsync (not ListCollectionNamesAsync) supports a filter document.
@@ -100,7 +100,7 @@ public class MongoService : IMongoService
         string env, string database, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: listing collection names in '{Db}'", env, database);
-        var db    = _connection.Client.GetDatabase(database);
+        var db    = _factory.GetClient(env).GetDatabase(database);
         var names = await (await db.ListCollectionNamesAsync(cancellationToken: ct)).ToListAsync(ct);
         return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
     }
@@ -110,7 +110,7 @@ public class MongoService : IMongoService
     {
         try
         {
-            var db       = _connection.Client.GetDatabase(database);
+            var db       = _factory.GetClient(env).GetDatabase(database);
             var col      = db.GetCollection<BsonDocument>(name);
             var pipeline = new[]
             {
@@ -161,7 +161,7 @@ public class MongoService : IMongoService
         _log.LogDebug("mongo [{Env}]: querying '{Db}/{Col}' skip={Skip} limit={Limit} search={Search} sort={Sort}{Desc}",
             env, database, collection, skip, limit, search, sortField, sortDesc ? " desc" : "");
 
-        var db  = _connection.Client.GetDatabase(database);
+        var db  = _factory.GetClient(env).GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
         var filter = BuildDocumentFilter(search, useUtc);
@@ -241,7 +241,7 @@ public class MongoService : IMongoService
         string env, string database, string collection, CancellationToken ct = default)
     {
         _log.LogDebug("mongo [{Env}]: getting details for '{Db}/{Col}'", env, database, collection);
-        var db  = _connection.Client.GetDatabase(database);
+        var db  = _factory.GetClient(env).GetDatabase(database);
         var col = db.GetCollection<BsonDocument>(collection);
 
         MongoCollectionSummary summary;
@@ -279,7 +279,7 @@ public class MongoService : IMongoService
     public async Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default)
     {
         _log.LogInformation("mongo [{Env}]: dropping collection '{Db}/{Col}'", env, database, collection);
-        var db = _connection.Client.GetDatabase(database);
+        var db = _factory.GetClient(env).GetDatabase(database);
         await db.DropCollectionAsync(collection, ct);
     }
 }

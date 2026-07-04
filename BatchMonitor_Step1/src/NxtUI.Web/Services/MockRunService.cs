@@ -1,4 +1,6 @@
+using NxtUI.Configuration;
 using NxtUI.Core.Services;
+using NxtUI.Filtering;
 using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
 using Microsoft.AspNetCore.SignalR;
@@ -92,6 +94,7 @@ public class MockRunService : IRunService
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
     private readonly IHubContext<RunEventsHub>? _hubContext;
+    private readonly RunsSettings _runsSettings;
     private readonly CancellationTokenSource _bgCts = new();
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
@@ -101,9 +104,10 @@ public class MockRunService : IRunService
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockRunService(IHubContext<RunEventsHub>? hubContext = null)
+    public MockRunService(IHubContext<RunEventsHub>? hubContext = null, RunsSettings? runsSettings = null)
     {
-        _hubContext = hubContext;
+        _hubContext   = hubContext;
+        _runsSettings = runsSettings ?? new RunsSettings();
         var rng = new Random(42);
 
         _store = Enumerable.Range(1, 200).Select(i =>
@@ -119,12 +123,12 @@ public class MockRunService : IRunService
             };
             return new RunSummary
             {
-                RunId     = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
-                Name = $"{type}_{entity}",
-                Type      = type,
-                Status    = status,
-                Start     = start,
-                End       = status != RunStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
+                RunId       = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
+                Description = $"{type}_{entity}",
+                Type        = type,
+                Status      = status,
+                Start       = start,
+                End         = status != RunStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
             };
         }).OrderByDescending(b => b.Start).ToList();
 
@@ -143,17 +147,39 @@ public class MockRunService : IRunService
         var query = _store.Where(b => b.Start < before);
         if (filter is not null && !filter.IsEmpty)
         {
+            if (filter.FilterAst is not null)
+                query = query.Where(b => FilterEvaluator.Evaluate(filter.FilterAst, b));
+
             if (!string.IsNullOrWhiteSpace(filter.SearchText))
             {
                 var text = filter.SearchText.Trim();
                 query = query.Where(b =>
                     b.RunId.Contains(text, StringComparison.OrdinalIgnoreCase) ||
-                    b.Name.Contains(text, StringComparison.OrdinalIgnoreCase));
+                    b.Description.Contains(text, StringComparison.OrdinalIgnoreCase));
             }
             if (filter.Statuses?.Count > 0) query = query.Where(b => filter.Statuses.Contains(b.Status));
             if (filter.Types?.Count > 0)    query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
         }
-        return Task.FromResult(query.Take(count).ToList());
+
+        query = SortByField(query, filter?.SortField, filter?.SortDescending ?? true);
+
+        var effectiveCount = Math.Min(count > 0 ? count : _runsSettings.PageSize, _runsSettings.MaxResults);
+        return Task.FromResult(query.Take(effectiveCount).ToList());
+    }
+
+    // Mirrors SqlRunService's allow-listed sort columns; unrecognized/null falls back to Start desc.
+    private static IEnumerable<RunSummary> SortByField(IEnumerable<RunSummary> query, string? field, bool descending)
+    {
+        Func<RunSummary, IComparable> keySelector = field switch
+        {
+            "RunId"       => b => b.RunId,
+            "Type"        => b => b.Type,
+            "Status"      => b => b.Status,
+            "Description" => b => b.Description,
+            "EndTime"     => b => b.End ?? DateTime.MinValue,
+            _             => b => b.Start,
+        };
+        return descending ? query.OrderByDescending(keySelector) : query.OrderBy(keySelector);
     }
 
     public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default)
@@ -174,7 +200,7 @@ public class MockRunService : IRunService
         var details = new RunDetails
         {
             RunId     = runId ?? "RUN-UNKNOWN",
-            Name = summary?.Name ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Name      = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
             Type      = summary?.Type ?? "FullLoad",
             Status    = summary?.Status ?? RunStatus.Completed,
             Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),

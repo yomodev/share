@@ -10,17 +10,31 @@ namespace NxtUI.Filtering;
 public static class SqlFilterBuilder
 {
     // Maps canonical field names (post alias-resolution) to qualified SQL column references.
+    // RequestId is a real int column in the RunsTable — it's filter/sort-only, never
+    // selected or shown in the UI grid (Description is the human-readable column there).
     private static readonly Dictionary<string, string> ColumnMap =
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["RunId"]       = "r.RunId",
-            ["Name"]        = "r.Name",
+            ["RequestId"]   = "r.RequestId",
             ["Status"]      = "r.Status",
             ["Type"]        = "r.Type",
             ["Description"] = "r.Description",
             ["StartTime"]   = "r.StartTime",
             ["EndTime"]     = "r.EndTime",
         };
+
+    /// <summary>
+    /// Resolves a canonical field name to its qualified SQL column, for use in contexts
+    /// (like ORDER BY) that need an allow-listed column rather than a WHERE fragment.
+    /// Returns false for anything not in <see cref="ColumnMap"/> — never interpolate
+    /// unvalidated field names into SQL.
+    /// </summary>
+    public static bool TryGetColumn(string? field, out string column)
+    {
+        column = "";
+        return field is not null && ColumnMap.TryGetValue(field, out column!);
+    }
 
     /// <summary>
     /// Converts <paramref name="node"/> to a SQL WHERE fragment (no leading "WHERE").
@@ -32,6 +46,21 @@ public static class SqlFilterBuilder
         var sql = BuildNode(node, ctx);
         return (sql, ctx.Parameters);
     }
+
+    /// <summary>
+    /// True if the AST contains a term against <paramref name="field"/> (case-insensitive).
+    /// Used to detect an explicit date-range filter so callers can skip an implicit default window.
+    /// </summary>
+    public static bool ReferencesField(FilterNode? node, string field) =>
+        node switch
+        {
+            null                                                      => false,
+            AndNode and                                                => ReferencesField(and.Left, field) || ReferencesField(and.Right, field),
+            OrNode or                                                  => ReferencesField(or.Left, field)  || ReferencesField(or.Right, field),
+            NotNode not                                                => ReferencesField(not.Operand, field),
+            FieldTermNode t when t.Field.Equals(field, StringComparison.OrdinalIgnoreCase) => true,
+            _                                                          => false,
+        };
 
     private static string BuildNode(FilterNode? node, BuildContext ctx) =>
         node switch

@@ -83,6 +83,16 @@
                         }
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
+                        <MudTooltip Text="Expand all">
+                            <MudIconButton Icon="@Icons.Material.Outlined.UnfoldMore"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SetJsonCollapsedAsync(false))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Collapse all">
+                            <MudIconButton Icon="@Icons.Material.Outlined.UnfoldLess"
+                                           Size="Size.Small"
+                                           OnClick="@(() => SetJsonCollapsedAsync(true))" />
+                        </MudTooltip>
                         <MudTooltip Text="Save as JSON">
                             <MudIconButton Icon="@Icons.Material.Outlined.SaveAlt"
                                            Size="Size.Small"
@@ -266,6 +276,12 @@
         var filename = string.Concat($"{doc.Id}.json"
             .Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
         await JS.InvokeVoidAsync("bmSaveFile", filename, pretty, "application/json");
+    }
+
+    private async Task SetJsonCollapsedAsync(bool collapsed)
+    {
+        try { await JS.InvokeVoidAsync("bmJsonViewer.setAllCollapsed", _jsonRef, collapsed); }
+        catch (JSDisconnectedException) { }
     }
 
     private static string TruncateJson(string json)

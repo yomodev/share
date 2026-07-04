@@ -711,7 +711,7 @@
                     <MudSelectItem Value="@Environment">@Environment</MudSelectItem>
                 </MudSelect>
 
-                <MudTextField T="string" Placeholder="Search RunId / Name…"
+                <MudTextField T="string" Placeholder="Search RunId / Description…"
                               Adornment="Adornment.Start"
                               AdornmentIcon="@Icons.Material.Outlined.Search"
                               Value="@_dialogFilter" ValueChanged="OnDialogFilterChanged"
@@ -732,7 +732,7 @@
                              Dense="true" Hover="true" Striped="true" Bordered="false">
                     <Columns>
                         <PropertyColumn Property="x => x.RunId" Title="RunId" />
-                        <PropertyColumn Property="x => x.Name" Title="Name" />
+                        <PropertyColumn Property="x => x.Description" Title="Description" />
                         <TemplateColumn Title="Status">
                             <CellTemplate>
                                 <StatusIcon Status="@context.Item.Status" />

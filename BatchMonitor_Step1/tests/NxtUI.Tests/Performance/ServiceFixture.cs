@@ -63,23 +63,30 @@ public sealed class ServiceFixture : IAsyncLifetime
 
     // ── private ───────────────────────────────────────────────────────────────
 
-    private static IConfiguration BuildConfiguration()
+    // Walk up from the test output directory to find NxtUI.Web's own folder.
+    // Typical path: tests/NxtUI.Tests/bin/Debug/net8.0 → src/NxtUI.Web
+    private static string? FindWebRoot()
     {
-        // Walk up from the test output directory to find appsettings.json in NxtUI.Web.
-        // Typical path: tests/NxtUI.Tests/bin/Debug/net8.0 → src/NxtUI.Web
         var dir = AppContext.BaseDirectory;
         for (int i = 0; i < 8; i++)
         {
             var candidate = Path.Combine(dir, "src", "NxtUI.Web", "appsettings.json");
-            if (File.Exists(candidate))
-                return new ConfigurationBuilder()
-                    .SetBasePath(Path.GetDirectoryName(candidate)!)
-                    .AddJsonFile("appsettings.json")
-                    .AddJsonFile("appsettings.Development.json", optional: true)
-                    .AddEnvironmentVariables()
-                    .Build();
+            if (File.Exists(candidate)) return Path.GetDirectoryName(candidate);
             dir = Path.GetDirectoryName(dir) ?? dir;
         }
+        return null;
+    }
+
+    private static IConfiguration BuildConfiguration()
+    {
+        var webRoot = FindWebRoot();
+        if (webRoot is not null)
+            return new ConfigurationBuilder()
+                .SetBasePath(webRoot)
+                .AddJsonFile("appsettings.json")
+                .AddJsonFile("appsettings.Development.json", optional: true)
+                .AddEnvironmentVariables()
+                .Build();
 
         // Fallback: minimal in-memory config so tests can still run without the file.
         return new ConfigurationBuilder()
@@ -109,8 +116,13 @@ public sealed class ServiceFixture : IAsyncLifetime
         svc.Configure<KafkaSettings>    (config.GetSection(KafkaSettings.SectionName));
 
         // ── Connection factories (used by real services) ───────────────────────
-        svc.AddSingleton<MongoConnection>();
-        svc.AddSingleton<KafkaConnection>();
+        svc.AddSingleton(new EnvironmentConfigOptions
+        {
+            BasePath = Path.Combine(FindWebRoot() ?? AppContext.BaseDirectory, "config")
+        });
+        svc.AddSingleton<EnvironmentConfigLoader>();
+        svc.AddSingleton<MongoConnectionFactory>();
+        svc.AddSingleton<KafkaConnectionFactory>();
 
         // ── Heartbeat ─────────────────────────────────────────────────────────
         // Mock (default — same as running app):

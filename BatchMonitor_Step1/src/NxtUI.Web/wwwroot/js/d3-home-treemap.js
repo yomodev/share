@@ -2,12 +2,40 @@ window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
 
+    // Gradient stops (RAM MB → RGB), blue (idle) through violet (very high).
+    // Piecewise-linear RGB interpolation between adjacent stops — no external
+    // color-space dependency, just enough steps to look smooth on a treemap tile.
+    const RAM_COLOR_STOPS = [
+        { ram: 0,    rgb: [59, 130, 246] },  // blue    #3B82F6
+        { ram: 100,  rgb: [34, 197, 94]  },  // green   #22C55E
+        { ram: 250,  rgb: [234, 179, 8]  },  // yellow  #EAB308
+        { ram: 450,  rgb: [249, 115, 22] },  // orange  #F97316
+        { ram: 700,  rgb: [239, 68, 68]  },  // red     #EF4444
+        { ram: 1100, rgb: [168, 85, 247] },  // violet  #A855F7
+    ];
+
+    function ramColor(ram) {
+        const stops = RAM_COLOR_STOPS;
+        if (ram <= stops[0].ram) return `rgb(${stops[0].rgb.join(',')})`;
+        const last = stops[stops.length - 1];
+        if (ram >= last.ram) return `rgb(${last.rgb.join(',')})`;
+        for (let i = 0; i < stops.length - 1; i++) {
+            const s0 = stops[i], s1 = stops[i + 1];
+            if (ram >= s0.ram && ram <= s1.ram) {
+                const t = (ram - s0.ram) / (s1.ram - s0.ram);
+                const r = Math.round(s0.rgb[0] + (s1.rgb[0] - s0.rgb[0]) * t);
+                const g = Math.round(s0.rgb[1] + (s1.rgb[1] - s0.rgb[1]) * t);
+                const b = Math.round(s0.rgb[2] + (s1.rgb[2] - s0.rgb[2]) * t);
+                return `rgb(${r},${g},${b})`;
+            }
+        }
+        return `rgb(${last.rgb.join(',')})`;
+    }
+
     function leafColor(d) {
         if (!d.online) return 'rgba(180,50,50,0.25)';   // offline — dim red
         if (d.ram == null) return 'rgba(128,128,128,0.28)'; // online, no RAM yet — gray
-        if (d.ram > 500)   return '#E24B4A';
-        if (d.ram > 200)   return '#BA7517';
-        return '#1D9E75';
+        return ramColor(d.ram);
     }
 
     function leafOpacity(d) { return d.online ? 0.82 : 0.45; }
@@ -120,8 +148,10 @@ window.homeMemoryTreemap = (function () {
                     event.stopPropagation();
                     tip.style('display', 'none');
                     const st = _state.get(container);
+                    // Host is included because PIDs are only unique per host — two
+                    // different hosts can report the same service name + PID.
                     if (st?.leafClickRef && d.pid != null)
-                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', d.name + '|' + d.pid).catch(() => {});
+                        st.leafClickRef.invokeMethodAsync('OnLeafClicked', leaf.parent.data.name + '|' + d.name + '|' + d.pid).catch(() => {});
                 })
                 .on('mousemove', event => {
                     const ram    = d.ram != null ? Math.round(d.ram) + ' MB' : 'no data';
@@ -173,24 +203,59 @@ window.homeMemoryTreemap = (function () {
 
     const _state = new WeakMap(); // container → { aborted, data, ro, _wake }
 
+    // Last good payload per env, kept across stop()/start() cycles (i.e. across Home
+    // being hidden/shown again) so resuming repaints instantly instead of blanking
+    // the treemap and re-showing the loading spinner every time a tab is focused.
+    const _lastData = new Map();
+
     function allOnlineLeavesHaveRam(node) {
         if (!node.children || node.children.length === 0)
             return !node.online || node.ram != null;  // offline leaves don't need RAM
         return node.children.every(allOnlineLeavesHaveRam);
     }
 
+    // Notifies .NET at two distinct points: as soon as SOMETHING is on screen
+    // (NotifyFirstPaint — this is what "the map is ready" should mean for a
+    // loading spinner, since real infra may have services that never report a
+    // RAM sample at all, so waiting for allOnlineLeavesHaveRam can wait forever),
+    // and again once every online leaf has a RAM value (NotifyDataLoaded, kept
+    // for any caller that specifically wants full data, not just first paint).
+    function notify(s, hasFullData) {
+        if (!s.dotnetRef) return;
+        if (!s.notifiedFirstPaint) {
+            s.notifiedFirstPaint = true;
+            s.dotnetRef.invokeMethodAsync('NotifyFirstPaint').catch(() => {});
+        }
+        if (hasFullData && !s.notifiedFullyLoaded) {
+            s.notifiedFullyLoaded = true;
+            s.dotnetRef.invokeMethodAsync('NotifyDataLoaded').catch(() => {});
+        }
+    }
+
     function start(container, env, intervalMs, dotnetRef, leafClickRef) {
         stop(container);
 
-        const s = { aborted: false, data: null, ro: null, _wake: null, dotnetRef: dotnetRef || null, leafClickRef: leafClickRef || null };
+        const cached = _lastData.get(env) || null;
+        const s = {
+            aborted: false, data: cached, ro: null, _wake: null,
+            dotnetRef: dotnetRef || null, leafClickRef: leafClickRef || null,
+            notifiedFirstPaint: false, notifiedFullyLoaded: false,
+        };
         _state.set(container, s);
 
-        // Show a spinner immediately — cleared by paint() on first successful data.
-        container.innerHTML =
-            '<div class="bm-treemap-loading">' +
-              '<div class="bm-treemap-spinner"></div>' +
-              '<span class="bm-treemap-loading-label">Loading services information…</span>' +
-            '</div>';
+        if (cached) {
+            // Resuming with data we've already shown before — repaint immediately,
+            // no spinner, no empty gap.
+            paint(container, cached);
+            notify(s, allOnlineLeavesHaveRam(cached));
+        } else {
+            // First time ever for this env — show the big spinner until data arrives.
+            container.innerHTML =
+                '<div class="bm-treemap-loading bm-treemap-loading-big">' +
+                  '<div class="bm-treemap-spinner bm-treemap-spinner-big"></div>' +
+                  '<span class="bm-treemap-loading-label">Loading services information…</span>' +
+                '</div>';
+        }
 
         // ResizeObserver repaints on resize using the last fetched data.
         s.ro = new ResizeObserver(entries => {
@@ -217,12 +282,9 @@ window.homeMemoryTreemap = (function () {
                             // First real data: clear spinner, render, reset retry counter.
                             s.data     = json;
                             emptyCount = 0;
+                            _lastData.set(env, json);
                             paint(container, s.data);
-                            // Notify .NET when every service leaf has a RAM value.
-                            if (s.dotnetRef && allOnlineLeavesHaveRam(json)) {
-                                s.dotnetRef.invokeMethodAsync('NotifyDataLoaded').catch(() => {});
-                                s.dotnetRef = null;
-                            }
+                            notify(s, allOnlineLeavesHaveRam(json));
                         }
                     }
                 } catch (_) { /* network error — retry */ }
@@ -236,6 +298,7 @@ window.homeMemoryTreemap = (function () {
                 }
 
                 // Use short retry interval until we have data; then switch to steady poll.
+                // Already-cached env skips the retry burst — go straight to steady polling.
                 const delay = (s.data ? steadyInterval : retryInterval);
                 await new Promise(resolve => { s._wake = resolve; setTimeout(resolve, delay); });
             }

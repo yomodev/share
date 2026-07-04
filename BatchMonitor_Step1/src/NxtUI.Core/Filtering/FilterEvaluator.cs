@@ -88,6 +88,17 @@ public static class FilterEvaluator
             caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
     }
 
+    // FilterParser's canonical field names (e.g. "StartTime") mirror SQL/Mongo column
+    // names, which don't always match the in-memory model's property name
+    // (RunSummary.Start, not RunSummary.StartTime). Try the canonical name first,
+    // then these synonyms, before giving up.
+    private static readonly Dictionary<string, string> PropertySynonyms =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["StartTime"] = "Start",
+            ["EndTime"]   = "End",
+        };
+
     private static object? GetProperty(object obj, string field)
     {
         var direct = obj.GetType()
@@ -95,6 +106,14 @@ public static class FilterEvaluator
             ?.GetValue(obj);
 
         if (direct is not null) return direct;
+
+        if (PropertySynonyms.TryGetValue(field, out var synonym))
+        {
+            var viaSynonym = obj.GetType()
+                .GetProperty(synonym, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                ?.GetValue(obj);
+            if (viaSynonym is not null) return viaSynonym;
+        }
 
         // Fallback: if the object has a JsonPayload string, search inside it.
         // This lets payload field filters (e.g. orderId:>0) work on deserialized proto messages.

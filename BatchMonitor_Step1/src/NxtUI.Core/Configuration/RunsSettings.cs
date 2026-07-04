@@ -10,6 +10,9 @@ public class RunsSettings
     /// <summary>Default look-back window. Default: 4 months.</summary>
     public int WindowMonths { get; set; } = 4;
 
-    /// <summary>Maximum rows returned per query. Default: 100.</summary>
+    /// <summary>Maximum rows returned per query when the caller doesn't specify a count. Default: 100.</summary>
     public int PageSize { get; set; } = 100;
+
+    /// <summary>Hard cap on rows returned per query, regardless of what the caller requests. Default: 1000.</summary>
+    public int MaxResults { get; set; } = 1000;
 }

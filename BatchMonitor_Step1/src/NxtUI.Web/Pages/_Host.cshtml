@@ -21,13 +21,18 @@
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=32" rel="stylesheet" />
+    <link href="css/app.css?v=35" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
 </head>
 <body>
-    <component type="typeof(App)" render-mode="ServerPrerendered" />
+    <!-- Server (not ServerPrerendered): prerendering runs OnInitializedAsync once
+         during the initial HTTP response, then AGAIN once the real SignalR circuit
+         connects — every data-fetching page was silently double-querying on first
+         load. Skipping prerendering costs a slightly later first paint but halves
+         every page's initial load work. -->
+    <component type="typeof(App)" render-mode="Server" />
 
     <!-- Custom Blazor reconnect / error overlay — replaces the default banner. -->
     <div id="blazor-error-ui" style="display:none;">
@@ -131,7 +136,7 @@
     <script src="js/d3-memory-stacked.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=16"></script>
+    <script src="js/d3-home-treemap.js?v=17"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>

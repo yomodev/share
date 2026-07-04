@@ -128,79 +128,97 @@
 
     </div>
 
-    <!-- ── Memory treemap ──────────────────────────────────────────────────── -->
-    <div class="bm-section-header" style="margin:0;">
-        <div class="bm-memory-header-left">
-            <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+    <!-- ── Memory + Recent Runs: one loading gate so the big spinner covers
+         both until they're both ready, then everything appears together —
+         no gap where the spinner is gone but content underneath is still empty. -->
+    <div class="bm-home-body-wrap">
+        @if (!_mapReady || !_runsReady)
+        {
+            <div class="bm-home-loading-overlay">
+                <div class="bm-home-loading-spinner"></div>
+                <span class="bm-home-loading-label">Loading dashboard…</span>
+            </div>
+        }
+
+        <!-- ── Memory treemap ──────────────────────────────────────────────── -->
+        <div class="bm-section-header" style="margin:0;">
+            <div class="bm-memory-header-left">
+                <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+            </div>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       StartIcon="@Icons.Material.Outlined.OpenInNew"
+                       OnClick="OpenServices"
+                       Class="bm-view-all-btn">
+                View All
+            </MudButton>
         </div>
-        <MudButton Variant="Variant.Text" Size="Size.Small"
-                   StartIcon="@Icons.Material.Outlined.OpenInNew"
-                   OnClick="OpenServices"
-                   Class="bm-view-all-btn">
-            View All
-        </MudButton>
-    </div>
-    <HomeMemoryTreemap Env="@EnvService.SelectedId" OnPidClicked="OnTreemapPidClicked" />
+        <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
+                            OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
 
-    <!-- ── Mini batch summary ─────────────────────────────────────────────── -->
-    <div class="bm-section-header" style="margin:4px 0 0;">
-        <div class="bm-memory-header-left">
-            <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
+        <!-- ── Mini batch summary ───────────────────────────────────────────── -->
+        <div class="bm-section-header" style="margin:4px 0 0;">
+            <div class="bm-memory-header-left">
+                <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
+            </div>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       StartIcon="@Icons.Material.Outlined.OpenInNew"
+                       OnClick="OpenRunsDashboard"
+                       Class="bm-view-all-btn">
+                View All
+            </MudButton>
         </div>
-        <MudButton Variant="Variant.Text" Size="Size.Small"
-                   StartIcon="@Icons.Material.Outlined.OpenInNew"
-                   OnClick="OpenRunsDashboard"
-                   Class="bm-view-all-btn">
-            View All
-        </MudButton>
+
+        <MudPaper Elevation="0" Class="bm-mini-summary">
+
+            <MudTable T="RunSummary"
+                      Items="@_recent"
+                      Dense="true"
+                      Hover="true"
+                      Elevation="0"
+                      Class="bm-mini-table">
+                <HeaderContent>
+                    <MudTh Style="width:36px;"></MudTh>
+                    <MudTh>Run ID</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh>Type</MudTh>
+                    <MudTh>Started</MudTh>
+                    <MudTh>Duration</MudTh>
+                    <MudTh Style="width:80px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><StatusIcon Status="@context.Status" /></MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2">@context.Description</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                            @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
+                        </MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                            @FormatDuration(context.Duration)
+                        </MudText>
+                    </MudTd>
+                    <MudTd Style="text-align:right;">
+                        <MudTooltip Text="Open Detail">
+                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenDetail(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
     </div>
-
-    <MudPaper Elevation="0" Class="bm-mini-summary">
-
-        <MudTable T="RunSummary"
-                  Items="@_recent"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  Class="bm-mini-table">
-            <HeaderContent>
-                <MudTh Style="width:36px;"></MudTh>
-                <MudTh>Name</MudTh>
-                <MudTh>Type</MudTh>
-                <MudTh>Started</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh Style="width:80px;"></MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd><StatusIcon Status="@context.Status" /></MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2">@context.Name</MudText>
-                </MudTd>
-                <MudTd>
-                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
-                    </MudText>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @FormatDuration(context.Duration)
-                    </MudText>
-                </MudTd>
-                <MudTd Style="text-align:right;">
-                    <MudTooltip Text="Open Detail">
-                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OpenDetail(context))" />
-                    </MudTooltip>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </MudPaper>
 
 </div>
 
@@ -223,6 +241,11 @@
     // we can trigger a data refresh when the user switches back to Home.
     private bool _wasVisible;
 
+    // Big overlay spinner stays up until BOTH are ready — set once, not re-cleared
+    // on every visibility toggle, so returning to Home never re-blanks the page.
+    private bool _mapReady;
+    private bool _runsReady;
+
     protected override async Task OnInitializedAsync()
     {
         EnvService.OnChange         += OnEnvExternalChange;
@@ -231,8 +254,11 @@
         _wasVisible = TabService.ActiveTab is null;
         HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+        _runsReady = true;
         if (IsVisible) StartPolling();
     }
+
+    private void OnMapDataLoaded() => _ = InvokeAsync(() => { _mapReady = true; StateHasChanged(); });
 
     private bool IsVisible => TabService.ActiveTab is null;
 
@@ -283,7 +309,7 @@
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 5, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, 10, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -334,9 +360,12 @@
             try
             {
                 _recent       = [];
+                _runsReady    = false;
+                _mapReady     = false; // new env's treemap has no cached paint yet
                 if (IsVisible) StateHasChanged();
                 HealthCache.RequestRefresh(EnvService.SelectedId);
                 await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+                _runsReady = true;
                 if (IsVisible) StateHasChanged();
             }
             catch (Exception ex) { Logger.LogError(ex, "Env change update failed"); }
@@ -347,8 +376,11 @@
     {
         EnvService.SelectedId = newId;
         _recent               = [];
+        _runsReady            = false;
+        _mapReady             = false;
         HealthCache.RequestRefresh(newId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
+        _runsReady = true;
     }
 
     // ── Navigation ────────────────────────────────────────────────────────
@@ -368,7 +400,7 @@
     }
 
     private void OpenDetail(RunSummary b) =>
-        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.Name, EnvService.SelectedId));
+        TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, EnvService.SelectedId));
 
     // ── Helpers ───────────────────────────────────────────────────────────
 

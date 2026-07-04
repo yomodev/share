@@ -14,30 +14,60 @@
 
 @code {
     [Parameter] public string            Env            { get; set; } = string.Empty;
+
+    // Fires on the first successful paint (something is on screen) — use this to
+    // gate a "map is ready" loading spinner. OnDataLoaded fires later, only once
+    // every online leaf has reported a RAM sample — real infra may have services
+    // that never report RAM, so a spinner gated on OnDataLoaded can hang forever.
+    [Parameter] public EventCallback     OnFirstPaint   { get; set; }
     [Parameter] public EventCallback     OnDataLoaded   { get; set; }
     [Parameter] public EventCallback<string> OnPidClicked  { get; set; }
+
+    // When false (e.g. Home is hidden behind another tab), the JS polling loop is
+    // stopped entirely — no background fetches while nobody can see the result.
+    [Parameter] public bool Visible { get; set; } = true;
 
     private ElementReference                        _ref;
     private IDisposable?                            _sub;
     private DotNetObjectReference<HomeMemoryTreemap>? _selfRef;
     private string                                  _subscribedEnv = string.Empty;
     private bool                                    _started;
+    private bool                                    _wasVisible = true;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (Env == _subscribedEnv) return;
-
-        _sub?.Dispose();
-        _sub = MetricsMonitor.Subscribe(Env);
-        _subscribedEnv = Env;
-
-        if (_started)
+        if (Env != _subscribedEnv)
         {
-            // Env changed — clear old tree and start new. start() re-injects its
-            // own loading spinner into the container immediately.
-            try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
-            _selfRef ??= DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+            _sub?.Dispose();
+            _sub = MetricsMonitor.Subscribe(Env);
+            _subscribedEnv = Env;
+
+            if (_started)
+            {
+                // Env changed — clear old tree and start new. start() re-injects its
+                // own loading spinner into the container immediately (no cached data
+                // exists yet for a never-seen env).
+                try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+            }
+        }
+
+        if (Visible != _wasVisible)
+        {
+            if (!Visible && _started)
+            {
+                // Home just became hidden — stop polling entirely.
+                try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
+            }
+            else if (Visible && _started)
+            {
+                // Home just became visible again — resume. start() repaints from
+                // cached data instantly (no spinner) if we've fetched this env before.
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+            }
+            _wasVisible = Visible;
         }
     }
 
@@ -49,6 +79,9 @@
         await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
         await InvokeAsync(StateHasChanged);
     }
+
+    [JSInvokable]
+    public void NotifyFirstPaint() => _ = OnFirstPaint.InvokeAsync();
 
     [JSInvokable]
     public void NotifyDataLoaded() => _ = OnDataLoaded.InvokeAsync();

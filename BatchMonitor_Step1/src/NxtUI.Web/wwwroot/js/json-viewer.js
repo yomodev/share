@@ -116,5 +116,19 @@ window.bmJsonViewer = (() => {
         return s;
     }
 
-    return { render };
+    // ── expand / collapse all ───────────────────────────────────────────────
+
+    function setAllCollapsed(el, collapsed) {
+        el.querySelectorAll('.bm-jv-toggle').forEach(toggle => {
+            const wrap    = toggle.parentElement;
+            const body    = wrap && wrap.querySelector(':scope > .bm-jv-body');
+            const summary = wrap && wrap.querySelector(':scope > .bm-jv-summary');
+            if (!body || !summary) return;
+            body.style.display    = collapsed ? 'none' : '';
+            summary.style.display = collapsed ? 'inline' : 'none';
+            toggle.textContent    = collapsed ? '▸' : '▾';
+        });
+    }
+
+    return { render, setAllCollapsed };
 })();

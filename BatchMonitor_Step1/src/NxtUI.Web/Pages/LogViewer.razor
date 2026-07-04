@@ -111,7 +111,16 @@
             <MudText Typo="Typo.body2" Color="Color.Error">@_error</MudText>
         </div>
     }
-    <LogViewport @ref="_viewport" OnWordDoubleClicked="OnWordDoubleClickedAsync" />
+    <div class="bm-lv-body-wrap">
+        @if (_isLoading)
+        {
+            <div class="bm-lv-loading-overlay">
+                <div class="bm-lv-loading-spinner"></div>
+                <span class="bm-lv-loading-label">@_loadingLabel</span>
+            </div>
+        }
+        <LogViewport @ref="_viewport" OnWordDoubleClicked="OnWordDoubleClickedAsync" />
+    </div>
 
 </div>
 
@@ -150,6 +159,7 @@
     private bool    _dirty;
 
     private bool    _isLoading;
+    private string  _loadingLabel = "Loading file…";
     private string? _error;
     private string? _rawContent;
     private string? _localKey;
@@ -185,8 +195,8 @@
         ? "local file" : (Path ?? "");
 
     private string _pathTooltip => Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
-        ? "local file  •  Ctrl+Click to copy"
-        : $"{Path}  •  Ctrl+Click to copy";
+        ? "local file  •  Click to copy"
+        : $"{Path}  •  Click to copy";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -234,7 +244,6 @@
 
     private async Task OnNameClickAsync(MouseEventArgs e)
     {
-        if (!e.CtrlKey) return;
         var text = Path?.StartsWith("local:", StringComparison.OrdinalIgnoreCase) == true
             ? Path["local:".Length..]
             : (Path ?? "");
@@ -330,8 +339,9 @@
     private async Task LoadAsync()
     {
         if (string.IsNullOrWhiteSpace(Path)) return;
-        _isLoading = true;
-        _error     = null;
+        _isLoading    = true;
+        _loadingLabel = "Loading file…";
+        _error        = null;
         StopTail();
         StateHasChanged();
 
@@ -352,36 +362,52 @@
                 (_rawContent, _fileOffset) = await LogViewerSvc.ReadAllAsync(Path!, _cts.Token);
             }
             _dirty = true;
+            // _isLoading / Tab loading stay on — RenderViewerAsync (fired from
+            // OnAfterRenderAsync once _dirty is picked up) still has to run the JS
+            // parse, which can take a while on a large file; clearing them here would
+            // drop the spinner before the actual parsing work even starts.
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex)
+        {
+            _error     = ex.Message;
+            _isLoading = false;
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
+        StateHasChanged();
+    }
+
+    private async Task RenderViewerAsync()
+    {
+        if (_viewport is null || (_rawContent is null && _localKey is null) || !_rendered)
+            return;
+
+        try
+        {
+            _loadingLabel = "Parsing log file…";
+            StateHasChanged();
+
+            var formats = Config.GetSection("Logs:Formats").Get<string[]>() ?? [];
+            var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap, formats };
+            if (_localKey is not null)
+            {
+                await _viewport.RenderLocalFileAsync(_localKey, opts);
+                _localKey = null;
+            }
+            else
+            {
+                await _viewport.RenderAsync(_rawContent!, opts);
+                _rawContent = null;
+                StartTail();
+            }
+        }
         finally
         {
             _isLoading = false;
             Tab?.EndLoading();
             TabService.NotifyChanged();
             StateHasChanged();
-        }
-    }
-
-    private async Task RenderViewerAsync()
-    {
-        if (_viewport is null) return;
-        if (_rawContent is null && _localKey is null) return;
-        if (!_rendered) return;
-
-        var formats = Config.GetSection("Logs:Formats").Get<string[]>() ?? [];
-        var opts = new { anchorLine = _anchorLine, fontSize = _fontSize, wordWrap = _wordWrap, formats };
-        if (_localKey is not null)
-        {
-            await _viewport.RenderLocalFileAsync(_localKey, opts);
-            _localKey = null;
-        }
-        else
-        {
-            await _viewport.RenderAsync(_rawContent!, opts);
-            _rawContent = null;
-            StartTail();
         }
     }
 

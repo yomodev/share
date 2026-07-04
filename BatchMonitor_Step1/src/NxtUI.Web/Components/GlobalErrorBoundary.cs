@@ -1,21 +1,21 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Logging;
-using MudBlazor;
+using NxtUI.Web.Services;
 
 namespace NxtUI.Web.Components;
 
 /// <summary>
 /// Wraps the main content area. When a component throws an unhandled exception:
 ///   1. Logs it with full stack trace.
-///   2. Shows a MudBlazor error snackbar.
+///   2. Reports it via ErrorNotificationService (toast + Settings history).
 ///   3. Auto-recovers so the rest of the UI continues working.
 ///
 /// Usage in Razor: <GlobalErrorBoundary>...content...</GlobalErrorBoundary>
 /// </summary>
 public sealed class GlobalErrorBoundary : ErrorBoundary
 {
-    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+    [Inject] private ErrorNotificationService Notifications { get; set; } = default!;
     [Inject] private ILogger<GlobalErrorBoundary> Logger { get; set; } = default!;
 
     protected override async Task OnErrorAsync(Exception exception)
@@ -26,14 +26,10 @@ public sealed class GlobalErrorBoundary : ErrorBoundary
             ? exception.Message[..150] + "…"
             : exception.Message;
 
-        Snackbar.Add(
+        Notifications.Report(
             $"An error occurred and was recovered automatically.\n{msg}",
-            Severity.Error,
-            cfg =>
-            {
-                cfg.ShowCloseIcon        = true;
-                cfg.VisibleStateDuration = 10_000;
-            });
+            exception,
+            "Render");
 
         // Yield so the current render frame completes, then reset the boundary.
         await Task.Yield();

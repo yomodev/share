@@ -54,7 +54,7 @@ public interface IRunService
 /// </summary>
 public class RunFilter
 {
-    /// <summary>Free-text search across RunId, RequestId, Name.</summary>
+    /// <summary>Free-text search across RunId, RequestId, Description.</summary>
     public string? SearchText { get; set; }
 
     /// <summary>Filter by one or more statuses.</summary>
@@ -69,8 +69,19 @@ public class RunFilter
     /// </summary>
     public FilterNode? FilterAst { get; set; }
 
+    /// <summary>
+    /// Column to sort by (canonical field name, e.g. "StartTime", "RunId"). Null/unrecognized
+    /// falls back to the backend's default (StartTime). Validated against an allow-list —
+    /// never interpolated into SQL without that check.
+    /// </summary>
+    public string? SortField { get; set; }
+
+    /// <summary>Sort direction. Default: descending.</summary>
+    public bool SortDescending { get; set; } = true;
+
     public bool IsEmpty =>
         string.IsNullOrWhiteSpace(SearchText) &&
         (Statuses is null || Statuses.Count == 0) &&
-        (Types    is null || Types.Count    == 0);
+        (Types    is null || Types.Count    == 0) &&
+        FilterAst is null;
 }

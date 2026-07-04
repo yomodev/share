@@ -46,7 +46,8 @@ public sealed class FilterParser
             // RunSummary
             ["run"]         = "RunId",
             ["runid"]       = "RunId",
-            ["name"]        = "Name",
+            ["requestid"]   = "RequestId",
+            ["reqid"]       = "RequestId",
             ["type"]        = "Type",
             ["status"]      = "Status",
             ["desc"]        = "Description",
