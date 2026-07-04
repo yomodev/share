@@ -1857,10 +1857,6 @@ html, body {
     color: var(--mud-palette-text-secondary) !important;
 }
 
-@keyframes bm-spin {
-    to { transform: rotate(360deg); }
-}
-
 /* ── Card shell ──────────────────────────────────────────────────── */
 .bm-health-card {
     border: 1px solid var(--mud-palette-divider);
