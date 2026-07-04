@@ -20,12 +20,20 @@
         {
             <table class="bm-kafka-info-table" style="width:100%;">
                 <tbody>
+                    @if (MessageCount is not null)
+                    {
+                        <tr><td>Messages</td>  <td><code>@MessageCount</code></td></tr>
+                    }
+                    <tr><td>Partitions</td>    <td><code>@_config!.PartitionCount</code></td></tr>
+                    <tr><td>Cleanup policy</td><td>
+                        <span class="bm-kafka-policy @(_config!.CleanupPolicy.Contains("compact") ? "bm-kafka-policy-compact" : "bm-kafka-policy-delete")">
+                            @_config!.CleanupPolicy
+                        </span>
+                    </td></tr>
                     <tr><td>Retention</td>     <td><code>@FormatRetention(_config!.RetentionMs)</code></td></tr>
-                    <tr><td>Cleanup</td>       <td><code>@_config!.CleanupPolicy</code></td></tr>
                     <tr><td>Max msg bytes</td> <td><code>@FormatBytes(_config!.MaxMessageBytes)</code></td></tr>
                     <tr><td>Min in-sync</td>   <td><code>@_config!.MinInSyncReplicas</code></td></tr>
                     <tr><td>Compression</td>   <td><code>@_config!.CompressionType</code></td></tr>
-                    <tr><td>Partitions</td>    <td><code>@_config!.PartitionCount</code></td></tr>
                     <tr><td>Repl factor</td>   <td><code>@_config!.ReplicationFactor</code></td></tr>
                 </tbody>
             </table>
@@ -39,8 +47,9 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    [Parameter] public string TopicName   { get; set; } = string.Empty;
-    [Parameter] public string Environment { get; set; } = string.Empty;
+    [Parameter] public string  TopicName    { get; set; } = string.Empty;
+    [Parameter] public string  Environment  { get; set; } = string.Empty;
+    [Parameter] public string? MessageCount { get; set; }
 
     private KafkaTopicConfig? _config  = null;
     private bool              _loading = true;

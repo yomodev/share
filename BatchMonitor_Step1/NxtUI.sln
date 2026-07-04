@@ -20,6 +20,20 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NxtUI.Tests", "tests\NxtUI.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MudSelectRepro", "src\MudSelectRepro\MudSelectRepro.csproj", "{3907AB0F-F106-4290-BA5B-26A830313825}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-FE94-461D-8319-C3DF28AAF7B9}"
+	ProjectSection(SolutionItems) = preProject
+		docs\01_Architecture.md = docs\01_Architecture.md
+		docs\02_Models_DataFlow.md = docs\02_Models_DataFlow.md
+		docs\03_Decisions.md = docs\03_Decisions.md
+		docs\04_FlowGraph.md = docs\04_FlowGraph.md
+		docs\05_Timeline.md = docs\05_Timeline.md
+		docs\06_UI_Components.md = docs\06_UI_Components.md
+		docs\07_SessionContext.md = docs\07_SessionContext.md
+		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
+		docs\09_Features.md = docs\09_Features.md
+		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

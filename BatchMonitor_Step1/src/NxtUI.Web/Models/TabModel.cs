@@ -56,6 +56,9 @@ public class TabModel
     /// <summary>MudBlazor icon constant string for the tab.</summary>
     public string Icon { get; set; } = MudBlazor.Icons.Material.Outlined.Dashboard;
 
+    /// <summary>Optional user-chosen CSS color for the tab icon. Null = default theme color.</summary>
+    public string? IconColor { get; set; }
+
     public bool IsActive { get; set; }
 
     // Counter rather than bool so overlapping loads (e.g. multiple panes in a
@@ -152,7 +155,7 @@ public class TabModel
         Type        = TabType.LogBrowser,
         Label       = "Log Browser",
         Environment = env,
-        Icon        = MudBlazor.Icons.Material.Outlined.Article
+        Icon        = MudBlazor.Icons.Material.Outlined.Folder
     };
 
     public static TabModel CreateEnvironmentDashboard(string env) => new()
@@ -200,7 +203,7 @@ public class TabModel
         Label       = topicName.Length > 28 ? topicName[..28] + "…" : topicName,
         Environment = env,
         EntityId    = topicName,
-        Icon        = MudBlazor.Icons.Material.Outlined.MoveToInbox
+        Icon        = MudBlazor.Icons.Material.Outlined.Stream
     };
 
     public static TabModel CreateKafkaGroupsDashboard(string env) => new()
@@ -219,7 +222,7 @@ public class TabModel
         Label       = collection.Length > 24 ? collection[..24] + "…" : collection,
         Environment = env,
         EntityId    = $"{database}/{collection}",
-        Icon        = MudBlazor.Icons.Material.Outlined.TableChart
+        Icon        = MudBlazor.Icons.Material.Outlined.Storage
     };
 
     public static TabModel CreateLogViewer(string path, string env) => new()

@@ -19,6 +19,28 @@
             </span>
 
             <div>
+                <div style="font-size:0.75rem; color:var(--mud-palette-text-secondary); margin-bottom:6px;">Color</div>
+                <div class="bm-icon-picker">
+                    <MudTooltip Text="Default (theme color)" Placement="Placement.Top">
+                        <div class="bm-color-picker-item @(_selectedColor is null ? "selected" : "")"
+                             style="background:var(--mud-palette-surface); border:1px dashed var(--mud-palette-text-secondary);"
+                             @onclick="@(() => _selectedColor = null)">
+                            <MudIcon Icon="@Icons.Material.Outlined.FormatColorReset" Size="Size.Small" />
+                        </div>
+                    </MudTooltip>
+                    @foreach (var (color, label) in _colors)
+                    {
+                        var c = color;
+                        <MudTooltip Text="@label" Placement="Placement.Top">
+                            <div class="bm-color-picker-item @(_selectedColor == c ? "selected" : "")"
+                                 style="background:@c;"
+                                 @onclick="@(() => _selectedColor = c)"></div>
+                        </MudTooltip>
+                    }
+                </div>
+            </div>
+
+            <div>
                 <div style="font-size:0.75rem; color:var(--mud-palette-text-secondary); margin-bottom:6px;">Icon</div>
                 <div class="bm-icon-picker">
                     @foreach (var (icon, label) in _icons)
@@ -27,7 +49,8 @@
                         <MudTooltip Text="@label" Placement="Placement.Top">
                             <div class="bm-icon-picker-item @(_selectedIcon == ico ? "selected" : "")"
                                  @onclick="@(() => _selectedIcon = ico)">
-                                <MudIcon Icon="@ico" Size="Size.Small" />
+                                <MudIcon Icon="@ico" Size="Size.Small"
+                                         Style="@(_selectedColor is null ? "" : $"color:{_selectedColor};")" />
                             </div>
                         </MudTooltip>
                     }
@@ -45,14 +68,30 @@
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
-    [Parameter] public string TabId        { get; set; } = string.Empty;
-    [Parameter] public string CurrentLabel { get; set; } = string.Empty;
-    [Parameter] public string CurrentIcon  { get; set; } = string.Empty;
+    [Parameter] public string  TabId             { get; set; } = string.Empty;
+    [Parameter] public string  CurrentLabel      { get; set; } = string.Empty;
+    [Parameter] public string  CurrentIcon       { get; set; } = string.Empty;
+    [Parameter] public string? CurrentIconColor  { get; set; }
 
-    private string _name         = string.Empty;
-    private string _selectedIcon = string.Empty;
+    private string  _name          = string.Empty;
+    private string  _selectedIcon  = string.Empty;
+    private string? _selectedColor;
     private MudTextField<string>? _field;
     private ElementReference _fieldRef;
+
+    private static readonly (string Color, string Label)[] _colors =
+    [
+        ("#EF4444", "Red"),
+        ("#F97316", "Orange"),
+        ("#EAB308", "Yellow"),
+        ("#22C55E", "Green"),
+        ("#14B8A6", "Teal"),
+        ("#3B82F6", "Blue"),
+        ("#6366F1", "Indigo"),
+        ("#A855F7", "Purple"),
+        ("#EC4899", "Pink"),
+        ("#78716C", "Gray"),
+    ];
 
     private static readonly (string Icon, string Label)[] _icons =
     [
@@ -67,7 +106,8 @@
         (Icons.Material.Outlined.Dns,            "Services"),
         (Icons.Material.Outlined.AccountTree,    "Pipelines"),
         (Icons.Material.Outlined.Tune,           "Config"),
-        (Icons.Material.Outlined.Article,        "Logs"),
+        (Icons.Material.Outlined.Folder,         "Logs"),
+        (Icons.Material.Outlined.Article,        "Document"),
         (Icons.Material.Outlined.Dashboard,      "Dashboard"),
         (Icons.Material.Outlined.Analytics,      "Analytics"),
         (Icons.Material.Outlined.TrendingUp,     "Trending"),
@@ -82,12 +122,55 @@
         (Icons.Material.Outlined.Person,         "Person"),
         (Icons.Material.Outlined.Notifications,  "Notifications"),
         (Icons.Material.Outlined.Settings,       "Settings"),
+        // ── additional choices ──────────────────────────────────────────
+        (Icons.Material.Outlined.Memory,          "Memory"),
+        (Icons.Material.Outlined.PlaylistPlay,    "Playlist"),
+        (Icons.Material.Outlined.ManageSearch,    "Search"),
+        (Icons.Material.Outlined.FilterAlt,       "Filter"),
+        (Icons.Material.Outlined.Warning,         "Warning"),
+        (Icons.Material.Outlined.Error,           "Error"),
+        (Icons.Material.Outlined.CheckCircle,     "Success"),
+        (Icons.Material.Outlined.Info,            "Info"),
+        (Icons.Material.Outlined.Lightbulb,       "Idea"),
+        (Icons.Material.Outlined.Build,           "Build"),
+        (Icons.Material.Outlined.Science,         "Science"),
+        (Icons.Material.Outlined.Terminal,        "Terminal"),
+        (Icons.Material.Outlined.CloudQueue,      "Cloud"),
+        (Icons.Material.Outlined.Bolt,            "Bolt"),
+        (Icons.Material.Outlined.Whatshot,        "Hot"),
+        (Icons.Material.Outlined.Favorite,        "Favorite"),
+        (Icons.Material.Outlined.Visibility,      "Watch"),
+        (Icons.Material.Outlined.History,         "History"),
+        (Icons.Material.Outlined.Schedule,        "Schedule"),
+        (Icons.Material.Outlined.CalendarToday,   "Calendar"),
+        (Icons.Material.Outlined.LocationOn,      "Location"),
+        (Icons.Material.Outlined.Public,          "Global"),
+        (Icons.Material.Outlined.Security,        "Security"),
+        (Icons.Material.Outlined.Lock,            "Lock"),
+        (Icons.Material.Outlined.Key,             "Key"),
+        (Icons.Material.Outlined.Extension,       "Plugin"),
+        (Icons.Material.Outlined.Widgets,         "Widgets"),
+        (Icons.Material.Outlined.GridView,        "Grid"),
+        (Icons.Material.Outlined.List,            "List"),
+        (Icons.Material.Outlined.BarChart,        "Chart"),
+        (Icons.Material.Outlined.PieChart,        "Pie chart"),
+        (Icons.Material.Outlined.ShowChart,       "Line chart"),
+        (Icons.Material.Outlined.Inventory,       "Inventory"),
+        (Icons.Material.Outlined.LocalShipping,   "Shipping"),
+        (Icons.Material.Outlined.ShoppingCart,    "Cart"),
+        (Icons.Material.Outlined.Payment,         "Payment"),
+        (Icons.Material.Outlined.Receipt,         "Receipt"),
+        (Icons.Material.Outlined.Email,           "Email"),
+        (Icons.Material.Outlined.Chat,            "Chat"),
+        (Icons.Material.Outlined.Language,        "Language"),
+        (Icons.Material.Outlined.Rocket,          "Rocket"),
     ];
 
     protected override void OnInitialized()
     {
-        _name         = CurrentLabel;
-        _selectedIcon = CurrentIcon;
+        _name          = CurrentLabel;
+        _selectedIcon  = CurrentIcon;
+        _selectedColor = CurrentIconColor;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -106,7 +189,7 @@
     {
         var trimmed = _name?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(trimmed)) return;
-        TabService.RenameTab(TabId, trimmed, _selectedIcon);
+        TabService.RenameTab(TabId, trimmed, _selectedIcon, _selectedColor, setIconColor: true);
         MudDialog.Close(DialogResult.Ok(true));
     }
 

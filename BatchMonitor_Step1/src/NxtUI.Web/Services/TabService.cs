@@ -103,8 +103,13 @@ public class TabService
     /// <summary>Returns true if the tab with the given id is the active tab.</summary>
     public bool IsActive(string tabId) => ActiveTab?.Id == tabId;
 
-    /// <summary>Renames the tab's display label and optionally its icon. No-op if not found or label is blank.</summary>
-    public void RenameTab(string tabId, string newLabel, string? newIcon = null)
+    /// <summary>
+    /// Renames the tab's display label and optionally its icon/icon color.
+    /// No-op if not found or label is blank. Pass <paramref name="newIconColor"/> as
+    /// null to reset to the default theme color, or omit it to leave the color unchanged.
+    /// </summary>
+    public void RenameTab(string tabId, string newLabel, string? newIcon = null,
+        string? newIconColor = null, bool setIconColor = false)
     {
         newLabel = newLabel.Trim();
         if (string.IsNullOrEmpty(newLabel)) return;
@@ -112,6 +117,7 @@ public class TabService
         if (tab is null) return;
         tab.Label = newLabel;
         if (newIcon is not null) tab.Icon = newIcon;
+        if (setIconColor) tab.IconColor = newIconColor;
         Notify();
     }
 

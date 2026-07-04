@@ -128,97 +128,90 @@
 
     </div>
 
-    <!-- ── Memory + Recent Runs: one loading gate so the big spinner covers
-         both until they're both ready, then everything appears together —
-         no gap where the spinner is gone but content underneath is still empty. -->
-    <div class="bm-home-body-wrap">
-        @if (!_mapReady || !_runsReady)
-        {
-            <div class="bm-home-loading-overlay">
-                <div class="bm-home-loading-spinner"></div>
-                <span class="bm-home-loading-label">Loading dashboard…</span>
-            </div>
-        }
-
-        <!-- ── Memory treemap ──────────────────────────────────────────────── -->
-        <div class="bm-section-header" style="margin:0;">
-            <div class="bm-memory-header-left">
+    <!-- ── Memory treemap ────────────────────────────────────────────────── -->
+    <div class="bm-section-header" style="margin:0;">
+        <div class="bm-memory-header-left">
+            @if (!_mapReady)
+            {
+                <div class="bm-section-spinner"></div>
+            }
+            else
+            {
                 <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
-            </div>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       StartIcon="@Icons.Material.Outlined.OpenInNew"
-                       OnClick="OpenServices"
-                       Class="bm-view-all-btn">
-                View All
-            </MudButton>
+            }
+            <MudTooltip Text="View all services">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title bm-section-title-link" @onclick="OpenServices">Memory</MudText>
+            </MudTooltip>
         </div>
-        <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
-                            OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
-
-        <!-- ── Mini batch summary ───────────────────────────────────────────── -->
-        <div class="bm-section-header" style="margin:4px 0 0;">
-            <div class="bm-memory-header-left">
-                <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
-            </div>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       StartIcon="@Icons.Material.Outlined.OpenInNew"
-                       OnClick="OpenRunsDashboard"
-                       Class="bm-view-all-btn">
-                View All
-            </MudButton>
-        </div>
-
-        <MudPaper Elevation="0" Class="bm-mini-summary">
-
-            <MudTable T="RunSummary"
-                      Items="@_recent"
-                      Dense="true"
-                      Hover="true"
-                      Elevation="0"
-                      Class="bm-mini-table">
-                <HeaderContent>
-                    <MudTh Style="width:36px;"></MudTh>
-                    <MudTh>Run ID</MudTh>
-                    <MudTh>Description</MudTh>
-                    <MudTh>Type</MudTh>
-                    <MudTh>Started</MudTh>
-                    <MudTh>Duration</MudTh>
-                    <MudTh Style="width:80px;"></MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd><StatusIcon Status="@context.Status" /></MudTd>
-                    <MudTd>
-                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
-                    </MudTd>
-                    <MudTd>
-                        <MudText Typo="Typo.body2">@context.Description</MudText>
-                    </MudTd>
-                    <MudTd>
-                        <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                    </MudTd>
-                    <MudTd>
-                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                            @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
-                        </MudText>
-                    </MudTd>
-                    <MudTd>
-                        <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                            @FormatDuration(context.Duration)
-                        </MudText>
-                    </MudTd>
-                    <MudTd Style="text-align:right;">
-                        <MudTooltip Text="Open Detail">
-                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenDetail(context))" />
-                        </MudTooltip>
-                    </MudTd>
-                </RowTemplate>
-            </MudTable>
-        </MudPaper>
     </div>
+    <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
+                        OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+
+    <!-- ── Mini batch summary ───────────────────────────────────────────── -->
+    <div class="bm-section-header" style="margin:4px 0 0;">
+        <div class="bm-memory-header-left">
+            @if (!_runsReady || _runsLoading)
+            {
+                <div class="bm-section-spinner"></div>
+            }
+            else
+            {
+                <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
+            }
+            <MudTooltip Text="View more runs">
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title bm-section-title-link" @onclick="OpenRunsDashboard">Recent Runs</MudText>
+            </MudTooltip>
+        </div>
+    </div>
+
+    <MudPaper Elevation="0" Class="bm-mini-summary">
+
+        <MudTable T="RunSummary"
+                  Items="@_recent"
+                  Dense="true"
+                  Hover="true"
+                  Elevation="0"
+                  Class="bm-mini-table">
+            <HeaderContent>
+                <MudTh Style="width:36px;"></MudTh>
+                <MudTh>Run ID</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Started</MudTh>
+                <MudTh>Duration</MudTh>
+                <MudTh Style="width:80px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd><StatusIcon Status="@context.Status" /></MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2">@context.Description</MudText>
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                        @FormatDuration(context.Duration)
+                    </MudText>
+                </MudTd>
+                <MudTd Style="text-align:right;">
+                    <MudTooltip Text="Open Detail">
+                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OpenDetail(context))" />
+                    </MudTooltip>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudPaper>
 
 </div>
 
@@ -241,10 +234,13 @@
     // we can trigger a data refresh when the user switches back to Home.
     private bool _wasVisible;
 
-    // Big overlay spinner stays up until BOTH are ready — set once, not re-cleared
-    // on every visibility toggle, so returning to Home never re-blanks the page.
+    // Each section shows a small spinner in its header (left of the label) until it
+    // has loaded once, then swaps to the section icon — never re-blanks on later
+    // visibility toggles. _runsLoading additionally flips the spinner back on during
+    // every poll tick, since a Recent Runs refresh actually swaps the rendered rows.
     private bool _mapReady;
     private bool _runsReady;
+    private bool _runsLoading;
 
     protected override async Task OnInitializedAsync()
     {
@@ -306,6 +302,7 @@
 
     private async Task LoadRunsAsync()
     {
+        _runsLoading = true;
         try
         {
             _recent = await RunService.GetRunsAsync(
@@ -313,6 +310,7 @@
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
+        finally { _runsLoading = false; }
     }
 
     private async Task PollRunsAsync(CancellationToken ct)

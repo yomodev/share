@@ -423,6 +423,21 @@ html, body {
     color: var(--mud-palette-primary);
 }
 
+.bm-color-picker-item {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border: 2px solid transparent;
+    color: #fff;
+    transition: border-color 0.15s, transform 0.1s;
+}
+.bm-color-picker-item:hover { transform: scale(1.08); }
+.bm-color-picker-item.selected { border-color: var(--mud-palette-text-primary); }
+
 /* ================================================================
    PAGE SHELL
    ================================================================ */
@@ -546,7 +561,6 @@ html, body {
     text-transform: uppercase; letter-spacing: 0.07em;
     color: var(--mud-palette-text-secondary);
 }
-.bm-view-all-btn  { font-size: 0.78rem !important; }
 .bm-mini-table .mud-table-container { border: none !important; }
 
 /* ================================================================
@@ -1802,36 +1816,23 @@ html, body {
     font-family: var(--bm-font-ui, sans-serif);
 }
 
-/* ── Home dashboard: single loading gate over Memory + Recent Runs ───── */
-.bm-home-body-wrap {
-    position: relative;
-}
-
-.bm-home-loading-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    background: var(--mud-palette-background);
-}
-
-.bm-home-loading-spinner {
-    width: 44px;
-    height: 44px;
-    border: 4px solid rgba(128, 128, 128, 0.2);
+/* ── Home dashboard: per-section header spinner (replaces the section icon
+   until that section has loaded, or while it's actively refreshing) ──── */
+.bm-section-spinner {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    border: 2px solid rgba(128, 128, 128, 0.25);
     border-top-color: var(--mud-palette-primary);
     border-radius: 50%;
     animation: bm-spin 0.8s linear infinite;
 }
 
-.bm-home-loading-label {
-    font-size: 0.85rem;
-    color: var(--mud-palette-text-secondary);
-    font-family: var(--bm-font-ui, sans-serif);
+.bm-section-title-link {
+    cursor: pointer;
+}
+.bm-section-title-link:hover {
+    color: var(--mud-palette-primary);
 }
 
 .bm-treemap-error {

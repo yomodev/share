@@ -21,7 +21,7 @@
 
             <div class="bm-tab @(isActive ? "active" : "")"
                  @onclick="@(() => TabService.Focus(tabId))"
-                 @ondblclick="@(() => RenameTabAsync(tabId, tab.Label, tab.Icon))"
+                 @ondblclick="@(() => RenameTabAsync(tabId, tab.Label, tab.Icon, tab.IconColor))"
                  @ondblclick:stopPropagation="true"
                  @key="tabId"
                  data-tab-id="@tabId"
@@ -35,7 +35,8 @@
                 }
                 else
                 {
-                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon" />
+                    <MudIcon Icon="@tab.Icon" Size="Size.Small" Class="bm-tab-icon"
+                             Style="@(tab.IconColor is null ? "" : $"color:{tab.IconColor};")" />
                 }
                 <span class="bm-tab-label" @key="@($"{tabId}:{tab.Label}")">@tab.Label</span>
 
@@ -93,13 +94,14 @@
 
     private void OnTabsChanged() => InvokeAsync(StateHasChanged);
 
-    private async Task RenameTabAsync(string tabId, string currentLabel, string currentIcon)
+    private async Task RenameTabAsync(string tabId, string currentLabel, string currentIcon, string? currentIconColor)
     {
         var parameters = new DialogParameters<TabRenameDialog>
         {
-            { x => x.TabId,        tabId        },
-            { x => x.CurrentLabel, currentLabel },
-            { x => x.CurrentIcon,  currentIcon  },
+            { x => x.TabId,          tabId            },
+            { x => x.CurrentLabel,   currentLabel     },
+            { x => x.CurrentIcon,    currentIcon      },
+            { x => x.CurrentIconColor, currentIconColor },
         };
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, CloseOnEscapeKey = true };
         var dialog = await DialogService.ShowAsync<TabRenameDialog>("Rename tab", parameters, options);

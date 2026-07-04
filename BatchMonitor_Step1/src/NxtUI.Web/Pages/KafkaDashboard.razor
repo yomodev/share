@@ -90,7 +90,6 @@
                     <MudTh Style="white-space:nowrap;">
                         <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
                     </MudTh>
-                    <MudTh Style="white-space:nowrap;">Policy</MudTh>
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -105,21 +104,12 @@
                         @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
                         else { <span class="bm-muted">—</span> }
                     </MudTd>
-                    <MudTd>
-                        @if (context.ConfigLoaded)
-                        {
-                            <span class="bm-kafka-policy @(context.CleanupPolicy.Contains("compact") ? "bm-kafka-policy-compact" : "bm-kafka-policy-delete")">
-                                @context.CleanupPolicy
-                            </span>
-                        }
-                        else { <span class="bm-muted">—</span> }
-                    </MudTd>
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
                             <MudTooltip Text="Topic config">
                                 <MudIconButton Icon="@Icons.Material.Outlined.Info"
                                                Size="Size.Small"
-                                               OnClick="@(() => OpenInfoDialog(context.Name))" />
+                                               OnClick="@(() => OpenInfoDialog(context))" />
                             </MudTooltip>
                             <MudTooltip Text="Consumer groups">
                                 <MudIconButton Icon="@Icons.Material.Outlined.Group"
@@ -569,14 +559,15 @@
         await LoadAsync();
     }
 
-    private async Task OpenInfoDialog(string topicName)
+    private async Task OpenInfoDialog(KafkaTopicSummary topic)
     {
         var p = new DialogParameters<KafkaTopicInfoDialog>
         {
-            { x => x.TopicName,   topicName   },
-            { x => x.Environment, Environment },
+            { x => x.TopicName,    topic.Name  },
+            { x => x.Environment,  Environment },
+            { x => x.MessageCount, topic.ConfigLoaded ? FormatMessages(topic) : null },
         };
-        await DialogService.ShowAsync<KafkaTopicInfoDialog>($"{topicName} — config", p,
+        await DialogService.ShowAsync<KafkaTopicInfoDialog>($"{topic.Name} — config", p,
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 

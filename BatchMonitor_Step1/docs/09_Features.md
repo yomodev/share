@@ -2,10 +2,7 @@
 
 ## Overview
 
-This is a user-facing tour of Batch Monitor's features, grouped by page. Pages
-only visible in developer mode (`DtSvc.DevMode` — Batches, Pipelines,
-Environment, Config) are intentionally left out; they're internal tooling,
-not part of the day-to-day workflow this doc covers.
+This is a user-facing tour of features, grouped by page.
 
 Every open page/dataset lives in a **tab** at the top of the window. Tabs
 persist their state (scroll position, filters, live polling) even when you
@@ -78,8 +75,7 @@ polling loop.
   `ram`/`mem`/`memory`, `peak`, `updated`/`update`.
 - **Card view / Table view** toggle (top left) — card view supports grouping
   by **Service** or **Host**.
-- Refresh reloads with whatever filter is currently set — it no longer wipes
-  your filter back to the default.
+- Refresh reloads with whatever filter is currently set.
 - Double-click a row/card to open that process's Logs.
 
 ### Memory Graph
@@ -108,8 +104,6 @@ Three related views, opened from the sidebar's Kafka entry:
   groups side by side; a filter box narrows either list.
 - **Topic Inspector** — live-tails a topic's messages (Start/Pause), with a
   filter box over the decoded fields and a JSON detail panel per message.
-  Proto-decoded `bytes`/`BytesValue` fields show as `byte[N]` (length only)
-  instead of a raw base64 blob — the value itself is rarely useful inline.
 - **Consumer Groups** — select a group to see its per-topic lag breakdown.
 
 ---

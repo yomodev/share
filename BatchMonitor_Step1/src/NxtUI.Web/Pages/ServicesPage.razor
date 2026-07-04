@@ -98,10 +98,10 @@
                             <div class="bm-svc-group-header">
                                 <span class="bm-svc-group-count">@group.Count()</span>
                                 @group.Key
-                                @{ var groupRam = group.Sum(s => s.RamMb ?? 0); }
-                                @if (groupRam > 0)
+                                @{ var groupMem = group.Sum(s => s.RamMb ?? 0); }
+                                @if (groupMem > 0)
                                 {
-                                    <span class="bm-svc-group-ram">@FormatMb(groupRam) MB</span>
+                                    <span class="bm-svc-group-ram">@FormatMb(groupMem) MB</span>
                                 }
                             </div>
                         }
@@ -128,7 +128,7 @@
                                         <span>PID @s.ProcessId</span>
                                         @if (s.RamMb is not null || s.PeakMb is not null)
                                         {
-                                            <span>Mem. <span class="@RamColorClass(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
+                                            <span>Mem. <span style="@MemColorStyle(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
                                         }
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
                                     </div>
@@ -159,7 +159,7 @@
                     <MudTh @onclick='@(() => SetSort("pid"))' Style="cursor:pointer">PID@(SortIcon("pid"))</MudTh>
                     <MudTh @onclick='@(() => SetSort("updated"))' Style="cursor:pointer">Last Heartbeat@(SortIcon("updated"))</MudTh>
                     <MudTh @onclick='@(() => SetSort("started"))' Style="cursor:pointer">Started (UTC)@(SortIcon("started"))</MudTh>
-                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("ram"))'>RAM (MB)@(SortIcon("ram"))</MudTh>
+                    <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("mem"))'>Mem (MB)@(SortIcon("mem"))</MudTh>
                     <MudTh Style="text-align:right; cursor:pointer;" @onclick='@(() => SetSort("peak"))'>Peak (MB)@(SortIcon("peak"))</MudTh>
                     <MudTh Style="width:80px; text-align:center;">Actions</MudTh>
                 </HeaderContent>
@@ -178,8 +178,8 @@
                     <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
                     <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
                     <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
-                    <MudTd DataLabel="RAM (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
-                        <MudText Typo="Typo.body2" Class="@($"bm-monospace {RamColorClass(context.RamMb)}")">@FormatMb(context.RamMb)</MudText>
+                    <MudTd DataLabel="Mem (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                        <MudText Typo="Typo.body2" Class="bm-monospace" Style="@MemColorStyle(context.RamMb)">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
                     <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
                         <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
@@ -187,7 +187,7 @@
                     <MudTd Style="text-align:center;">
                         <div class="bm-row-actions">
                             <MudTooltip Text="@(rowPath != null ? $"Copy: {rowPath}" : "Copy log path")">
-                                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
                                                Size="Size.Small"
                                                Color="@(rowPath != null ? Color.Default : Color.Inherit)"
                                                Disabled="@_copyingFor.Contains(rowKey)"
@@ -258,13 +258,14 @@
         searchableFields: SearchableFields,
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            ["svc"]         = "ServiceName",
+            ["name"]        = "ServiceName",
             ["svcname"]     = "ServiceName",
             ["servicename"] = "ServiceName",
             ["host"]        = "HostName",
             ["hostname"]    = "HostName",
             ["pid"]         = "ProcessId",
             ["processid"]   = "ProcessId",
-            ["ram"]         = "RamMb",
             ["mem"]         = "RamMb",
             ["peak"]        = "PeakMb",
             ["updated"]     = "UpdatedDateTime",
@@ -273,12 +274,12 @@
 
     private static readonly (string Aliases, string Label)[] _fieldHints =
     [
-        ("svcname / servicename", "service name"),
-        ("host / hostname",       "host name"),
-        ("pid / processid",       "process ID"),
-        ("ram / mem",             "current RAM in MB (e.g. ram:>500)"),
-        ("peak",                  "peak RAM in MB (e.g. peak:>1000)"),
-        ("updated",               "last heartbeat timestamp (e.g. updated:>-10m  →  online in last 10 min)"),
+        ("svc / name",  "service name"),
+        ("host",        "host name"),
+        ("pid",         "process ID"),
+        ("mem",         "current memory in MB (e.g. mem:>500)"),
+        ("peak",        "peak memory in MB (e.g. peak:>1000)"),
+        ("updated",     "last heartbeat timestamp (e.g. updated:>-10m  →  online in last 10 min)"),
     ];
 
     private List<ServiceStatus> _all      = new();
@@ -557,7 +558,7 @@
         "pid"     => _sortDesc ? src.OrderByDescending(s => s.ProcessId)       : src.OrderBy(s => s.ProcessId),
         "updated" => _sortDesc ? src.OrderByDescending(s => s.UpdatedDateTime) : src.OrderBy(s => s.UpdatedDateTime),
         "started" => _sortDesc ? src.OrderByDescending(s => s.CreatedDateTime) : src.OrderBy(s => s.CreatedDateTime),
-        "ram"     => _sortDesc ? src.OrderByDescending(s => s.RamMb  ?? 0)     : src.OrderBy(s => s.RamMb  ?? 0),
+        "mem"     => _sortDesc ? src.OrderByDescending(s => s.RamMb  ?? 0)     : src.OrderBy(s => s.RamMb  ?? 0),
         "peak"    => _sortDesc ? src.OrderByDescending(s => s.PeakMb ?? 0)     : src.OrderBy(s => s.PeakMb ?? 0),
         _         => src,
     };
