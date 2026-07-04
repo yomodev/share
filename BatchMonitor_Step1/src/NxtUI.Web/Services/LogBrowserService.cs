@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Filtering;
@@ -14,6 +15,7 @@ namespace NxtUI.Web.Services;
 public class LogBrowserService : ILogBrowserService
 {
     private readonly LogPathSettings _settings;
+    private readonly IReadOnlyList<CompiledLogFormat> _formats;
 
     // Detects the start of a new log entry: line begins with a timestamp.
     private static readonly Regex TimestampPrefix =
@@ -29,9 +31,15 @@ public class LogBrowserService : ILogBrowserService
         string   Message,
         string?  Caller);
 
-    public LogBrowserService(IOptions<LogPathSettings> settings)
+    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config)
     {
         _settings = settings.Value;
+
+        // Same "Logs:Formats" templates the interactive LogViewer uses (see log-viewer-parser.js
+        // compileFormat) — search must parse files the same way the viewer displays them, so a
+        // filter like `caller:>` or `thread:5` matches consistently in both places.
+        var formatStrings = config.GetSection("Logs:Formats").Get<string[]>() ?? [];
+        _formats = CompileFormats(formatStrings);
     }
 
     // ── ILogBrowserService ────────────────────────────────────────────────
@@ -227,7 +235,7 @@ public class LogBrowserService : ILogBrowserService
 
     // ── private: content filtering ────────────────────────────────────────
 
-    private static bool FileMatchesContent(string filePath, FilterNode filter, CancellationToken ct)
+    private bool FileMatchesContent(string filePath, FilterNode filter, CancellationToken ct)
     {
         try
         {
@@ -274,7 +282,40 @@ public class LogBrowserService : ILogBrowserService
         return false;
     }
 
-    private static LogLine? ParseEntry(string firstLine, string continuation)
+    // Tries each configured Logs:Formats template (same ones the interactive LogViewer
+    // uses) against the entry's first line, falling back to the legacy fixed
+    // pipe-delimited layout so existing deployments without a Formats config keep working.
+    private LogLine? ParseEntry(string firstLine, string continuation)
+    {
+        foreach (var fmt in _formats)
+        {
+            var m = fmt.Regex.Match(firstLine);
+            if (!m.Success) continue;
+
+            DateTime.TryParse(Group(m, "timestamp"), CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var ts);
+
+            var level   = Group(m, "level");
+            var machine = Group(m, "host");
+            int.TryParse(Group(m, "pid"),    out var pid);
+            int.TryParse(Group(m, "thread"), out var tid);
+
+            var message = Group(m, "message");
+            if (continuation.Length > 0)
+                message = message + "\n" + continuation;
+
+            var caller = Group(m, "caller");
+            return new LogLine(ts, level, machine, pid, tid, message,
+                string.IsNullOrEmpty(caller) ? null : caller);
+        }
+
+        return ParseEntryLegacy(firstLine, continuation);
+    }
+
+    private static string Group(Match m, string name) =>
+        m.Groups[name].Success ? m.Groups[name].Value.Trim() : "";
+
+    private static LogLine? ParseEntryLegacy(string firstLine, string continuation)
     {
         var parts = firstLine.Split('|');
         if (parts.Length < 6) return null;
@@ -294,5 +335,90 @@ public class LogBrowserService : ILogBrowserService
         var caller = parts.Length >= 7 ? parts[6].Trim() : null;
 
         return new LogLine(ts, level, machine, pid, tid, message, caller);
+    }
+
+    // ── private: format template compiler ─────────────────────────────────
+    // Mirrors log-viewer-parser.js's compileFormat() so a search filter behaves
+    // identically to the interactive viewer for the same Logs:Formats templates.
+
+    private sealed record CompiledLogFormat(Regex Regex);
+
+    private static readonly Regex TokenRegex = new(@"\{([^}]+)\}", RegexOptions.Compiled);
+    private static readonly HashSet<string> CaptureFields =
+        new(StringComparer.Ordinal) { "timestamp", "level", "host", "pid", "thread", "message", "caller" };
+
+    private static List<CompiledLogFormat> CompileFormats(IEnumerable<string> formatStrings)
+    {
+        var result = new List<CompiledLogFormat>();
+        foreach (var fmt in formatStrings)
+        {
+            var compiled = CompileFormat(fmt);
+            if (compiled is not null) result.Add(compiled);
+        }
+        return result;
+    }
+
+    private static CompiledLogFormat? CompileFormat(string? formatStr)
+    {
+        if (string.IsNullOrEmpty(formatStr)) return null;
+
+        var tokens = new List<(bool IsPlaceholder, string Value)>();
+        var last   = 0;
+        foreach (Match m in TokenRegex.Matches(formatStr))
+        {
+            if (m.Index > last) tokens.Add((false, formatStr[last..m.Index]));
+            tokens.Add((true, m.Groups[1].Value));
+            last = m.Index + m.Length;
+        }
+        if (last < formatStr.Length) tokens.Add((false, formatStr[last..]));
+
+        var pattern    = new StringBuilder("^");
+        var fieldCount = 0;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var (isPlaceholder, val) = tokens[i];
+            if (!isPlaceholder) { pattern.Append(Regex.Escape(val)); continue; }
+
+            if (val == "newline") { pattern.Append(@"\n"); continue; }
+            if (val == "$")       { pattern.Append(@"(?=$|\n)"); continue; }
+            if (val == "*")       { pattern.Append(@"[^\n]*"); continue; }
+
+            // Determine the stopper based on what follows this field, same as the JS compiler.
+            string stopper;
+            (bool IsPlaceholder, string Value)? next =
+                i + 1 < tokens.Count ? tokens[i + 1] : null;
+            if (next is null)
+            {
+                stopper = "[^\\n]*"; // last token: greedy to EOL
+            }
+            else if (next.Value.IsPlaceholder)
+            {
+                stopper = next.Value.Value is "$" or "*" or "newline"
+                    ? "[^\\n]*"   // before an EOL marker: greedy
+                    : "[^\\n]*?"; // before another capture: non-greedy
+            }
+            else
+            {
+                var fc    = next.Value.Value.Length > 0 ? next.Value.Value[0] : '\0';
+                var fcEsc = fc is ']' or '\\' or '^' or '-' ? "\\" + fc : fc.ToString();
+                stopper   = fc == '\0' ? "[^\\n]*" : $"[^\\n{fcEsc}]*";
+            }
+
+            if (CaptureFields.Contains(val))
+            {
+                pattern.Append($"(?<{val}>{stopper})");
+                fieldCount++;
+            }
+            else
+            {
+                pattern.Append($"(?:{stopper})");
+            }
+        }
+
+        if (fieldCount < 2) return null; // too few fields to be useful
+
+        return new CompiledLogFormat(new Regex(pattern.ToString(),
+            RegexOptions.Compiled | RegexOptions.Multiline));
     }
 }

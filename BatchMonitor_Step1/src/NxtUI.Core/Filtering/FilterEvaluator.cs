@@ -46,6 +46,9 @@ public static class FilterEvaluator
                 string.Equals(raw.ToString(), sv.Value,
                     t.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase),
 
+            // A bare number with no comparison operator (e.g. "thread:5") means exact equality.
+            (MatchType.Exact, NumberValue nv) => ToDouble(raw) == nv.Value,
+
             (MatchType.Glob, StringValue sv) =>
                 GlobMatch(raw.ToString() ?? "", sv.Value, t.CaseSensitive),
 
