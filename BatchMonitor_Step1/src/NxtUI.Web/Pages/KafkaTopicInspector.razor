@@ -7,6 +7,7 @@
 @inject ILogger<KafkaTopicInspector> Logger
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -378,6 +379,7 @@
                 Tab?.EndLoading();
                 TabService.NotifyChanged();
                 StateHasChanged();
+                Snackbar.Add($"Failed to tail topic \"{TopicName}\": {ex.Message}", Severity.Error);
             });
         }
     }

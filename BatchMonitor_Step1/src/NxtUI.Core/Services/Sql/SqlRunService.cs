@@ -128,6 +128,10 @@ public class SqlRunService(
 
         // ── Execute ────────────────────────────────────────────────────────────
 
+        log.LogDebug(
+            "sql [{Env}]: ast={Ast} -> sql={Sql} params={@Params}",
+            env, filter?.FilterAst, sql, allParams.Select(p => $"{p.ParameterName}={p.Value}"));
+
         await using var conn = new SqlConnection(sqlCfg.ConnectionString);
         await conn.OpenAsync(ct);
 

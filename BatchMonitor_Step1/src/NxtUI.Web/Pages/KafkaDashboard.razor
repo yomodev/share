@@ -415,6 +415,11 @@
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load Kafka {ViewMode} for env {Env}", _viewMode, Environment);
+            Snackbar.Add($"Failed to load Kafka data: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading   = false;
@@ -496,7 +501,11 @@
             _topicLags = lags.ToList();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+            Snackbar.Add($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loadingDetail = false;

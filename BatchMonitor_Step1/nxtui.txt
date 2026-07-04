@@ -2586,7 +2586,7 @@ Corner cases to cover:
 - Empty `Or` list → matches nothing (`$nor: [{}]` or equivalent)
 - Empty `And` list → matches everything (no filter)
 FILE docs/09_Features.md
-LENGTH 9063
+LENGTH 9121
 # 09 — Features & Usage Guide
 
 ## Overview
@@ -2616,8 +2616,9 @@ The landing page (no tab selected). Shows, top to bottom:
 - **Kafka / Mongo health strip** (top right) — a row of colored dots, one per
   broker/node, plus an overall status label and last-checked time.
 - **Memory** — a treemap of every service process across all hosts, one tile
-  per process, colored on a blue → green → yellow → orange → red → deeppink
-  gradient by RAM usage (grey = no sample yet, dim red = offline). Click a
+  per process, colored on a blue (0 MB) → green (128 MB) → yellow (512 MB)
+  → orange (2048 MB) → red (4096 MB) → deeppink (8196+ MB) gradient by RAM
+  usage (grey = no sample yet, dim red = offline). Click a
   tile to jump to that process in the Memory Graph. A big spinner covers this
   section (plus Recent Runs below it) until both have loaded for the first
   time; after that, switching away and back doesn't re-show the spinner —
@@ -2783,7 +2784,7 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   moment to parse, and the spinner now reflects that instead of
   disappearing early.
 FILE docs/10_CodeReviewNotes.md
-LENGTH 7629
+LENGTH 3555
 # 10 — Code Review Notes
 
 A running list of smells, inconsistencies, and improvement opportunities
@@ -2851,75 +2852,6 @@ Not fixed this session since it's a structural change to a component that
 already just got new props (`RootNodes`/`ChildCache` filtering) — better
 done as its own isolated change with its own before/after screenshots.
 
-### Server-side log line parsing duplicates the JS parser by hand
-
-`LogBrowserService.CompileFormat` (added this session) is a line-by-line
-port of `log-viewer-parser.js`'s `compileFormat()` token grammar, kept in
-sync by hand. Any future change to the placeholder grammar (`{timestamp}`,
-`{*}`, `{$}`, etc.) has to be made in both places or client/server parsing
-will silently drift apart again — which is exactly the bug this session
-just fixed. There's no automated test that would catch the two
-implementations diverging on a new format string beyond the specific cases
-already covered in `LogBrowserServiceFormatTests`. Worth considering
-whether the format-string grammar could live in one place (e.g. a small
-shared JSON schema both sides compile independently against, with a
-contract test that runs the same sample format strings through both and
-diffs the extracted groups) rather than two hand-maintained regex
-compilers.
-
-### `RunSummary` vs `RunDetails` — two overlapping "run" models
-
-`RunSummary` (list/table row) had its `Name` property removed earlier this
-session in favor of `Description`, but `RunDetails` (the single-run detail
-view) still has its own independent `Name` property, populated separately
-by each `IRunService` implementation. The two models aren't related by
-inheritance or composition, so it's easy to update one and forget the
-other exists — which is close to what almost happened here. Consider
-whether `RunDetails` should carry a `Description` too for consistency, or
-whether the two models should share a common base for the fields they do
-overlap on (`RunId`, `Type`, `Status`, `Start`, `End`).
-
-### Focus-gated polling is reimplemented per page
-
-Home.razor and LogBrowser.razor (and to an extent KafkaTopicInspector's
-stream lifecycle) each hand-roll the same shape: a nullable
-`CancellationTokenSource? _pollCts`, a `StartPolling()`/`StopPolling()`
-pair, and a `PeriodicTimer` loop that checks focus/visibility before doing
-work. It's a small amount of code each time, but it's now been written at
-least three times with slightly different edge-case handling (e.g.
-LogBrowser's new `RestartPollingIfBrowsing()` helper doesn't have an
-equivalent in Home.razor, which instead inlines the same decision at each
-call site). A small reusable `FocusGatedPoller` helper class (start/stop
-tied to an `IsVisible` predicate, wrapping the timer + cancellation
-boilerplate) would let each page just supply "what to do on tick" and "am I
-currently visible."
-
-### Hand-rolled CSS spinners vs. MudBlazor's built-ins
-
-`.bm-treemap-spinner`, `.bm-home-loading-spinner`, and `.bm-lv-loading-spinner`
-are three near-identical CSS-only spinning rings (border + `@keyframes
-bm-spin`), each defined separately for its own container. `MudProgressCircular`
-already provides this out of the box with size/color props. Worth checking
-whether the custom CSS versions exist because `MudProgressCircular` didn't
-fit visually in those specific spots, or just because it was easier to
-copy an existing CSS block than look up the MudBlazor component — if the
-latter, consolidating would cut ~30 lines of CSS and match the rest of the
-app's use of MudBlazor progress indicators (`MudProgressLinear` is already
-used consistently for the linear case).
-
-### Per-page boilerplate: `Env`/`Tab`/`TabService` wiring
-
-Nearly every dashboard page (`Runs`, `ServicesPage`, `KafkaDashboard`,
-`KafkaGroupsDashboard`, `KafkaTopicInspector`, `MongoDashboard`,
-`MongoCollectionInspector`, `LogBrowser`) independently declares
-`[Parameter] public string Environment/Env { get; set; }`,
-`[Parameter] public TabModel? Tab { get; set; }`, injects `TabService`, and
-repeats the same `Tab?.BeginLoading()/EndLoading() +
-TabService.NotifyChanged()` pattern around each load method. A shared base
-component (or a small injectable helper that wraps "run this async
-operation with tab-loading feedback") would reduce the amount of
-boilerplate that has to be kept consistent by hand across eight-plus files
-— exactly the kind of drift this session's Step 1 had to go back and fix.
 FILE docs/old/01_Shell_Theme_Tabs.md
 LENGTH 6829
 # Batch Monitor — Shell, Theme, and Tab System
@@ -5890,7 +5822,7 @@ LENGTH 2933
 
 </nlog>
 FILE src/NxtUI.Web/NxtUI.Web.csproj
-LENGTH 918
+LENGTH 997
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -5903,6 +5835,10 @@ LENGTH 918
     <Content Update="nlog.config">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NxtUI.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -6256,7 +6192,7 @@ LENGTH 642
 @using NxtUI.Web.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
-LENGTH 1921
+LENGTH 1922
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -6275,7 +6211,7 @@ LENGTH 1921
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
-    <PackageReference Include="FluentAssertions" Version="8.4.0" />
+    <PackageReference Include="AwesomeAssertions" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
@@ -6305,6 +6241,58 @@ LENGTH 1921
   </ItemGroup>
 
 </Project>
+FILE tests/shared/log-format-grammar-cases.json
+LENGTH 1280
+[
+  {
+    "name": "pipe-delimited-with-caller-and-tail",
+    "format": "{timestamp}|{level}|{host}|{pid}|{thread}|{message}|{caller}{*}{$}",
+    "line": "2024-01-15 10:00:00|INFO|host1|111|1|hello world|OrderService.Process",
+    "valid": true,
+    "expected": {
+      "timestamp": "2024-01-15 10:00:00",
+      "level": "INFO",
+      "host": "host1",
+      "pid": "111",
+      "thread": "1",
+      "message": "hello world",
+      "caller": "OrderService.Process"
+    }
+  },
+  {
+    "name": "space-delimited-no-caller",
+    "format": "{timestamp} {level} {message}",
+    "line": "2024-02-01T09:30:00 WARN disk usage high",
+    "valid": true,
+    "expected": {
+      "timestamp": "2024-02-01T09:30:00",
+      "level": "WARN",
+      "message": "disk usage high"
+    }
+  },
+  {
+    "name": "consecutive-captures-no-literal-between",
+    "format": "{level}{message}",
+    "line": "INFOhello world",
+    "valid": true,
+    "expected": {
+      "level": "",
+      "message": "INFOhello world"
+    }
+  },
+  {
+    "name": "single-placeholder-is-invalid",
+    "format": "{timestamp}",
+    "line": "2024-02-01T09:30:00",
+    "valid": false
+  },
+  {
+    "name": "no-placeholders-is-invalid",
+    "format": "just a literal string",
+    "line": "just a literal string",
+    "valid": false
+  }
+]
 FILE src/MudSelectRepro/Pages/Index.razor
 LENGTH 8728
 @page "/"
@@ -10096,6 +10084,171 @@ LENGTH 2251
             await SelectedChanged.InvokeAsync(target);
     }
 }
+FILE src/NxtUI.Web/Components/BmRunsTable.razor
+LENGTH 7550
+@namespace NxtUI.Web.Components
+@using NxtUI.Core.Models
+@using NxtUI.Web.Services
+@inject DateTimeDisplayService DtSvc
+
+<div class="bm-table-wrap">
+    <MudTable T="RunSummary"
+              Items="@Rows"
+              Loading="@Loading"
+              LoadingProgressColor="Color.Primary"
+              Dense="true"
+              Hover="true"
+              Elevation="0"
+              Striped="true"
+              Class="bm-batch-table"
+              FixedHeader="@FixedHeader"
+              Height="@(FixedHeader ? "100%" : null)">
+        <HeaderContent>
+            <MudTh Style="width:36px;"></MudTh>
+            <MudTh>@HeaderContent("Run ID", "RunId")</MudTh>
+            <MudTh>@HeaderContent("Description", "Description")</MudTh>
+            <MudTh>@HeaderContent("Type", "Type")</MudTh>
+            <MudTh>@HeaderContent("Started (UTC)", "StartTime")</MudTh>
+            <MudTh>Duration</MudTh>
+            <MudTh>@HeaderContent("Status", "Status")</MudTh>
+            <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="padding-left:12px;" @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <StatusIcon Status="@context.Status" />
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2">@context.Description</MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
+                    @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
+                </MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <MudText Typo="Typo.body2" Class="bm-monospace">
+                    @FormatDuration(context.Duration)
+                </MudText>
+            </MudTd>
+            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+                <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
+                    @context.Status
+                </span>
+            </MudTd>
+            <MudTd Style="text-align:center;">
+                <div class="bm-row-actions">
+                    <MudTooltip Text="Open Detail">
+                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Open Timeline">
+                        <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
+                    </MudTooltip>
+                    <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
+                        <span>
+                            <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           Disabled="@(context.Status != RunStatus.Running)"
+                                           OnClick="@(() => OnStopRun.InvokeAsync(context))" />
+                        </span>
+                    </MudTooltip>
+                </div>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+</div>
+
+@if (ShowPaginationAndFilter)
+{
+    <div class="bm-batch-footer">
+        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
+            @TotalCount results
+        </MudText>
+
+        <BmPagination Count="@TotalPages"
+                      Selected="@Page"
+                      SelectedChanged="@(p => PageChanged.InvokeAsync(p))" />
+
+        <div class="bm-rows-select">
+            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
+            <MudSelect T="int"
+                       Value="@PageSize"
+                       ValueChanged="@(sz => PageSizeChanged.InvokeAsync(sz))"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Style="width:90px">
+                <MudSelectItem Value="10">10</MudSelectItem>
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+                <MudSelectItem Value="200">200</MudSelectItem>
+            </MudSelect>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<RunSummary> Rows { get; set; } = new();
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool FixedHeader { get; set; } = true;
+
+    // When false (Home's "recent runs" use case), no footer/pagination is shown
+    // and no header sort links are wired — just the same columns/actions as
+    // the full Runs page, with whatever rows the caller already fetched.
+    [Parameter] public bool ShowPaginationAndFilter { get; set; } = true;
+
+    [Parameter] public int TotalCount { get; set; }
+    [Parameter] public int Page { get; set; } = 1;
+    [Parameter] public int PageSize { get; set; } = 25;
+    [Parameter] public int TotalPages { get; set; } = 1;
+    [Parameter] public EventCallback<int> PageChanged { get; set; }
+    [Parameter] public EventCallback<int> PageSizeChanged { get; set; }
+
+    // Server-side sort state — only meaningful when ShowPaginationAndFilter is true.
+    [Parameter] public string? SortField { get; set; }
+    [Parameter] public bool SortDescending { get; set; }
+    [Parameter] public EventCallback<string> OnSort { get; set; }
+
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenDetail { get; set; }
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
+    [Parameter, EditorRequired] public EventCallback<RunSummary> OnStopRun { get; set; }
+
+    private RenderFragment HeaderContent(string label, string field)
+    {
+        if (!ShowPaginationAndFilter || !OnSort.HasDelegate)
+        {
+            return @<text>@label</text>;
+        }
+
+        return @<MudLink Underline="Underline.Hover"
+                 Color="Color.Inherit"
+                 OnClick="@(() => OnSort.InvokeAsync(field))"
+                 Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+            @label
+            @if (SortField == field)
+            {
+                <MudIcon Icon="@(SortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                          Size="Size.Small" />
+            }
+        </MudLink>;
+    }
+
+    private static string FormatDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+}
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
 LENGTH 3122
 @namespace NxtUI.Web.Components
@@ -10265,7 +10418,7 @@ LENGTH 2134
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 6521
+LENGTH 6621
 @namespace NxtUI.Web.Components
 @inject NxtUI.Web.Services.TabService _tabSvc
 @* Reusable debounced filter input with inline help popup.
@@ -10297,6 +10450,8 @@ LENGTH 6521
                       Style="flex:1;min-width:0;" />
     </MudTooltip>
 
+    @if (ShowHint)
+    {
     <MudMenu @ref="_menu"
              AnchorOrigin="Origin.BottomRight"
              TransformOrigin="Origin.TopRight"
@@ -10370,6 +10525,7 @@ LENGTH 6521
             </div>
         </ChildContent>
     </MudMenu>
+    }
 
 </div>
 
@@ -10380,6 +10536,7 @@ LENGTH 6521
     [Parameter] public string? Class           { get; set; }
     [Parameter] public int     DebounceMs      { get; set; } = 300;
     [Parameter] public string  Placeholder     { get; set; } = "Filter…";
+    [Parameter] public bool    ShowHint        { get; set; } = true;
 
     [Parameter] public (string Aliases, string Label)[] FieldHints { get; set; } = [];
 
@@ -11793,7 +11950,7 @@ LENGTH 9367
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+        _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
         var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", "bm-sidebar-open");
         if (stored is not null)
         {
@@ -11828,7 +11985,7 @@ LENGTH 9367
     }
 }
 FILE src/NxtUI.Web/Layout/TabBar.razor
-LENGTH 4725
+LENGTH 4744
 @namespace NxtUI.Web.Layout
 @using NxtUI.Web.Models
 @inject TabService TabService
@@ -11903,7 +12060,7 @@ LENGTH 4725
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
             try
             {
                 await _appModule.InvokeVoidAsync("initTabDrag", _stripRef, _selfRef);
@@ -11934,7 +12091,7 @@ LENGTH 4725
             { x => x.CurrentIcon,    currentIcon      },
             { x => x.CurrentIconColor, currentIconColor },
         };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Small, CloseOnEscapeKey = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
         var dialog = await DialogService.ShowAsync<TabRenameDialog>("Rename tab", parameters, options);
         await dialog.Result;
         await InvokeAsync(StateHasChanged);
@@ -11960,7 +12117,7 @@ LENGTH 4725
     }
 }
 FILE src/NxtUI.Web/Layout/TabRenameDialog.razor
-LENGTH 9725
+LENGTH 9708
 @namespace NxtUI.Web.Layout
 @using MudBlazor
 @inject TabService TabService
@@ -11968,7 +12125,7 @@ LENGTH 9725
 
 <MudDialog>
     <DialogContent>
-        <div style="display:flex; flex-direction:column; gap:16px; min-width:340px;">
+        <div style="display:flex; flex-direction:column; gap:14px;">
 
             <span @ref="_fieldRef">
                 <MudTextField @ref="_field"
@@ -12141,7 +12298,7 @@ LENGTH 9725
         if (firstRender && _field is not null)
         {
             // Use requestAnimationFrame so focus runs after the dialog open animation.
-            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
             await appModule.InvokeVoidAsync("focusAfterFrame", _fieldRef);
             try { await appModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
@@ -13545,7 +13702,7 @@ LENGTH 17757
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 17936
+LENGTH 16194
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Configuration
@@ -13558,6 +13715,7 @@ LENGTH 17936
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<RunsSettings> RunsOpts
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-home">
@@ -13681,7 +13839,7 @@ LENGTH 17936
         <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
             @if (!_mapReady)
             {
-                <div class="bm-section-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
             }
             else
             {
@@ -13698,7 +13856,7 @@ LENGTH 17936
         <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenRunsDashboard" title="View more runs">
             @if (!_runsReady || _runsLoading)
             {
-                <div class="bm-section-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
             }
             else
             {
@@ -13709,52 +13867,13 @@ LENGTH 17936
     </div>
 
     <MudPaper Elevation="0" Class="bm-mini-summary">
-
-        <MudTable T="RunSummary"
-                  Items="@_recent"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  Class="bm-mini-table">
-            <HeaderContent>
-                <MudTh Style="width:36px;"></MudTh>
-                <MudTh>Run ID</MudTh>
-                <MudTh>Description</MudTh>
-                <MudTh>Type</MudTh>
-                <MudTh>Started</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh Style="width:80px;"></MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd><StatusIcon Status="@context.Status" /></MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2">@context.Description</MudText>
-                </MudTd>
-                <MudTd>
-                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @DtSvc.Format(context.Start, "HH:mm:ss")@DtSvc.ZoneSuffix
-                    </MudText>
-                </MudTd>
-                <MudTd>
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @FormatDuration(context.Duration)
-                    </MudText>
-                </MudTd>
-                <MudTd Style="text-align:right;">
-                    <MudTooltip Text="Open Detail">
-                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OpenDetail(context))" />
-                    </MudTooltip>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
+        <BmRunsTable Rows="@_recent"
+                     Loading="@_runsLoading"
+                     FixedHeader="false"
+                     ShowPaginationAndFilter="false"
+                     OnOpenDetail="@(r => OpenDetail(r))"
+                     OnOpenTimeline="@(r => OpenTimeline(r))"
+                     OnStopRun="@(r => StopRunAsync(r))" />
     </MudPaper>
 
 </div>
@@ -13772,7 +13891,7 @@ LENGTH 17936
     // Controls the Runs polling loop's lifetime independently of _cts — started
     // only while Home is visible, cancelled the moment it isn't, so no polling
     // happens in the background while a tab is focused.
-    private CancellationTokenSource? _pollCts;
+    private FocusGatedPoller? _poller;
 
     // Home is visible only when no tab is active. Track the previous state so
     // we can trigger a data refresh when the user switches back to Home.
@@ -13788,6 +13907,13 @@ LENGTH 17936
 
     protected override async Task OnInitializedAsync()
     {
+        var interval = TimeSpan.FromSeconds(RunsOpts.Value.PollingIntervalSeconds);
+        _poller = new FocusGatedPoller(interval, async ct =>
+        {
+            await LoadRunsAsync();
+            await InvokeAsync(StateHasChanged);
+        }, ex => Logger.LogError(ex, "Runs polling failed"));
+
         EnvService.OnChange         += OnEnvExternalChange;
         HealthCache.OnHealthUpdated += OnHealthUpdated;
         TabService.OnChange         += OnTabVisibilityChanged;
@@ -13795,26 +13921,12 @@ LENGTH 17936
         HealthCache.RequestRefresh(EnvService.SelectedId);
         await Task.WhenAll(LoadRunsAsync(), CheckHealthAsync());
         _runsReady = true;
-        if (IsVisible) StartPolling();
+        if (IsVisible) _poller.Start();
     }
 
     private void OnMapDataLoaded() => _ = InvokeAsync(() => { _mapReady = true; StateHasChanged(); });
 
     private bool IsVisible => TabService.ActiveTab is null;
-
-    private void StartPolling()
-    {
-        if (_pollCts is not null) return; // already running
-        _pollCts = new CancellationTokenSource();
-        _ = PollRunsAsync(_pollCts.Token);
-    }
-
-    private void StopPolling()
-    {
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
-        _pollCts = null;
-    }
 
     private void OnTabVisibilityChanged()
     {
@@ -13822,7 +13934,7 @@ LENGTH 17936
         if (visible && !_wasVisible)
         {
             // Home just became visible — refresh stale data, render, then resume polling.
-            StartPolling();
+            _poller?.Start();
             _ = InvokeAsync(async () =>
             {
                 try
@@ -13837,7 +13949,7 @@ LENGTH 17936
         else if (!visible && _wasVisible)
         {
             // Home just became hidden — stop polling entirely, not just the render.
-            StopPolling();
+            _poller?.Stop();
         }
         _wasVisible = visible;
     }
@@ -13855,22 +13967,6 @@ LENGTH 17936
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
         finally { _runsLoading = false; }
-    }
-
-    private async Task PollRunsAsync(CancellationToken ct)
-    {
-        var interval = TimeSpan.FromSeconds(RunsOpts.Value.PollingIntervalSeconds);
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(interval, ct);
-                await LoadRunsAsync();
-                await InvokeAsync(StateHasChanged);
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Logger.LogError(ex, "Runs polling failed"); }
-        }
     }
 
     // ── Health ────────────────────────────────────────────────────────────
@@ -13944,6 +14040,21 @@ LENGTH 17936
     private void OpenDetail(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, EnvService.SelectedId));
 
+    private void OpenTimeline(RunSummary b) =>
+        TabService.OpenOrFocus(TabModel.CreateTimeline(b.RunId, EnvService.SelectedId));
+
+    private async Task StopRunAsync(RunSummary b)
+    {
+        var ok = await RunService.CancelRunAsync(EnvService.SelectedId, b.RunId, _cts.Token);
+        if (ok)
+        {
+            Snackbar.Add($"Stop requested for {b.RunId}", Severity.Warning);
+            await LoadRunsAsync();
+        }
+        else
+            Snackbar.Add("Could not stop run", Severity.Error);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private static string StatusCss(HealthStatus? s) => s switch
@@ -13955,17 +14066,12 @@ LENGTH 17936
         _                     => "unknown",
     };
 
-    private static string FormatDuration(TimeSpan ts) =>
-        ts.TotalHours >= 1
-            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
-
     public void Dispose()
     {
         EnvService.OnChange         -= OnEnvExternalChange;
         HealthCache.OnHealthUpdated -= OnHealthUpdated;
         TabService.OnChange         -= OnTabVisibilityChanged;
-        StopPolling();
+        _poller?.Stop();
         _cts.Cancel();
     }
 }
@@ -14073,7 +14179,7 @@ LENGTH 4212
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26764
+LENGTH 27234
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14193,7 +14299,7 @@ LENGTH 26764
                                                OnClick="@(() => OpenGroupsDialog(context.Name))" />
                             </MudTooltip>
                             <MudTooltip Text="Inspect messages">
-                                <MudIconButton Icon="@Icons.Material.Outlined.MoveToInbox"
+                                <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
                                                Size="Size.Small"
                                                OnClick="@(() => OpenInspector(context.Name))" />
                             </MudTooltip>
@@ -14385,13 +14491,15 @@ LENGTH 26764
     private bool _loadingDetail = false;
 
     // Filter parsers
-    private static readonly FilterParser TopicParser = new(["Name", "CleanupPolicy"],
+    private static readonly FilterParser TopicParser = new(["Name", "PartitionCount", "MessageCount"],
         new Dictionary<string, string>
         {
-            ["name"]    = "Name",
-            ["topic"]   = "Name",
-            ["cleanup"] = "CleanupPolicy",
-            ["policy"]  = "CleanupPolicy",
+            ["name"]       = "Name",
+            ["topic"]      = "Name",
+            ["partitions"] = "PartitionCount",
+            ["parts"]      = "PartitionCount",
+            ["messages"]   = "MessageCount",
+            ["msgs"]       = "MessageCount",
         });
 
     private static readonly FilterParser GroupParser = new(["GroupId", "State"],
@@ -14404,8 +14512,9 @@ LENGTH 26764
 
     private static readonly (string Aliases, string Label)[] _topicFieldHints =
     [
-        ("name / topic",     "topic name"),
-        ("cleanup / policy", "cleanup policy (delete / compact)"),
+        ("name / topic",         "topic name"),
+        ("partitions / parts",   "partition count (supports >, >=, <, <=, ..)"),
+        ("messages / msgs",      "message count (supports >, >=, <, <=, ..)"),
     ];
 
     private static readonly (string Aliases, string Label)[] _groupFieldHints =
@@ -14420,8 +14529,7 @@ LENGTH 26764
     {
         _loading   = true;
         _enriching = false;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -14489,12 +14597,15 @@ LENGTH 26764
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load Kafka {ViewMode} for env {Env}", _viewMode, Environment);
+            Snackbar.Add($"Failed to load Kafka data: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading   = false;
             _enriching = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             StateHasChanged();
         }
     }
@@ -14564,8 +14675,7 @@ LENGTH 26764
         _selectedGroup = group;
         _topicLags     = null;
         _loadingDetail = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -14573,12 +14683,14 @@ LENGTH 26764
             _topicLags = lags.ToList();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+            Snackbar.Add($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loadingDetail = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             StateHasChanged();
         }
     }
@@ -14678,7 +14790,7 @@ LENGTH 26764
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 10308
+LENGTH 10204
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14856,8 +14968,7 @@ LENGTH 10308
         _result       = default; // loading
         _selected     = null;
         _detailResult = default;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -14868,11 +14979,6 @@ LENGTH 10308
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _result = Result<List<KafkaConsumerGroupOverview>>.Fail(ex.Message); }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-        }
     }
 
     private void OnFilterChanged(string text)
@@ -14903,22 +15009,21 @@ LENGTH 10308
         }
         _selected     = group;
         _detailResult = default; // loading
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        StateHasChanged();
-        try
+        using (TabLoadingScope.Begin(Tab, TabService))
         {
-            var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
-            _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
+            StateHasChanged();
+            try
+            {
+                var lags  = await KafkaSvc.GetGroupTopicLagsAsync(Environment, group.GroupId, _cts.Token);
+                _detailResult = Result<List<KafkaGroupTopicLag>>.Ok(lags.ToList());
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
+                _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
+            }
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
-            _detailResult = Result<List<KafkaGroupTopicLag>>.Fail(ex.Message);
-        }
-        Tab?.EndLoading();
-        TabService.NotifyChanged();
         StateHasChanged();
     }
 
@@ -14934,7 +15039,7 @@ LENGTH 10308
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 27234
+LENGTH 27660
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14944,6 +15049,7 @@ LENGTH 27234
 @inject ILogger<KafkaTopicInspector> Logger
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -14954,6 +15060,12 @@ LENGTH 27234
             <MudIcon Icon="@Icons.Material.Outlined.MoveToInbox" Size="Size.Small" Class="bm-inspector-topic-icon" />
             @TopicName
         </span>
+
+        <MudTooltip Text="Browse topics">
+            <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
+                           Size="Size.Small"
+                           OnClick="@(() => TabService.OpenOrFocus(TabModel.CreateKafkaDashboard(Environment)))" />
+        </MudTooltip>
 
         <!-- Start / Pause -->
         <MudTooltip Text="@(_state == StreamState.Running ? "Pause" : "Start")">
@@ -15309,6 +15421,7 @@ LENGTH 27234
                 Tab?.EndLoading();
                 TabService.NotifyChanged();
                 StateHasChanged();
+                Snackbar.Add($"Failed to tail topic \"{TopicName}\": {ex.Message}", Severity.Error);
             });
         }
     }
@@ -15559,7 +15672,7 @@ LENGTH 27234
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 34518
+LENGTH 33730
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -15578,67 +15691,73 @@ LENGTH 34518
 
 <div class="bm-page bm-page-fill bm-lb-page">
 
-    <!-- ── Toolbar row 1: open / search toggle / row filter / refresh ─── -->
-    <div class="bm-lb-filter-toolbar">
-        <MudTooltip Text="Open file...">
-            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                           Size="Size.Small"
-                           OnClick="OpenLocalFileAsync" />
-        </MudTooltip>
+    <!-- ── Toolbar: open / search toggle / row filter / refresh, plus a
+         collapsible second line for the search fields (same container so
+         the collapsed state leaves no visible border/sliver). ─────────── -->
+    <div class="bm-lb-filter-toolbar bm-lb-toolbar-multiline">
+        <div class="bm-lb-toolbar-row">
+            <MudTooltip Text="Open file...">
+                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                               Size="Size.Small"
+                               OnClick="OpenLocalFileAsync" />
+            </MudTooltip>
 
-        <MudTooltip Text="@(_searchBarOpen ? "Hide search" : "Show search")">
-            <MudIconButton Icon="@(_searchBarOpen ? Icons.Material.Outlined.SearchOff : Icons.Material.Outlined.ManageSearch)"
-                           Color="@(_searchBarOpen ? Color.Primary : Color.Default)"
-                           Size="Size.Small"
-                           OnClick="ToggleSearchBarAsync" />
-        </MudTooltip>
+            <MudTooltip Text="@(_searchBarOpen ? "Hide search" : "Show search")">
+                <MudIconButton Icon="@(_searchBarOpen ? Icons.Material.Outlined.SearchOff : Icons.Material.Outlined.ManageSearch)"
+                               Color="@(_searchBarOpen ? Color.Primary : Color.Default)"
+                               Size="Size.Small"
+                               OnClick="ToggleSearchBarAsync" />
+            </MudTooltip>
 
-        <FilterBox Value="@_rowFilterText"
-                   OnFilterChanged="OnRowFilterChanged"
-                   ParseError="@_rowFilterError"
-                   Placeholder="Filter files…"
-                   Class="bm-filter-input"
-                   FieldHints="@RowFieldHints" />
+            <FilterBox Value="@_rowFilterText"
+                       OnFilterChanged="OnRowFilterChanged"
+                       ParseError="@_rowFilterError"
+                       Placeholder="Filter files…"
+                       Class="bm-filter-input"
+                       FieldHints="@RowFieldHints" />
 
-        @if (_lastScan.HasValue)
+            @if (_lastScan.HasValue)
+            {
+                <div class="bm-infra-lastupdate">
+                    <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
+                    <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
+            }
+
+            <MudTooltip Text="Refresh">
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                               Size="Size.Small"
+                               Disabled="@(_isSearching || _loadingFiles)"
+                               OnClick="RefreshAsync"
+                               Class="bm-refresh-btn" />
+            </MudTooltip>
+        </div>
+
+        @if (_searchBarOpen)
         {
-            <div class="bm-infra-lastupdate">
-                <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
-                <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            <div class="bm-lb-toolbar-row">
+                <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
+                              Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                              Class="bm-lb-search-half" />
+
+                <FilterBox Value="@_contentFilterStr"
+                           OnFilterChanged="OnContentFilterChanged"
+                           ParseError="@_contentFilterError"
+                           Placeholder="Content filter…"
+                           Class="bm-lb-search-half"
+                           FieldHints="@ContentFieldHints" />
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@(_isSearching ? Color.Error : Color.Primary)"
+                           Size="Size.Small"
+                           Disabled="@(!_isSearching && _selectedPath is null)"
+                           OnClick="OnSearchButtonClickAsync"
+                           Class="bm-lb-search-btn">
+                    @(_isSearching ? "Stop" : "Start Search")
+                </MudButton>
             </div>
         }
-
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                           Size="Size.Small"
-                           Disabled="@(_isSearching || _loadingFiles)"
-                           OnClick="RefreshAsync"
-                           Class="bm-refresh-btn" />
-        </MudTooltip>
-    </div>
-
-    <!-- ── Toolbar row 2: collapsible search bar ─────────────────────── -->
-    <div class="bm-lb-search-row @(_searchBarOpen ? "bm-lb-search-row-open" : "")">
-        <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
-                      Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
-                      Class="bm-lb-search-half" />
-
-        <FilterBox Value="@_contentFilterStr"
-                   OnFilterChanged="OnContentFilterChanged"
-                   ParseError="@_contentFilterError"
-                   Placeholder="Content filter…"
-                   Class="bm-lb-search-half"
-                   FieldHints="@ContentFieldHints" />
-
-        <MudButton Variant="Variant.Filled"
-                   Color="@(_isSearching ? Color.Error : Color.Primary)"
-                   Size="Size.Small"
-                   Disabled="@(!_isSearching && _selectedPath is null)"
-                   OnClick="OnSearchButtonClickAsync"
-                   Class="bm-lb-search-btn">
-            @(_isSearching ? "Stop" : "Start Search")
-        </MudButton>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
@@ -15690,6 +15809,7 @@ LENGTH 34518
                        ParseError="@_treeFilterError"
                        Placeholder="Filter folders…"
                        Class="bm-lb-tree-filter"
+                       ShowHint="false"
                        FieldHints="@TreeFieldHints" />
         </div>
 
@@ -15939,7 +16059,7 @@ LENGTH 34518
 
     private CancellationTokenSource  _cts        = new();
     private CancellationTokenSource? _searchCts;
-    private CancellationTokenSource? _pollCts;
+    private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
     private DateTime                 _lastManualPoll = DateTime.MinValue;
 
@@ -15947,37 +16067,36 @@ LENGTH 34518
 
     protected override async Task OnInitializedAsync()
     {
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
+        _poller = new FocusGatedPoller(interval, async ct =>
+        {
+            // Skip auto-refresh while a search is running.
+            if (_selectedPath is not null && !_isSearching && !_isSearchMode)
+                await InvokeAsync(LoadFilesAsync);
+        }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
+
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
+        _servers = EnvironmentService.GetServers(Env).ToList();
+
         try
         {
-            _servers = EnvironmentService.GetServers(Env).ToList();
-
-            try
-            {
-                var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
-                _rootNodes = roots.ToList();
-            }
-            catch (Exception ex) { _initError = ex.Message; }
-
-            _initialized = true;
-            _lastScan    = DateTime.UtcNow;
-            _previousIsFocused = IsFocused;
-            // No auto-start here — polling only begins once the user actually selects a
-            // folder or toggles the search bar (see RestartPollingIfBrowsing).
-
-            // Auto-navigate to today's date folder if one exists at the root.
-            var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-            var todayNode = _rootNodes.FirstOrDefault(n =>
-                n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-            if (todayNode is not null)
-                await OnExpandedChangedAsync(todayNode, true);
+            var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
+            _rootNodes = roots.ToList();
         }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-        }
+        catch (Exception ex) { _initError = ex.Message; }
+
+        _initialized = true;
+        _lastScan    = DateTime.UtcNow;
+        _previousIsFocused = IsFocused;
+        // No auto-start here — polling only begins once the user actually selects a
+        // folder or toggles the search bar (see RestartPollingIfBrowsing).
+
+        // Auto-navigate to today's date folder if one exists at the root.
+        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
+        var todayNode = _rootNodes.FirstOrDefault(n =>
+            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
+        if (todayNode is not null)
+            await OnExpandedChangedAsync(todayNode, true);
     }
 
     // Synchronous and separate from OnParametersSetAsync below — this must not
@@ -16002,7 +16121,7 @@ LENGTH 34518
         }
         else
         {
-            StopPolling();
+            _poller?.Stop();
         }
     }
 
@@ -16010,8 +16129,7 @@ LENGTH 34518
     // the search bar isn't open (composing/viewing a search is a snapshot, not live).
     private void RestartPollingIfBrowsing()
     {
-        if (IsFocused && _selectedPath is not null && !_searchBarOpen) StartPolling();
-        else StopPolling();
+        _poller?.SetActive(IsFocused && _selectedPath is not null && !_searchBarOpen);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -16075,8 +16193,7 @@ LENGTH 34518
             {
                 _loadingNodes.Add(node.RelativePath);
                 _loadingFiles = true;
-                Tab?.BeginLoading();
-                TabService.NotifyChanged();
+                using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
                 StateHasChanged();
                 await Task.Yield();
                 try
@@ -16088,8 +16205,6 @@ LENGTH 34518
                 {
                     _loadingNodes.Remove(node.RelativePath);
                     _loadingFiles = _loadingNodes.Count > 0;
-                    Tab?.EndLoading();
-                    TabService.NotifyChanged();
                     StateHasChanged();
                 }
             }
@@ -16145,7 +16260,7 @@ LENGTH 34518
         _isSearchMode = false;
         _selectedPath = null;
         _files.Clear();
-        StopPolling();
+        _poller?.Stop();
         StateHasChanged();
     }
 
@@ -16183,8 +16298,7 @@ LENGTH 34518
 
         var path    = _selectedPath; // capture — user may change selection while awaiting
         var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         try
         {
             // Collect all servers in parallel without touching _files mid-flight.
@@ -16210,8 +16324,6 @@ LENGTH 34518
                 _loadingFiles = _loadingNodes.Count > 0;
                 await InvokeAsync(StateHasChanged);
             }
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
     }
 
@@ -16229,8 +16341,7 @@ LENGTH 34518
         _isSearchMode = true;
         _loadingFiles = true;
         _files.Clear();
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
         var path   = _selectedPath;
@@ -16251,8 +16362,6 @@ LENGTH 34518
         {
             _isSearching  = false;
             _loadingFiles = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -16269,10 +16378,7 @@ LENGTH 34518
 
     private async Task RefreshAsync()
     {
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        try
-        {
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         if (_selectedPath is not null)
         {
             // Invalidate only the selected node's child cache entry and reload its files.
@@ -16289,45 +16395,6 @@ LENGTH 34518
             _lastScan  = DateTime.UtcNow;
             StateHasChanged();
         }
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-        }
-    }
-
-    private void StartPolling()
-    {
-        if (_pollCts is not null) return; // already running
-        _pollCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-        _ = PollLoopAsync(_pollCts.Token);
-    }
-
-    private void StopPolling()
-    {
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
-        _pollCts = null;
-    }
-
-    private async Task PollLoopAsync(CancellationToken ct)
-    {
-        var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
-        using var timer = new PeriodicTimer(interval);
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                // Skip auto-refresh while a search is running.
-                if (_selectedPath is not null && !_isSearching && !_isSearchMode)
-                {
-                    try { await InvokeAsync(LoadFilesAsync); }
-                    catch (Exception ex) { Logger.LogWarning(ex, "Log browser auto-refresh failed"); }
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
@@ -16372,14 +16439,14 @@ LENGTH 34518
     public async ValueTask DisposeAsync()
     {
         StopSearch();
-        StopPolling();
+        _poller?.Stop();
         _selfRef?.Dispose();
         await _cts.CancelAsync();
         _cts.Dispose();
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 22874
+LENGTH 22921
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -16485,7 +16552,7 @@ LENGTH 22874
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     @if (_isLoading)
     {
-        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="flex-shrink:0" />
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-lv-loading-bar" />
     }
     @if (_error is not null)
     {
@@ -16497,7 +16564,7 @@ LENGTH 22874
         @if (_isLoading)
         {
             <div class="bm-lv-loading-overlay">
-                <div class="bm-lv-loading-spinner"></div>
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
                 <span class="bm-lv-loading-label">@_loadingLabel</span>
             </div>
         }
@@ -17616,7 +17683,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 12507
+LENGTH 12718
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -17626,6 +17693,7 @@ LENGTH 12507
 @inject ILogger<MongoCollectionInspector> Logger
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -17811,8 +17879,7 @@ LENGTH 12507
         var ct = _cts.Token;
 
         _loading = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -17827,11 +17894,14 @@ LENGTH 12507
             _page       = Math.Clamp(_page, 1, _totalPages);
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to query {Db}/{Col} in env {Env}", _database, _collection, Environment);
+            Snackbar.Add($"Failed to load documents: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
 
         StateHasChanged();
@@ -17925,7 +17995,7 @@ LENGTH 12507
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11661
+LENGTH 11439
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -18105,22 +18175,13 @@ LENGTH 11661
 
     protected override async Task OnInitializedAsync()
     {
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
-        try
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
+        // Load database names only — fast even with 100+ databases (no dbStats).
+        _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
+        if (_databaseNames.Count > 0)
         {
-            // Load database names only — fast even with 100+ databases (no dbStats).
-            _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
-            if (_databaseNames.Count > 0)
-            {
-                _selectedDb = _databaseNames[0];
-                await LoadCollectionsAsync();
-            }
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
+            _selectedDb = _databaseNames[0];
+            await LoadCollectionsAsync();
         }
     }
 
@@ -18139,8 +18200,7 @@ LENGTH 11661
         var ct = _cts.Token;
 
         _loading = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -18163,8 +18223,6 @@ LENGTH 11661
         finally
         {
             _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
         StateHasChanged();
     }
@@ -18673,7 +18731,7 @@ LENGTH 16383
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 12834
+LENGTH 7053
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -18703,119 +18761,28 @@ LENGTH 12834
         </MudTooltip>
     </div>
 
-    <!-- ── Table ─────────────────────────────────────────────────────── -->
-    <div class="bm-table-wrap">
-        @if (_result.IsFailed)
-        {
-            <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
-        }
-        <!-- Table shell (headers, toolbar, pagination) renders immediately; only
-             the rows populate progressively. Loading="" shows MudTable's own
-             progress bar without hiding the structure underneath. -->
-        <MudTable T="RunSummary"
-                  Items="@_paged"
-                  Loading="@_result.IsLoading"
-                  LoadingProgressColor="Color.Primary"
-                  Dense="true"
-                  Hover="true"
-                  Elevation="0"
-                  Striped="true"
-                  Class="bm-batch-table"
-                  FixedHeader="true"
-                  Height="100%">
-            <HeaderContent>
-                <MudTh Style="width:36px;"></MudTh>
-                <MudTh>@SortableHeader("Run ID", "RunId")</MudTh>
-                <MudTh>@SortableHeader("Description", "Description")</MudTh>
-                <MudTh>@SortableHeader("Type", "Type")</MudTh>
-                <MudTh>@SortableHeader("Started (UTC)", "StartTime")</MudTh>
-                <MudTh>Duration</MudTh>
-                <MudTh>@SortableHeader("Status", "Status")</MudTh>
-                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenDetail(context))">
-                    <StatusIcon Status="@context.Status" />
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2">@context.Description</MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
-                        @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
-                    </MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <MudText Typo="Typo.body2" Class="bm-monospace">
-                        @FormatDuration(context.Duration)
-                    </MudText>
-                </MudTd>
-                <MudTd @ondblclick="@(() => OpenDetail(context))">
-                    <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
-                        @context.Status
-                    </span>
-                </MudTd>
-                <MudTd Style="text-align:center;">
-                    <div class="bm-row-actions">
-                        <MudTooltip Text="Open Detail">
-                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenDetail(context))" />
-                        </MudTooltip>
-                        <MudTooltip Text="Open Timeline">
-                            <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
-                                           Size="Size.Small"
-                                           OnClick="@(() => OpenTimeline(context))" />
-                        </MudTooltip>
-                        <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
-                            <span>
-                                <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
-                                               Size="Size.Small"
-                                               Color="Color.Error"
-                                               Disabled="@(context.Status != RunStatus.Running)"
-                                               OnClick="@(() => StopRunAsync(context))" />
-                            </span>
-                        </MudTooltip>
-                    </div>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </div>
+    @if (_result.IsFailed)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
+    }
 
-    <!-- ── Footer: count + rows per page + pagination ────────────────── -->
-    <div class="bm-batch-footer">
-        <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
-            @_all.Count results
-        </MudText>
-
-        <BmPagination Count="@_totalPages"
-                      Selected="@_page"
-                      SelectedChanged="OnPageChanged" />
-
-        <div class="bm-rows-select">
-            <MudText Typo="Typo.body2" Class="bm-muted" Style="white-space:nowrap;">Rows:</MudText>
-            <MudSelect T="int"
-                       Value="@_pageSize"
-                       ValueChanged="OnPageSizeChanged"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Margin="Margin.Dense"
-                       Style="width:90px">
-                <MudSelectItem Value="10">10</MudSelectItem>
-                <MudSelectItem Value="25">25</MudSelectItem>
-                <MudSelectItem Value="50">50</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-                <MudSelectItem Value="200">200</MudSelectItem>
-                <MudSelectItem Value="100">100</MudSelectItem>
-            </MudSelect>
-        </div>
-    </div>
+    <!-- Table shell (headers, toolbar, pagination) renders immediately; only
+         the rows populate progressively. Loading="" shows MudTable's own
+         progress bar without hiding the structure underneath. -->
+    <BmRunsTable Rows="@_paged"
+                 Loading="@_result.IsLoading"
+                 TotalCount="@_all.Count"
+                 Page="@_page"
+                 PageSize="@_pageSize"
+                 TotalPages="@_totalPages"
+                 PageChanged="OnPageChanged"
+                 PageSizeChanged="OnPageSizeChanged"
+                 SortField="@_sortField"
+                 SortDescending="@_sortDescending"
+                 OnSort="OnSort"
+                 OnOpenDetail="@(r => OpenDetail(r))"
+                 OnOpenTimeline="@(r => OpenTimeline(r))"
+                 OnStopRun="@(r => StopRunAsync(r))" />
 
 </div>
 
@@ -18868,8 +18835,7 @@ LENGTH 12834
     private async Task LoadAsync()
     {
         _result = default; // loading
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
         try
         {
@@ -18890,11 +18856,6 @@ LENGTH 12834
         catch (Exception ex)
         {
             _result = Result<List<RunSummary>>.Fail(ex.Message);
-        }
-        finally
-        {
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
     }
 
@@ -18931,18 +18892,6 @@ LENGTH 12834
         await LoadAsync();
     }
 
-    private RenderFragment SortableHeader(string label, string field) => @<MudLink Underline="Underline.Hover"
-                 Color="Color.Inherit"
-                 OnClick="@(() => OnSort(field))"
-                 Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
-        @label
-        @if (_sortField == field)
-        {
-            <MudIcon Icon="@(_sortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
-                      Size="Size.Small" />
-        }
-    </MudLink>;
-
     private void RebuildPage() =>
         _paged = _all.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
 
@@ -18970,15 +18919,10 @@ LENGTH 12834
             Snackbar.Add("Could not stop run", Severity.Error);
     }
 
-    private static string FormatDuration(TimeSpan ts) =>
-        ts.TotalHours >= 1
-            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
-
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 31977
+LENGTH 31914
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -19306,8 +19250,7 @@ LENGTH 31977
         var ct = _cts.Token;
 
         _loading = true;
-        Tab?.BeginLoading();
-        TabService.NotifyChanged();
+        using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
 
         try
         {
@@ -19330,8 +19273,6 @@ LENGTH 31977
         finally
         {
             _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
         }
 
         await InvokeAsync(StateHasChanged);
@@ -19681,11 +19622,11 @@ public partial class ServicesPage
     private static readonly (double Mb, byte R, byte G, byte B)[] MemGradientStops =
     [
         (0,    59, 130, 246), // blue      #3B82F6
-        (100,  34, 197, 94),  // green     #22C55E
-        (250,  234, 179, 8),  // yellow    #EAB308
-        (450,  249, 115, 22), // orange    #F97316
-        (700,  239, 68, 68),  // red       #EF4444
-        (1100, 255, 20, 147), // deeppink  #FF1493
+        (128,  34, 197, 94),  // green     #22C55E
+        (512,  234, 179, 8),  // yellow    #EAB308
+        (2048, 249, 115, 22), // orange    #F97316
+        (4096, 239, 68, 68),  // red       #EF4444
+        (8196, 255, 20, 147), // deeppink  #FF1493
     ];
 
     private static string? MemGradientColor(double? mb)
@@ -19902,7 +19843,7 @@ LENGTH 10289
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
     }
 
     private void SetMode(ThemeMode mode)
@@ -20040,7 +19981,7 @@ LENGTH 31130
         {
             try
             {
-                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=6");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
                 _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=6");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
@@ -20750,7 +20691,7 @@ LENGTH 22164
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=39" rel="stylesheet" />
+    <link href="css/app.css?v=43" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -20865,7 +20806,7 @@ LENGTH 22164
     <script src="js/d3-memory-stacked.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=18"></script>
+    <script src="js/d3-home-treemap.js?v=19"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -21174,7 +21115,7 @@ LENGTH 22164
     <script src="js/workspace.js"></script>
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
-    <link rel="modulepreload" href="js/app.js?v=6" />
+    <link rel="modulepreload" href="js/app.js?v=7" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
 </body>
 </html>
@@ -21622,6 +21563,73 @@ public sealed class ErrorNotificationService
         lock (_lock) _history.Clear();
     }
 }
+FILE src/NxtUI.Web/Services/FocusGatedPoller.cs
+LENGTH 2167
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Wraps the Start()/Stop() + PeriodicTimer + CancellationTokenSource boilerplate that
+/// Home.razor and LogBrowser.razor each hand-rolled independently for "keep refreshing
+/// on an interval, but only while the page/section is actually being looked at."
+/// Visibility/focus checks stay in the caller's <paramref name="onTick"/> callback —
+/// this class only owns the timer lifecycle, not the definition of "visible."
+/// </summary>
+public sealed class FocusGatedPoller : IDisposable
+{
+    private readonly TimeSpan _interval;
+    private readonly Func<CancellationToken, Task> _onTick;
+    private readonly Action<Exception>? _onError;
+    private CancellationTokenSource? _cts;
+
+    public FocusGatedPoller(TimeSpan interval, Func<CancellationToken, Task> onTick, Action<Exception>? onError = null)
+    {
+        _interval = interval;
+        _onTick   = onTick;
+        _onError  = onError;
+    }
+
+    public bool IsRunning => _cts is not null;
+
+    public void Start()
+    {
+        if (_cts is not null) return; // already running
+        _cts = new CancellationTokenSource();
+        _ = LoopAsync(_cts.Token);
+    }
+
+    public void Stop()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    /// <summary>Start if <paramref name="shouldRun"/>, stop otherwise — for call sites that
+    /// re-evaluate "should polling be active right now" from several places (selection
+    /// changed, a panel opened, focus changed) rather than calling Start/Stop directly.</summary>
+    public void SetActive(bool shouldRun)
+    {
+        if (shouldRun) Start();
+        else Stop();
+    }
+
+    private async Task LoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(_interval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                try { await _onTick(ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _onError?.Invoke(ex); }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose() => Stop();
+}
 FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
 LENGTH 6358
 using System.Collections.Concurrent;
@@ -21968,7 +21976,7 @@ public sealed class InfraHealthCache : BackgroundService
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 16499
+LENGTH 16670
 using NxtUI.Core.Services;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -22312,7 +22320,9 @@ public class LogBrowserService : ILogBrowserService
     // Mirrors log-viewer-parser.js's compileFormat() so a search filter behaves
     // identically to the interactive viewer for the same Logs:Formats templates.
 
-    private sealed record CompiledLogFormat(Regex Regex);
+    // internal (not private) + [InternalsVisibleTo] so the format-grammar contract
+    // test can compile a format string directly and compare it against the JS side.
+    internal sealed record CompiledLogFormat(Regex Regex);
 
     private static readonly Regex TokenRegex = new(@"\{([^}]+)\}", RegexOptions.Compiled);
     private static readonly HashSet<string> CaptureFields =
@@ -22329,7 +22339,7 @@ public class LogBrowserService : ILogBrowserService
         return result;
     }
 
-    private static CompiledLogFormat? CompileFormat(string? formatStr)
+    internal static CompiledLogFormat? CompileFormat(string? formatStr)
     {
         if (string.IsNullOrEmpty(formatStr)) return null;
 
@@ -23601,6 +23611,39 @@ public class SignalRConnectionService(
         public void Dispose() => action();
     }
 }
+FILE src/NxtUI.Web/Services/TabLoadingScope.cs
+LENGTH 936
+using NxtUI.Web.Models;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Collapses the repeated
+/// <c>Tab?.BeginLoading(); TabService.NotifyChanged(); ... finally { Tab?.EndLoading(); TabService.NotifyChanged(); }</c>
+/// try/finally block duplicated across every dashboard page's load method into a
+/// single <c>using</c>. Construction begins loading, disposal ends it.
+/// </summary>
+public readonly struct TabLoadingScope : IDisposable
+{
+    private readonly TabModel? _tab;
+    private readonly TabService _tabService;
+
+    private TabLoadingScope(TabModel? tab, TabService tabService)
+    {
+        _tab = tab;
+        _tabService = tabService;
+        _tab?.BeginLoading();
+        _tabService.NotifyChanged();
+    }
+
+    public static TabLoadingScope Begin(TabModel? tab, TabService tabService) => new(tab, tabService);
+
+    public void Dispose()
+    {
+        _tab?.EndLoading();
+        _tabService.NotifyChanged();
+    }
+}
 FILE src/NxtUI.Web/Services/TabService.cs
 LENGTH 5226
 using NxtUI.Web.Models;
@@ -24618,9 +24661,9 @@ FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
-LENGTH 11791
+LENGTH 11792
 using NxtUI.Filtering;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -24909,10 +24952,10 @@ public class FilterEvaluatorTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterIntegrationTests.cs
-LENGTH 10504
+LENGTH 10505
 using NxtUI.Core.Models;
 using NxtUI.Filtering;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -25168,9 +25211,9 @@ public class FilterIntegrationTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterParserTests.cs
-LENGTH 15708
+LENGTH 15709
 using NxtUI.Filtering;
-using FluentAssertions;
+using AwesomeAssertions;
 using MatchType = NxtUI.Filtering.MatchType;
 
 namespace NxtUI.Tests.Filtering;
@@ -25616,8 +25659,8 @@ public sealed class KafkaIntegrationTestFactAttribute : FactAttribute
     }
 }
 FILE tests/NxtUI.Tests/Integration/KafkaIntegrationTests.cs
-LENGTH 13872
-using FluentAssertions;
+LENGTH 13873
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -25978,9 +26021,9 @@ public sealed class KafkaIntegrationTests
     }
 }
 FILE tests/NxtUI.Tests/Performance/ConcurrencyPerfTests.cs
-LENGTH 7644
+LENGTH 7645
 using System.Diagnostics;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
 using NxtUI.Web.Services;
@@ -26152,7 +26195,8 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     }
 }
 FILE tests/NxtUI.Tests/Performance/EnvironmentConfigTests.cs
-LENGTH 3380
+LENGTH 3452
+using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -26179,13 +26223,13 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         out_.WriteLine($"Configured: {settings.Environments.Count} environments");
         out_.WriteLine($"Returned:   {all.Count} environments");
 
-        Assert.Equal(settings.Environments.Count, all.Count);
+        all.Count.Should().Be(settings.Environments.Count);
 
         foreach (var def in settings.Environments)
         {
             var found = all.FirstOrDefault(e => e.Id.Equals(def.Id, StringComparison.OrdinalIgnoreCase));
             out_.WriteLine($"  {def.Id} ({def.Tier}): {(found is not null ? "found" : "MISSING")}");
-            Assert.NotNull(found);
+            found.Should().NotBeNull();
         }
     }
 
@@ -26199,7 +26243,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         {
             var servers = envSvc.GetServers(def.Id);
             out_.WriteLine($"  {def.Id}: {servers.Count} servers (expected {def.Servers.Count})");
-            Assert.Equal(def.Servers.Count, servers.Count);
+            servers.Count.Should().Be(def.Servers.Count);
         }
     }
 
@@ -26215,7 +26259,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
             foreach (var expected in def.Servers)
             {
                 out_.WriteLine($"  {def.Id}: checking for '{expected}'");
-                Assert.Contains(expected, actual, StringComparer.OrdinalIgnoreCase);
+                actual.Should().Contain(s => s.Equals(expected, StringComparison.OrdinalIgnoreCase));
             }
         }
     }
@@ -26225,7 +26269,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     {
         var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var result = envSvc.GetServers("__nonexistent_env__");
-        Assert.Empty(result);
+        result.Should().BeEmpty();
     }
 
     [Fact]
@@ -26237,12 +26281,12 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
         foreach (var def in settings.Environments)
         {
             var env = envSvc.GetById(def.Id);
-            Assert.NotNull(env);
-            Assert.Equal(def.Id, env.Id, StringComparer.OrdinalIgnoreCase);
+            env.Should().NotBeNull();
+            env!.Id.Equals(def.Id, StringComparison.OrdinalIgnoreCase).Should().BeTrue();
             out_.WriteLine($"  {def.Id}: label='{env.Label}', tier='{def.Tier}'");
         }
 
-        Assert.Null(envSvc.GetById("__nonexistent__"));
+        envSvc.GetById("__nonexistent__").Should().BeNull();
     }
 }
 FILE tests/NxtUI.Tests/Performance/HomeTreemapPerfTests.cs
@@ -26646,9 +26690,9 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
         b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
 }
 FILE tests/NxtUI.Tests/Performance/LogViewerPerfTests.cs
-LENGTH 7513
+LENGTH 7514
 using System.Diagnostics;
-using FluentAssertions;
+using AwesomeAssertions;
 using NxtUI.Web.Services;
 
 namespace NxtUI.Tests.Performance;
@@ -27303,10 +27347,10 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
     }
 }
 FILE tests/NxtUI.Tests/Protos/MessageRegistryTests.cs
-LENGTH 8400
+LENGTH 8401
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using FluentAssertions;
+using AwesomeAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using NxtUI.Protos;
@@ -27504,7 +27548,8 @@ public class MessageRegistryTests
     }
 }
 FILE tests/NxtUI.Tests/Services/LogBrowserServiceFormatTests.cs
-LENGTH 4292
+LENGTH 4311
+using AwesomeAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -27555,8 +27600,8 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("a.log", results);
-        Assert.DoesNotContain("b.log", results);
+        results.Should().Contain("a.log");
+        results.Should().NotContain("b.log");
     }
 
     [Fact]
@@ -27571,8 +27616,8 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("thread5.log", results);
-        Assert.DoesNotContain("thread9.log", results);
+        results.Should().Contain("thread5.log");
+        results.Should().NotContain("thread9.log");
     }
 
     [Fact]
@@ -27586,7 +27631,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         await foreach (var entry in svc.SearchAsync(["local"], "", "*.log", filter, CancellationToken.None))
             results.Add(entry.FileName);
 
-        Assert.Contains("legacy.log", results);
+        results.Should().Contain("legacy.log");
     }
 
     private static FilterParser LogLineParser() => new(
@@ -27604,6 +27649,91 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
     {
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
+    }
+}
+FILE tests/NxtUI.Tests/Services/LogFormatGrammarContractTests.cs
+LENGTH 3139
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using AwesomeAssertions;
+using NxtUI.Web.Services;
+
+namespace NxtUI.Tests.Services;
+
+/// <summary>
+/// Contract test: LogBrowserService.CompileFormat (C#) and log-viewer-parser.js's
+/// compileFormat() are two hand-maintained implementations of the same placeholder
+/// grammar. This runs a shared set of format strings + sample lines
+/// (tests/shared/log-format-grammar-cases.json) through the C# side and asserts the
+/// extracted field values — the JS side asserts the same fixture independently in
+/// log-format-grammar.contract.test.js. If a future grammar change updates one side
+/// without the other, whichever side's assertions drift from the fixture will fail.
+/// </summary>
+public sealed class LogFormatGrammarContractTests
+{
+    public sealed record Case(string Name, string Format, string Line, bool Valid, Dictionary<string, string>? Expected);
+
+    public static IEnumerable<object[]> Cases()
+    {
+        foreach (var c in LoadCases())
+            yield return [c];
+    }
+
+    private static List<Case> LoadCases()
+    {
+        var json = File.ReadAllText(FixturePath());
+        using var doc = JsonDocument.Parse(json);
+
+        var cases = new List<Case>();
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+            var name   = el.GetProperty("name").GetString()!;
+            var format = el.GetProperty("format").GetString()!;
+            var line   = el.GetProperty("line").GetString()!;
+            var valid  = el.GetProperty("valid").GetBoolean();
+
+            Dictionary<string, string>? expected = null;
+            if (el.TryGetProperty("expected", out var expEl))
+            {
+                expected = new Dictionary<string, string>();
+                foreach (var prop in expEl.EnumerateObject())
+                    expected[prop.Name] = prop.Value.GetString() ?? "";
+            }
+
+            cases.Add(new Case(name, format, line, valid, expected));
+        }
+        return cases;
+    }
+
+    private static string FixturePath([CallerFilePath] string here = "")
+    {
+        // tests/NxtUI.Tests/Services/<this file>.cs -> ascend to tests/, then shared/.
+        var dir = Path.GetDirectoryName(here)!;
+        return Path.GetFullPath(Path.Combine(dir, "..", "..", "shared", "log-format-grammar-cases.json"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void CompileFormat_MatchesFixtureExpectations(Case testCase)
+    {
+        var compiled = LogBrowserService.CompileFormat(testCase.Format);
+
+        if (!testCase.Valid)
+        {
+            compiled.Should().BeNull();
+            return;
+        }
+
+        compiled.Should().NotBeNull();
+        var match = compiled!.Regex.Match(testCase.Line);
+        match.Success.Should().BeTrue($"[{testCase.Name}] format did not match sample line");
+
+        foreach (var (field, expectedValue) in testCase.Expected!)
+        {
+            var group = match.Groups[field];
+            group.Success.Should().BeTrue($"[{testCase.Name}] field '{field}' did not capture");
+            group.Value.Should().Be(expectedValue);
+        }
     }
 }
 FILE src/MudSelectRepro/wwwroot/js/diag.js
@@ -29218,10 +29348,11 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 12548
+LENGTH 13481
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using NxtUI.Configuration;
 using NxtUI.Core.Models;
@@ -29423,7 +29554,7 @@ public class MongoService : IMongoService
 
     // ── Filter builder ─────────────────────────────────────────────────────────
 
-    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
+    private FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(search))
         {
@@ -29437,7 +29568,9 @@ public class MongoService : IMongoService
         {
             try
             {
-                return new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+                var raw = new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+                _log.LogDebug("mongo filter: raw JSON query -> {Mongo}", RenderFilter(raw));
+                return raw;
             }
             catch
             {
@@ -29448,15 +29581,26 @@ public class MongoService : IMongoService
         // Field:value filter language → AST → MongoDB filter
         try
         {
-            var node = DocFilterParser.Parse(s, useUtc);
-            return MongoFilterBuilder.Build(node);
+            var node   = DocFilterParser.Parse(s, useUtc);
+            var filter = MongoFilterBuilder.Build(node);
+            _log.LogDebug("mongo filter: '{Search}' -> ast={Ast} -> mongo={Mongo}", s, node, RenderFilter(filter));
+            return filter;
         }
         catch
         {
             // Unparseable input: fall back to _id regex so the user sees partial results
-            return Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+            var fallback = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+            _log.LogDebug("mongo filter: '{Search}' unparseable -> falling back to _id regex -> {Mongo}", s, RenderFilter(fallback));
+            return fallback;
         }
     }
+
+    /// <summary>Renders a filter to the exact BSON/JSON MongoDB will receive over the wire —
+    /// the same representation you'd see running the equivalent query in mongosh.</summary>
+    private static string RenderFilter(FilterDefinition<BsonDocument> filter) =>
+        filter.Render(new RenderArgs<BsonDocument>(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry)).ToString();
 
     public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(
         string env, string database, string collection, CancellationToken ct = default)
@@ -29505,7 +29649,7 @@ public class MongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 8243
+LENGTH 8431
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using NxtUI.Configuration;
@@ -29636,6 +29780,10 @@ public class SqlRunService(
 
         // ── Execute ────────────────────────────────────────────────────────────
 
+        log.LogDebug(
+            "sql [{Env}]: ast={Ast} -> sql={Sql} params={@Params}",
+            env, filter?.FilterAst, sql, allParams.Select(p => $"{p.ParameterName}={p.Value}"));
+
         await using var conn = new SqlConnection(sqlCfg.ConnectionString);
         await conn.OpenAsync(ct);
 
@@ -29691,7 +29839,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 86636
+LENGTH 86652
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -30092,8 +30240,10 @@ html, body {
 /* Icon picker in rename dialog */
 .bm-icon-picker {
     display: grid;
-    grid-template-columns: repeat(8, 36px);
+    grid-template-columns: repeat(auto-fill, 36px);
     gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
 }
 .bm-icon-picker-item {
     width: 36px;
@@ -30143,7 +30293,10 @@ html, body {
     display: flex;
     flex-direction: column;
     padding: 0;
+    position: relative;
 }
+
+.bm-lv-loading-bar { position: absolute; bottom: 0; left: 0; right: 0; z-index: 10; }
 
 /* Page variant that fills height end-to-end */
 .bm-page-fill {
@@ -30285,8 +30438,9 @@ html, body {
 .bm-filter-input { flex: 1; }
 .bm-refresh-btn  { flex-shrink: 0; }
 
-/* Loading bar */
-.bm-loading-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; border-radius: 0; }
+/* Loading bar — anchored to the bottom of its container so it never shifts
+   the table/content above it when it appears/disappears. */
+.bm-loading-bar { position: absolute; bottom: 0; left: 0; right: 0; z-index: 10; border-radius: 0; }
 
 /* Table wrapper fills remaining height */
 .bm-table-wrap {
@@ -31512,15 +31666,8 @@ html, body {
 
 /* ── Home dashboard: per-section header spinner (replaces the section icon
    until that section has loaded, or while it's actively refreshing) ──── */
-.bm-section-spinner {
-    width: 15px;
-    height: 15px;
-    flex-shrink: 0;
-    border: 2px solid rgba(128, 128, 128, 0.25);
-    border-top-color: var(--mud-palette-primary);
-    border-radius: 50%;
-    animation: bm-spin 0.8s linear infinite;
-}
+.bm-section-spinner { flex-shrink: 0; }
+.bm-section-spinner.mud-progress-circular { width: 15px; height: 15px; }
 
 .bm-section-title-link {
     cursor: pointer;
@@ -32010,34 +32157,23 @@ tr.bm-row-searching td:first-child {
 /* ── Log Browser ──────────────────────────────────────────────────── */
 .bm-lb-page { display: flex; flex-direction: column; }
 
-.bm-lb-filter-toolbar {
+/* bm-lb-toolbar-multiline: same bordered container as before, but now holds
+   one or two .bm-lb-toolbar-row lines (main row + optional search row) so a
+   collapsed search row leaves no border/height artifact behind. */
+.bm-lb-filter-toolbar.bm-lb-toolbar-multiline {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
 }
-
-/* Collapsible second row: filename glob + content filter + Start Search/Stop.
-   Hidden by default, expands with a height/opacity transition when toggled. */
-.bm-lb-search-row {
+.bm-lb-toolbar-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 12px;
-    max-height: 0;
-    opacity: 0;
-    overflow: hidden;
-    border-bottom: 1px solid transparent;
-    transition: max-height 0.2s ease, opacity 0.15s ease, padding 0.2s ease, border-color 0.2s ease;
 }
-.bm-lb-search-row-open {
-    max-height: 56px;
-    opacity: 1;
-    padding: 8px 12px;
-    border-bottom-color: var(--mud-palette-divider);
-}
+
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
 .bm-lb-search-btn  { flex-shrink: 0; white-space: nowrap; }
 
@@ -32098,12 +32234,13 @@ tr.bm-row-searching td:first-child {
     overflow: auto;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
 .bm-lb-file-table { flex: 1 1 0; }
 .bm-lb-file-table tr.bm-lb-file-row { cursor: pointer; transition: background 0.12s ease; }
 .bm-lb-file-table tr.bm-lb-file-row:hover { background: var(--mud-palette-action-default-hover) !important; }
-.bm-lb-files-progress { height: 3px; flex-shrink: 0; }
+.bm-lb-files-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; z-index: 10; }
 
 .bm-lb-empty {
     display: flex;
@@ -32249,8 +32386,8 @@ tr.bm-row-searching td:first-child {
 
 /* ── Batches catalog ─────────────────────────────────────────────────────── */
 
-.bm-batches-page { display:flex; flex-direction:column; overflow:hidden; }
-.bm-batches-progress { flex-shrink:0; }
+.bm-batches-page { display:flex; flex-direction:column; overflow:hidden; position:relative; }
+.bm-batches-progress { position:absolute; bottom:0; left:0; right:0; z-index:10; }
 
 .bm-batches-layout {
     display: flex;
@@ -33231,7 +33368,7 @@ LENGTH 7870
 
 .bm-tl-dialog-selected { background: rgba(56,139,253,0.10) !important; }
 FILE src/NxtUI.Web/wwwroot/css/log-viewer.css
-LENGTH 10549
+LENGTH 10319
 /* ── Log Viewer ─────────────────────────────────────────────────────────────── */
 
 /* Outer page layout */
@@ -33402,15 +33539,6 @@ LENGTH 10549
     justify-content: center;
     gap: 14px;
     background: var(--mud-palette-background);
-}
-
-.bm-lv-loading-spinner {
-    width: 40px;
-    height: 40px;
-    border: 4px solid rgba(128, 128, 128, 0.2);
-    border-top-color: var(--mud-palette-primary);
-    border-radius: 50%;
-    animation: bm-spin 0.8s linear infinite;
 }
 
 .bm-lv-loading-label {
@@ -34071,8 +34199,21 @@ FILE src/NxtUI.Web/wwwroot/js/.gitignore
 LENGTH 14
 node_modules/
 FILE src/NxtUI.Web/wwwroot/js/app.js
-LENGTH 16191
+LENGTH 16837
 // Batch Monitor — client-side utilities
+
+// ── prevent text selection on double/triple-click in data tables ──────────
+// Runs once at module load (the browser only evaluates an ES module once no
+// matter how many times components dynamically import it). Only suppresses
+// the browser's native "select word/paragraph" behavior on repeat clicks
+// (e.detail > 1) so rows can still use @ondblclick for row actions without
+// also selecting the cell's text — a plain single click still selects text
+// normally.
+document.addEventListener('mousedown', (e) => {
+    if (e.detail > 1 && e.target.closest('.bm-batch-table')) {
+        e.preventDefault();
+    }
+});
 
 // ── localStorage helpers ──────────────────────────────────────────────────
 
@@ -35315,11 +35456,11 @@ window.homeMemoryTreemap = (function () {
     // color-space dependency, just enough steps to look smooth on a treemap tile.
     const RAM_COLOR_STOPS = [
         { ram: 0,    rgb: [59, 130, 246] },  // blue      #3B82F6
-        { ram: 100,  rgb: [34, 197, 94]  },  // green     #22C55E
-        { ram: 250,  rgb: [234, 179, 8]  },  // yellow    #EAB308
-        { ram: 450,  rgb: [249, 115, 22] },  // orange    #F97316
-        { ram: 700,  rgb: [239, 68, 68]  },  // red       #EF4444
-        { ram: 1100, rgb: [255, 20, 147] },  // deeppink  #FF1493
+        { ram: 128,  rgb: [34, 197, 94]  },  // green     #22C55E
+        { ram: 512,  rgb: [234, 179, 8]  },  // yellow    #EAB308
+        { ram: 2048, rgb: [249, 115, 22] },  // orange    #F97316
+        { ram: 4096, rgb: [239, 68, 68]  },  // red       #EF4444
+        { ram: 8196, rgb: [255, 20, 147] },  // deeppink  #FF1493
     ];
 
     function ramColor(ram) {
@@ -38226,6 +38367,47 @@ window.bmJsonViewer = (() => {
 
     return { render, setAllCollapsed };
 })();
+FILE src/NxtUI.Web/wwwroot/js/log-format-grammar.contract.test.js
+LENGTH 1560
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { compileFormat } from './log-viewer-parser.js'
+
+// Contract test: the placeholder grammar ({timestamp}, {level}, {*}, {$}, ...) is
+// implemented independently in compileFormat() here and in
+// LogBrowserService.CompileFormat (C#). Both sides assert against the same fixture
+// (tests/shared/log-format-grammar-cases.json) — see
+// tests/NxtUI.Tests/Services/LogFormatGrammarContractTests.cs for the C# side.
+// A grammar change made on only one side will fail whichever side's assertions no
+// longer match the shared fixture.
+
+const here = dirname(fileURLToPath(import.meta.url))
+const fixturePath = join(here, '..', '..', '..', '..', 'tests', 'shared', 'log-format-grammar-cases.json')
+const cases = JSON.parse(readFileSync(fixturePath, 'utf-8'))
+
+describe('compileFormat — shared grammar fixture', () => {
+    for (const c of cases) {
+        it(c.name, () => {
+            const compiled = compileFormat(c.format)
+
+            if (!c.valid) {
+                expect(compiled).toBeNull()
+                return
+            }
+
+            expect(compiled).not.toBeNull()
+            compiled.regex.lastIndex = 0
+            const match = compiled.regex.exec(c.line)
+            expect(match).not.toBeNull()
+
+            for (const [field, expected] of Object.entries(c.expected)) {
+                expect(match.groups?.[field]).toBe(expected)
+            }
+        })
+    }
+})
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.js
 LENGTH 11618
 // log-viewer-parser.js — ES module
