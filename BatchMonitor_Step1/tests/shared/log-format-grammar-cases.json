@@ -1,0 +1,50 @@
+[
+  {
+    "name": "pipe-delimited-with-caller-and-tail",
+    "format": "{timestamp}|{level}|{host}|{pid}|{thread}|{message}|{caller}{*}{$}",
+    "line": "2024-01-15 10:00:00|INFO|host1|111|1|hello world|OrderService.Process",
+    "valid": true,
+    "expected": {
+      "timestamp": "2024-01-15 10:00:00",
+      "level": "INFO",
+      "host": "host1",
+      "pid": "111",
+      "thread": "1",
+      "message": "hello world",
+      "caller": "OrderService.Process"
+    }
+  },
+  {
+    "name": "space-delimited-no-caller",
+    "format": "{timestamp} {level} {message}",
+    "line": "2024-02-01T09:30:00 WARN disk usage high",
+    "valid": true,
+    "expected": {
+      "timestamp": "2024-02-01T09:30:00",
+      "level": "WARN",
+      "message": "disk usage high"
+    }
+  },
+  {
+    "name": "consecutive-captures-no-literal-between",
+    "format": "{level}{message}",
+    "line": "INFOhello world",
+    "valid": true,
+    "expected": {
+      "level": "",
+      "message": "INFOhello world"
+    }
+  },
+  {
+    "name": "single-placeholder-is-invalid",
+    "format": "{timestamp}",
+    "line": "2024-02-01T09:30:00",
+    "valid": false
+  },
+  {
+    "name": "no-placeholders-is-invalid",
+    "format": "just a literal string",
+    "line": "just a literal string",
+    "valid": false
+  }
+]

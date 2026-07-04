@@ -341,7 +341,9 @@ public class LogBrowserService : ILogBrowserService
     // Mirrors log-viewer-parser.js's compileFormat() so a search filter behaves
     // identically to the interactive viewer for the same Logs:Formats templates.
 
-    private sealed record CompiledLogFormat(Regex Regex);
+    // internal (not private) + [InternalsVisibleTo] so the format-grammar contract
+    // test can compile a format string directly and compare it against the JS side.
+    internal sealed record CompiledLogFormat(Regex Regex);
 
     private static readonly Regex TokenRegex = new(@"\{([^}]+)\}", RegexOptions.Compiled);
     private static readonly HashSet<string> CaptureFields =
@@ -358,7 +360,7 @@ public class LogBrowserService : ILogBrowserService
         return result;
     }
 
-    private static CompiledLogFormat? CompileFormat(string? formatStr)
+    internal static CompiledLogFormat? CompileFormat(string? formatStr)
     {
         if (string.IsNullOrEmpty(formatStr)) return null;
 
