@@ -274,11 +274,7 @@
 
     private void OnPageSizeChanged(int size) { _pageSize = size; _page = 1; RebuildPage(); }
 
-    private async Task RefreshAsync()
-    {
-        await LoadAsync();
-        Snackbar.Add("Refreshed", Severity.Normal, c => c.VisibleStateDuration = 1500);
-    }
+    private async Task RefreshAsync() => await LoadAsync();
 
     private void OpenDetail(RunSummary b) =>
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, Environment));

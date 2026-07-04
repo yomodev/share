@@ -128,7 +128,7 @@
                                         <span>PID @s.ProcessId</span>
                                         @if (s.RamMb is not null || s.PeakMb is not null)
                                         {
-                                            <span>Mem. <span style="@MemColorStyle(s.RamMb)">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
+                                            <span>Mem. <span style="@($"font-weight:700;{MemColorStyle(s.RamMb)}")">@FormatMb(s.RamMb)</span><span class="bm-muted bm-svc-peak-label" style="margin-left:5px">@FormatMb(s.PeakMb)</span></span>
                                         }
                                         <span>@FormatAge(s.UpdatedDateTime)</span>
                                     </div>

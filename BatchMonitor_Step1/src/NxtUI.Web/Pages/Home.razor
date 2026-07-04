@@ -130,18 +130,16 @@
 
     <!-- ── Memory treemap ────────────────────────────────────────────────── -->
     <div class="bm-section-header" style="margin:0;">
-        <div class="bm-memory-header-left">
+        <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
             @if (!_mapReady)
             {
                 <div class="bm-section-spinner"></div>
             }
             else
             {
-                <MudIcon Icon="@Icons.Material.Outlined.Memory" Class="bm-memory-header-icon" />
+                <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
             }
-            <MudTooltip Text="View all services">
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title bm-section-title-link" @onclick="OpenServices">Memory</MudText>
-            </MudTooltip>
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
         </div>
     </div>
     <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
@@ -149,18 +147,16 @@
 
     <!-- ── Mini batch summary ───────────────────────────────────────────── -->
     <div class="bm-section-header" style="margin:4px 0 0;">
-        <div class="bm-memory-header-left">
+        <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenRunsDashboard" title="View more runs">
             @if (!_runsReady || _runsLoading)
             {
                 <div class="bm-section-spinner"></div>
             }
             else
             {
-                <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" Class="bm-memory-header-icon" />
+                <MudIcon Icon="@Icons.Material.Outlined.ViewList" Class="bm-memory-header-icon" />
             }
-            <MudTooltip Text="View more runs">
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title bm-section-title-link" @onclick="OpenRunsDashboard">Recent Runs</MudText>
-            </MudTooltip>
+            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
         </div>
     </div>
 
