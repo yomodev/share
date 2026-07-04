@@ -2,16 +2,16 @@ window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
 
-    // Gradient stops (RAM MB → RGB), blue (idle) through violet (very high).
+    // Gradient stops (RAM MB → RGB), blue (idle) through deep pink (very high).
     // Piecewise-linear RGB interpolation between adjacent stops — no external
     // color-space dependency, just enough steps to look smooth on a treemap tile.
     const RAM_COLOR_STOPS = [
-        { ram: 0,    rgb: [59, 130, 246] },  // blue    #3B82F6
-        { ram: 100,  rgb: [34, 197, 94]  },  // green   #22C55E
-        { ram: 250,  rgb: [234, 179, 8]  },  // yellow  #EAB308
-        { ram: 450,  rgb: [249, 115, 22] },  // orange  #F97316
-        { ram: 700,  rgb: [239, 68, 68]  },  // red     #EF4444
-        { ram: 1100, rgb: [168, 85, 247] },  // violet  #A855F7
+        { ram: 0,    rgb: [59, 130, 246] },  // blue      #3B82F6
+        { ram: 100,  rgb: [34, 197, 94]  },  // green     #22C55E
+        { ram: 250,  rgb: [234, 179, 8]  },  // yellow    #EAB308
+        { ram: 450,  rgb: [249, 115, 22] },  // orange    #F97316
+        { ram: 700,  rgb: [239, 68, 68]  },  // red       #EF4444
+        { ram: 1100, rgb: [255, 20, 147] },  // deeppink  #FF1493
     ];
 
     function ramColor(ram) {

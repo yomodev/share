@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "NxtUI.Web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/NxtUI.Web/NxtUI.Web.csproj", "--no-build"],
+      "port": 57080
+    }
+  ]
+}
