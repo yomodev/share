@@ -583,26 +583,6 @@ function render(container, rawText, options = {}) {
 }
 
 /**
- * Attach an additional viewport to an existing document.
- * Use the docId returned by render() or getDocId().
- * @param {HTMLElement} container
- * @param {string}      docId
- * @param {{ anchorLine?: number, fontSize?: number, wordWrap?: boolean }} options
- */
-function addViewport(container, docId, options = {}) {
-    destroy(container);
-    const doc = _docs.get(docId);
-    if (!doc) { console.error('[logViewer] addViewport: doc not found:', docId); return; }
-    const vp = _createViewport(container, doc, options);
-    if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
-}
-
-/** Returns the docId for the document currently shown in container. */
-function getDocId(container) {
-    return _vp.get(container)?.doc.docId ?? null;
-}
-
-/**
  * Append new raw text (live-tail delta). Updates the shared document and
  * re-renders every viewport showing it.
  */
@@ -831,7 +811,7 @@ function registerDotNetRef(container, dotNetRef) {
 }
 
 window.logViewer = {
-    render, renderLocalFile, addViewport, getDocId,
+    render, renderLocalFile,
     appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,
