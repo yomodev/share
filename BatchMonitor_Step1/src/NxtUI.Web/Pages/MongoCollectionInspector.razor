@@ -7,6 +7,7 @@
 @inject ILogger<MongoCollectionInspector> Logger
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -207,6 +208,11 @@
             _page       = Math.Clamp(_page, 1, _totalPages);
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to query {Db}/{Col} in env {Env}", _database, _collection, Environment);
+            Snackbar.Add($"Failed to load documents: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _loading = false;

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using NxtUI.Configuration;
 using NxtUI.Core.Models;
@@ -202,7 +203,7 @@ public class MongoService : IMongoService
 
     // ── Filter builder ─────────────────────────────────────────────────────────
 
-    private static FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
+    private FilterDefinition<BsonDocument> BuildDocumentFilter(string? search, bool useUtc = true)
     {
         if (string.IsNullOrWhiteSpace(search))
         {
@@ -216,7 +217,9 @@ public class MongoService : IMongoService
         {
             try
             {
-                return new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+                var raw = new BsonDocumentFilterDefinition<BsonDocument>(BsonDocument.Parse(s));
+                _log.LogDebug("mongo filter: raw JSON query -> {Mongo}", RenderFilter(raw));
+                return raw;
             }
             catch
             {
@@ -227,15 +230,26 @@ public class MongoService : IMongoService
         // Field:value filter language → AST → MongoDB filter
         try
         {
-            var node = DocFilterParser.Parse(s, useUtc);
-            return MongoFilterBuilder.Build(node);
+            var node   = DocFilterParser.Parse(s, useUtc);
+            var filter = MongoFilterBuilder.Build(node);
+            _log.LogDebug("mongo filter: '{Search}' -> ast={Ast} -> mongo={Mongo}", s, node, RenderFilter(filter));
+            return filter;
         }
         catch
         {
             // Unparseable input: fall back to _id regex so the user sees partial results
-            return Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+            var fallback = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression(s, "i"));
+            _log.LogDebug("mongo filter: '{Search}' unparseable -> falling back to _id regex -> {Mongo}", s, RenderFilter(fallback));
+            return fallback;
         }
     }
+
+    /// <summary>Renders a filter to the exact BSON/JSON MongoDB will receive over the wire —
+    /// the same representation you'd see running the equivalent query in mongosh.</summary>
+    private static string RenderFilter(FilterDefinition<BsonDocument> filter) =>
+        filter.Render(new RenderArgs<BsonDocument>(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry)).ToString();
 
     public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(
         string env, string database, string collection, CancellationToken ct = default)
