@@ -41,21 +41,10 @@
                        Class="bm-filter-input"
                        FieldHints="@RowFieldHints" />
 
-            @if (_lastScan.HasValue)
-            {
-                <div class="bm-infra-lastupdate">
-                    <span class="bm-infra-lastupdate-label bm-muted">@(_isSearchMode ? "Found" : "Scanned")</span>
-                    <span class="bm-infra-time bm-muted">@_lastScan.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-                </div>
-            }
-
-            <MudTooltip Text="Refresh">
-                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                               Size="Size.Small"
-                               Disabled="@(_isSearching || _loadingFiles)"
-                               OnClick="RefreshAsync"
-                               Class="bm-refresh-btn" />
-            </MudTooltip>
+            <ToolbarRefresh LastUpdated="@_lastScan"
+                            Label="@(_isSearchMode ? "Found" : "Scanned")"
+                            Loading="@(_isSearching || _loadingFiles)"
+                            OnRefresh="RefreshAsync" />
         </div>
 
         <div class="bm-lb-search-collapse @(_searchBarOpen ? "bm-lb-search-collapse-open" : "")">

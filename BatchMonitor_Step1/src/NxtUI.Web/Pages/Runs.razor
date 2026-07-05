@@ -18,13 +18,8 @@
                    Class="bm-filter-input"
                    FieldHints="@_runFieldHints" />
 
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                           Size="Size.Small"
-                           OnClick="RefreshAsync"
-                           Disabled="@_result.IsLoading"
-                           Class="bm-refresh-btn" />
-        </MudTooltip>
+        <ToolbarRefresh Loading="@_result.IsLoading"
+                        OnRefresh="RefreshAsync" />
     </div>
 
     @if (_result.IsFailed)

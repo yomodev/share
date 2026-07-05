@@ -1,0 +1,25 @@
+@* Shared toolbar fragment: optional last-updated timestamp + refresh icon button. *@
+
+@if (LastUpdated.HasValue)
+{
+    <div class="bm-infra-lastupdate">
+        <span class="bm-infra-lastupdate-label bm-muted">@Label</span>
+        <span class="bm-infra-time bm-muted">@LastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+    </div>
+}
+
+<MudTooltip Text="@TooltipText">
+    <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
+                   Size="Size.Small"
+                   Disabled="@Loading"
+                   OnClick="OnRefresh"
+                   Class="bm-refresh-btn" />
+</MudTooltip>
+
+@code {
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public DateTime? LastUpdated { get; set; }
+    [Parameter] public string Label { get; set; } = "Updated";
+    [Parameter] public string TooltipText { get; set; } = "Refresh";
+    [Parameter] public EventCallback OnRefresh { get; set; }
+}

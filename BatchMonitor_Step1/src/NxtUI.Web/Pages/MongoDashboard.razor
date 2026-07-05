@@ -49,13 +49,8 @@
                    Class="bm-filter-input"
                    FieldHints="@_fieldHints" />
 
-        <MudTooltip Text="Refresh">
-            <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                           Size="Size.Small"
-                           Disabled="@_loading"
-                           OnClick="LoadCollectionsAsync"
-                           Class="bm-refresh-btn" />
-        </MudTooltip>
+        <ToolbarRefresh Loading="@_loading"
+                        OnRefresh="LoadCollectionsAsync" />
     </div>
 
     <!-- Table -->

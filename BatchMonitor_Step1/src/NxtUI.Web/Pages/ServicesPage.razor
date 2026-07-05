@@ -53,21 +53,9 @@
         </div>
 
         <div class="bm-svc-toolbar-right">
-            @if (_lastUpdated.HasValue)
-            {
-                <div class="bm-infra-lastupdate">
-                    <span class="bm-infra-lastupdate-label bm-muted">Updated</span>
-                    <span class="bm-infra-time bm-muted">@_lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss")</span>
-                </div>
-            }
-
-            <MudTooltip Text="Refresh">
-                <MudIconButton Icon="@Icons.Material.Outlined.Refresh"
-                               Size="Size.Small"
-                               OnClick="RefreshAsync"
-                               Disabled="@_loading"
-                               Class="bm-refresh-btn" />
-            </MudTooltip>
+            <ToolbarRefresh LastUpdated="@_lastUpdated"
+                            Loading="@_loading"
+                            OnRefresh="RefreshAsync" />
         </div>
 
     </div>
