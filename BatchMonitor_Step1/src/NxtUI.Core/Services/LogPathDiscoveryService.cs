@@ -50,6 +50,25 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         return await task;
     }
 
+    public void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys)
+    {
+        var prefix = env + "|";
+        var removed = 0;
+        foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+        {
+            if (_cache.TryRemove(key, out _)) removed++;
+        }
+        if (removed > 0)
+            log.LogDebug("discovery [{Env}]: pruned {Count} stale cache entr{Suffix}", env, removed, removed == 1 ? "y" : "ies");
+    }
+
+    public void ClearEnv(string env)
+    {
+        var prefix = env + "|";
+        foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _cache.TryRemove(key, out _);
+    }
+
     // ── Internal ─────────────────────────────────────────────────────────────
 
     private async Task<string?> RunSearchAsync(ServiceStatus svc, string env, string key)

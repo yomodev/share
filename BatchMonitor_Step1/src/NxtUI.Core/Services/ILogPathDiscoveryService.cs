@@ -31,4 +31,15 @@ public interface ILogPathDiscoveryService
     /// so subscribers can call StateHasChanged selectively.
     /// </summary>
     event Action<string>? OnPathResolved;
+
+    /// <summary>
+    /// Removes cached entries for <paramref name="env"/> whose key isn't in
+    /// <paramref name="activeKeys"/> (a service no longer reported by heartbeat).
+    /// Without this the cache — keyed by (env, host, service, PID) — grows without
+    /// bound for the lifetime of the process as services restart with new PIDs.
+    /// </summary>
+    void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys);
+
+    /// <summary>Removes every cached entry for an environment (e.g. once it's gone fully idle).</summary>
+    void ClearEnv(string env);
 }

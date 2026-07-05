@@ -52,4 +52,11 @@ public class LogPathSettings
     /// re-subscribing resumes from where it left off without re-reading files from the start.
     /// </summary>
     public int IdleReleaseMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Caps how many matches a single recursive Log Browser search (Start Search) accumulates
+    /// before it stops itself. Without a cap, searching a huge/misconfigured tree can grow the
+    /// result list and the render workload without bound for as long as the search keeps running.
+    /// </summary>
+    public int MaxSearchResults { get; set; } = 5000;
 }

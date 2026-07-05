@@ -99,8 +99,11 @@ public class LogBrowserService : ILogBrowserService
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var serverList = servers.ToList();
-        var channel = Channel.CreateUnbounded<LogFileEntry>(
-            new UnboundedChannelOptions { SingleWriter = false, SingleReader = true });
+        // Bounded (not unbounded): if the reader (Blazor UI, one StateHasChanged round trip
+        // per batch) falls behind a fast recursive scan across many servers, WriteAsync below
+        // simply awaits until there's room instead of buffering every match unboundedly in memory.
+        var channel = Channel.CreateBounded<LogFileEntry>(
+            new BoundedChannelOptions(256) { SingleWriter = false, SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
 
         var producers = serverList.Select(server => Task.Run(async () =>
         {

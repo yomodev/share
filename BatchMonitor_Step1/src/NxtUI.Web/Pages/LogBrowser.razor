@@ -90,7 +90,9 @@
             @if (_isSearchMode)
             {
                 <span class="bm-lb-bc-sep bm-muted"> — </span>
-                <span class="bm-muted bm-toolbar-hint">search results</span>
+                <span class="bm-muted bm-toolbar-hint">
+                    search results@(_searchCapped ? $" (stopped at {LogSettings.Value.MaxSearchResults} results)" : "")
+                </span>
             }
             <MudTooltip Text="Clear all">
                 <MudIconButton Icon="@Icons.Material.Outlined.ClearAll" Size="Size.Small" OnClick="ClearSelection" />
@@ -447,6 +449,7 @@
     private CancellationTokenSource? _searchCts;
     private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
+    private bool                     _searchCapped;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -715,21 +718,50 @@
         _isSearching  = true;
         _isSearchMode = true;
         _loadingFiles = true;
+        _searchCapped = false;
         _files.Clear();
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
-        var paths  = _checkedPaths.ToList();
-        var glob   = _fileGlob;
-        var filter = _contentFilterNode;
-        var ct     = _searchCts.Token;
+        var paths      = _checkedPaths.ToList();
+        var glob       = _fileGlob;
+        var filter     = _contentFilterNode;
+        var ct         = _searchCts.Token;
+        var maxResults = LogSettings.Value.MaxSearchResults;
+
+        // Batches UI updates instead of one StateHasChanged per match — a recursive search
+        // over a large tree can yield matches far faster than a render round trip keeps up
+        // with, and doing one full render per match is what made the tab feel unresponsive
+        // during a big search. All callbacks below run through InvokeAsync, which marshals
+        // onto Blazor Server's single renderer sync context, so this shared state is safe
+        // even though multiple checked-path searches run in parallel.
+        var lastFlush = DateTime.UtcNow;
+        var flushInterval = TimeSpan.FromMilliseconds(200);
 
         try
         {
             await Task.WhenAll(paths.Select(async path =>
             {
                 await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
-                    await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
+                {
+                    var reachedCap = false;
+                    await InvokeAsync(() =>
+                    {
+                        if (_files.Count >= maxResults) return;
+                        _files.Add(entry);
+                        if (_files.Count >= maxResults)
+                        {
+                            _searchCapped = true;
+                            reachedCap = true;
+                        }
+                        if (reachedCap || DateTime.UtcNow - lastFlush >= flushInterval)
+                        {
+                            lastFlush = DateTime.UtcNow;
+                            StateHasChanged();
+                        }
+                    });
+                    if (reachedCap) { await _searchCts.CancelAsync(); break; }
+                }
             }));
             _lastScan = DateTime.UtcNow;
         }
