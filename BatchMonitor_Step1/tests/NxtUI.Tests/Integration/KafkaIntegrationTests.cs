@@ -311,7 +311,254 @@ public sealed class KafkaIntegrationTests
         bytes!.Length.Should().Be(first.RawSizeBytes);
     }
 
+    // ── Cluster / topic listing ───────────────────────────────────────────────
+    // Run these against a second machine's broker via KAFKA_BOOTSTRAP_SERVERS to
+    // reproduce whatever differs about that environment (ACLs, topic naming, broker
+    // version quirks, etc.) before it shows up as a bug report from the real UI.
+
+    [KafkaIntegrationTestFact]
+    public async Task GetClusterInfoAsync_ReturnsBrokers()
+    {
+        var svc = BuildService();
+
+        var info = await svc.GetClusterInfoAsync("test");
+
+        info.Should().NotBeNull();
+        info.Brokers.Should().NotBeEmpty();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicsAsync_ReturnsTopicList()
+    {
+        var svc = BuildService();
+
+        var topics = await svc.GetTopicsAsync("test");
+
+        // Not asserting non-empty — a freshly provisioned broker may have none yet.
+        // What matters when reproducing on another machine: it doesn't throw, and
+        // every returned summary has a non-blank name and a partition count.
+        foreach (var t in topics)
+        {
+            t.Name.Should().NotBeNullOrWhiteSpace();
+            t.PartitionCount.Should().BeGreaterThan(0);
+        }
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicConfigAsync_ReturnsConfig_ForFirstTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var config = await svc.GetTopicConfigAsync("test", topics[0].Name);
+
+        config.Should().NotBeNull();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicEnrichmentAsync_ReturnsEntryPerTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var enrichment = await svc.GetTopicEnrichmentAsync("test", topics);
+
+        enrichment.Should().HaveCount(topics.Count);
+        foreach (var t in topics)
+            enrichment.Should().ContainKey(t.Name);
+    }
+
+    // ── Consumer groups ────────────────────────────────────────────────────────
+
+    [KafkaIntegrationTestFact]
+    public async Task GetAllConsumerGroupsAsync_ReturnsGroups()
+    {
+        var svc = BuildService();
+
+        var groups = await svc.GetAllConsumerGroupsAsync("test");
+
+        // Same reasoning as topics: don't require any to exist, just that listing
+        // itself works and each returned group has a real id.
+        foreach (var g in groups)
+            g.GroupId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicConsumerGroupsAsync_ReturnsGroups_ForFirstTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var groups = await svc.GetTopicConsumerGroupsAsync("test", topics[0].Name);
+
+        groups.Should().NotBeNull();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetGroupTopicLagsAsync_ReturnsLags_ForFirstExistingGroup()
+    {
+        var svc = BuildService();
+        var groups = await svc.GetAllConsumerGroupsAsync("test");
+        if (groups.Count == 0) return;
+
+        var lags = await svc.GetGroupTopicLagsAsync("test", groups[0].GroupId);
+
+        lags.Should().NotBeNull();
+    }
+
+    // ── TailTopicAsync — every seek mode the topic inspector's Mode select offers ──
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_SinglePartition_Latest_CapsToRequestedTotal()
+    {
+        // Reproduces the "latest:N applies per partition, not as a total" bug: restrict
+        // to one partition and confirm the count never exceeds N regardless of how many
+        // partitions the topic actually has.
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        var multiPartition = topics.FirstOrDefault(t => t.PartitionCount > 1);
+        if (multiPartition is null) return;
+
+        var directive = new KafkaSeekDirective { Partitions = new HashSet<int> { 0 }, Latest = 5 };
+        var messages = new List<KafkaMessage>();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", multiPartition.Name, directive, cts.Token))
+            messages.Add(msg);
+
+        messages.Should().OnlyContain(m => m.Partition == 0);
+        messages.Count.Should().BeLessThanOrEqualTo(5);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_OffsetFrom_StartsAtOrAfterRequestedOffset()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.HighWatermark > s.LowWatermark);
+        if (target is null) return; // topic has no data to seek into
+
+        var midOffset = (target.LowWatermark + target.HighWatermark) / 2;
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            OffsetFrom = midOffset,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+        {
+            messages.Add(msg);
+            if (messages.Count >= 5) cts.Cancel();
+        }
+
+        messages.Should().OnlyContain(m => m.Offset >= midOffset);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_OffsetRange_StaysWithinBounds()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.HighWatermark - s.LowWatermark >= 5);
+        if (target is null) return;
+
+        var from = target.LowWatermark;
+        var to = target.LowWatermark + 3;
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            OffsetFrom = from,
+            OffsetTo = to,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+            messages.Add(msg);
+
+        messages.Should().OnlyContain(m => m.Offset >= from && m.Offset <= to);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_TimestampFrom_OnlyReturnsNewerMessages()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.FirstMessageTimestamp.HasValue && s.LastMessageTimestamp.HasValue);
+        if (target is null) return;
+
+        // Midpoint between first and last known message timestamp on that partition.
+        var span = target.LastMessageTimestamp!.Value - target.FirstMessageTimestamp!.Value;
+        var midpoint = target.FirstMessageTimestamp.Value + TimeSpan.FromTicks(span.Ticks / 2);
+
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            TimestampFrom = midpoint,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+        {
+            messages.Add(msg);
+            if (messages.Count >= 10) cts.Cancel();
+        }
+
+        messages.Should().OnlyContain(m => m.Timestamp >= midpoint.AddSeconds(-1)); // small tolerance
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_Uncapped_ExceedsMaxFetchMessages()
+    {
+        // Reproduces the background-monitor use case (ServiceMetricsMonitor): uncapped:true
+        // must ignore MaxFetchMessages instead of silently stopping after it.
+        var factory = BuildFactory();
+        var pipeline = BuildPipeline();
+        var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 2 });
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+
+        var topics = await svc.GetTopicsAsync("test");
+        var target = topics.FirstOrDefault();
+        if (target is null) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", target.Name);
+        if (!stats.Any(s => s.HighWatermark - s.LowWatermark > 2)) return; // not enough data to prove the point
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", target.Name, KafkaSeekDirective.Default, cts.Token, uncapped: true))
+        {
+            messages.Add(msg);
+            if (messages.Count > 2) cts.Cancel(); // proved the point — cap of 2 was exceeded
+        }
+
+        messages.Count.Should().BeGreaterThan(2, "uncapped:true must ignore MaxFetchMessages=2");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static KafkaService BuildService(int maxFetchMessages = 2_000)
+    {
+        var factory = BuildFactory();
+        var pipeline = BuildPipeline();
+        var settings = Options.Create(new KafkaSettings { MaxFetchMessages = maxFetchMessages });
+        return new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+    }
 
     private static FilterParser BuildParser() => new(
         ["Key", "PayloadType", "Partition", "Offset", "Timestamp", "latest"],

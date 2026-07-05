@@ -34,6 +34,7 @@ public class MockHeartbeatService : IHeartbeatService
                 ServiceName = inst.Service,
                 HostName = inst.Host,
                 ProcessId = inst.Pid,
+                ServiceInstanceId = MockInstanceId(inst.Service, inst.Host, inst.Pid),
                 UpdatedDateTime = updated,
                 CreatedDateTime = now.AddHours(-i - 1),
                 IsOnline = (now - updated).TotalSeconds <= 60,
@@ -41,5 +42,13 @@ public class MockHeartbeatService : IHeartbeatService
         }).ToList();
 
         return Task.FromResult(statuses);
+    }
+
+    // Deterministic GUID-shaped (dashes removed) id, matching the real format's shape.
+    private static string MockInstanceId(string service, string host, int pid)
+    {
+        var hash = System.Security.Cryptography.MD5.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{service}|{host}|{pid}"));
+        return Convert.ToHexString(hash);
     }
 }

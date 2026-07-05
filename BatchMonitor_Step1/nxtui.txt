@@ -5657,7 +5657,7 @@ LENGTH 520
     </NotFound>
 </Router>
 FILE src/NxtUI.Web/appsettings.Development.json
-LENGTH 652
+LENGTH 317
 {
   "DetailedErrors": true,
 
@@ -5666,17 +5666,6 @@ LENGTH 652
       "Default": "Debug",
       "Microsoft.AspNetCore": "Information"
     }
-  },
-
-  "Logs": {
-    "ServiceTemplates": [
-      "C:\\Temp\\NxtUI-testlogs\\{date}\\Services\\{service}_{env}\\{server}_*_Pid_{pid}"
-    ],
-    "MetricsFileName": "Metrics.log",
-    "MetricsIntervalSeconds": 90,
-    "LogsFolder": "C:\\Temp\\logs\\{server}",
-    "FolderScanIntervalSeconds": 30,
-    "FolderScanMinIntervalSeconds": 10
   },
 
   "TestLogGenerator": {
@@ -5688,18 +5677,36 @@ LENGTH 652
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 2495
+LENGTH 3024
 {
   "AllowedHosts": "*",
+
+  "Ui": {
+    "FilterDebounceMs": 500
+  },
 
   "Kafka": {
     "BootstrapServers": "localhost:9092",
     "TopicDeserializers": [
-      { "Pattern": "orders.*",   "Types": ["OrderEvent"] },
-      { "Pattern": "payments.*", "Types": ["PaymentEvent"] },
-      { "Pattern": "*.events",   "Types": ["OrderEvent", "PaymentEvent"] }
+      {
+        "Pattern": "orders.*",
+        "Types": [ "OrderEvent" ]
+      },
+      {
+        "Pattern": "payments.*",
+        "Types": [ "PaymentEvent" ]
+      },
+      {
+        "Pattern": "*.events",
+        "Types": [ "OrderEvent", "PaymentEvent" ]
+      },
+      {
+        "Pattern": "metrics",
+        "Types": [ "MetricsTracker" ]
+      }
     ],
-    "DefaultProtoType": "ProtoMsg"
+    "DefaultProtoType": "ProtoMsg",
+    "MetricsTopicName": "metrics"
   },
 
   "Mongo": {
@@ -5724,12 +5731,13 @@ LENGTH 2495
       "{timestamp}{newline}{host}|{pid}|{thread}|{message}|{caller}|{*}{newline}"
     ],
     "ServiceTemplates": [
+      "C:\\Temp\\NxtUI-testlogs\\{date}\\Services\\{service}_{env}\\{server}_*_Pid_{pid}",
       "\\\\{server}\\Shared\\bau\\logs\\{date}\\Services\\{service}_{env}\\{server}_*_Pid_{pid}"
     ],
     "MetricsFileName": "Metrics.log",
     "MetricsIntervalSeconds": 90,
-    "LogsFolder": "\\\\{server}\\Shared\\bau\\logs",
-    "Servers": [],
+    "LogsFolder": "C:\\Temp\\logs\\{server}",
+    //"LogsFolder": "\\\\{server}\\Shared\\bau\\logs",
     "FolderScanIntervalSeconds": 30,
     "FolderScanMinIntervalSeconds": 10,
     "IdleReleaseMinutes": 10
@@ -5757,17 +5765,47 @@ LENGTH 2495
     "DefaultEnvironment": "DEV1",
     "DefaultPageSize": 25,
     "Environments": [
-      { "Id": "DEV1",  "Label": "Development 1", "Tier": "Development", "Servers": [ "dev1-srv-01", "dev1-srv-02" ] },
-      { "Id": "DEV2",  "Label": "Development 2", "Tier": "Development", "Servers": [ "dev2-srv-01" ] },
-      { "Id": "UAT1",  "Label": "UAT 1",          "Tier": "UAT",         "Servers": [ "uat1-srv-01", "uat1-srv-02" ] },
-      { "Id": "UAT2",  "Label": "UAT 2",          "Tier": "UAT",         "Servers": [ "uat2-srv-01" ] },
-      { "Id": "STG1",  "Label": "Staging 1",      "Tier": "Staging",     "Servers": [ "stg1-srv-01", "stg1-srv-02" ] },
-      { "Id": "PROD1", "Label": "Production 1",   "Tier": "Production",  "Servers": [ "prod-srv-01", "prod-srv-02", "prod-srv-03" ] }
+      {
+        "Id": "DEV1",
+        "Label": "Development 1",
+        "Tier": "Development",
+        "Servers": [ "dev1-srv-01", "dev1-srv-02" ]
+      },
+      {
+        "Id": "DEV2",
+        "Label": "Development 2",
+        "Tier": "Development",
+        "Servers": [ "dev2-srv-01" ]
+      },
+      {
+        "Id": "UAT1",
+        "Label": "UAT 1",
+        "Tier": "UAT",
+        "Servers": [ "uat1-srv-01", "uat1-srv-02" ]
+      },
+      {
+        "Id": "UAT2",
+        "Label": "UAT 2",
+        "Tier": "UAT",
+        "Servers": [ "uat2-srv-01" ]
+      },
+      {
+        "Id": "STG1",
+        "Label": "Staging 1",
+        "Tier": "Staging",
+        "Servers": [ "stg1-srv-01", "stg1-srv-02" ]
+      },
+      {
+        "Id": "PROD1",
+        "Label": "Production 1",
+        "Tier": "Production",
+        "Servers": [ "prod-srv-01", "prod-srv-02", "prod-srv-03" ]
+      }
     ]
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 2933
+LENGTH 3810
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
   ANSI color codes used below (&#27; = ESC):
@@ -5811,6 +5849,19 @@ LENGTH 2933
             concurrentWrites="false"
             keepFileOpen="true"
             layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
+
+    <!-- Mongo queries (MongoService's LogDebug calls: rendered filters, sort/skip/limit,
+         AST -> Mongo translation): plain-text rolling file, one per day, kept 14 days -->
+    <target xsi:type="File" name="mongo-file"
+            fileName="${basedir}/logs/mongo-queries.log"
+            archiveFileName="${basedir}/logs/mongo-queries.{#}.log"
+            archiveEvery="Day"
+            archiveNumbering="Date"
+            archiveDateFormat="yyyy-MM-dd"
+            maxArchiveFiles="14"
+            concurrentWrites="false"
+            keepFileOpen="true"
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
   </targets>
 
   <rules>
@@ -5821,6 +5872,9 @@ LENGTH 2933
 
     <!-- diagnostics monitor → console + file -->
     <logger name="NxtUI.Web.Services.ServerDiagnosticsMonitor" minlevel="Debug" writeTo="console,diag-file" final="true" />
+
+    <!-- mongo queries → console + file -->
+    <logger name="NxtUI.Core.Services.Mongo.*" minlevel="Debug" writeTo="console,mongo-file" final="true" />
 
     <!-- app code at Debug and above -->
     <logger name="NxtUI.*" minlevel="Debug" writeTo="console" />
@@ -5870,7 +5924,7 @@ LENGTH 1029
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 16448
+LENGTH 16568
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -5920,6 +5974,9 @@ public class Program
 
         builder.Services.Configure<RunsSettings>(
             builder.Configuration.GetSection(RunsSettings.SectionName));
+
+        builder.Services.Configure<UiSettings>(
+            builder.Configuration.GetSection(UiSettings.SectionName));
 
         // ── Per-environment config loader ─────────────────────────────────────
         builder.Services.AddSingleton(new EnvironmentConfigOptions
@@ -6568,7 +6625,7 @@ public class HeartbeatSettings
     public int IdleReleaseMinutes { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/KafkaSettings.cs
-LENGTH 3321
+LENGTH 3766
 using System.Security.Cryptography;
 using System.Text;
 
@@ -6617,6 +6674,14 @@ public class KafkaSettings
 
     /// <summary>Maximum messages fetched in one streaming session (default 2000).</summary>
     public int MaxFetchMessages { get; set; } = 2_000;
+
+    /// <summary>
+    /// Per-environment topic that services publish periodic memory-metrics samples to
+    /// (protobuf-encoded MetricsTracker messages), single partition, low retention.
+    /// ServiceMetricsMonitor tails this live and only falls back to disk-based log
+    /// parsing for history older than the topic's retention window. Default: "metrics".
+    /// </summary>
+    public string MetricsTopicName { get; set; } = "metrics";
 
     // ── Connection fingerprint ────────────────────────────────────────────────
 
@@ -6832,6 +6897,21 @@ public class TestLogGeneratorSettings
     /// errors for UAT/Staging/Production databases at startup.
     /// </summary>
     public List<string> Environments { get; set; } = [];
+}
+FILE src/NxtUI.Core/Configuration/UiSettings.cs
+LENGTH 461
+namespace NxtUI.Configuration;
+
+public class UiSettings
+{
+    public const string SectionName = "Ui";
+
+    /// <summary>
+    /// Default debounce interval (ms) for FilterBox inputs — how long to wait after the
+    /// user stops typing before firing OnFilterChanged (and the resulting Mongo/SQL/Kafka
+    /// query). Individual FilterBox call sites can still override this explicitly.
+    /// </summary>
+    public int FilterDebounceMs { get; set; } = 500;
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -8621,7 +8701,7 @@ public record MongoHealth
     public string? Error { get; init; }
 }
 FILE src/NxtUI.Core/Models/HeartbeatDocument.cs
-LENGTH 643
+LENGTH 916
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
@@ -8647,6 +8727,11 @@ public class HeartbeatDocument
 
     [BsonElement("HostName")]
     public string HostName { get; set; } = string.Empty;
+
+    /// <summary>GUID (dashes removed) identifying this specific process instance —
+    /// used to match this heartbeat to its live Kafka metrics stream.</summary>
+    [BsonElement("ServiceInstanceId")]
+    public string ServiceInstanceId { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Core/Models/KafkaModels.cs
 LENGTH 4203
@@ -8925,7 +9010,7 @@ public class RunSummary
     public TimeSpan Duration => (End ?? DateTime.UtcNow) - Start;
 }
 FILE src/NxtUI.Core/Models/ServiceStatus.cs
-LENGTH 660
+LENGTH 921
 namespace NxtUI.Core.Models;
 
 public class ServiceStatus
@@ -8933,6 +9018,10 @@ public class ServiceStatus
     public string ServiceName { get; set; } = string.Empty;
     public string HostName { get; set; } = string.Empty;
     public int ProcessId { get; set; }
+
+    /// <summary>GUID (dashes removed) identifying this specific process instance —
+    /// matches this service to its live Kafka metrics stream (MetricsTracker.ServiceInstanceId).</summary>
+    public string ServiceInstanceId { get; set; } = string.Empty;
     public DateTime UpdatedDateTime { get; set; }
     public DateTime CreatedDateTime { get; set; }
     public bool IsOnline { get; set; }
@@ -9227,7 +9316,7 @@ public interface IHeartbeatService
     Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IKafkaService.cs
-LENGTH 3452
+LENGTH 3775
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9259,8 +9348,14 @@ public interface IKafkaMonitor
     /// The stream ends when the cancellation token is cancelled (Pause/Reset) or when a
     /// bounded end condition in the directive is reached.
     /// </summary>
+    /// <param name="uncapped">
+    /// When true, ignores KafkaSettings.MaxFetchMessages (that safety cap exists for
+    /// interactive UI sessions; long-running background consumers need to keep tailing
+    /// indefinitely instead of silently stopping after N messages).
+    /// </param>
     IAsyncEnumerable<KafkaMessage> TailTopicAsync(
-        string env, string topicName, KafkaSeekDirective directive, CancellationToken ct = default);
+        string env, string topicName, KafkaSeekDirective directive, CancellationToken ct = default,
+        bool uncapped = false);
 
     /// <summary>
     /// Returns watermark offsets and first/last message timestamps for each partition.
@@ -10014,6 +10109,28 @@ public class TopologyComputationService
     private static string InferTopicName(string pipeline) =>
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
 }
+FILE src/NxtUI.Protos/Protos/MetricsTracker.proto
+LENGTH 712
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Protos";
+package nxtui;
+
+import "google/protobuf/timestamp.proto";
+
+// Periodic memory-metrics sample published by each service instance to the
+// per-environment metrics topic (single partition, low retention). Tailed
+// live by ServiceMetricsMonitor; disk-based log parsing only backfills
+// history older than the topic's retention window.
+message MetricsTracker {
+  string ServiceName = 1;
+  string ServiceInstanceId = 2;
+  google.protobuf.Timestamp ProcessStartTime = 3;
+  string HostName = 4;
+  int64 CurrentMemoryUsageByte = 5;
+  int64 PeakMemoryUsageByte = 6;
+  int64 ChildProcessesMemoryUsageByte = 7;
+  int64 ChildProcessesPeakMemoryUsageByte = 8;
+}
 FILE src/NxtUI.Protos/Protos/OrderEvent.proto
 LENGTH 703
 syntax = "proto3";
@@ -10528,12 +10645,15 @@ LENGTH 2134
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 6621
+LENGTH 7023
 @namespace NxtUI.Web.Components
+@using Microsoft.Extensions.Options
+@using NxtUI.Configuration
 @inject NxtUI.Web.Services.TabService _tabSvc
+@inject IOptions<UiSettings> UiOptions
 @* Reusable debounced filter input with inline help popup.
    Value           — controlled value; set from parent so programmatic clear works.
-   OnFilterChanged — fired after DebounceMs of inactivity.
+   OnFilterChanged — fired after DebounceMs (or Ui:FilterDebounceMs if unset) of inactivity.
    ParseError      — non-null shows a red outline (no inline text, preserves toolbar height).
    FieldHints      — context-specific fields shown in the cheat sheet popup.
    Class           — applied to the wrapper div for flex-layout integration. *@
@@ -10551,7 +10671,7 @@ LENGTH 6621
                       Value="@Value"
                       ValueChanged="NotifyChanged"
                       Immediate="true"
-                      DebounceInterval="@DebounceMs"
+                      DebounceInterval="@EffectiveDebounceMs"
                       Variant="Variant.Outlined"
                       Margin="Margin.Dense"
                       Error="@(ParseError is not null)"
@@ -10644,7 +10764,11 @@ LENGTH 6621
     [Parameter] public EventCallback<string> OnFilterChanged { get; set; }
     [Parameter] public string? ParseError      { get; set; }
     [Parameter] public string? Class           { get; set; }
-    [Parameter] public int     DebounceMs      { get; set; } = 300;
+    // Null (the default) means "use the configured Ui:FilterDebounceMs" — set explicitly
+    // per call site to override (e.g. TimelineTab's CSV import filter uses 250ms).
+    [Parameter] public int?    DebounceMs      { get; set; }
+
+    private int EffectiveDebounceMs => DebounceMs ?? UiOptions.Value.FilterDebounceMs;
     [Parameter] public string  Placeholder     { get; set; } = "Filter…";
     [Parameter] public bool    ShowHint        { get; set; } = true;
 
@@ -10895,7 +11019,7 @@ public partial class KafkaTopicInfoDialog
     };
 }
 FILE src/NxtUI.Web/Components/LogBrowserFileTree.razor
-LENGTH 5338
+LENGTH 7069
 @namespace NxtUI.Web.Components
 @using NxtUI.Web.Models
 
@@ -10930,49 +11054,58 @@ else if (RootNodes.Count == 0)
 }
 else
 {
-    <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
-                 SelectedValueChanged="@((LogFolderNode? n) => OnTreeNodeSelected.InvokeAsync(n))"
-                 Class="bm-lb-tree">
+    <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary" Class="bm-lb-tree">
         @foreach (var node in RootNodes)
         {
-            <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
+            <MudTreeViewItem @key="@node.RelativePath" Value="@node"
                              Icon="@(LoadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                              Expanded="@Expanded.Contains(node.RelativePath)"
                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
-                @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
-                {
-                    @foreach (var c1 in ch1)
+                <BodyContent>@RenderRow(node)</BodyContent>
+                <ChildContent>
+                    @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
                     {
-                        <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
-                                         Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                         Expanded="@Expanded.Contains(c1.RelativePath)"
-                                         ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
-                                         OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
-                            @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
-                            {
-                                @foreach (var c2 in ch2)
-                                {
-                                    <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
-                                                     Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                                     Expanded="@Expanded.Contains(c2.RelativePath)"
-                                                     ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
-                                                     OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
-                                        @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
+                        @foreach (var c1 in ch1)
+                        {
+                            <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
+                                             Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                             Expanded="@Expanded.Contains(c1.RelativePath)"
+                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
+                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
+                                <BodyContent>@RenderRow(c1)</BodyContent>
+                                <ChildContent>
+                                    @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
+                                    {
+                                        @foreach (var c2 in ch2)
                                         {
-                                            @foreach (var c3 in ch3)
-                                            {
-                                                <MudTreeViewItem @key="@c3.RelativePath" Value="@c3" Text="@c3.Name"
-                                                                 Icon="@Icons.Material.Outlined.Folder"
-                                                                 OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))" />
-                                            }
+                                            <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
+                                                             Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                                             Expanded="@Expanded.Contains(c2.RelativePath)"
+                                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
+                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
+                                                <BodyContent>@RenderRow(c2)</BodyContent>
+                                                <ChildContent>
+                                                    @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
+                                                    {
+                                                        @foreach (var c3 in ch3)
+                                                        {
+                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
+                                                                             Icon="@Icons.Material.Outlined.Folder"
+                                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
+                                                                <BodyContent>@RenderRow(c3)</BodyContent>
+                                                            </MudTreeViewItem>
+                                                        }
+                                                    }
+                                                </ChildContent>
+                                            </MudTreeViewItem>
                                         }
-                                    </MudTreeViewItem>
-                                }
-                            }
-                        </MudTreeViewItem>
+                                    }
+                                </ChildContent>
+                            </MudTreeViewItem>
+                        }
                     }
-                }
+                </ChildContent>
             </MudTreeViewItem>
         }
     </MudTreeView>
@@ -10984,16 +11117,34 @@ else
     [Parameter] public Dictionary<string, IReadOnlyList<LogFolderNode>> ChildCache { get; set; } = new();
     [Parameter] public HashSet<string>     Expanded       { get; set; } = new();
     [Parameter] public HashSet<string>     LoadingNodes   { get; set; } = new();
+    [Parameter] public HashSet<string>     CheckedPaths   { get; set; } = new();
     [Parameter] public bool                Initialized    { get; set; }
     [Parameter] public bool                LogsFolderMissing { get; set; }
     [Parameter] public string?             InitError      { get; set; }
 
-    [Parameter] public EventCallback<LogFolderNode?>          OnTreeNodeSelected { get; set; }
     [Parameter] public EventCallback<(LogFolderNode, bool)>   OnExpandedChanged  { get; set; }
     [Parameter] public EventCallback<LogFolderNode>           OnItemClick        { get; set; }
+    [Parameter] public EventCallback<(LogFolderNode, bool)>   OnCheckChanged     { get; set; }
 
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
+
+    // Row body: folder name on the left, a selection checkbox on the right — independent
+    // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
+    // a folder never toggles its expansion and vice versa.
+    private RenderFragment RenderRow(LogFolderNode node) => __builder =>
+    {
+        <div class="bm-lb-tree-row">
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
+            <div @onclick:stopPropagation="true">
+                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
+                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
+                             Size="Size.Small"
+                             Color="Color.Primary"
+                             Class="bm-lb-tree-row-checkbox" />
+            </div>
+        </div>
+    };
 }
 FILE src/NxtUI.Web/Components/LogViewerToolbar.razor
 LENGTH 7203
@@ -15159,7 +15310,7 @@ LENGTH 10034
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 27123
+LENGTH 28156
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -15212,17 +15363,10 @@ LENGTH 27123
                            OnClick="ToggleStats" />
         </MudTooltip>
 
-        <FilterBox Value="@_filterText"
-                   OnFilterChanged="OnFilterChanged"
-                   ParseError="@_filterParseError"
-                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
-                   Class="bm-filter-input"
-                   FieldHints="@_fieldHints" />
-
         <!-- Mode select -->
         <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
                    Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
-                   Style="width:max-content; min-width:140px;">
+                   Style="width:max-content;">
             <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
             <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
             <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
@@ -15230,6 +15374,13 @@ LENGTH 27123
             <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
             <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
         </MudSelect>
+
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -15301,7 +15452,7 @@ LENGTH 27123
     <!-- Message table + detail side by side -->
     <div class="bm-inspector-body">
         <div class="bm-table-wrap">
-            @if (_state == StreamState.Running && _messages.Count == 0)
+            @if (_state == StreamState.Running && (_messages.Count == 0 || _boundedFetch))
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
             }
@@ -15324,8 +15475,9 @@ LENGTH 27123
                     <MudTh Style="white-space:nowrap;">Part</MudTh>
                     <MudTh Style="white-space:nowrap;">Key</MudTh>
                     <MudTh Style="white-space:nowrap;">Type</MudTh>
-                    <MudTh Style="width:100%;">Payload</MudTh>
+                    <MudTh Style="white-space:nowrap;">Size</MudTh>
                     <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
@@ -15338,14 +15490,16 @@ LENGTH 27123
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-kafka-payload-type bm-kafka-type-@context.PayloadType.ToLower()">@context.PayloadType</span>
-                        <span class="bm-muted" style="font-size:10px;">@context.RawSizeBytes B</span>
+                        <span class="bm-kafka-payload-type @TypeChipClass(context.PayloadType)">@context.PayloadType</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
+                        <span class="bm-kafka-mono bm-muted">@context.RawSizeBytes B</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
                     </MudTd>
                 </RowTemplate>
             </MudTable>
@@ -15360,7 +15514,7 @@ LENGTH 27123
                         offset <strong>@_selected.Offset</strong>
                         &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
                         &nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp, "yyyy-MM-dd HH:mm:ss.fff")@DtSvc.ZoneSuffix
-                        &nbsp;·&nbsp; <span class="bm-kafka-payload-type bm-kafka-type-@_selected.PayloadType.ToLower()">@_selected.PayloadType</span>
+                        &nbsp;·&nbsp; <span class="bm-kafka-payload-type @TypeChipClass(_selected.PayloadType)">@_selected.PayloadType</span>
                         &nbsp;·&nbsp; <span class="bm-muted">@_selected.RawSizeBytes B</span>
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
@@ -15432,6 +15586,7 @@ LENGTH 27123
     private bool                              _jsonDirty;
     private StreamState                       _state       = StreamState.Idle;
     private CancellationTokenSource           _cts         = new();
+    private bool                              _boundedFetch;
 
     private string  _filterText       = string.Empty;
     private string? _filterParseError;
@@ -15488,6 +15643,7 @@ LENGTH 27123
         StateHasChanged();
 
         var (directive, remaining) = ExtractDirective(_filterText);
+        _boundedFetch = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue;
         var lastRender = DateTime.MinValue;
 
         try
@@ -15760,6 +15916,22 @@ LENGTH 27123
     private static string? TruncateValue(string? v)
         => v is null ? null : v.Length > 120 ? v[..120] + "…" : v;
 
+    // Payload types are arbitrary proto message names (unbounded set) — pick a color
+    // bucket via a stable hash instead of hardcoding one CSS class per known type name.
+    // string.GetHashCode() is randomized per process, so it's not used here.
+    private static readonly string[] TypeChipClasses =
+    [
+        "bm-type-hash-0", "bm-type-hash-1", "bm-type-hash-2", "bm-type-hash-3",
+        "bm-type-hash-4", "bm-type-hash-5", "bm-type-hash-6", "bm-type-hash-7",
+    ];
+
+    private static string TypeChipClass(string type)
+    {
+        var hash = 0;
+        foreach (var c in type) hash = (hash * 31 + c) & 0x7fffffff;
+        return TypeChipClasses[hash % TypeChipClasses.Length];
+    }
+
     private static string FormatJson(string raw)
     {
         try
@@ -15782,7 +15954,7 @@ LENGTH 27123
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 33465
+LENGTH 36542
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -15850,7 +16022,7 @@ LENGTH 33465
                     <MudButton Variant="Variant.Filled"
                                Color="@(_isSearching ? Color.Error : Color.Primary)"
                                Size="Size.Small"
-                               Disabled="@(!_isSearching && _selectedPath is null)"
+                               Disabled="@(!_isSearching && _checkedPaths.Count == 0)"
                                OnClick="OnSearchButtonClickAsync"
                                Class="bm-lb-search-btn">
                         @(_isSearching ? "Stop" : "Start Search")
@@ -15860,29 +16032,30 @@ LENGTH 33465
         </div>
     </div>
 
-    <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
+    <!-- ── Toolbar row 2: selected-folder chips ─────────────────────────── -->
     <div class="bm-batch-toolbar bm-lb-toolbar bm-lb-breadcrumb-bar">
-        @if (_selectedPath is not null)
+        @if (_checkedPaths.Count > 0)
         {
-            var parts = _selectedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
-            var accumulated = "";
-            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">\</span>
-            foreach (var part in parts)
+            @foreach (var path in _checkedPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
             {
-                accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
-                var snap = accumulated;
-                <span class="bm-lb-bc-sep bm-muted">\</span>
-                <span class="bm-lb-bc-item" @onclick="@(() => NavigateBreadcrumbAsync(snap))">@part</span>
+                var snap = path;
+                <MudChip T="string" Size="Size.Small" Class="bm-lb-path-chip"
+                         OnClose="@(() => SetCheckedAsync(snap, false))">
+                    @(string.IsNullOrEmpty(path) ? "\\" : path)
+                </MudChip>
             }
             @if (_isSearchMode)
             {
                 <span class="bm-lb-bc-sep bm-muted"> — </span>
                 <span class="bm-muted bm-toolbar-hint">search results</span>
             }
+            <MudTooltip Text="Clear all">
+                <MudIconButton Icon="@Icons.Material.Outlined.ClearAll" Size="Size.Small" OnClick="ClearSelection" />
+            </MudTooltip>
         }
         else
         {
-            <span class="bm-muted bm-toolbar-hint">Select a folder in the tree</span>
+            <span class="bm-muted bm-toolbar-hint">Check one or more folders in the tree</span>
         }
     </div>
 
@@ -15895,19 +16068,20 @@ LENGTH 33465
                 <LogBrowserFileTree Servers="@_servers"
                                     RootNodes="@FilteredRootNodes"
                                     ChildCache="@FilteredChildCache"
-                                    Expanded="@_expanded"
+                                    Expanded="@EffectiveExpanded"
                                     LoadingNodes="@_loadingNodes"
+                                    CheckedPaths="@_checkedPaths"
                                     Initialized="@_initialized"
                                     LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
                                     InitError="@_initError"
-                                    OnTreeNodeSelected="@OnTreeNodeSelectedAsync"
                                     OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
-                                    OnItemClick="@OnItemClickAsync" />
+                                    OnItemClick="@OnItemClickAsync"
+                                    OnCheckChanged="@(args => OnCheckChangedAsync(args.Item1, args.Item2))" />
             </div>
             <FilterBox Value="@_treeFilterText"
                        OnFilterChanged="OnTreeFilterChanged"
                        ParseError="@_treeFilterError"
-                       Placeholder="Filter folders…"
+                       Placeholder="Filter path…"
                        Class="bm-lb-tree-filter"
                        ShowHint="false"
                        FieldHints="@TreeFieldHints" />
@@ -15918,11 +16092,11 @@ LENGTH 33465
 
         <!-- right: file table -->
         <div class="bm-lb-files-panel">
-            @if (_selectedPath is null)
+            @if (_checkedPaths.Count == 0)
             {
                 <div class="bm-lb-empty">
                     <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Large" Class="bm-muted" Style="opacity:.3" />
-                    <MudText Typo="Typo.body2" Class="bm-muted mt-2">Select a folder to view its files</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-muted mt-2">Check a folder to view its files</MudText>
                 </div>
             }
             else
@@ -15953,7 +16127,11 @@ LENGTH 33465
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd DataLabel="Host" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
+                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))">
+                                <MudTooltip Text="@context.FullPath">
+                                    <MudText Typo="Typo.body2">@context.FileName</MudText>
+                                </MudTooltip>
+                            </MudTd>
                             <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="@(() => OpenInViewer(context))">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
@@ -16033,6 +16211,8 @@ LENGTH 33465
             ["created"]  = "CreatedUtc",
             ["updated"]  = "LastModifiedUtc",
             ["modified"] = "LastModifiedUtc",
+            ["path"]     = "FullPath",
+            ["fullpath"] = "FullPath",
         });
 
     private static readonly (string Aliases, string Label)[] RowFieldHints =
@@ -16042,6 +16222,7 @@ LENGTH 33465
         ("size",                  "file size (bytes)"),
         ("created",               "creation time"),
         ("updated / modified",    "last modified time"),
+        ("path / fullpath",       "full file path"),
     ];
 
     // ── panel resize ─────────────────────────────────────────────────────
@@ -16070,48 +16251,108 @@ LENGTH 33465
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
-    // Sidebar tree name filter — same shared filter grammar as every other filter box
-    // (AND/OR/NOT/parens, see docs/08_FilterSyntax.md), evaluated against LogFolderNode.Name.
-    // Only filters nodes already loaded (root + expanded branches' cached children);
-    // deeper unexpanded branches aren't fetched eagerly.
-    private static readonly FilterParser TreeFilterParser = new(searchableFields: ["Name"]);
+    // Sidebar tree filter — same shared filter grammar as every other filter box
+    // (AND/OR/NOT/parens, see docs/08_FilterSyntax.md), evaluated against the folder's
+    // full RelativePath by default (not just its own Name), so typing an ancestor
+    // segment (e.g. "orders") surfaces every folder underneath it, not just folders
+    // literally named "orders". A folder is kept if it matches OR any of its (loaded)
+    // descendants match — see NodeMatchesOrHasDescendantMatch — and the whole subtree
+    // is eagerly loaded once a filter is active (see EnsureTreeLoadedAsync) so the
+    // filter can actually see branches the user hasn't manually expanded yet.
+    private static readonly FilterParser TreeFilterParser = new(
+        searchableFields: ["RelativePath"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["path"] = "RelativePath",
+            ["name"] = "Name",
+        });
 
     private static readonly (string Aliases, string Label)[] TreeFieldHints =
     [
-        ("name", "folder name"),
+        ("path", "full folder path (default)"),
+        ("name", "folder name only"),
     ];
 
     private string      _treeFilterText  = "";
     private string?     _treeFilterError;
     private FilterNode? _treeFilterNode;
+    private bool        _treeFullyLoaded;
 
-    private void OnTreeFilterChanged(string v)
+    private async Task OnTreeFilterChanged(string v)
     {
         _treeFilterText  = v;
         _treeFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _treeFilterNode = null; return; }
         try   { _treeFilterNode = TreeFilterParser.Parse(v, DtSvc.UseUtc); }
-        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; }
+        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; return; }
+
+        await EnsureTreeLoadedAsync();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Eagerly loads every folder down to the depth LogBrowserFileTree can actually
+    /// render (4 levels: root + 3), so the tree filter has something to search inside
+    /// unexpanded branches. Runs once per session (or since the last full Refresh) —
+    /// real infra may have many folders, so this isn't repeated on every keystroke.
+    /// </summary>
+    private async Task EnsureTreeLoadedAsync()
+    {
+        if (_treeFullyLoaded) return;
+        _treeFullyLoaded = true;
+
+        async Task LoadLevelAsync(IEnumerable<LogFolderNode> nodes, int depthRemaining)
+        {
+            if (depthRemaining <= 0) return;
+            foreach (var node in nodes)
+            {
+                if (!node.HasChildren) continue;
+                if (!_childCache.ContainsKey(node.RelativePath))
+                {
+                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
+                    _childCache[node.RelativePath] = children;
+                }
+                await LoadLevelAsync(_childCache[node.RelativePath], depthRemaining - 1);
+            }
+        }
+
+        await LoadLevelAsync(_rootNodes, 3);
     }
 
     private List<LogFolderNode> FilteredRootNodes =>
         _treeFilterNode is null
             ? _rootNodes
-            : _rootNodes.Where(MatchesTreeFilter).ToList();
+            : _rootNodes.Where(NodeMatchesOrHasDescendantMatch).ToList();
 
     private Dictionary<string, IReadOnlyList<LogFolderNode>> FilteredChildCache =>
         _treeFilterNode is null
             ? _childCache
             : _childCache.ToDictionary(
                 kv => kv.Key,
-                kv => (IReadOnlyList<LogFolderNode>)kv.Value.Where(MatchesTreeFilter).ToList(),
+                kv => (IReadOnlyList<LogFolderNode>)kv.Value.Where(NodeMatchesOrHasDescendantMatch).ToList(),
                 StringComparer.OrdinalIgnoreCase);
 
-    private bool MatchesTreeFilter(LogFolderNode n) =>
-        FilterEvaluator.Evaluate(_treeFilterNode, n);
+    // A folder survives the filter if it matches itself, or any (already-loaded)
+    // descendant matches — otherwise a non-matching parent would hide matching
+    // children beneath it entirely.
+    private bool NodeMatchesOrHasDescendantMatch(LogFolderNode n) =>
+        FilterEvaluator.Evaluate(_treeFilterNode, n) ||
+        (_childCache.TryGetValue(n.RelativePath, out var children) && children.Any(NodeMatchesOrHasDescendantMatch));
+
+    // While filtering, auto-expand every node that has a surviving (kept) child, so the
+    // match is actually visible without the user manually expanding each ancestor.
+    private HashSet<string> EffectiveExpanded =>
+        _treeFilterNode is null
+            ? _expanded
+            : new HashSet<string>(
+                _expanded.Concat(FilteredChildCache.Where(kv => kv.Value.Count > 0).Select(kv => kv.Key)),
+                StringComparer.OrdinalIgnoreCase);
 
     // ── file / search state ───────────────────────────────────────────────
-    private string?            _selectedPath;
+    // Checked folders (checkbox column) — independent of _expanded (which folders are
+    // open in the tree) and independent of each other; the files table aggregates
+    // results from every checked path across all servers.
+    private readonly HashSet<string> _checkedPaths = new(StringComparer.OrdinalIgnoreCase);
     private List<LogFileEntry> _files        = new();
     private bool               _loadingFiles;
     private bool               _initialized;
@@ -16120,7 +16361,9 @@ LENGTH 33465
     private string?            _initError;
     // tracks which tree nodes are currently fetching their children
     private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
-    private string?  _lastManualPollPath;
+    // Bumped every time the checked-path set changes — lets an in-flight LoadFilesAsync
+    // detect it's been superseded by a newer selection change and discard its result.
+    private int _loadGeneration;
 
     // always-visible row filter — filters the currently-loaded file table itself
     private string      _rowFilterText  = "";
@@ -16161,7 +16404,6 @@ LENGTH 33465
     private CancellationTokenSource? _searchCts;
     private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
-    private DateTime                 _lastManualPoll = DateTime.MinValue;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -16171,7 +16413,7 @@ LENGTH 33465
         _poller = new FocusGatedPoller(interval, async ct =>
         {
             // Skip auto-refresh while a search is running.
-            if (_selectedPath is not null && !_isSearching && !_isSearchMode)
+            if (_checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
                 await InvokeAsync(LoadFilesAsync);
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
@@ -16212,7 +16454,7 @@ LENGTH 33465
             // navigating away and isn't composing a search — don't restart polling just
             // because the tab regained focus.
             RestartPollingIfBrowsing();
-            if (_initialized && _selectedPath is not null && !_isSearching && !_isSearchMode)
+            if (_initialized && _checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
                 _ = InvokeAsync(async () =>
                 {
                     try { await LoadFilesAsync(); }
@@ -16229,7 +16471,7 @@ LENGTH 33465
     // the search bar isn't open (composing/viewing a search is a snapshot, not live).
     private void RestartPollingIfBrowsing()
     {
-        _poller?.SetActive(IsFocused && _selectedPath is not null && !_searchBarOpen);
+        _poller?.SetActive(IsFocused && _checkedPaths.Count > 0 && !_searchBarOpen);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -16265,15 +16507,22 @@ LENGTH 33465
 
     // ── tree interaction ──────────────────────────────────────────────────
 
-    private async Task OnTreeNodeSelectedAsync(LogFolderNode? node)
-    {
-        if (node is null || node.RelativePath == "__loading__") return;
+    // Checking a folder is entirely independent from expanding it — clicking a row
+    // only ever toggles expand/collapse (below); the checkbox is the sole way to
+    // add/remove a folder from the file table's result set.
+    private Task OnCheckChangedAsync(LogFolderNode node, bool isChecked) =>
+        SetCheckedAsync(node.RelativePath, isChecked);
 
-        // Clicking the tree always exits search mode.
+    private async Task SetCheckedAsync(string relativePath, bool isChecked)
+    {
+        // Checking/unchecking always exits search mode — it's a browsing action.
         if (_isSearching) StopSearch();
         _isSearchMode = false;
 
-        await SelectPathAsync(node.RelativePath);
+        if (isChecked) _checkedPaths.Add(relativePath);
+        else           _checkedPaths.Remove(relativePath);
+
+        await LoadFilesAsync();
         RestartPollingIfBrowsing();
     }
 
@@ -16315,50 +16564,13 @@ LENGTH 33465
         }
     }
 
-    // ── selection (normal mode) ───────────────────────────────────────────
-
-    private async Task SelectPathAsync(string relativePath)
-    {
-        var isNewPath = relativePath != _selectedPath;
-        _selectedPath = relativePath;
-
-        // When navigating to a different folder, clear old rows immediately so
-        // the wrong folder's files aren't shown. On refresh (same folder) keep
-        // existing rows visible — the progress bar is enough feedback.
-        if (isNewPath) _files = [];
-
-        _loadingFiles = true;
-        StateHasChanged();
-        await Task.Yield();
-
-        var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
-        var sameFolder  = relativePath == _lastManualPollPath;
-        if (!sameFolder || (DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
-        {
-            _lastManualPoll     = DateTime.UtcNow;
-            _lastManualPollPath = relativePath;
-            await LoadFilesAsync();
-        }
-        else
-        {
-            _loadingFiles = _loadingNodes.Count > 0;
-            StateHasChanged();
-        }
-    }
-
-    private async Task NavigateBreadcrumbAsync(string relativePath)
-    {
-        if (_isSearching) StopSearch();
-        _isSearchMode = false;
-        await SelectPathAsync(relativePath);
-        RestartPollingIfBrowsing();
-    }
+    // ── selection (checked folders) ───────────────────────────────────────
 
     private void ClearSelection()
     {
         if (_isSearching) StopSearch();
         _isSearchMode = false;
-        _selectedPath = null;
+        _checkedPaths.Clear();
         _files.Clear();
         _poller?.Stop();
         StateHasChanged();
@@ -16385,33 +16597,45 @@ LENGTH 33465
             _expanded.Add(current);
         }
 
-        _selectedPath = parsed.Value.RelativePath;
+        _checkedPaths.Add(parsed.Value.RelativePath);
         await LoadFilesAsync();
         StateHasChanged();
     }
 
-    // ── file loading (normal mode) ────────────────────────────────────────
+    // ── file loading (aggregated across all checked folders) ──────────────
 
     private async Task LoadFilesAsync()
     {
-        if (_selectedPath is null) return;
+        var myGen = ++_loadGeneration;
 
-        var path    = _selectedPath; // capture — user may change selection while awaiting
+        if (_checkedPaths.Count == 0)
+        {
+            _files        = [];
+            _loadingFiles = false;
+            StateHasChanged();
+            return;
+        }
+
+        _loadingFiles = true;
+        StateHasChanged();
+        await Task.Yield();
+
+        var paths   = _checkedPaths.ToList(); // capture — user may change selection while awaiting
         var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         try
         {
-            // Collect all servers in parallel without touching _files mid-flight.
-            await Task.WhenAll(_servers.Select(async server =>
+            // Collect all (path, server) combinations in parallel without touching _files mid-flight.
+            await Task.WhenAll(paths.SelectMany(path => _servers.Select(async server =>
             {
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
                 foreach (var r in results) pending.Add(r);
-            }));
+            })));
 
             // Swap in the new list atomically — no intermediate empty-table flash.
             await InvokeAsync(() =>
             {
-                if (_selectedPath != path) return;
+                if (myGen != _loadGeneration) return; // superseded by a newer selection change
                 _files    = [.. pending];
                 _lastScan = DateTime.UtcNow;
                 StateHasChanged();
@@ -16419,7 +16643,7 @@ LENGTH 33465
         }
         finally
         {
-            if (_selectedPath == path)
+            if (myGen == _loadGeneration)
             {
                 _loadingFiles = _loadingNodes.Count > 0;
                 await InvokeAsync(StateHasChanged);
@@ -16427,11 +16651,11 @@ LENGTH 33465
         }
     }
 
-    // ── search (recursive mode) ───────────────────────────────────────────
+    // ── search (recursive mode, across all checked folders) ────────────────
 
     private async Task StartSearchAsync()
     {
-        if (_selectedPath is null) return;
+        if (_checkedPaths.Count == 0) return;
         if (_contentFilterError is not null) return;
 
         StopSearch();
@@ -16444,17 +16668,18 @@ LENGTH 33465
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
-        var path   = _selectedPath;
+        var paths  = _checkedPaths.ToList();
         var glob   = _fileGlob;
         var filter = _contentFilterNode;
         var ct     = _searchCts.Token;
 
         try
         {
-            await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
+            await Task.WhenAll(paths.Select(async path =>
             {
-                await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
-            }
+                await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
+                    await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
+            }));
             _lastScan = DateTime.UtcNow;
         }
         catch (OperationCanceledException) { }
@@ -16479,17 +16704,20 @@ LENGTH 33465
     private async Task RefreshAsync()
     {
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
-        if (_selectedPath is not null)
+        if (_checkedPaths.Count > 0)
         {
-            // Invalidate only the selected node's child cache entry and reload its files.
-            _childCache.Remove(_selectedPath);
-            var children = await BrowserSvc.GetSubfoldersAsync(_servers, _selectedPath, _cts.Token);
-            _childCache[_selectedPath] = children;
+            // Invalidate each checked folder's child cache entry and reload files.
+            foreach (var path in _checkedPaths.ToList())
+            {
+                _childCache.Remove(path);
+                var children = await BrowserSvc.GetSubfoldersAsync(_servers, path, _cts.Token);
+                _childCache[path] = children;
+            }
             await LoadFilesAsync();
         }
         else
         {
-            // Nothing selected — refresh just the root listing.
+            // Nothing checked — refresh just the root listing.
             var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
             _rootNodes = roots.ToList();
             _lastScan  = DateTime.UtcNow;
@@ -23325,24 +23553,39 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 12550
+LENGTH 23440
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace NxtUI.Web.Services;
 
 /// <summary>
-/// Background metrics monitor. For each subscribed environment it periodically reads
-/// the (already discovered) per-service metrics file incrementally, parses the memory
-/// lines and caches them.
+/// Background metrics monitor. Per environment, memory metrics come from two sources
+/// merged together:
+///
+///   1. Kafka (primary, live): each environment's own Kafka cluster has a single-partition,
+///      low-retention topic (KafkaSettings.MetricsTopicName, default "metrics") that every
+///      service instance publishes protobuf-encoded MetricsTracker samples to. This is
+///      tailed continuously from the moment an env gets its first subscriber.
+///
+///   2. Disk-based log parsing (backfill only): the first time a service is seen on Kafka,
+///      if there's a gap between the process's start time and the earliest timestamp Kafka's
+///      retention still has, that gap is filled once from the service's on-disk metrics log
+///      file. After that one-time backfill, the service is no longer touched by the file
+///      poller — Kafka is the sole ongoing source for it.
+///
+/// If an environment's Kafka topic has no data at all (not yet wired up there), this falls
+/// back entirely to the original continuous file-polling behavior for that environment.
 ///
 /// Polling is paused when an environment has no subscribers, but cached data (file offsets
 /// and sample history) is kept for <c>IdleReleaseMinutes</c> so that re-subscribing resumes
-/// from where it left off — no redundant file re-reads.
+/// from where it left off — no redundant file re-reads or Kafka replays.
 ///
 /// Service lists come from <see cref="IHeartbeatMonitor"/> (already cached) so this service
 /// never hits MongoDB directly.
@@ -23355,6 +23598,8 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private readonly IHeartbeatMonitor _heartbeatMonitor;
     private readonly ILogPathDiscoveryService _discovery;
     private readonly LogPathSettings _paths;
+    private readonly IKafkaMonitor _kafka;
+    private readonly KafkaSettings _kafkaSettings;
     private readonly ILogger<ServiceMetricsMonitor> _log;
 
     // Limits simultaneous network file reads to avoid overwhelming the servers.
@@ -23364,8 +23609,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private readonly Dictionary<string, int> _envRefs = new();   // env -> subscriber count
     private readonly Dictionary<string, DateTime> _envIdle = new();   // env -> idle-since (no subscribers)
     private readonly Dictionary<string, IDisposable> _hbSubs = new();   // env -> HeartbeatMonitor subscription
+    private readonly Dictionary<string, CancellationTokenSource> _kafkaCts = new();   // env -> Kafka consumer lifetime
     private readonly ConcurrentDictionary<string, Entry> _entries = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new();
+    // env -> topic has yielded at least one MetricsTracker message. Unset/false means
+    // "no Kafka data for this env" — the file poller keeps running unconditionally for it.
+    private readonly ConcurrentDictionary<string, bool> _kafkaHasData = new();
     private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnMetricsUpdated;
@@ -23374,11 +23623,15 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         IHeartbeatMonitor heartbeatMonitor,
         ILogPathDiscoveryService discovery,
         IOptions<LogPathSettings> paths,
+        IKafkaMonitor kafka,
+        IOptions<KafkaSettings> kafkaSettings,
         ILogger<ServiceMetricsMonitor> log)
     {
         _heartbeatMonitor = heartbeatMonitor;
         _discovery = discovery;
         _paths = paths.Value;
+        _kafka = kafka;
+        _kafkaSettings = kafkaSettings.Value;
         _log = log;
 
         // A freshly resolved path means there may be a file to read right away —
@@ -23407,6 +23660,10 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         public DateTime LastWriteUtc = DateTime.MinValue;
         public MetricsSample? Latest;
         public readonly List<MetricsSample> History = new();
+        // Set once the one-time disk backfill (for the pre-Kafka-retention gap) has run
+        // for this service, whether or not it actually found a gap to fill. Once true and
+        // Kafka has data for the env, the file poller stops touching this entry entirely.
+        public bool DiskBackfilled;
     }
 
     // ── Subscription ───────────────────────────────────────────────────────────
@@ -23420,6 +23677,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             // Keep a HeartbeatMonitor subscription alive for this env so it keeps polling.
             if (!_hbSubs.ContainsKey(env))
                 _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
+
+            // Start (or resume) the Kafka metrics consumer for this env.
+            if (!_kafkaCts.ContainsKey(env))
+            {
+                var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+                _kafkaCts[env] = cts;
+                _ = RunKafkaConsumerAsync(env, cts.Token);
+            }
         }
 
         // Poll immediately so a freshly opened tab doesn't wait a full interval.
@@ -23504,10 +23769,20 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
         foreach (var env in toRelease)
         {
-            lock (_subLock) _envIdle.Remove(env);
+            lock (_subLock)
+            {
+                _envIdle.Remove(env);
+                if (_kafkaCts.TryGetValue(env, out var cts))
+                {
+                    cts.Cancel();
+                    cts.Dispose();
+                    _kafkaCts.Remove(env);
+                }
+            }
             foreach (var key in _entries.Keys
                          .Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
                 _entries.TryRemove(key, out _);
+            _kafkaHasData.TryRemove(env, out _);
             _log.LogInformation("metrics [{Env}]: idle cache released", env);
         }
     }
@@ -23560,10 +23835,21 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
         var parsed = 0;
 
+        var kafkaLive = _kafkaHasData.TryGetValue(env, out var hasData) && hasData;
+
         await Task.WhenAll(services.Select(async svc =>
         {
             var key = LogPathDiscoveryService.CacheKey(svc, env);
             var entry = _entries.GetOrAdd(key, _ => new Entry());
+
+            // Kafka is confirmed live for this env and this service already got its
+            // one-time disk backfill — Kafka is now the sole ongoing source for it.
+            if (kafkaLive)
+            {
+                bool backfilled;
+                lock (entry.Sync) backfilled = entry.DiskBackfilled;
+                if (backfilled) return;
+            }
 
             // Resolve and cache the file path once; never re-search after that.
             if (entry.FilePath is null)
@@ -23638,6 +23924,189 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             _entries.TryRemove(key, out _);
             _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
         }
+    }
+
+    // ── Kafka metrics consumer ──────────────────────────────────────────────────
+
+    private async Task RunKafkaConsumerAsync(string env, CancellationToken ct)
+    {
+        var topic = _kafkaSettings.MetricsTopicName;
+        if (string.IsNullOrWhiteSpace(topic)) return;
+
+        try
+        {
+            var first = true;
+            await foreach (var msg in _kafka.TailTopicAsync(env, topic, KafkaSeekDirective.Default, ct, uncapped: true))
+            {
+                if (ct.IsCancellationRequested) break;
+                if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase)) continue;
+
+                _kafkaHasData[env] = true;
+                if (first)
+                {
+                    _log.LogInformation("metrics [{Env}]: Kafka topic '{Topic}' has data, earliest={Ts:HH:mm:ss}", env, topic, msg.Timestamp);
+                    first = false;
+                }
+
+                await HandleMetricsMessageAsync(env, msg, ct);
+            }
+        }
+        catch (OperationCanceledException) { /* unsubscribed / shutting down */ }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "metrics [{Env}]: Kafka consumer for topic '{Topic}' failed", env, topic);
+        }
+    }
+
+    private async Task HandleMetricsMessageAsync(string env, KafkaMessage msg, CancellationToken ct)
+    {
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(msg.JsonPayload ?? "{}"); }
+        catch { return; }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            var hostName    = GetStringCI(root, "HostName");
+            var serviceName = GetStringCI(root, "ServiceName");
+            var instanceId  = GetStringCI(root, "ServiceInstanceId");
+            if (hostName is null || serviceName is null || instanceId is null) return;
+
+            // Kafka carries no ProcessId — join against the heartbeat-reported instance by
+            // (host, service, instance id) to find the same ServiceStatus/Entry the file
+            // poller already uses. If heartbeat hasn't reported this instance yet, skip;
+            // a later message will match once it does.
+            var services = _heartbeatMonitor.GetServices(env);
+            var svc = services?.FirstOrDefault(s =>
+                string.Equals(s.HostName, hostName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(s.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(s.ServiceInstanceId, instanceId, StringComparison.OrdinalIgnoreCase));
+            if (svc is null) return;
+
+            var startStr = GetStringCI(root, "ProcessStartTime");
+            DateTime.TryParse(startStr, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                out var processStartUtc);
+
+            var sample = new MetricsSample
+            {
+                Timestamp           = msg.Timestamp,
+                CurrentUsageBytes   = GetInt64CI(root, "CurrentMemoryUsageByte"),
+                PeakUsageBytes      = GetInt64CI(root, "PeakMemoryUsageByte"),
+                ChildUsageBytes     = GetInt64CI(root, "ChildProcessesMemoryUsageByte"),
+                ChildPeakUsageBytes = GetInt64CI(root, "ChildProcessesPeakMemoryUsageByte"),
+            };
+
+            var key   = LogPathDiscoveryService.CacheKey(svc, env);
+            var entry = _entries.GetOrAdd(key, _ => new Entry());
+
+            bool needsBackfill;
+            lock (entry.Sync)
+            {
+                UpsertSample(entry, sample);
+                needsBackfill = !entry.DiskBackfilled;
+            }
+
+            if (needsBackfill && processStartUtc != default)
+                await BackfillFromDiskAsync(env, svc, entry, processStartUtc, sample.Timestamp, ct);
+
+            OnMetricsUpdated?.Invoke(env);
+        }
+    }
+
+    /// <summary>
+    /// One-time fill of the gap between a process's start time and the earliest sample
+    /// Kafka's (low-retention) topic still has, read from that service's on-disk metrics
+    /// log file. Runs at most once per service — see Entry.DiskBackfilled.
+    /// </summary>
+    private async Task BackfillFromDiskAsync(
+        string env, ServiceStatus svc, Entry entry, DateTime processStartUtc, DateTime kafkaEarliestUtc, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_paths.MetricsFileName))
+        {
+            lock (entry.Sync) entry.DiskBackfilled = true;
+            return;
+        }
+
+        var folder = _discovery.GetCachedPath(svc, env);
+        if (folder is null)
+        {
+            _discovery.EnsureDiscovering(svc, env);
+            return; // retry on the next Kafka message for this service, once the path resolves
+        }
+
+        var file = Path.Combine(folder, _paths.MetricsFileName);
+
+        await _ioGate.WaitAsync(ct);
+        IncrementalFileReader.Result result;
+        try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, 0), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "metrics [{Env}]: backfill read failed {File}", env, file);
+            lock (entry.Sync) entry.DiskBackfilled = true; // don't retry forever on a broken file
+            return;
+        }
+        finally { _ioGate.Release(); }
+
+        var filled = 0;
+        lock (entry.Sync)
+        {
+            foreach (var line in result.Lines)
+            {
+                if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
+                if (sample.Timestamp < processStartUtc || sample.Timestamp >= kafkaEarliestUtc) continue;
+                UpsertSample(entry, sample);
+                filled++;
+            }
+            entry.DiskBackfilled = true;
+        }
+
+        _log.LogInformation(
+            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
+            env, filled, svc.ServiceName, svc.HostName, processStartUtc, kafkaEarliestUtc);
+    }
+
+    /// <summary>Inserts/replaces by timestamp, keeps History sorted ascending, caps at MaxHistory.</summary>
+    private static void UpsertSample(Entry entry, MetricsSample sample)
+    {
+        var idx = entry.History.FindIndex(s => s.Timestamp == sample.Timestamp);
+        if (idx >= 0)
+        {
+            entry.History[idx] = sample;
+        }
+        else
+        {
+            var insertAt = entry.History.FindIndex(s => s.Timestamp > sample.Timestamp);
+            if (insertAt < 0) entry.History.Add(sample);
+            else entry.History.Insert(insertAt, sample);
+        }
+
+        if (entry.History.Count > MaxHistory)
+            entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
+
+        if (entry.Latest is null || sample.Timestamp >= entry.Latest.Timestamp)
+            entry.Latest = sample;
+    }
+
+    private static string? GetStringCI(JsonElement obj, string name)
+    {
+        foreach (var p in obj.EnumerateObject())
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                return p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.ToString();
+        return null;
+    }
+
+    private static long GetInt64CI(JsonElement obj, string name)
+    {
+        foreach (var p in obj.EnumerateObject())
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                return p.Value.ValueKind switch
+                {
+                    JsonValueKind.Number => p.Value.GetInt64(),
+                    JsonValueKind.String when long.TryParse(p.Value.GetString(), out var v) => v,
+                    _ => 0,
+                };
+        return 0;
     }
 
     private sealed class Subscription : IDisposable
@@ -26287,7 +26756,7 @@ public sealed class KafkaIntegrationTestFactAttribute : FactAttribute
     }
 }
 FILE tests/NxtUI.Tests/Integration/KafkaIntegrationTests.cs
-LENGTH 13855
+LENGTH 23818
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -26601,7 +27070,254 @@ public sealed class KafkaIntegrationTests
         bytes!.Length.Should().Be(first.RawSizeBytes);
     }
 
+    // ── Cluster / topic listing ───────────────────────────────────────────────
+    // Run these against a second machine's broker via KAFKA_BOOTSTRAP_SERVERS to
+    // reproduce whatever differs about that environment (ACLs, topic naming, broker
+    // version quirks, etc.) before it shows up as a bug report from the real UI.
+
+    [KafkaIntegrationTestFact]
+    public async Task GetClusterInfoAsync_ReturnsBrokers()
+    {
+        var svc = BuildService();
+
+        var info = await svc.GetClusterInfoAsync("test");
+
+        info.Should().NotBeNull();
+        info.Brokers.Should().NotBeEmpty();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicsAsync_ReturnsTopicList()
+    {
+        var svc = BuildService();
+
+        var topics = await svc.GetTopicsAsync("test");
+
+        // Not asserting non-empty — a freshly provisioned broker may have none yet.
+        // What matters when reproducing on another machine: it doesn't throw, and
+        // every returned summary has a non-blank name and a partition count.
+        foreach (var t in topics)
+        {
+            t.Name.Should().NotBeNullOrWhiteSpace();
+            t.PartitionCount.Should().BeGreaterThan(0);
+        }
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicConfigAsync_ReturnsConfig_ForFirstTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var config = await svc.GetTopicConfigAsync("test", topics[0].Name);
+
+        config.Should().NotBeNull();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicEnrichmentAsync_ReturnsEntryPerTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var enrichment = await svc.GetTopicEnrichmentAsync("test", topics);
+
+        enrichment.Should().HaveCount(topics.Count);
+        foreach (var t in topics)
+            enrichment.Should().ContainKey(t.Name);
+    }
+
+    // ── Consumer groups ────────────────────────────────────────────────────────
+
+    [KafkaIntegrationTestFact]
+    public async Task GetAllConsumerGroupsAsync_ReturnsGroups()
+    {
+        var svc = BuildService();
+
+        var groups = await svc.GetAllConsumerGroupsAsync("test");
+
+        // Same reasoning as topics: don't require any to exist, just that listing
+        // itself works and each returned group has a real id.
+        foreach (var g in groups)
+            g.GroupId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetTopicConsumerGroupsAsync_ReturnsGroups_ForFirstTopic()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var groups = await svc.GetTopicConsumerGroupsAsync("test", topics[0].Name);
+
+        groups.Should().NotBeNull();
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task GetGroupTopicLagsAsync_ReturnsLags_ForFirstExistingGroup()
+    {
+        var svc = BuildService();
+        var groups = await svc.GetAllConsumerGroupsAsync("test");
+        if (groups.Count == 0) return;
+
+        var lags = await svc.GetGroupTopicLagsAsync("test", groups[0].GroupId);
+
+        lags.Should().NotBeNull();
+    }
+
+    // ── TailTopicAsync — every seek mode the topic inspector's Mode select offers ──
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_SinglePartition_Latest_CapsToRequestedTotal()
+    {
+        // Reproduces the "latest:N applies per partition, not as a total" bug: restrict
+        // to one partition and confirm the count never exceeds N regardless of how many
+        // partitions the topic actually has.
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        var multiPartition = topics.FirstOrDefault(t => t.PartitionCount > 1);
+        if (multiPartition is null) return;
+
+        var directive = new KafkaSeekDirective { Partitions = new HashSet<int> { 0 }, Latest = 5 };
+        var messages = new List<KafkaMessage>();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", multiPartition.Name, directive, cts.Token))
+            messages.Add(msg);
+
+        messages.Should().OnlyContain(m => m.Partition == 0);
+        messages.Count.Should().BeLessThanOrEqualTo(5);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_OffsetFrom_StartsAtOrAfterRequestedOffset()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.HighWatermark > s.LowWatermark);
+        if (target is null) return; // topic has no data to seek into
+
+        var midOffset = (target.LowWatermark + target.HighWatermark) / 2;
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            OffsetFrom = midOffset,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+        {
+            messages.Add(msg);
+            if (messages.Count >= 5) cts.Cancel();
+        }
+
+        messages.Should().OnlyContain(m => m.Offset >= midOffset);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_OffsetRange_StaysWithinBounds()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.HighWatermark - s.LowWatermark >= 5);
+        if (target is null) return;
+
+        var from = target.LowWatermark;
+        var to = target.LowWatermark + 3;
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            OffsetFrom = from,
+            OffsetTo = to,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+            messages.Add(msg);
+
+        messages.Should().OnlyContain(m => m.Offset >= from && m.Offset <= to);
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_TimestampFrom_OnlyReturnsNewerMessages()
+    {
+        var svc = BuildService();
+        var topics = await svc.GetTopicsAsync("test");
+        if (topics.Count == 0) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", topics[0].Name);
+        var target = stats.FirstOrDefault(s => s.FirstMessageTimestamp.HasValue && s.LastMessageTimestamp.HasValue);
+        if (target is null) return;
+
+        // Midpoint between first and last known message timestamp on that partition.
+        var span = target.LastMessageTimestamp!.Value - target.FirstMessageTimestamp!.Value;
+        var midpoint = target.FirstMessageTimestamp.Value + TimeSpan.FromTicks(span.Ticks / 2);
+
+        var directive = new KafkaSeekDirective
+        {
+            Partitions = new HashSet<int> { target.Partition },
+            TimestampFrom = midpoint,
+        };
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", topics[0].Name, directive, cts.Token))
+        {
+            messages.Add(msg);
+            if (messages.Count >= 10) cts.Cancel();
+        }
+
+        messages.Should().OnlyContain(m => m.Timestamp >= midpoint.AddSeconds(-1)); // small tolerance
+    }
+
+    [KafkaIntegrationTestFact]
+    public async Task TailTopicAsync_Uncapped_ExceedsMaxFetchMessages()
+    {
+        // Reproduces the background-monitor use case (ServiceMetricsMonitor): uncapped:true
+        // must ignore MaxFetchMessages instead of silently stopping after it.
+        var factory = BuildFactory();
+        var pipeline = BuildPipeline();
+        var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 2 });
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+
+        var topics = await svc.GetTopicsAsync("test");
+        var target = topics.FirstOrDefault();
+        if (target is null) return;
+
+        var stats = await svc.GetPartitionStatsAsync("test", target.Name);
+        if (!stats.Any(s => s.HighWatermark - s.LowWatermark > 2)) return; // not enough data to prove the point
+
+        var messages = new List<KafkaMessage>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await foreach (var msg in svc.TailTopicAsync("test", target.Name, KafkaSeekDirective.Default, cts.Token, uncapped: true))
+        {
+            messages.Add(msg);
+            if (messages.Count > 2) cts.Cancel(); // proved the point — cap of 2 was exceeded
+        }
+
+        messages.Count.Should().BeGreaterThan(2, "uncapped:true must ignore MaxFetchMessages=2");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static KafkaService BuildService(int maxFetchMessages = 2_000)
+    {
+        var factory = BuildFactory();
+        var pipeline = BuildPipeline();
+        var settings = Options.Create(new KafkaSettings { MaxFetchMessages = maxFetchMessages });
+        return new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+    }
 
     private static FilterParser BuildParser() => new(
         ["Key", "PayloadType", "Partition", "Offset", "Timestamp", "latest"],
@@ -28536,7 +29252,7 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 22199
+LENGTH 24365
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -28711,7 +29427,8 @@ public class KafkaService(
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default,
+        bool uncapped = false)
     {
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
@@ -28734,15 +29451,26 @@ public class KafkaService(
         using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
         consumer.Assign(selectedPartitions);
 
+        // Immediately after Assign(), librdkafka hasn't finished transitioning the
+        // assigned partitions to their internal fetch-active state yet — calling
+        // Seek() too early intermittently throws KafkaException "Local: Erroneous
+        // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
+        // that transition to complete before we seek.
+        try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
+
         // Seek to correct starting positions
         await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
 
         int consumed = 0;
-        int cap = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue
-            ? _global.MaxFetchMessages  // bounded mode still has a safety cap
-            : _global.MaxFetchMessages; // live mode cap
+        // Latest is a total across all selected partitions, not per-partition — SeekAsync still
+        // seeks each partition back by Latest so recent messages are available on every partition,
+        // but consumption stops as soon as the combined total is reached, whichever partitions
+        // it came from first.
+        int cap = directive.Latest.HasValue
+            ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
+            : _global.MaxFetchMessages;
 
-        while (!ct.IsCancellationRequested && consumed < cap)
+        while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
         {
             ConsumeResult<string?, byte[]>? cr;
             try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
@@ -28966,7 +29694,7 @@ public class KafkaService(
             {
                 var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
                 var startOffset = Math.Max(wm.Low.Value, wm.High.Value - directive.Latest.Value);
-                consumer.Seek(new TopicPartitionOffset(tp, startOffset));
+                await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, startOffset), ct);
             }
             return;
         }
@@ -28977,22 +29705,50 @@ public class KafkaService(
                 new TopicPartitionTimestamp(tp, new Timestamp(directive.TimestampFrom.Value))).ToList();
             var offsets = consumer.OffsetsForTimes(tpos, TimeSpan.FromSeconds(10));
             foreach (var tpo in offsets)
-                consumer.Seek(tpo.Offset.IsSpecial
+                await SeekWithRetryAsync(consumer, tpo.Offset.IsSpecial
                     ? new TopicPartitionOffset(tpo.TopicPartition, Offset.Beginning)
-                    : tpo);
+                    : tpo, ct);
             return;
         }
 
         if (directive.OffsetFrom.HasValue)
         {
             foreach (var tp in partitions)
-                consumer.Seek(new TopicPartitionOffset(tp, directive.OffsetFrom.Value));
+                await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, directive.OffsetFrom.Value), ct);
             return;
         }
 
         // Default: beginning
         foreach (var tp in partitions)
-            consumer.Seek(new TopicPartitionOffset(tp, Offset.Beginning));
+            await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, Offset.Beginning), ct);
+    }
+
+    /// <summary>
+    /// Wraps IConsumer.Seek() with retries against the Assign()-then-Seek() race: right after
+    /// Assign(), librdkafka hasn't always finished transitioning the partition to its internal
+    /// fetch-active state, and Seek() intermittently throws KafkaException "Local: Erroneous
+    /// state" (ErrorCode.Local_State) until it has. A single warm-up Consume() call in
+    /// TailTopicAsync usually avoids this, but isn't a hard guarantee (the transition is
+    /// asynchronous inside librdkafka) — retrying specifically on this error code is the
+    /// robust fix, since it keeps trying until the partition is actually ready instead of
+    /// gambling on a fixed delay being long enough.
+    /// </summary>
+    private static async Task SeekWithRetryAsync(
+        IConsumer<string?, byte[]> consumer, TopicPartitionOffset tpo, CancellationToken ct)
+    {
+        const int maxAttempts = 20;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                consumer.Seek(tpo);
+                return;
+            }
+            catch (KafkaException ex) when (ex.Error.Code == ErrorCode.Local_State && attempt < maxAttempts)
+            {
+                await Task.Delay(50, ct);
+            }
+        }
     }
 
     private static DateTime? FetchTimestampAt(
@@ -29191,7 +29947,7 @@ public sealed class MockEnvironmentService : IEnvironmentService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockHeartbeatService.cs
-LENGTH 1662
+LENGTH 2109
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services.Mock;
@@ -29228,6 +29984,7 @@ public class MockHeartbeatService : IHeartbeatService
                 ServiceName = inst.Service,
                 HostName = inst.Host,
                 ProcessId = inst.Pid,
+                ServiceInstanceId = MockInstanceId(inst.Service, inst.Host, inst.Pid),
                 UpdatedDateTime = updated,
                 CreatedDateTime = now.AddHours(-i - 1),
                 IsOnline = (now - updated).TotalSeconds <= 60,
@@ -29236,9 +29993,17 @@ public class MockHeartbeatService : IHeartbeatService
 
         return Task.FromResult(statuses);
     }
+
+    // Deterministic GUID-shaped (dashes removed) id, matching the real format's shape.
+    private static string MockInstanceId(string service, string host, int pid)
+    {
+        var hash = System.Security.Cryptography.MD5.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{service}|{host}|{pid}"));
+        return Convert.ToHexString(hash);
+    }
 }
 FILE src/NxtUI.Core/Services/Mock/MockKafkaService.cs
-LENGTH 14849
+LENGTH 14880
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -29418,7 +30183,8 @@ public class MockKafkaService : IKafkaService
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default,
+        bool uncapped = false)
     {
         var topic = _topics.FirstOrDefault(t => t.Name == topicName);
         var parts = topic?.PartitionCount ?? 3;
@@ -29852,7 +30618,7 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1864
+LENGTH 1917
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29897,6 +30663,7 @@ public class MongoHeartbeatService(
             ServiceName = d.ServiceName,
             HostName = d.HostName,
             ProcessId = d.ProcessId,
+            ServiceInstanceId = d.ServiceInstanceId,
             UpdatedDateTime = d.UpdatedDateTime,
             CreatedDateTime = d.CreatedDateTime,
             IsOnline = (now - d.UpdatedDateTime) <= threshold,
@@ -30587,7 +31354,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 87925
+LENGTH 88172
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -32024,11 +32791,6 @@ html, body {
     --bm-jv-toggle:  #58A6FF;   /* bright blue — ▾ ▸ chevron       */
     --bm-jv-summary: #8B949E;   /* grey    — collapsed placeholder  */
 
-    /* Kafka payload-type badges */
-    --bm-kafka-type-order-bg:   #1e3a5f; --bm-kafka-type-order-fg:   #7dd3fc;
-    --bm-kafka-type-payment-bg: #3b1f5e; --bm-kafka-type-payment-fg: #c4b5fd;
-    --bm-kafka-type-proto-bg:   #1a3a2a; --bm-kafka-type-proto-fg:   #86efac;
-
     /* D3 chart tooltips (memory graph, sunburst, treemap) */
     --bm-chart-tip-bg: rgba(18,18,18,0.92);
     --bm-chart-tip-fg: #e8e8e8;
@@ -32044,10 +32806,6 @@ html, body {
     --bm-jv-punct:   #6E7781;
     --bm-jv-toggle:  #0969DA;
     --bm-jv-summary: #6E7781;
-
-    --bm-kafka-type-order-bg:   #dbeafe; --bm-kafka-type-order-fg:   #1d4ed8;
-    --bm-kafka-type-payment-bg: #ede9fe; --bm-kafka-type-payment-fg: #6d28d9;
-    --bm-kafka-type-proto-bg:   #dcfce7; --bm-kafka-type-proto-fg:   #15803d;
 
     --bm-chart-tip-bg: rgba(255,255,255,0.97);
     --bm-chart-tip-fg: #1F2328;
@@ -32964,11 +33722,9 @@ tr.bm-row-searching td:first-child {
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
 .bm-lb-search-btn  { flex-shrink: 0; white-space: nowrap; }
 
-.bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
-.bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
-.bm-lb-bc-item:hover { text-decoration: underline; }
-.bm-lb-bc-item.bm-lb-bc-root { color: var(--mud-palette-text-secondary); font-weight: 600; }
+.bm-lb-breadcrumb-bar { font-size: 12px; gap: 6px; border-top: 1px solid var(--mud-palette-divider); flex-wrap: wrap; }
 .bm-lb-bc-sep   { color: var(--mud-palette-text-secondary); margin: 0 1px; user-select: none; }
+.bm-lb-path-chip { font-family: var(--bm-font-mono); font-size: 11px; }
 .bm-lb-body {
     flex: 1 1 0;
     display: flex;
@@ -33014,6 +33770,16 @@ tr.bm-row-searching td:first-child {
 /* tighten vertical spacing between tree nodes */
 .bm-lb-tree .mud-treeview-item-content { min-height: 22px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
 .bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
+
+.bm-lb-tree-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 6px;
+}
+.bm-lb-tree-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 2px !important; }
+.bm-lb-tree-row-checkbox .mud-icon-root { font-size: 16px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;
@@ -33425,17 +34191,24 @@ tr.bm-row-searching td:first-child {
 .bm-kafka-payload-type {
     display: inline-block;
     font-size: 10px;
-    font-weight: 600;
-    padding: 1px 5px;
-    border-radius: 3px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 8px;
     letter-spacing: .03em;
     background: var(--mud-palette-background-grey);
     color: var(--mud-palette-text-secondary);
 }
-.bm-kafka-type-orderevent   { background: var(--bm-kafka-type-order-bg);   color: var(--bm-kafka-type-order-fg); }
-.bm-kafka-type-paymentevent { background: var(--bm-kafka-type-payment-bg); color: var(--bm-kafka-type-payment-fg); }
-.bm-kafka-type-protomsg     { background: var(--bm-kafka-type-proto-bg);   color: var(--bm-kafka-type-proto-fg); }
-.bm-kafka-type-unknown      { background: var(--mud-palette-background-grey); color: var(--mud-palette-text-disabled); }
+/* Payload types are arbitrary/unbounded (proto message names), so colors are picked
+   by a stable hash of the type name into a fixed palette instead of one CSS class
+   per known type name — new types automatically get a (consistent) color. */
+.bm-type-hash-0 { background: rgba(59,130,246,0.14)  !important; color: #60a5fa !important; }
+.bm-type-hash-1 { background: rgba(168,85,247,0.14)  !important; color: #c084fc !important; }
+.bm-type-hash-2 { background: rgba(34,197,94,0.14)   !important; color: #4ade80 !important; }
+.bm-type-hash-3 { background: rgba(234,179,8,0.14)   !important; color: #facc15 !important; }
+.bm-type-hash-4 { background: rgba(236,72,153,0.14)  !important; color: #f472b6 !important; }
+.bm-type-hash-5 { background: rgba(20,184,166,0.14)  !important; color: #2dd4bf !important; }
+.bm-type-hash-6 { background: rgba(249,115,22,0.14)  !important; color: #fb923c !important; }
+.bm-type-hash-7 { background: rgba(139,148,158,0.14) !important; color: #8b949e !important; }
 
 .bm-kafka-stats-panel {
     border-bottom: 1px solid var(--mud-palette-lines-default);

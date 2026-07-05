@@ -177,7 +177,8 @@ public class MockKafkaService : IKafkaService
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default,
+        bool uncapped = false)
     {
         var topic = _topics.FirstOrDefault(t => t.Name == topicName);
         var parts = topic?.PartitionCount ?? 3;

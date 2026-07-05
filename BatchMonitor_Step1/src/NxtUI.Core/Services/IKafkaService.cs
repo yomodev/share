@@ -29,8 +29,14 @@ public interface IKafkaMonitor
     /// The stream ends when the cancellation token is cancelled (Pause/Reset) or when a
     /// bounded end condition in the directive is reached.
     /// </summary>
+    /// <param name="uncapped">
+    /// When true, ignores KafkaSettings.MaxFetchMessages (that safety cap exists for
+    /// interactive UI sessions; long-running background consumers need to keep tailing
+    /// indefinitely instead of silently stopping after N messages).
+    /// </param>
     IAsyncEnumerable<KafkaMessage> TailTopicAsync(
-        string env, string topicName, KafkaSeekDirective directive, CancellationToken ct = default);
+        string env, string topicName, KafkaSeekDirective directive, CancellationToken ct = default,
+        bool uncapped = false);
 
     /// <summary>
     /// Returns watermark offsets and first/last message timestamps for each partition.

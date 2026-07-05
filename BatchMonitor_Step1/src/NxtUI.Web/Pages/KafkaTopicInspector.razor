@@ -50,17 +50,10 @@
                            OnClick="ToggleStats" />
         </MudTooltip>
 
-        <FilterBox Value="@_filterText"
-                   OnFilterChanged="OnFilterChanged"
-                   ParseError="@_filterParseError"
-                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
-                   Class="bm-filter-input"
-                   FieldHints="@_fieldHints" />
-
         <!-- Mode select -->
         <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
                    Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
-                   Style="width:max-content; min-width:140px;">
+                   Style="width:max-content;">
             <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
             <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
             <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
@@ -68,6 +61,13 @@
             <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
             <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
         </MudSelect>
+
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -162,8 +162,9 @@
                     <MudTh Style="white-space:nowrap;">Part</MudTh>
                     <MudTh Style="white-space:nowrap;">Key</MudTh>
                     <MudTh Style="white-space:nowrap;">Type</MudTh>
-                    <MudTh Style="width:100%;">Payload</MudTh>
+                    <MudTh Style="white-space:nowrap;">Size</MudTh>
                     <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
@@ -176,14 +177,16 @@
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-kafka-payload-type bm-kafka-type-@context.PayloadType.ToLower()">@context.PayloadType</span>
-                        <span class="bm-muted" style="font-size:10px;">@context.RawSizeBytes B</span>
+                        <span class="bm-kafka-payload-type @TypeChipClass(context.PayloadType)">@context.PayloadType</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
-                        <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
+                        <span class="bm-kafka-mono bm-muted">@context.RawSizeBytes B</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
+                    </MudTd>
+                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                        <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
                     </MudTd>
                 </RowTemplate>
             </MudTable>
@@ -198,7 +201,7 @@
                         offset <strong>@_selected.Offset</strong>
                         &nbsp;·&nbsp; partition <strong>@_selected.Partition</strong>
                         &nbsp;·&nbsp; @DtSvc.Format(_selected.Timestamp, "yyyy-MM-dd HH:mm:ss.fff")@DtSvc.ZoneSuffix
-                        &nbsp;·&nbsp; <span class="bm-kafka-payload-type bm-kafka-type-@_selected.PayloadType.ToLower()">@_selected.PayloadType</span>
+                        &nbsp;·&nbsp; <span class="bm-kafka-payload-type @TypeChipClass(_selected.PayloadType)">@_selected.PayloadType</span>
                         &nbsp;·&nbsp; <span class="bm-muted">@_selected.RawSizeBytes B</span>
                     </span>
                     <div style="display:flex; align-items:center; gap:4px;">
@@ -599,6 +602,22 @@
 
     private static string? TruncateValue(string? v)
         => v is null ? null : v.Length > 120 ? v[..120] + "…" : v;
+
+    // Payload types are arbitrary proto message names (unbounded set) — pick a color
+    // bucket via a stable hash instead of hardcoding one CSS class per known type name.
+    // string.GetHashCode() is randomized per process, so it's not used here.
+    private static readonly string[] TypeChipClasses =
+    [
+        "bm-type-hash-0", "bm-type-hash-1", "bm-type-hash-2", "bm-type-hash-3",
+        "bm-type-hash-4", "bm-type-hash-5", "bm-type-hash-6", "bm-type-hash-7",
+    ];
+
+    private static string TypeChipClass(string type)
+    {
+        var hash = 0;
+        foreach (var c in type) hash = (hash * 31 + c) & 0x7fffffff;
+        return TypeChipClasses[hash % TypeChipClasses.Length];
+    }
 
     private static string FormatJson(string raw)
     {

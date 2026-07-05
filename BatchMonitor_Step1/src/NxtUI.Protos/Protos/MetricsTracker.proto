@@ -1,0 +1,20 @@
+syntax = "proto3";
+option csharp_namespace = "NxtUI.Protos";
+package nxtui;
+
+import "google/protobuf/timestamp.proto";
+
+// Periodic memory-metrics sample published by each service instance to the
+// per-environment metrics topic (single partition, low retention). Tailed
+// live by ServiceMetricsMonitor; disk-based log parsing only backfills
+// history older than the topic's retention window.
+message MetricsTracker {
+  string ServiceName = 1;
+  string ServiceInstanceId = 2;
+  google.protobuf.Timestamp ProcessStartTime = 3;
+  string HostName = 4;
+  int64 CurrentMemoryUsageByte = 5;
+  int64 PeakMemoryUsageByte = 6;
+  int64 ChildProcessesMemoryUsageByte = 7;
+  int64 ChildProcessesPeakMemoryUsageByte = 8;
+}

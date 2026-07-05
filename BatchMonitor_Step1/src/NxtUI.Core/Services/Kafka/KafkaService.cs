@@ -172,7 +172,8 @@ public class KafkaService(
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default,
+        bool uncapped = false)
     {
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
@@ -214,7 +215,7 @@ public class KafkaService(
             ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
             : _global.MaxFetchMessages;
 
-        while (!ct.IsCancellationRequested && consumed < cap)
+        while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
         {
             ConsumeResult<string?, byte[]>? cr;
             try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
@@ -438,7 +439,7 @@ public class KafkaService(
             {
                 var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
                 var startOffset = Math.Max(wm.Low.Value, wm.High.Value - directive.Latest.Value);
-                consumer.Seek(new TopicPartitionOffset(tp, startOffset));
+                await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, startOffset), ct);
             }
             return;
         }
@@ -449,22 +450,50 @@ public class KafkaService(
                 new TopicPartitionTimestamp(tp, new Timestamp(directive.TimestampFrom.Value))).ToList();
             var offsets = consumer.OffsetsForTimes(tpos, TimeSpan.FromSeconds(10));
             foreach (var tpo in offsets)
-                consumer.Seek(tpo.Offset.IsSpecial
+                await SeekWithRetryAsync(consumer, tpo.Offset.IsSpecial
                     ? new TopicPartitionOffset(tpo.TopicPartition, Offset.Beginning)
-                    : tpo);
+                    : tpo, ct);
             return;
         }
 
         if (directive.OffsetFrom.HasValue)
         {
             foreach (var tp in partitions)
-                consumer.Seek(new TopicPartitionOffset(tp, directive.OffsetFrom.Value));
+                await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, directive.OffsetFrom.Value), ct);
             return;
         }
 
         // Default: beginning
         foreach (var tp in partitions)
-            consumer.Seek(new TopicPartitionOffset(tp, Offset.Beginning));
+            await SeekWithRetryAsync(consumer, new TopicPartitionOffset(tp, Offset.Beginning), ct);
+    }
+
+    /// <summary>
+    /// Wraps IConsumer.Seek() with retries against the Assign()-then-Seek() race: right after
+    /// Assign(), librdkafka hasn't always finished transitioning the partition to its internal
+    /// fetch-active state, and Seek() intermittently throws KafkaException "Local: Erroneous
+    /// state" (ErrorCode.Local_State) until it has. A single warm-up Consume() call in
+    /// TailTopicAsync usually avoids this, but isn't a hard guarantee (the transition is
+    /// asynchronous inside librdkafka) — retrying specifically on this error code is the
+    /// robust fix, since it keeps trying until the partition is actually ready instead of
+    /// gambling on a fixed delay being long enough.
+    /// </summary>
+    private static async Task SeekWithRetryAsync(
+        IConsumer<string?, byte[]> consumer, TopicPartitionOffset tpo, CancellationToken ct)
+    {
+        const int maxAttempts = 20;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                consumer.Seek(tpo);
+                return;
+            }
+            catch (KafkaException ex) when (ex.Error.Code == ErrorCode.Local_State && attempt < maxAttempts)
+            {
+                await Task.Delay(50, ct);
+            }
+        }
     }
 
     private static DateTime? FetchTimestampAt(

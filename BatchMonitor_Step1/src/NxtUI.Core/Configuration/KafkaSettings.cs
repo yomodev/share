@@ -47,6 +47,14 @@ public class KafkaSettings
     /// <summary>Maximum messages fetched in one streaming session (default 2000).</summary>
     public int MaxFetchMessages { get; set; } = 2_000;
 
+    /// <summary>
+    /// Per-environment topic that services publish periodic memory-metrics samples to
+    /// (protobuf-encoded MetricsTracker messages), single partition, low retention.
+    /// ServiceMetricsMonitor tails this live and only falls back to disk-based log
+    /// parsing for history older than the topic's retention window. Default: "metrics".
+    /// </summary>
+    public string MetricsTopicName { get; set; } = "metrics";
+
     // ── Connection fingerprint ────────────────────────────────────────────────
 
     /// <summary>

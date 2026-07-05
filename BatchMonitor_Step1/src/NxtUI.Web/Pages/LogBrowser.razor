@@ -65,7 +65,7 @@
                     <MudButton Variant="Variant.Filled"
                                Color="@(_isSearching ? Color.Error : Color.Primary)"
                                Size="Size.Small"
-                               Disabled="@(!_isSearching && _selectedPath is null)"
+                               Disabled="@(!_isSearching && _checkedPaths.Count == 0)"
                                OnClick="OnSearchButtonClickAsync"
                                Class="bm-lb-search-btn">
                         @(_isSearching ? "Stop" : "Start Search")
@@ -75,29 +75,30 @@
         </div>
     </div>
 
-    <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
+    <!-- ── Toolbar row 2: selected-folder chips ─────────────────────────── -->
     <div class="bm-batch-toolbar bm-lb-toolbar bm-lb-breadcrumb-bar">
-        @if (_selectedPath is not null)
+        @if (_checkedPaths.Count > 0)
         {
-            var parts = _selectedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries);
-            var accumulated = "";
-            <span class="bm-lb-bc-item bm-lb-bc-root bm-muted" @onclick="ClearSelection">\</span>
-            foreach (var part in parts)
+            @foreach (var path in _checkedPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
             {
-                accumulated = string.IsNullOrEmpty(accumulated) ? part : accumulated + "\\" + part;
-                var snap = accumulated;
-                <span class="bm-lb-bc-sep bm-muted">\</span>
-                <span class="bm-lb-bc-item" @onclick="@(() => NavigateBreadcrumbAsync(snap))">@part</span>
+                var snap = path;
+                <MudChip T="string" Size="Size.Small" Class="bm-lb-path-chip"
+                         OnClose="@(() => SetCheckedAsync(snap, false))">
+                    @(string.IsNullOrEmpty(path) ? "\\" : path)
+                </MudChip>
             }
             @if (_isSearchMode)
             {
                 <span class="bm-lb-bc-sep bm-muted"> — </span>
                 <span class="bm-muted bm-toolbar-hint">search results</span>
             }
+            <MudTooltip Text="Clear all">
+                <MudIconButton Icon="@Icons.Material.Outlined.ClearAll" Size="Size.Small" OnClick="ClearSelection" />
+            </MudTooltip>
         }
         else
         {
-            <span class="bm-muted bm-toolbar-hint">Select a folder in the tree</span>
+            <span class="bm-muted bm-toolbar-hint">Check one or more folders in the tree</span>
         }
     </div>
 
@@ -110,19 +111,20 @@
                 <LogBrowserFileTree Servers="@_servers"
                                     RootNodes="@FilteredRootNodes"
                                     ChildCache="@FilteredChildCache"
-                                    Expanded="@_expanded"
+                                    Expanded="@EffectiveExpanded"
                                     LoadingNodes="@_loadingNodes"
+                                    CheckedPaths="@_checkedPaths"
                                     Initialized="@_initialized"
                                     LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
                                     InitError="@_initError"
-                                    OnTreeNodeSelected="@OnTreeNodeSelectedAsync"
                                     OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
-                                    OnItemClick="@OnItemClickAsync" />
+                                    OnItemClick="@OnItemClickAsync"
+                                    OnCheckChanged="@(args => OnCheckChangedAsync(args.Item1, args.Item2))" />
             </div>
             <FilterBox Value="@_treeFilterText"
                        OnFilterChanged="OnTreeFilterChanged"
                        ParseError="@_treeFilterError"
-                       Placeholder="Filter folders…"
+                       Placeholder="Filter path…"
                        Class="bm-lb-tree-filter"
                        ShowHint="false"
                        FieldHints="@TreeFieldHints" />
@@ -133,11 +135,11 @@
 
         <!-- right: file table -->
         <div class="bm-lb-files-panel">
-            @if (_selectedPath is null)
+            @if (_checkedPaths.Count == 0)
             {
                 <div class="bm-lb-empty">
                     <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Large" Class="bm-muted" Style="opacity:.3" />
-                    <MudText Typo="Typo.body2" Class="bm-muted mt-2">Select a folder to view its files</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-muted mt-2">Check a folder to view its files</MudText>
                 </div>
             }
             else
@@ -168,7 +170,11 @@
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd DataLabel="Host" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2">@context.FileName</MudText></MudTd>
+                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))">
+                                <MudTooltip Text="@context.FullPath">
+                                    <MudText Typo="Typo.body2">@context.FileName</MudText>
+                                </MudTooltip>
+                            </MudTd>
                             <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="@(() => OpenInViewer(context))">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
@@ -248,6 +254,8 @@
             ["created"]  = "CreatedUtc",
             ["updated"]  = "LastModifiedUtc",
             ["modified"] = "LastModifiedUtc",
+            ["path"]     = "FullPath",
+            ["fullpath"] = "FullPath",
         });
 
     private static readonly (string Aliases, string Label)[] RowFieldHints =
@@ -257,6 +265,7 @@
         ("size",                  "file size (bytes)"),
         ("created",               "creation time"),
         ("updated / modified",    "last modified time"),
+        ("path / fullpath",       "full file path"),
     ];
 
     // ── panel resize ─────────────────────────────────────────────────────
@@ -285,48 +294,108 @@
 
     private readonly LogFolderNode _loadingNode = new("…", "__loading__", false);
 
-    // Sidebar tree name filter — same shared filter grammar as every other filter box
-    // (AND/OR/NOT/parens, see docs/08_FilterSyntax.md), evaluated against LogFolderNode.Name.
-    // Only filters nodes already loaded (root + expanded branches' cached children);
-    // deeper unexpanded branches aren't fetched eagerly.
-    private static readonly FilterParser TreeFilterParser = new(searchableFields: ["Name"]);
+    // Sidebar tree filter — same shared filter grammar as every other filter box
+    // (AND/OR/NOT/parens, see docs/08_FilterSyntax.md), evaluated against the folder's
+    // full RelativePath by default (not just its own Name), so typing an ancestor
+    // segment (e.g. "orders") surfaces every folder underneath it, not just folders
+    // literally named "orders". A folder is kept if it matches OR any of its (loaded)
+    // descendants match — see NodeMatchesOrHasDescendantMatch — and the whole subtree
+    // is eagerly loaded once a filter is active (see EnsureTreeLoadedAsync) so the
+    // filter can actually see branches the user hasn't manually expanded yet.
+    private static readonly FilterParser TreeFilterParser = new(
+        searchableFields: ["RelativePath"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["path"] = "RelativePath",
+            ["name"] = "Name",
+        });
 
     private static readonly (string Aliases, string Label)[] TreeFieldHints =
     [
-        ("name", "folder name"),
+        ("path", "full folder path (default)"),
+        ("name", "folder name only"),
     ];
 
     private string      _treeFilterText  = "";
     private string?     _treeFilterError;
     private FilterNode? _treeFilterNode;
+    private bool        _treeFullyLoaded;
 
-    private void OnTreeFilterChanged(string v)
+    private async Task OnTreeFilterChanged(string v)
     {
         _treeFilterText  = v;
         _treeFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _treeFilterNode = null; return; }
         try   { _treeFilterNode = TreeFilterParser.Parse(v, DtSvc.UseUtc); }
-        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; }
+        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; return; }
+
+        await EnsureTreeLoadedAsync();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Eagerly loads every folder down to the depth LogBrowserFileTree can actually
+    /// render (4 levels: root + 3), so the tree filter has something to search inside
+    /// unexpanded branches. Runs once per session (or since the last full Refresh) —
+    /// real infra may have many folders, so this isn't repeated on every keystroke.
+    /// </summary>
+    private async Task EnsureTreeLoadedAsync()
+    {
+        if (_treeFullyLoaded) return;
+        _treeFullyLoaded = true;
+
+        async Task LoadLevelAsync(IEnumerable<LogFolderNode> nodes, int depthRemaining)
+        {
+            if (depthRemaining <= 0) return;
+            foreach (var node in nodes)
+            {
+                if (!node.HasChildren) continue;
+                if (!_childCache.ContainsKey(node.RelativePath))
+                {
+                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
+                    _childCache[node.RelativePath] = children;
+                }
+                await LoadLevelAsync(_childCache[node.RelativePath], depthRemaining - 1);
+            }
+        }
+
+        await LoadLevelAsync(_rootNodes, 3);
     }
 
     private List<LogFolderNode> FilteredRootNodes =>
         _treeFilterNode is null
             ? _rootNodes
-            : _rootNodes.Where(MatchesTreeFilter).ToList();
+            : _rootNodes.Where(NodeMatchesOrHasDescendantMatch).ToList();
 
     private Dictionary<string, IReadOnlyList<LogFolderNode>> FilteredChildCache =>
         _treeFilterNode is null
             ? _childCache
             : _childCache.ToDictionary(
                 kv => kv.Key,
-                kv => (IReadOnlyList<LogFolderNode>)kv.Value.Where(MatchesTreeFilter).ToList(),
+                kv => (IReadOnlyList<LogFolderNode>)kv.Value.Where(NodeMatchesOrHasDescendantMatch).ToList(),
                 StringComparer.OrdinalIgnoreCase);
 
-    private bool MatchesTreeFilter(LogFolderNode n) =>
-        FilterEvaluator.Evaluate(_treeFilterNode, n);
+    // A folder survives the filter if it matches itself, or any (already-loaded)
+    // descendant matches — otherwise a non-matching parent would hide matching
+    // children beneath it entirely.
+    private bool NodeMatchesOrHasDescendantMatch(LogFolderNode n) =>
+        FilterEvaluator.Evaluate(_treeFilterNode, n) ||
+        (_childCache.TryGetValue(n.RelativePath, out var children) && children.Any(NodeMatchesOrHasDescendantMatch));
+
+    // While filtering, auto-expand every node that has a surviving (kept) child, so the
+    // match is actually visible without the user manually expanding each ancestor.
+    private HashSet<string> EffectiveExpanded =>
+        _treeFilterNode is null
+            ? _expanded
+            : new HashSet<string>(
+                _expanded.Concat(FilteredChildCache.Where(kv => kv.Value.Count > 0).Select(kv => kv.Key)),
+                StringComparer.OrdinalIgnoreCase);
 
     // ── file / search state ───────────────────────────────────────────────
-    private string?            _selectedPath;
+    // Checked folders (checkbox column) — independent of _expanded (which folders are
+    // open in the tree) and independent of each other; the files table aggregates
+    // results from every checked path across all servers.
+    private readonly HashSet<string> _checkedPaths = new(StringComparer.OrdinalIgnoreCase);
     private List<LogFileEntry> _files        = new();
     private bool               _loadingFiles;
     private bool               _initialized;
@@ -335,7 +404,9 @@
     private string?            _initError;
     // tracks which tree nodes are currently fetching their children
     private readonly HashSet<string> _loadingNodes = new(StringComparer.OrdinalIgnoreCase);
-    private string?  _lastManualPollPath;
+    // Bumped every time the checked-path set changes — lets an in-flight LoadFilesAsync
+    // detect it's been superseded by a newer selection change and discard its result.
+    private int _loadGeneration;
 
     // always-visible row filter — filters the currently-loaded file table itself
     private string      _rowFilterText  = "";
@@ -376,7 +447,6 @@
     private CancellationTokenSource? _searchCts;
     private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
-    private DateTime                 _lastManualPoll = DateTime.MinValue;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -386,7 +456,7 @@
         _poller = new FocusGatedPoller(interval, async ct =>
         {
             // Skip auto-refresh while a search is running.
-            if (_selectedPath is not null && !_isSearching && !_isSearchMode)
+            if (_checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
                 await InvokeAsync(LoadFilesAsync);
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
@@ -427,7 +497,7 @@
             // navigating away and isn't composing a search — don't restart polling just
             // because the tab regained focus.
             RestartPollingIfBrowsing();
-            if (_initialized && _selectedPath is not null && !_isSearching && !_isSearchMode)
+            if (_initialized && _checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
                 _ = InvokeAsync(async () =>
                 {
                     try { await LoadFilesAsync(); }
@@ -444,7 +514,7 @@
     // the search bar isn't open (composing/viewing a search is a snapshot, not live).
     private void RestartPollingIfBrowsing()
     {
-        _poller?.SetActive(IsFocused && _selectedPath is not null && !_searchBarOpen);
+        _poller?.SetActive(IsFocused && _checkedPaths.Count > 0 && !_searchBarOpen);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -480,15 +550,22 @@
 
     // ── tree interaction ──────────────────────────────────────────────────
 
-    private async Task OnTreeNodeSelectedAsync(LogFolderNode? node)
-    {
-        if (node is null || node.RelativePath == "__loading__") return;
+    // Checking a folder is entirely independent from expanding it — clicking a row
+    // only ever toggles expand/collapse (below); the checkbox is the sole way to
+    // add/remove a folder from the file table's result set.
+    private Task OnCheckChangedAsync(LogFolderNode node, bool isChecked) =>
+        SetCheckedAsync(node.RelativePath, isChecked);
 
-        // Clicking the tree always exits search mode.
+    private async Task SetCheckedAsync(string relativePath, bool isChecked)
+    {
+        // Checking/unchecking always exits search mode — it's a browsing action.
         if (_isSearching) StopSearch();
         _isSearchMode = false;
 
-        await SelectPathAsync(node.RelativePath);
+        if (isChecked) _checkedPaths.Add(relativePath);
+        else           _checkedPaths.Remove(relativePath);
+
+        await LoadFilesAsync();
         RestartPollingIfBrowsing();
     }
 
@@ -530,50 +607,13 @@
         }
     }
 
-    // ── selection (normal mode) ───────────────────────────────────────────
-
-    private async Task SelectPathAsync(string relativePath)
-    {
-        var isNewPath = relativePath != _selectedPath;
-        _selectedPath = relativePath;
-
-        // When navigating to a different folder, clear old rows immediately so
-        // the wrong folder's files aren't shown. On refresh (same folder) keep
-        // existing rows visible — the progress bar is enough feedback.
-        if (isNewPath) _files = [];
-
-        _loadingFiles = true;
-        StateHasChanged();
-        await Task.Yield();
-
-        var minInterval = LogSettings.Value.FolderScanMinIntervalSeconds;
-        var sameFolder  = relativePath == _lastManualPollPath;
-        if (!sameFolder || (DateTime.UtcNow - _lastManualPoll).TotalSeconds >= minInterval)
-        {
-            _lastManualPoll     = DateTime.UtcNow;
-            _lastManualPollPath = relativePath;
-            await LoadFilesAsync();
-        }
-        else
-        {
-            _loadingFiles = _loadingNodes.Count > 0;
-            StateHasChanged();
-        }
-    }
-
-    private async Task NavigateBreadcrumbAsync(string relativePath)
-    {
-        if (_isSearching) StopSearch();
-        _isSearchMode = false;
-        await SelectPathAsync(relativePath);
-        RestartPollingIfBrowsing();
-    }
+    // ── selection (checked folders) ───────────────────────────────────────
 
     private void ClearSelection()
     {
         if (_isSearching) StopSearch();
         _isSearchMode = false;
-        _selectedPath = null;
+        _checkedPaths.Clear();
         _files.Clear();
         _poller?.Stop();
         StateHasChanged();
@@ -600,33 +640,45 @@
             _expanded.Add(current);
         }
 
-        _selectedPath = parsed.Value.RelativePath;
+        _checkedPaths.Add(parsed.Value.RelativePath);
         await LoadFilesAsync();
         StateHasChanged();
     }
 
-    // ── file loading (normal mode) ────────────────────────────────────────
+    // ── file loading (aggregated across all checked folders) ──────────────
 
     private async Task LoadFilesAsync()
     {
-        if (_selectedPath is null) return;
+        var myGen = ++_loadGeneration;
 
-        var path    = _selectedPath; // capture — user may change selection while awaiting
+        if (_checkedPaths.Count == 0)
+        {
+            _files        = [];
+            _loadingFiles = false;
+            StateHasChanged();
+            return;
+        }
+
+        _loadingFiles = true;
+        StateHasChanged();
+        await Task.Yield();
+
+        var paths   = _checkedPaths.ToList(); // capture — user may change selection while awaiting
         var pending = new System.Collections.Concurrent.ConcurrentBag<LogFileEntry>();
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         try
         {
-            // Collect all servers in parallel without touching _files mid-flight.
-            await Task.WhenAll(_servers.Select(async server =>
+            // Collect all (path, server) combinations in parallel without touching _files mid-flight.
+            await Task.WhenAll(paths.SelectMany(path => _servers.Select(async server =>
             {
                 var results = await BrowserSvc.GetFilesAsync([server], path, _cts.Token);
                 foreach (var r in results) pending.Add(r);
-            }));
+            })));
 
             // Swap in the new list atomically — no intermediate empty-table flash.
             await InvokeAsync(() =>
             {
-                if (_selectedPath != path) return;
+                if (myGen != _loadGeneration) return; // superseded by a newer selection change
                 _files    = [.. pending];
                 _lastScan = DateTime.UtcNow;
                 StateHasChanged();
@@ -634,7 +686,7 @@
         }
         finally
         {
-            if (_selectedPath == path)
+            if (myGen == _loadGeneration)
             {
                 _loadingFiles = _loadingNodes.Count > 0;
                 await InvokeAsync(StateHasChanged);
@@ -642,11 +694,11 @@
         }
     }
 
-    // ── search (recursive mode) ───────────────────────────────────────────
+    // ── search (recursive mode, across all checked folders) ────────────────
 
     private async Task StartSearchAsync()
     {
-        if (_selectedPath is null) return;
+        if (_checkedPaths.Count == 0) return;
         if (_contentFilterError is not null) return;
 
         StopSearch();
@@ -659,17 +711,18 @@
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
-        var path   = _selectedPath;
+        var paths  = _checkedPaths.ToList();
         var glob   = _fileGlob;
         var filter = _contentFilterNode;
         var ct     = _searchCts.Token;
 
         try
         {
-            await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
+            await Task.WhenAll(paths.Select(async path =>
             {
-                await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
-            }
+                await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
+                    await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
+            }));
             _lastScan = DateTime.UtcNow;
         }
         catch (OperationCanceledException) { }
@@ -694,17 +747,20 @@
     private async Task RefreshAsync()
     {
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
-        if (_selectedPath is not null)
+        if (_checkedPaths.Count > 0)
         {
-            // Invalidate only the selected node's child cache entry and reload its files.
-            _childCache.Remove(_selectedPath);
-            var children = await BrowserSvc.GetSubfoldersAsync(_servers, _selectedPath, _cts.Token);
-            _childCache[_selectedPath] = children;
+            // Invalidate each checked folder's child cache entry and reload files.
+            foreach (var path in _checkedPaths.ToList())
+            {
+                _childCache.Remove(path);
+                var children = await BrowserSvc.GetSubfoldersAsync(_servers, path, _cts.Token);
+                _childCache[path] = children;
+            }
             await LoadFilesAsync();
         }
         else
         {
-            // Nothing selected — refresh just the root listing.
+            // Nothing checked — refresh just the root listing.
             var roots  = await BrowserSvc.GetSubfoldersAsync(_servers, "", _cts.Token);
             _rootNodes = roots.ToList();
             _lastScan  = DateTime.UtcNow;

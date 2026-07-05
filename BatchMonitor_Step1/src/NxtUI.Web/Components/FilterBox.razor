@@ -1,8 +1,11 @@
 @namespace NxtUI.Web.Components
+@using Microsoft.Extensions.Options
+@using NxtUI.Configuration
 @inject NxtUI.Web.Services.TabService _tabSvc
+@inject IOptions<UiSettings> UiOptions
 @* Reusable debounced filter input with inline help popup.
    Value           — controlled value; set from parent so programmatic clear works.
-   OnFilterChanged — fired after DebounceMs of inactivity.
+   OnFilterChanged — fired after DebounceMs (or Ui:FilterDebounceMs if unset) of inactivity.
    ParseError      — non-null shows a red outline (no inline text, preserves toolbar height).
    FieldHints      — context-specific fields shown in the cheat sheet popup.
    Class           — applied to the wrapper div for flex-layout integration. *@
@@ -20,7 +23,7 @@
                       Value="@Value"
                       ValueChanged="NotifyChanged"
                       Immediate="true"
-                      DebounceInterval="@DebounceMs"
+                      DebounceInterval="@EffectiveDebounceMs"
                       Variant="Variant.Outlined"
                       Margin="Margin.Dense"
                       Error="@(ParseError is not null)"
@@ -113,7 +116,11 @@
     [Parameter] public EventCallback<string> OnFilterChanged { get; set; }
     [Parameter] public string? ParseError      { get; set; }
     [Parameter] public string? Class           { get; set; }
-    [Parameter] public int     DebounceMs      { get; set; } = 300;
+    // Null (the default) means "use the configured Ui:FilterDebounceMs" — set explicitly
+    // per call site to override (e.g. TimelineTab's CSV import filter uses 250ms).
+    [Parameter] public int?    DebounceMs      { get; set; }
+
+    private int EffectiveDebounceMs => DebounceMs ?? UiOptions.Value.FilterDebounceMs;
     [Parameter] public string  Placeholder     { get; set; } = "Filter…";
     [Parameter] public bool    ShowHint        { get; set; } = true;
 

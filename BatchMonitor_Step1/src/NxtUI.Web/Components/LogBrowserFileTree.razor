@@ -32,49 +32,58 @@ else if (RootNodes.Count == 0)
 }
 else
 {
-    <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary"
-                 SelectedValueChanged="@((LogFolderNode? n) => OnTreeNodeSelected.InvokeAsync(n))"
-                 Class="bm-lb-tree">
+    <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary" Class="bm-lb-tree">
         @foreach (var node in RootNodes)
         {
-            <MudTreeViewItem @key="@node.RelativePath" Value="@node" Text="@node.Name"
+            <MudTreeViewItem @key="@node.RelativePath" Value="@node"
                              Icon="@(LoadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                              Expanded="@Expanded.Contains(node.RelativePath)"
                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
-                @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
-                {
-                    @foreach (var c1 in ch1)
+                <BodyContent>@RenderRow(node)</BodyContent>
+                <ChildContent>
+                    @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
                     {
-                        <MudTreeViewItem @key="@c1.RelativePath" Value="@c1" Text="@c1.Name"
-                                         Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                         Expanded="@Expanded.Contains(c1.RelativePath)"
-                                         ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
-                                         OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
-                            @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
-                            {
-                                @foreach (var c2 in ch2)
-                                {
-                                    <MudTreeViewItem @key="@c2.RelativePath" Value="@c2" Text="@c2.Name"
-                                                     Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
-                                                     Expanded="@Expanded.Contains(c2.RelativePath)"
-                                                     ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
-                                                     OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
-                                        @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
+                        @foreach (var c1 in ch1)
+                        {
+                            <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
+                                             Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                             Expanded="@Expanded.Contains(c1.RelativePath)"
+                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
+                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
+                                <BodyContent>@RenderRow(c1)</BodyContent>
+                                <ChildContent>
+                                    @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
+                                    {
+                                        @foreach (var c2 in ch2)
                                         {
-                                            @foreach (var c3 in ch3)
-                                            {
-                                                <MudTreeViewItem @key="@c3.RelativePath" Value="@c3" Text="@c3.Name"
-                                                                 Icon="@Icons.Material.Outlined.Folder"
-                                                                 OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))" />
-                                            }
+                                            <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
+                                                             Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
+                                                             Expanded="@Expanded.Contains(c2.RelativePath)"
+                                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
+                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
+                                                <BodyContent>@RenderRow(c2)</BodyContent>
+                                                <ChildContent>
+                                                    @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
+                                                    {
+                                                        @foreach (var c3 in ch3)
+                                                        {
+                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
+                                                                             Icon="@Icons.Material.Outlined.Folder"
+                                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
+                                                                <BodyContent>@RenderRow(c3)</BodyContent>
+                                                            </MudTreeViewItem>
+                                                        }
+                                                    }
+                                                </ChildContent>
+                                            </MudTreeViewItem>
                                         }
-                                    </MudTreeViewItem>
-                                }
-                            }
-                        </MudTreeViewItem>
+                                    }
+                                </ChildContent>
+                            </MudTreeViewItem>
+                        }
                     }
-                }
+                </ChildContent>
             </MudTreeViewItem>
         }
     </MudTreeView>
@@ -86,14 +95,32 @@ else
     [Parameter] public Dictionary<string, IReadOnlyList<LogFolderNode>> ChildCache { get; set; } = new();
     [Parameter] public HashSet<string>     Expanded       { get; set; } = new();
     [Parameter] public HashSet<string>     LoadingNodes   { get; set; } = new();
+    [Parameter] public HashSet<string>     CheckedPaths   { get; set; } = new();
     [Parameter] public bool                Initialized    { get; set; }
     [Parameter] public bool                LogsFolderMissing { get; set; }
     [Parameter] public string?             InitError      { get; set; }
 
-    [Parameter] public EventCallback<LogFolderNode?>          OnTreeNodeSelected { get; set; }
     [Parameter] public EventCallback<(LogFolderNode, bool)>   OnExpandedChanged  { get; set; }
     [Parameter] public EventCallback<LogFolderNode>           OnItemClick        { get; set; }
+    [Parameter] public EventCallback<(LogFolderNode, bool)>   OnCheckChanged     { get; set; }
 
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
+
+    // Row body: folder name on the left, a selection checkbox on the right — independent
+    // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
+    // a folder never toggles its expansion and vice versa.
+    private RenderFragment RenderRow(LogFolderNode node) => __builder =>
+    {
+        <div class="bm-lb-tree-row">
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
+            <div @onclick:stopPropagation="true">
+                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
+                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
+                             Size="Size.Small"
+                             Color="Color.Primary"
+                             Class="bm-lb-tree-row-checkbox" />
+            </div>
+        </div>
+    };
 }

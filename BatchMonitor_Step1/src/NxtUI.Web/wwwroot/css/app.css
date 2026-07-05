@@ -1434,11 +1434,6 @@ html, body {
     --bm-jv-toggle:  #58A6FF;   /* bright blue — ▾ ▸ chevron       */
     --bm-jv-summary: #8B949E;   /* grey    — collapsed placeholder  */
 
-    /* Kafka payload-type badges */
-    --bm-kafka-type-order-bg:   #1e3a5f; --bm-kafka-type-order-fg:   #7dd3fc;
-    --bm-kafka-type-payment-bg: #3b1f5e; --bm-kafka-type-payment-fg: #c4b5fd;
-    --bm-kafka-type-proto-bg:   #1a3a2a; --bm-kafka-type-proto-fg:   #86efac;
-
     /* D3 chart tooltips (memory graph, sunburst, treemap) */
     --bm-chart-tip-bg: rgba(18,18,18,0.92);
     --bm-chart-tip-fg: #e8e8e8;
@@ -1454,10 +1449,6 @@ html, body {
     --bm-jv-punct:   #6E7781;
     --bm-jv-toggle:  #0969DA;
     --bm-jv-summary: #6E7781;
-
-    --bm-kafka-type-order-bg:   #dbeafe; --bm-kafka-type-order-fg:   #1d4ed8;
-    --bm-kafka-type-payment-bg: #ede9fe; --bm-kafka-type-payment-fg: #6d28d9;
-    --bm-kafka-type-proto-bg:   #dcfce7; --bm-kafka-type-proto-fg:   #15803d;
 
     --bm-chart-tip-bg: rgba(255,255,255,0.97);
     --bm-chart-tip-fg: #1F2328;
@@ -2374,11 +2365,9 @@ tr.bm-row-searching td:first-child {
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }
 .bm-lb-search-btn  { flex-shrink: 0; white-space: nowrap; }
 
-.bm-lb-breadcrumb-bar { font-size: 12px; gap: 2px; border-top: 1px solid var(--mud-palette-divider); }
-.bm-lb-bc-item  { cursor: pointer; color: var(--mud-palette-primary); }
-.bm-lb-bc-item:hover { text-decoration: underline; }
-.bm-lb-bc-item.bm-lb-bc-root { color: var(--mud-palette-text-secondary); font-weight: 600; }
+.bm-lb-breadcrumb-bar { font-size: 12px; gap: 6px; border-top: 1px solid var(--mud-palette-divider); flex-wrap: wrap; }
 .bm-lb-bc-sep   { color: var(--mud-palette-text-secondary); margin: 0 1px; user-select: none; }
+.bm-lb-path-chip { font-family: var(--bm-font-mono); font-size: 11px; }
 .bm-lb-body {
     flex: 1 1 0;
     display: flex;
@@ -2424,6 +2413,16 @@ tr.bm-row-searching td:first-child {
 /* tighten vertical spacing between tree nodes */
 .bm-lb-tree .mud-treeview-item-content { min-height: 22px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
 .bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
+
+.bm-lb-tree-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 6px;
+}
+.bm-lb-tree-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 2px !important; }
+.bm-lb-tree-row-checkbox .mud-icon-root { font-size: 16px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;
@@ -2835,17 +2834,24 @@ tr.bm-row-searching td:first-child {
 .bm-kafka-payload-type {
     display: inline-block;
     font-size: 10px;
-    font-weight: 600;
-    padding: 1px 5px;
-    border-radius: 3px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 8px;
     letter-spacing: .03em;
     background: var(--mud-palette-background-grey);
     color: var(--mud-palette-text-secondary);
 }
-.bm-kafka-type-orderevent   { background: var(--bm-kafka-type-order-bg);   color: var(--bm-kafka-type-order-fg); }
-.bm-kafka-type-paymentevent { background: var(--bm-kafka-type-payment-bg); color: var(--bm-kafka-type-payment-fg); }
-.bm-kafka-type-protomsg     { background: var(--bm-kafka-type-proto-bg);   color: var(--bm-kafka-type-proto-fg); }
-.bm-kafka-type-unknown      { background: var(--mud-palette-background-grey); color: var(--mud-palette-text-disabled); }
+/* Payload types are arbitrary/unbounded (proto message names), so colors are picked
+   by a stable hash of the type name into a fixed palette instead of one CSS class
+   per known type name — new types automatically get a (consistent) color. */
+.bm-type-hash-0 { background: rgba(59,130,246,0.14)  !important; color: #60a5fa !important; }
+.bm-type-hash-1 { background: rgba(168,85,247,0.14)  !important; color: #c084fc !important; }
+.bm-type-hash-2 { background: rgba(34,197,94,0.14)   !important; color: #4ade80 !important; }
+.bm-type-hash-3 { background: rgba(234,179,8,0.14)   !important; color: #facc15 !important; }
+.bm-type-hash-4 { background: rgba(236,72,153,0.14)  !important; color: #f472b6 !important; }
+.bm-type-hash-5 { background: rgba(20,184,166,0.14)  !important; color: #2dd4bf !important; }
+.bm-type-hash-6 { background: rgba(249,115,22,0.14)  !important; color: #fb923c !important; }
+.bm-type-hash-7 { background: rgba(139,148,158,0.14) !important; color: #8b949e !important; }
 
 .bm-kafka-stats-panel {
     border-bottom: 1px solid var(--mud-palette-lines-default);

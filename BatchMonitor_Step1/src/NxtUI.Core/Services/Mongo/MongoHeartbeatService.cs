@@ -42,6 +42,7 @@ public class MongoHeartbeatService(
             ServiceName = d.ServiceName,
             HostName = d.HostName,
             ProcessId = d.ProcessId,
+            ServiceInstanceId = d.ServiceInstanceId,
             UpdatedDateTime = d.UpdatedDateTime,
             CreatedDateTime = d.CreatedDateTime,
             IsOnline = (now - d.UpdatedDateTime) <= threshold,

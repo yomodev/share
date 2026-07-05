@@ -5,6 +5,10 @@ public class ServiceStatus
     public string ServiceName { get; set; } = string.Empty;
     public string HostName { get; set; } = string.Empty;
     public int ProcessId { get; set; }
+
+    /// <summary>GUID (dashes removed) identifying this specific process instance —
+    /// matches this service to its live Kafka metrics stream (MetricsTracker.ServiceInstanceId).</summary>
+    public string ServiceInstanceId { get; set; } = string.Empty;
     public DateTime UpdatedDateTime { get; set; }
     public DateTime CreatedDateTime { get; set; }
     public bool IsOnline { get; set; }

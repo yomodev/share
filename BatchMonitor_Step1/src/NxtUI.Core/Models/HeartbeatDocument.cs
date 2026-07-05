@@ -23,4 +23,9 @@ public class HeartbeatDocument
 
     [BsonElement("HostName")]
     public string HostName { get; set; } = string.Empty;
+
+    /// <summary>GUID (dashes removed) identifying this specific process instance —
+    /// used to match this heartbeat to its live Kafka metrics stream.</summary>
+    [BsonElement("ServiceInstanceId")]
+    public string ServiceInstanceId { get; set; } = string.Empty;
 }
