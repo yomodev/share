@@ -1,5 +1,4 @@
 using NxtUI.Core.Models;
-using NxtUI.Core.Services;
 
 namespace NxtUI.Core.Services.Mock;
 
@@ -40,21 +39,21 @@ public class MockMongoService : IMongoService
         ],
     };
 
-    private static readonly string[] Statuses     = ["Running", "Completed", "Failed"];
-    private static readonly string[] EventTypes   = ["BATCH_STARTED", "BATCH_COMPLETED", "STEP_FAILED", "RETRY", "CANCELLED"];
-    private static readonly string[] ConfigKeys   = ["maxRetries", "timeoutSec", "parallelism", "alertThreshold", "batchSize"];
-    private static readonly string[] Roles        = ["admin", "operator", "viewer", "developer"];
+    private static readonly string[] Statuses = ["Running", "Completed", "Failed"];
+    private static readonly string[] EventTypes = ["BATCH_STARTED", "BATCH_COMPLETED", "STEP_FAILED", "RETRY", "CANCELLED"];
+    private static readonly string[] ConfigKeys = ["maxRetries", "timeoutSec", "parallelism", "alertThreshold", "batchSize"];
+    private static readonly string[] Roles = ["admin", "operator", "viewer", "developer"];
     private static readonly string[] AuditActions = ["LOGIN", "LOGOUT", "READ", "WRITE", "DELETE", "STOP_BATCH"];
-    private static readonly string[] Resources    = ["batches", "users", "config", "events", "reports"];
-    private static readonly string[] FlagNames    = ["newUi", "kafka_v2", "analytics", "realtime", "darkMode", "export_csv"];
-    private static readonly string[] Severities   = ["critical", "warning", "info"];
-    private static readonly string[] EnvNames     = ["prod", "staging", "dev", "uat"];
+    private static readonly string[] Resources = ["batches", "users", "config", "events", "reports"];
+    private static readonly string[] FlagNames = ["newUi", "kafka_v2", "analytics", "realtime", "darkMode", "export_csv"];
+    private static readonly string[] Severities = ["critical", "warning", "info"];
+    private static readonly string[] EnvNames = ["prod", "staging", "dev", "uat"];
 
     private static MongoDocument MakeDoc(string id, string json, DateTime? ts) =>
         new() { Id = id, Json = json, Timestamp = ts };
 
     private static string NewId(int i) => $"{unchecked((long)0xDEAD_BEEF_0000_0000UL + i):x16}{i:x8}";
-    private static string ShortGuid()  => Guid.NewGuid().ToString("N")[..8];
+    private static string ShortGuid() => Guid.NewGuid().ToString("N")[..8];
     private static string Bool(bool b) => b ? "true" : "false";
 
     private MongoDocument GenerateDoc(string collection, int i, string id) => collection switch
@@ -264,9 +263,9 @@ public class MockMongoService : IMongoService
         string? sortField = null, bool sortDesc = false,
         CancellationToken ct = default, bool useUtc = true)
     {
-        var colMeta  = _collections.TryGetValue(database, out var cols)
+        var colMeta = _collections.TryGetValue(database, out var cols)
             ? cols.FirstOrDefault(c => c.Name == collection) : null;
-        var total    = colMeta?.DocumentCount ?? 100;
+        var total = colMeta?.DocumentCount ?? 100;
         var genLimit = (int)Math.Min(total, 500);
 
         var allDocs = Enumerable.Range(0, genLimit)

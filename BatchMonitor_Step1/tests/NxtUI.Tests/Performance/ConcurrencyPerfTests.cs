@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
 using NxtUI.Web.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -18,13 +18,13 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task Multiple_concurrent_heartbeat_subscriptions_all_receive_update()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
         const int count = 5;
 
-        var received  = new int[count];
-        var tcss      = Enumerable.Range(0, count)
+        var received = new int[count];
+        var tcss = Enumerable.Range(0, count)
             .Select(_ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously))
             .ToArray();
 
@@ -58,9 +58,9 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task Rapid_subscribe_unsubscribe_does_not_crash_monitor()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         for (int i = 0; i < 30; i++)
             heartbeat.Subscribe(env).Dispose();   // subscribe then immediately release
@@ -82,18 +82,18 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task Heartbeat_and_metrics_subscriptions_both_fire()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var metrics = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
-        var hbTcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hbTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var metTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         heartbeat.OnServicesUpdated += e => { if (e == env) hbTcs.TrySetResult(true); };
-        metrics.OnMetricsUpdated    += e => { if (e == env) metTcs.TrySetResult(true); };
+        metrics.OnMetricsUpdated += e => { if (e == env) metTcs.TrySetResult(true); };
 
-        using var hbSub  = heartbeat.Subscribe(env);
+        using var hbSub = heartbeat.Subscribe(env);
         using var metSub = metrics.Subscribe(env);
 
         await Task.WhenAny(hbTcs.Task, Task.Delay(15_000, ct));
@@ -114,9 +114,9 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task Concurrent_subscribe_to_all_environments()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var envs      = fix.Environments;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var envs = fix.Environments;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         if (envs.Length == 0) { out_.WriteLine("No environments configured."); return; }
 
@@ -145,12 +145,12 @@ public sealed class ConcurrencyPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task Subscription_refcount_returns_to_zero_cleanly()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         // Hold three subscriptions, wait for at least one update, then release all.
-        var tcs  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         heartbeat.OnServicesUpdated += e => { if (e == env) tcs.TrySetResult(true); };
 
         var sub1 = heartbeat.Subscribe(env);

@@ -18,9 +18,9 @@ public sealed class TopicDeserializerPipeline
 {
     private readonly record struct Rule(Regex Pattern, List<string> TypeNames);
 
-    private readonly List<Rule>       _rules;
+    private readonly List<Rule> _rules;
     private readonly IMessageRegistry _registry;
-    private readonly string?          _defaultType;
+    private readonly string? _defaultType;
 
     // Per-topic cache of the last type that successfully parsed a message —
     // avoids re-trying every candidate on every message once one is known good.
@@ -28,9 +28,9 @@ public sealed class TopicDeserializerPipeline
 
     public TopicDeserializerPipeline(IOptions<KafkaSettings> settings, IMessageRegistry registry)
     {
-        _registry    = registry;
+        _registry = registry;
         _defaultType = settings.Value.DefaultProtoType;
-        _rules       = settings.Value.TopicDeserializers
+        _rules = settings.Value.TopicDeserializers
             .Select(r => new Rule(GlobToRegex(r.Pattern), r.Types))
             .ToList();
     }

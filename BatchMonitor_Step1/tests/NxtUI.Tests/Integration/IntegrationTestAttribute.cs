@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace NxtUI.Tests.Integration;
 
 /// <summary>
@@ -6,14 +8,20 @@ namespace NxtUI.Tests.Integration;
 /// Tests that additionally require a real Kafka broker also check <c>KAFKA_BOOTSTRAP_SERVERS</c>.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class)]
-public sealed class IntegrationTestAttribute : Attribute { }
+public sealed class IntegrationTestAttribute : Attribute
+{
+    public IntegrationTestAttribute() { }
+}
 
 /// <summary>
 /// xUnit Fact that is automatically skipped when <c>RUN_INTEGRATION_TESTS != "1"</c>.
 /// </summary>
 public sealed class IntegrationTestFactAttribute : FactAttribute
 {
-    public IntegrationTestFactAttribute()
+    public IntegrationTestFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (Environment.GetEnvironmentVariable("RUN_INTEGRATION_TESTS") != "1")
             Skip = "Set RUN_INTEGRATION_TESTS=1 to run integration tests.";
@@ -26,7 +34,10 @@ public sealed class IntegrationTestFactAttribute : FactAttribute
 /// </summary>
 public sealed class KafkaIntegrationTestFactAttribute : FactAttribute
 {
-    public KafkaIntegrationTestFactAttribute()
+    public KafkaIntegrationTestFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (Environment.GetEnvironmentVariable("RUN_INTEGRATION_TESTS") != "1")
         {

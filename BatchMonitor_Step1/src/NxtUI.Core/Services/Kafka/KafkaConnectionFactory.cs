@@ -15,7 +15,7 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
 
     public ClientConfig GetClientConfig(string envId)
     {
-        var settings    = loader.GetKafka(envId);
+        var settings = loader.GetKafka(envId);
         var fingerprint = settings.GetFingerprint();
         return _cache.GetOrAdd(fingerprint, _ => Build(settings));
     }
@@ -26,9 +26,9 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     public ConsumerConfig BuildConsumerConfig(string envId, string groupId) =>
         new(GetClientConfig(envId))
         {
-            GroupId            = groupId,
-            AutoOffsetReset    = AutoOffsetReset.Earliest,
-            EnableAutoCommit   = false,
+            GroupId = groupId,
+            AutoOffsetReset = AutoOffsetReset.Earliest,
+            EnableAutoCommit = false,
             EnablePartitionEof = true,
         };
 
@@ -53,8 +53,8 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
         if (!string.IsNullOrWhiteSpace(s.SaslMechanism))
         {
             cfg.SaslMechanism = Enum.Parse<SaslMechanism>(s.SaslMechanism, ignoreCase: true);
-            cfg.SaslUsername  = s.SaslUsername;
-            cfg.SaslPassword  = s.SaslPassword;
+            cfg.SaslUsername = s.SaslUsername;
+            cfg.SaslPassword = s.SaslPassword;
         }
 
         return cfg;

@@ -1,5 +1,5 @@
-using NxtUI.Filtering;
 using AwesomeAssertions;
+using NxtUI.Core.Filtering;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -39,7 +39,7 @@ public class SqlFilterBuilderTests
     public void Bare_bool_true_produces_equality_clause()
     {
         var parser = new FilterParser(["IsOnline"]);
-        var node   = parser.Parse("IsOnline:true");
+        var node = parser.Parse("IsOnline:true");
         var (sql, ps) = SqlFilterBuilder.Build(node);
         sql.Should().Contain("=");
         ps.Should().ContainSingle().Which.Value.Should().Be(true);
@@ -49,7 +49,7 @@ public class SqlFilterBuilderTests
     public void Bare_bool_false_produces_equality_clause()
     {
         var parser = new FilterParser(["IsOnline"]);
-        var node   = parser.Parse("IsOnline:false");
+        var node = parser.Parse("IsOnline:false");
         var (sql, ps) = SqlFilterBuilder.Build(node);
         ps.Should().ContainSingle().Which.Value.Should().Be(false);
     }
@@ -70,7 +70,7 @@ public class SqlFilterBuilderTests
     public void NOT_wraps_bool_equality()
     {
         var parser = new FilterParser(["IsOnline"]);
-        var node   = parser.Parse("!IsOnline:true");
+        var node = parser.Parse("!IsOnline:true");
         var (sql, _) = SqlFilterBuilder.Build(node);
         sql.Should().StartWith("NOT");
     }

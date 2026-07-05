@@ -1,11 +1,9 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
-using NxtUI.Configuration;
+using NxtUI.Core.Filtering;
 using NxtUI.Core.Models;
-using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services.Mongo;
 

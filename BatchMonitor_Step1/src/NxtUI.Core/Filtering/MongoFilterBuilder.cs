@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 /// <summary>
 /// Translates a <see cref="FilterNode"/> AST into a MongoDB
@@ -21,12 +21,12 @@ public static class MongoFilterBuilder
     public static FilterDefinition<BsonDocument> Build(FilterNode? node) =>
         node switch
         {
-            null            => B.Empty,
-            AndNode and     => B.And(Build(and.Left), Build(and.Right)),
-            OrNode or       => B.Or(Build(or.Left), Build(or.Right)),
-            NotNode not     => B.Not(Build(not.Operand)),
+            null => B.Empty,
+            AndNode and => B.And(Build(and.Left), Build(and.Right)),
+            OrNode or => B.Or(Build(or.Left), Build(or.Right)),
+            NotNode not => B.Not(Build(not.Operand)),
             FieldTermNode t => BuildTerm(t),
-            _               => B.Empty,
+            _ => B.Empty,
         };
 
     // ── Field term ─────────────────────────────────────────────────────────
@@ -54,31 +54,31 @@ public static class MongoFilterBuilder
             // A bare number/date with no operator parses to Exact (equality) —
             // see FilterParser's "Number or Date with no comparison operator".
             (MatchType.Exact, NumberValue nv) => B.Eq(t.Field, nv.Value),
-            (MatchType.Exact, DateValue dv)   => B.Eq(t.Field, dv.Value),
+            (MatchType.Exact, DateValue dv) => B.Eq(t.Field, dv.Value),
 
             // Booleans only ever parse to Exact, but ParseBareTerm's global-term
             // expansion can produce Contains for a bare "true"/"false" — both mean
             // the same thing for a boolean value, so both map to equality.
-            (MatchType.Exact,    BoolValue bv) => B.Eq(t.Field, bv.Value),
+            (MatchType.Exact, BoolValue bv) => B.Eq(t.Field, bv.Value),
             (MatchType.Contains, BoolValue bv) => B.Eq(t.Field, bv.Value),
 
             // ── Numeric comparisons ────────────────────────────────────────
-            (MatchType.GreaterThan,        NumberValue nv) => B.Gt(t.Field,  nv.Value),
+            (MatchType.GreaterThan, NumberValue nv) => B.Gt(t.Field, nv.Value),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => B.Gte(t.Field, nv.Value),
-            (MatchType.LessThan,           NumberValue nv) => B.Lt(t.Field,  nv.Value),
-            (MatchType.LessThanOrEqual,    NumberValue nv) => B.Lte(t.Field, nv.Value),
+            (MatchType.LessThan, NumberValue nv) => B.Lt(t.Field, nv.Value),
+            (MatchType.LessThanOrEqual, NumberValue nv) => B.Lte(t.Field, nv.Value),
 
             // ── Date comparisons ───────────────────────────────────────────
-            (MatchType.GreaterThan,        DateValue dv) => B.Gt(t.Field,  dv.Value),
+            (MatchType.GreaterThan, DateValue dv) => B.Gt(t.Field, dv.Value),
             (MatchType.GreaterThanOrEqual, DateValue dv) => B.Gte(t.Field, dv.Value),
-            (MatchType.LessThan,           DateValue dv) => B.Lt(t.Field,  dv.Value),
-            (MatchType.LessThanOrEqual,    DateValue dv) => B.Lte(t.Field, dv.Value),
+            (MatchType.LessThan, DateValue dv) => B.Lt(t.Field, dv.Value),
+            (MatchType.LessThanOrEqual, DateValue dv) => B.Lte(t.Field, dv.Value),
 
             // ── Time-of-day comparisons ($expr + $mod on epoch ms) ─────────
-            (MatchType.GreaterThan,        TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gt",  tv.Seconds),
+            (MatchType.GreaterThan, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gt", tv.Seconds),
             (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$gte", tv.Seconds),
-            (MatchType.LessThan,           TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lt",  tv.Seconds),
-            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lte", tv.Seconds),
+            (MatchType.LessThan, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lt", tv.Seconds),
+            (MatchType.LessThanOrEqual, TimeOfDayValue tv) => TimeOfDayExpr(t.Field, "$lte", tv.Seconds),
 
             // ── Range (..) ─────────────────────────────────────────────────
             (MatchType.Between, RangeValue rv) => BuildRange(t.Field, rv),
@@ -94,15 +94,15 @@ public static class MongoFilterBuilder
 
         switch (range.Low)
         {
-            case NumberValue    ln: filters.Add(B.Gte(field, ln.Value)); break;
-            case DateValue      ld: filters.Add(B.Gte(field, ld.Value)); break;
+            case NumberValue ln: filters.Add(B.Gte(field, ln.Value)); break;
+            case DateValue ld: filters.Add(B.Gte(field, ld.Value)); break;
             case TimeOfDayValue lt: filters.Add(TimeOfDayExpr(field, "$gte", lt.Seconds)); break;
         }
 
         switch (range.High)
         {
-            case NumberValue    hn: filters.Add(B.Lte(field, hn.Value)); break;
-            case DateValue      hd: filters.Add(B.Lte(field, hd.Value)); break;
+            case NumberValue hn: filters.Add(B.Lte(field, hn.Value)); break;
+            case DateValue hd: filters.Add(B.Lte(field, hd.Value)); break;
             case TimeOfDayValue ht: filters.Add(TimeOfDayExpr(field, "$lte", ht.Seconds)); break;
         }
 
@@ -165,7 +165,7 @@ public static class MongoFilterBuilder
             {
                 '*' => ".*",
                 '?' => ".",
-                _   => Regex.Escape(ch.ToString()),
+                _ => Regex.Escape(ch.ToString()),
             });
         }
 

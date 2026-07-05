@@ -1,6 +1,6 @@
-using NxtUI.Core.Models;
-using NxtUI.Filtering;
 using AwesomeAssertions;
+using NxtUI.Core.Filtering;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -21,14 +21,14 @@ public class FilterIntegrationTests
     private static ServiceStatus MakeSvc(
         string name, string host, bool online = true,
         int pid = 1000, int minsAgo = 0) => new()
-    {
-        ServiceName     = name,
-        HostName        = host,
-        IsOnline        = online,
-        ProcessId       = pid,
-        UpdatedDateTime = DateTime.UtcNow.AddMinutes(-minsAgo),
-        CreatedDateTime = DateTime.UtcNow.AddDays(-1),
-    };
+        {
+            ServiceName = name,
+            HostName = host,
+            IsOnline = online,
+            ProcessId = pid,
+            UpdatedDateTime = DateTime.UtcNow.AddMinutes(-minsAgo),
+            CreatedDateTime = DateTime.UtcNow.AddDays(-1),
+        };
 
     [Fact]
     public void ServiceStatus_bare_term_matches_name_substring()
@@ -61,9 +61,9 @@ public class FilterIntegrationTests
     [Fact]
     public void ServiceStatus_AND_name_and_host()
     {
-        var target     = MakeSvc("Loader", "srv-01");
-        var wrongHost  = MakeSvc("Loader", "srv-02");
-        var wrongName  = MakeSvc("Exporter", "srv-01");
+        var target = MakeSvc("Loader", "srv-01");
+        var wrongHost = MakeSvc("Loader", "srv-02");
+        var wrongName = MakeSvc("Exporter", "srv-01");
         EvalSvc("ServiceName:Loader HostName:srv-01", target).Should().BeTrue();
         EvalSvc("ServiceName:Loader HostName:srv-01", wrongHost).Should().BeFalse();
         EvalSvc("ServiceName:Loader HostName:srv-01", wrongName).Should().BeFalse();
@@ -80,8 +80,8 @@ public class FilterIntegrationTests
     [Fact]
     public void ServiceStatus_stale_filter_by_UpdatedDateTime()
     {
-        var stale  = MakeSvc("Loader", "srv-01", minsAgo: 90);  // 90 min old
-        var fresh  = MakeSvc("Loader", "srv-01", minsAgo: 2);   // 2 min old
+        var stale = MakeSvc("Loader", "srv-01", minsAgo: 90);  // 90 min old
+        var fresh = MakeSvc("Loader", "srv-01", minsAgo: 2);   // 2 min old
         var parser = new FilterParser([]);
 
         // "updated more than 60 minutes ago" — stale only
@@ -106,14 +106,14 @@ public class FilterIntegrationTests
     private static KafkaTopicSummary MakeTopic(
         string name, int parts = 3, long retMs = 86_400_000,
         string policy = "delete", long msgs = 1000) => new()
-    {
-        Name             = name,
-        PartitionCount   = parts,
-        RetentionMs      = retMs,
-        CleanupPolicy    = policy,
-        MessageCount     = msgs,
-        ConfigLoaded     = true,
-    };
+        {
+            Name = name,
+            PartitionCount = parts,
+            RetentionMs = retMs,
+            CleanupPolicy = policy,
+            MessageCount = msgs,
+            ConfigLoaded = true,
+        };
 
     [Fact]
     public void KafkaTopic_bare_term_matches_name()
@@ -126,8 +126,8 @@ public class FilterIntegrationTests
     public void KafkaTopic_filter_high_partition_count()
     {
         var parser = new FilterParser([]);
-        var busy   = MakeTopic("test", parts: 24);
-        var small  = MakeTopic("test", parts: 3);
+        var busy = MakeTopic("test", parts: 24);
+        var small = MakeTopic("test", parts: 3);
         FilterEvaluator.Evaluate(parser.Parse("PartitionCount:>12"), busy).Should().BeTrue();
         FilterEvaluator.Evaluate(parser.Parse("PartitionCount:>12"), small).Should().BeFalse();
     }
@@ -135,10 +135,10 @@ public class FilterIntegrationTests
     [Fact]
     public void KafkaTopic_filter_retention_in_range()
     {
-        var parser    = new FilterParser([]);
-        var oneDay    = MakeTopic("t1", retMs: 86_400_000);        // 1 day
-        var oneWeek   = MakeTopic("t2", retMs: 604_800_000);       // 7 days
-        var twoWeeks  = MakeTopic("t3", retMs: 1_209_600_000);     // 14 days
+        var parser = new FilterParser([]);
+        var oneDay = MakeTopic("t1", retMs: 86_400_000);        // 1 day
+        var oneWeek = MakeTopic("t2", retMs: 604_800_000);       // 7 days
+        var twoWeeks = MakeTopic("t3", retMs: 1_209_600_000);     // 14 days
 
         // 2 days..10 days window
         var ast = parser.Parse("RetentionMs:172800000..864000000");
@@ -151,17 +151,17 @@ public class FilterIntegrationTests
     public void KafkaTopic_filter_by_cleanup_policy()
     {
         var compact = MakeTopic("t", policy: "compact");
-        var delete  = MakeTopic("t", policy: "delete");
+        var delete = MakeTopic("t", policy: "delete");
         EvalTopic("CleanupPolicy:compact", compact).Should().BeTrue();
         EvalTopic("CleanupPolicy:compact", delete).Should().BeFalse();
-        EvalTopic("CleanupPolicy:delete",  delete).Should().BeTrue();
+        EvalTopic("CleanupPolicy:delete", delete).Should().BeTrue();
     }
 
     [Fact]
     public void KafkaTopic_NOT_compact_excludes_compact_topics()
     {
         var compact = MakeTopic("t", policy: "compact");
-        var delete  = MakeTopic("t", policy: "delete");
+        var delete = MakeTopic("t", policy: "delete");
         EvalTopic("!CleanupPolicy:compact", compact).Should().BeFalse();
         EvalTopic("!CleanupPolicy:compact", delete).Should().BeTrue();
     }
@@ -169,8 +169,8 @@ public class FilterIntegrationTests
     [Fact]
     public void KafkaTopic_infinite_retention_is_negative_one()
     {
-        var parser    = new FilterParser([]);
-        var infinite  = MakeTopic("t", retMs: -1);
+        var parser = new FilterParser([]);
+        var infinite = MakeTopic("t", retMs: -1);
         FilterEvaluator.Evaluate(parser.Parse("RetentionMs:<0"), infinite).Should().BeTrue();
         FilterEvaluator.Evaluate(parser.Parse("RetentionMs:>0"), infinite).Should().BeFalse();
     }
@@ -192,12 +192,12 @@ public class FilterIntegrationTests
 
     private static MongoCollectionSummary MakeCol(
         string name, long docs = 0, long storageBytes = 0, bool loaded = true) => new()
-    {
-        Name             = name,
-        DocumentCount    = docs,
-        StorageSizeBytes = storageBytes,
-        StatsLoaded      = loaded,
-    };
+        {
+            Name = name,
+            DocumentCount = docs,
+            StorageSizeBytes = storageBytes,
+            StatsLoaded = loaded,
+        };
 
     [Fact]
     public void MongoCollection_bare_term_matches_name()
@@ -210,8 +210,8 @@ public class FilterIntegrationTests
     public void MongoCollection_filter_large_by_document_count()
     {
         var parser = new FilterParser([]);
-        var large  = MakeCol("big",   docs: 1_000_000);
-        var small  = MakeCol("small", docs: 100);
+        var large = MakeCol("big", docs: 1_000_000);
+        var small = MakeCol("small", docs: 100);
         FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>500000"), large).Should().BeTrue();
         FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>500000"), small).Should().BeFalse();
     }
@@ -228,7 +228,7 @@ public class FilterIntegrationTests
     [Fact]
     public void MongoCollection_unloaded_stats_doc_count_is_zero()
     {
-        var parser   = new FilterParser([]);
+        var parser = new FilterParser([]);
         var unloaded = MakeCol("test", loaded: false);
         FilterEvaluator.Evaluate(parser.Parse("DocumentCount:>0"), unloaded).Should().BeFalse();
         FilterEvaluator.Evaluate(parser.Parse("DocumentCount:<1"), unloaded).Should().BeTrue();
@@ -246,9 +246,9 @@ public class FilterIntegrationTests
     public void MongoCollection_filter_combines_name_and_doc_count()
     {
         var parser = new FilterParser(["Name"]);
-        var large  = MakeCol("audit_log", docs: 5_000_000);
-        var small  = MakeCol("audit_log", docs: 100);
-        var other  = MakeCol("run_events", docs: 5_000_000);
+        var large = MakeCol("audit_log", docs: 5_000_000);
+        var small = MakeCol("audit_log", docs: 100);
+        var other = MakeCol("run_events", docs: 5_000_000);
 
         FilterEvaluator.Evaluate(parser.Parse("Name:audit DocumentCount:>1000000"), large).Should().BeTrue();
         FilterEvaluator.Evaluate(parser.Parse("Name:audit DocumentCount:>1000000"), small).Should().BeFalse();

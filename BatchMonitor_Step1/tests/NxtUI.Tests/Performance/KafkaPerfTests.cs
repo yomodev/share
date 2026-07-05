@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -17,13 +17,13 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task TopicsLoad_TwoPhase_Timing()
     {
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         // Phase 1a — cluster info (renders the cluster bar in the UI).
         var clusterTask = kafka.GetClusterInfoAsync(env, ct);
-        var topicsTask  = kafka.GetTopicsAsync(env, ct);
+        var topicsTask = kafka.GetTopicsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers, " +
@@ -51,12 +51,12 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task ConsumersLoad_Timing()
     {
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var clusterTask = kafka.GetClusterInfoAsync(env, ct);
-        var groupsTask  = kafka.GetAllConsumerGroupsAsync(env, ct);
+        var groupsTask = kafka.GetAllConsumerGroupsAsync(env, ct);
 
         var cluster = await clusterTask;
         out_.WriteLine($"[{sw.Elapsed:c}] GetClusterInfoAsync: {cluster.Brokers.Count} brokers");
@@ -77,15 +77,15 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     [Fact]
     public async Task TopicTail_FirstMessages_Timing()
     {
-        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env    = fix.DefaultEnv;
-        var sw     = Stopwatch.StartNew();
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
         var topics = (await kafka.GetTopicsAsync(env, TestContext.Current.CancellationToken)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {topics.Count} topics available");
 
         if (topics.Count == 0) { out_.WriteLine("No topics — skipping tail test."); return; }
 
-        var topic    = topics[0].Name;
+        var topic = topics[0].Name;
         var messages = new List<KafkaMessage>();
         out_.WriteLine($"[{sw.Elapsed:c}] Tailing '{topic}' (first 10 messages, 15s timeout)…");
 
@@ -110,10 +110,10 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     [Fact]
     public async Task AllConsumerGroups_LagDetail_Sequential_vs_Parallel()
     {
-        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env    = fix.DefaultEnv;
-        var sw     = Stopwatch.StartNew();
-        var ct     = TestContext.Current.CancellationToken;
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
         var groups = (await kafka.GetAllConsumerGroupsAsync(env, ct)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] {groups.Count} consumer groups");
 
@@ -137,10 +137,10 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     [Fact]
     public async Task TopicConsumerGroups_Per_Topic_Timing()
     {
-        var kafka  = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env    = fix.DefaultEnv;
-        var sw     = Stopwatch.StartNew();
-        var ct     = TestContext.Current.CancellationToken;
+        var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
         var topics = (await kafka.GetTopicsAsync(env, ct)).ToList();
 
         if (topics.Count == 0) { out_.WriteLine("No topics."); return; }
@@ -148,7 +148,7 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
         out_.WriteLine($"[{sw.Elapsed:c}] Fetching consumer groups per topic ({topics.Count} topics)…");
         await Task.WhenAll(topics.Take(5).Select(async t =>
         {
-            var tSw    = Stopwatch.StartNew();
+            var tSw = Stopwatch.StartNew();
             var groups = await kafka.GetTopicConsumerGroupsAsync(env, t.Name, ct);
             out_.WriteLine($"  [{tSw.Elapsed:c}] {t.Name}: {groups.Count} consumer groups, " +
                            $"totalLag={groups.Sum(g => g.TotalLag):N0}");
@@ -161,8 +161,8 @@ public sealed class KafkaPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task Slow_broker_response_stays_within_timeout()
     {
         var kafka = fix.Services.GetRequiredService<IKafkaMonitor>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try

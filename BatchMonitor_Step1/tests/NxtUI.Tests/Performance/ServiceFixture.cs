@@ -2,7 +2,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Services;
@@ -41,7 +40,7 @@ public sealed class ServiceFixture : IAsyncLifetime
 
         var appSettings = config.GetSection(AppSettings.SectionName).Get<AppSettings>() ?? new();
         Environments = appSettings.Environments.Select(e => e.Id).ToArray();
-        DefaultEnv   = appSettings.DefaultEnvironment;
+        DefaultEnv = appSettings.DefaultEnvironment;
 
         _host = Host.CreateDefaultBuilder()
             .ConfigureLogging(log =>
@@ -93,16 +92,16 @@ public sealed class ServiceFixture : IAsyncLifetime
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["App:DefaultEnvironment"]       = "DEV1",
-                ["App:Environments:0:Id"]        = "DEV1",
-                ["App:Environments:0:Label"]     = "Development 1",
-                ["App:Environments:0:Tier"]      = "Development",
-                ["Heartbeats:IntervalSeconds"]   = "30",
-                ["Heartbeats:IdleReleaseMinutes"]= "10",
-                ["Logs:MetricsIntervalSeconds"]  = "90",
-                ["Logs:IdleReleaseMinutes"]      = "10",
-                ["Mongo:ConnectionString"]       = "mongodb://localhost:27017",
-                ["Kafka:BootstrapServers"]       = "localhost:9092",
+                ["App:DefaultEnvironment"] = "DEV1",
+                ["App:Environments:0:Id"] = "DEV1",
+                ["App:Environments:0:Label"] = "Development 1",
+                ["App:Environments:0:Tier"] = "Development",
+                ["Heartbeats:IntervalSeconds"] = "30",
+                ["Heartbeats:IdleReleaseMinutes"] = "10",
+                ["Logs:MetricsIntervalSeconds"] = "90",
+                ["Logs:IdleReleaseMinutes"] = "10",
+                ["Mongo:ConnectionString"] = "mongodb://localhost:27017",
+                ["Kafka:BootstrapServers"] = "localhost:9092",
             })
             .Build();
     }
@@ -110,11 +109,11 @@ public sealed class ServiceFixture : IAsyncLifetime
     private static void RegisterServices(IServiceCollection svc, IConfiguration config)
     {
         // ── Configuration ─────────────────────────────────────────────────────
-        svc.Configure<AppSettings>      (config.GetSection(AppSettings.SectionName));
+        svc.Configure<AppSettings>(config.GetSection(AppSettings.SectionName));
         svc.Configure<HeartbeatSettings>(config.GetSection("Heartbeats"));
-        svc.Configure<LogPathSettings>  (config.GetSection(LogPathSettings.SectionName));
-        svc.Configure<MongoSettings>    (config.GetSection(MongoSettings.SectionName));
-        svc.Configure<KafkaSettings>    (config.GetSection(KafkaSettings.SectionName));
+        svc.Configure<LogPathSettings>(config.GetSection(LogPathSettings.SectionName));
+        svc.Configure<MongoSettings>(config.GetSection(MongoSettings.SectionName));
+        svc.Configure<KafkaSettings>(config.GetSection(KafkaSettings.SectionName));
 
         // ── Connection factories (used by real services) ───────────────────────
         svc.AddSingleton(new EnvironmentConfigOptions
@@ -140,8 +139,8 @@ public sealed class ServiceFixture : IAsyncLifetime
         // Mock (default):
         svc.AddSingleton<MockMongoService>();
         svc.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MockMongoService>());
-        svc.AddSingleton<IMongoReader> (sp => sp.GetRequiredService<MockMongoService>());
-        svc.AddSingleton<IMongoAdmin>  (sp => sp.GetRequiredService<MockMongoService>());
+        svc.AddSingleton<IMongoReader>(sp => sp.GetRequiredService<MockMongoService>());
+        svc.AddSingleton<IMongoAdmin>(sp => sp.GetRequiredService<MockMongoService>());
         // Real MongoDB — swap comment block:
         // svc.AddSingleton<MongoService>();
         // svc.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MongoService>());
@@ -153,7 +152,7 @@ public sealed class ServiceFixture : IAsyncLifetime
         svc.AddSingleton<MockKafkaService>();
         svc.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<MockKafkaService>());
         svc.AddSingleton<IKafkaMonitor>(sp => sp.GetRequiredService<MockKafkaService>());
-        svc.AddSingleton<IKafkaAdmin>  (sp => sp.GetRequiredService<MockKafkaService>());
+        svc.AddSingleton<IKafkaAdmin>(sp => sp.GetRequiredService<MockKafkaService>());
         // Real Kafka broker — swap comment block:
         // svc.AddSingleton<KafkaService>();
         // svc.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<KafkaService>());

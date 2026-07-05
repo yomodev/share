@@ -1,5 +1,5 @@
-using NxtUI.Logging;
 using NxtUI.Core.Models;
+using NxtUI.Core.Logging;
 
 namespace NxtUI.Core.Services;
 

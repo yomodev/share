@@ -5,9 +5,9 @@ namespace NxtUI.Core.Services;
 /// <summary>Read-only Kafka monitoring operations. Safe to inject in any component.</summary>
 public interface IKafkaMonitor
 {
-    Task<KafkaClusterInfo>                       GetClusterInfoAsync(string env, CancellationToken ct = default);
-    Task<IReadOnlyList<KafkaTopicSummary>>       GetTopicsAsync(string env, CancellationToken ct = default);
-    Task<KafkaTopicConfig>                       GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
+    Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default);
+    Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default);
+    Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
 
     /// <summary>
     /// Cheap, batched enrichment for a whole topic list — cleanup policy (for the "~"
@@ -20,7 +20,7 @@ public interface IKafkaMonitor
         string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default);
-    Task<IReadOnlyList<KafkaGroupTopicLag>>         GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);
+    Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);
 
     /// <summary>
     /// Streams messages from a topic.

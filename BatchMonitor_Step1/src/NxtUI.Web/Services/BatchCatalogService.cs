@@ -12,8 +12,8 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public sealed class BatchCatalogService : IBatchCatalogService
 {
-    private readonly IWebHostEnvironment  _env;
-    private readonly IHttpClientFactory   _http;
+    private readonly IWebHostEnvironment _env;
+    private readonly IHttpClientFactory _http;
     private readonly ILogger<BatchCatalogService> _log;
 
     private IReadOnlyList<BatchDefinition>? _cache;
@@ -24,9 +24,9 @@ public sealed class BatchCatalogService : IBatchCatalogService
         IHttpClientFactory http,
         ILogger<BatchCatalogService> log)
     {
-        _env  = env;
+        _env = env;
         _http = http;
-        _log  = log;
+        _log = log;
     }
 
     public async Task<IReadOnlyList<BatchDefinition>> GetBatchesAsync(CancellationToken ct = default)
@@ -49,42 +49,43 @@ public sealed class BatchCatalogService : IBatchCatalogService
     }
 
     public async Task<BatchTriggerResult> TriggerAsync(
-        BatchDefinition            batch,
+        BatchDefinition batch,
         Dictionary<string, string> values,
-        string                     env,
-        CancellationToken          ct = default)
+        string env,
+        CancellationToken ct = default)
     {
         // Build resolved flat values (param values take precedence, then built-in placeholders)
         var resolved = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase)
         {
-            ["id"]        = batch.Id,
-            ["env"]       = env,
-            ["today"]     = DateTime.Today.ToString("yyyy-MM-dd"),
+            ["id"] = batch.Id,
+            ["env"] = env,
+            ["today"] = DateTime.Today.ToString("yyyy-MM-dd"),
             ["yesterday"] = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd"),
-            ["month"]     = DateTime.Today.Month.ToString("D2"),
-            ["year"]      = DateTime.Today.Year.ToString(),
+            ["month"] = DateTime.Today.Month.ToString("D2"),
+            ["year"] = DateTime.Today.Year.ToString(),
         };
 
-        var url  = Substitute(batch.Endpoint.Url, resolved);
+        var url = Substitute(batch.Endpoint.Url, resolved);
         var body = BuildBody(batch, values);
 
         _log.LogInformation("Triggering {Batch} → {Method} {Url}", batch.Id, batch.Endpoint.Method, url);
 
         try
         {
-            var client  = _http.CreateClient();
+            var client = _http.CreateClient();
             var content = new StringContent(body, Encoding.UTF8, "application/json");
             using var req = new HttpRequestMessage(
-                new HttpMethod(batch.Endpoint.Method), url) { Content = content };
+                new HttpMethod(batch.Endpoint.Method), url)
+            { Content = content };
 
             using var resp = await client.SendAsync(req, ct);
-            var respBody   = await resp.Content.ReadAsStringAsync(ct);
+            var respBody = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.IsSuccessStatusCode)
             {
                 var jobId = TryParseJobId(respBody);
                 return new BatchTriggerResult(true, url, body,
-                    JobId:   jobId,
+                    JobId: jobId,
                     Message: $"HTTP {(int)resp.StatusCode} — job queued{(jobId is not null ? $" ({jobId})" : "")}");
             }
 
@@ -97,7 +98,7 @@ public sealed class BatchCatalogService : IBatchCatalogService
             // In demo mode there is no real backend — simulate success so the UI
             // shows the resolved URL/body without crashing.
             return new BatchTriggerResult(true, url, body,
-                JobId:   Guid.NewGuid().ToString("N")[..8],
+                JobId: Guid.NewGuid().ToString("N")[..8],
                 Message: $"[MOCK] Endpoint unreachable — simulated success. Would call: {batch.Endpoint.Method} {url}");
         }
     }
@@ -120,14 +121,14 @@ public sealed class BatchCatalogService : IBatchCatalogService
             var raw = values.TryGetValue(p.Key, out var v) ? v : p.DefaultString();
             props[p.Key] = p.Type switch
             {
-                "boolean"     => raw is "true" or "True" or "1",
-                "number"      => double.TryParse(raw,
+                "boolean" => raw is "true" or "True" or "1",
+                "number" => double.TryParse(raw,
                                      System.Globalization.NumberStyles.Any,
                                      System.Globalization.CultureInfo.InvariantCulture,
                                      out var n) ? n : (object?)raw,
                 "multiselect" => raw.Split(',', StringSplitOptions.RemoveEmptyEntries)
                                     .Select(s => s.Trim()).ToArray(),
-                _             => raw
+                _ => raw
             };
         }
         return JsonSerializer.Serialize(props, new JsonSerializerOptions { WriteIndented = true });

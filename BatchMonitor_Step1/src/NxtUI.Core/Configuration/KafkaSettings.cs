@@ -11,16 +11,16 @@ public class KafkaSettings
 
     // ── TLS / mTLS ───────────────────────────────────────────────────────────
 
-    public bool    TlsEnabled         { get; set; }
+    public bool TlsEnabled { get; set; }
     public string? TlsCertificatePath { get; set; }
-    public string? TlsKeyPath         { get; set; }
-    public string? TlsCaPath          { get; set; }
+    public string? TlsKeyPath { get; set; }
+    public string? TlsCaPath { get; set; }
 
     // ── SASL ─────────────────────────────────────────────────────────────────
 
     public string? SaslMechanism { get; set; }
-    public string? SaslUsername  { get; set; }
-    public string? SaslPassword  { get; set; }
+    public string? SaslUsername { get; set; }
+    public string? SaslPassword { get; set; }
 
     // ── Deserialization pipeline ──────────────────────────────────────────────
 

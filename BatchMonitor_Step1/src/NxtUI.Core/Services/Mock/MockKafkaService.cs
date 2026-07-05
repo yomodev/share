@@ -10,7 +10,7 @@ public class MockKafkaService : IKafkaService
 
     private static readonly KafkaClusterInfo _cluster = new()
     {
-        ClusterId    = "mock-cluster-a1b2c3",
+        ClusterId = "mock-cluster-a1b2c3",
         ControllerId = 1,
         Brokers =
         [
@@ -67,12 +67,12 @@ public class MockKafkaService : IKafkaService
         var t = _topics.FirstOrDefault(x => x.Name == topicName);
         var cfg = new KafkaTopicConfig
         {
-            RetentionMs       = t?.RetentionMs       ?? 604_800_000,
-            CleanupPolicy     = t?.CleanupPolicy     ?? "delete",
-            MaxMessageBytes   = topicName.Contains("events") ? 5_242_880 : 1_048_576,
+            RetentionMs = t?.RetentionMs ?? 604_800_000,
+            CleanupPolicy = t?.CleanupPolicy ?? "delete",
+            MaxMessageBytes = topicName.Contains("events") ? 5_242_880 : 1_048_576,
             MinInSyncReplicas = 2,
-            CompressionType   = topicName.Contains("metrics") ? "lz4" : "producer",
-            PartitionCount    = t?.PartitionCount    ?? 6,
+            CompressionType = topicName.Contains("metrics") ? "lz4" : "producer",
+            PartitionCount = t?.PartitionCount ?? 6,
             ReplicationFactor = t?.ReplicationFactor ?? 3,
         };
         return Task.FromResult(cfg);
@@ -80,18 +80,18 @@ public class MockKafkaService : IKafkaService
 
     private static readonly Dictionary<string, IReadOnlyList<KafkaTopicConsumerGroup>> _topicGroups = new()
     {
-        ["bm.orders"]          = [ new() { GroupId = "svc-orders-consumer",  State = "Stable",      TotalLag = 0  },
+        ["bm.orders"] = [ new() { GroupId = "svc-orders-consumer",  State = "Stable",      TotalLag = 0  },
                                    new() { GroupId = "svc-orders-retry",     State = "Stable",      TotalLag = 12 },
                                    new() { GroupId = "svc-orders-archive",   State = "Dead",        TotalLag = 0  } ],
-        ["bm.invoices"]        = [ new() { GroupId = "svc-invoices-consumer",State = "Stable",      TotalLag = 0  },
+        ["bm.invoices"] = [ new() { GroupId = "svc-invoices-consumer",State = "Stable",      TotalLag = 0  },
                                    new() { GroupId = "svc-invoices-retry",   State = "Rebalancing", TotalLag = 5  } ],
-        ["bm.payments"]        = [ new() { GroupId = "svc-payments-consumer",State = "Stable",      TotalLag = 0  } ],
-        ["bm.events.raw"]      = [ new() { GroupId = "svc-enricher",         State = "Stable",      TotalLag = 241 },
+        ["bm.payments"] = [new() { GroupId = "svc-payments-consumer", State = "Stable", TotalLag = 0 }],
+        ["bm.events.raw"] = [ new() { GroupId = "svc-enricher",         State = "Stable",      TotalLag = 241 },
                                    new() { GroupId = "svc-analytics",        State = "Stable",      TotalLag = 0  } ],
-        ["bm.events.enriched"] = [ new() { GroupId = "svc-loader",           State = "Stable",      TotalLag = 0  } ],
-        ["bm.metrics"]         = [ new() { GroupId = "svc-metrics-consumer", State = "Stable",      TotalLag = 0  } ],
-        ["bm.audit"]           = [ new() { GroupId = "svc-audit-reader",     State = "Empty",       TotalLag = 0  } ],
-        ["bm.notifications"]   = [ new() { GroupId = "svc-notifier",         State = "Stable",      TotalLag = 3  } ],
+        ["bm.events.enriched"] = [new() { GroupId = "svc-loader", State = "Stable", TotalLag = 0 }],
+        ["bm.metrics"] = [new() { GroupId = "svc-metrics-consumer", State = "Stable", TotalLag = 0 }],
+        ["bm.audit"] = [new() { GroupId = "svc-audit-reader", State = "Empty", TotalLag = 0 }],
+        ["bm.notifications"] = [new() { GroupId = "svc-notifier", State = "Stable", TotalLag = 3 }],
     };
 
     public Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default)
@@ -133,11 +133,11 @@ public class MockKafkaService : IKafkaService
         IReadOnlyList<KafkaConsumerGroupOverview> result = byGroup
             .Select(kv => new KafkaConsumerGroupOverview
             {
-                GroupId    = kv.Key,
-                State      = kv.Value.State,
+                GroupId = kv.Key,
+                State = kv.Value.State,
                 TopicCount = kv.Value.Topics.Count,
-                TotalLag   = kv.Value.Lag,
-                Topics     = kv.Value.Topics,
+                TotalLag = kv.Value.Lag,
+                Topics = kv.Value.Topics,
             })
             .Where(g => !_deletedGroups.Contains(g.GroupId))
             .OrderBy(g => g.GroupId)
@@ -151,13 +151,13 @@ public class MockKafkaService : IKafkaService
             .Where(kv => kv.Value.Any(g => g.GroupId == groupId))
             .Select(kv =>
             {
-                var g       = kv.Value.First(g => g.GroupId == groupId);
-                var topic   = _topics.FirstOrDefault(t => t.Name == kv.Key);
+                var g = kv.Value.First(g => g.GroupId == groupId);
+                var topic = _topics.FirstOrDefault(t => t.Name == kv.Key);
                 return new KafkaGroupTopicLag
                 {
-                    TopicName  = kv.Key,
+                    TopicName = kv.Key,
                     Partitions = topic?.PartitionCount ?? 3,
-                    Lag        = g.TotalLag,
+                    Lag = g.TotalLag,
                 };
             })
             .OrderBy(x => x.TopicName)
@@ -179,12 +179,12 @@ public class MockKafkaService : IKafkaService
         string env, string topicName, KafkaSeekDirective directive,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var topic   = _topics.FirstOrDefault(t => t.Name == topicName);
-        var parts   = topic?.PartitionCount ?? 3;
+        var topic = _topics.FirstOrDefault(t => t.Name == topicName);
+        var parts = topic?.PartitionCount ?? 3;
         var baseOff = directive.OffsetFrom ?? _rng.NextInt64(1_000, 5_000_000);
-        var live    = !directive.OffsetTo.HasValue && !directive.TimestampTo.HasValue && !directive.Latest.HasValue;
-        var cap     = directive.Latest ?? (live ? 2_000 : 500);
-        var baseTs  = directive.TimestampFrom ?? (live ? DateTime.UtcNow.AddSeconds(-2) : DateTime.UtcNow.AddMinutes(-cap * 0.4));
+        var live = !directive.OffsetTo.HasValue && !directive.TimestampTo.HasValue && !directive.Latest.HasValue;
+        var cap = directive.Latest ?? (live ? 2_000 : 500);
+        var baseTs = directive.TimestampFrom ?? (live ? DateTime.UtcNow.AddSeconds(-2) : DateTime.UtcNow.AddMinutes(-cap * 0.4));
 
         for (int i = 0; i < cap; i++)
         {
@@ -194,12 +194,12 @@ public class MockKafkaService : IKafkaService
                 ? directive.Partitions.ElementAt(_rng.Next(directive.Partitions.Count))
                 : _rng.Next(0, parts);
 
-            var key  = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
+            var key = $"{_keyPrefixes[_rng.Next(_keyPrefixes.Length)]}-{_rng.Next(1000, 9999)}";
             var json = _valueTemplates[_rng.Next(_valueTemplates.Length)]
-                .Replace("{key}",    key)
-                .Replace("{n}",      (baseOff + i).ToString())
+                .Replace("{key}", key)
+                .Replace("{n}", (baseOff + i).ToString())
                 .Replace("{amount}", _rng.Next(10, 9999).ToString())
-                .Replace("{ts}",     (live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2)).ToString("o"));
+                .Replace("{ts}", (live ? DateTime.UtcNow : baseTs.AddSeconds(i * 2)).ToString("o"));
 
             var offset = baseOff + i;
             if (directive.OffsetTo.HasValue && offset > directive.OffsetTo.Value) yield break;
@@ -209,15 +209,15 @@ public class MockKafkaService : IKafkaService
 
             yield return new KafkaMessage
             {
-                Offset       = offset,
-                Partition    = partition,
-                Key          = key,
-                Timestamp    = ts,
-                JsonPayload  = json,
-                PayloadType  = topicName.Contains("order")   ? "OrderEvent"   :
+                Offset = offset,
+                Partition = partition,
+                Key = key,
+                Timestamp = ts,
+                JsonPayload = json,
+                PayloadType = topicName.Contains("order") ? "OrderEvent" :
                                topicName.Contains("payment") ? "PaymentEvent" : "ProtoMsg",
                 RawSizeBytes = json.Length,
-                Headers      = i % 4 == 0
+                Headers = i % 4 == 0
                     ? new() { ["correlation-id"] = Guid.NewGuid().ToString("N")[..8], ["source"] = "mock" }
                     : new(),
             };
@@ -232,19 +232,19 @@ public class MockKafkaService : IKafkaService
     public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
         string env, string topicName, CancellationToken ct = default)
     {
-        var topic   = _topics.FirstOrDefault(t => t.Name == topicName);
-        var parts   = topic?.PartitionCount ?? 3;
+        var topic = _topics.FirstOrDefault(t => t.Name == topicName);
+        var parts = topic?.PartitionCount ?? 3;
         var perPart = (topic?.MessageCount ?? 10_000) / parts;
-        var baseTs  = DateTime.UtcNow.AddDays(-7);
+        var baseTs = DateTime.UtcNow.AddDays(-7);
 
         IReadOnlyList<KafkaPartitionStats> result = Enumerable.Range(0, parts)
             .Select(p => new KafkaPartitionStats
             {
-                Partition             = p,
-                LowWatermark          = 0,
-                HighWatermark         = perPart + _rng.Next(-100, 100),
+                Partition = p,
+                LowWatermark = 0,
+                HighWatermark = perPart + _rng.Next(-100, 100),
                 FirstMessageTimestamp = baseTs.AddMinutes(p * 5),
-                LastMessageTimestamp  = DateTime.UtcNow.AddSeconds(-_rng.Next(0, 60)),
+                LastMessageTimestamp = DateTime.UtcNow.AddSeconds(-_rng.Next(0, 60)),
             }).ToList();
 
         return Task.FromResult(result);

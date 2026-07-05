@@ -14,9 +14,9 @@ public interface IMongoReader
     /// null if the environment has no configured default (e.g. mock/dev mode).
     /// </summary>
     string? GetDefaultDatabaseName(string env);
-    Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
-    Task<IReadOnlyList<string>>                 GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
-    Task<MongoCollectionSummary?>               GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);
+    Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
+    Task<MongoCollectionSummary?> GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);
     Task<IReadOnlyList<MongoCollectionSummary>> GetCollectionsAsync(string env, string database, CancellationToken ct = default);
     /// <summary>
     /// Returns one page of collections matching an optional name filter, with stats

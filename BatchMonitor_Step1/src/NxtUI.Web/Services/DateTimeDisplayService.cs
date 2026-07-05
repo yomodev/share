@@ -16,7 +16,7 @@ public class DateTimeDisplayService
     public DateTimeDisplayService(IHttpContextAccessor http)
     {
         var cookies = http.HttpContext?.Request.Cookies;
-        _useUtc  = cookies?["bm-tz"]  == "utc";
+        _useUtc = cookies?["bm-tz"] == "utc";
         _devMode = cookies?["bm-dev"] == "1";
     }
 

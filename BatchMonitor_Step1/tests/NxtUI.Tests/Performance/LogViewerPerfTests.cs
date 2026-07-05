@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using AwesomeAssertions;
 using NxtUI.Web.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -18,7 +18,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_returns_full_content_and_correct_offset()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -40,7 +40,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_empty_file_returns_empty_string_at_offset_zero()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -55,7 +55,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadAllAsync_large_file_timing()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -65,7 +65,7 @@ public sealed class LogViewerPerfTests
             await File.WriteAllLinesAsync(path, lines, ct);
 
             var fileMb = new FileInfo(path).Length / 1_048_576.0;
-            var sw     = Stopwatch.StartNew();
+            var sw = Stopwatch.StartNew();
             var (text, offset) = await Viewer.ReadAllAsync(path, ct);
             sw.Stop();
 
@@ -98,7 +98,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_after_ReadAll_returns_empty()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -115,7 +115,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_detects_appended_lines()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -135,7 +135,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ReadDelta_repeated_calls_are_incremental()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
@@ -173,7 +173,7 @@ public sealed class LogViewerPerfTests
     [Fact]
     public async Task ParseLine_throughput_for_1k_lines()
     {
-        var ct   = TestContext.Current.CancellationToken;
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {

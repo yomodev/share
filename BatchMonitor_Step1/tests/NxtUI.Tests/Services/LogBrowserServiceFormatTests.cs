@@ -2,7 +2,7 @@ using AwesomeAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Filtering;
+using NxtUI.Core.Filtering;
 using NxtUI.Web.Services;
 
 namespace NxtUI.Tests.Services;
@@ -87,10 +87,15 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
         searchableFields: ["Level", "Machine", "Message"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["ts"] = "Timestamp", ["timestamp"] = "Timestamp",
-            ["level"] = "Level", ["machine"] = "Machine",
-            ["pid"] = "Pid", ["thread"] = "ThreadId", ["tid"] = "ThreadId",
-            ["msg"] = "Message", ["message"] = "Message",
+            ["ts"] = "Timestamp",
+            ["timestamp"] = "Timestamp",
+            ["level"] = "Level",
+            ["machine"] = "Machine",
+            ["pid"] = "Pid",
+            ["thread"] = "ThreadId",
+            ["tid"] = "ThreadId",
+            ["msg"] = "Message",
+            ["message"] = "Message",
             ["caller"] = "Caller",
         });
 

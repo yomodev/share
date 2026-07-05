@@ -17,8 +17,8 @@ public sealed class FocusGatedPoller : IDisposable
     public FocusGatedPoller(TimeSpan interval, Func<CancellationToken, Task> onTick, Action<Exception>? onError = null)
     {
         _interval = interval;
-        _onTick   = onTick;
-        _onError  = onError;
+        _onTick = onTick;
+        _onError = onError;
     }
 
     public bool IsRunning => _cts is not null;

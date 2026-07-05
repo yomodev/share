@@ -17,7 +17,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     [Fact]
     public void GetAll_Returns_All_Configured_Environments()
     {
-        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
 
         var all = envSvc.GetAll();
@@ -38,7 +38,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     [Fact]
     public void GetServers_Returns_Correct_Count_For_Each_Environment()
     {
-        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
 
         foreach (var def in settings.Environments)
@@ -52,7 +52,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     [Fact]
     public void GetServers_Returns_Correct_Hostnames_For_Each_Environment()
     {
-        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
 
         foreach (var def in settings.Environments)
@@ -77,7 +77,7 @@ public sealed class EnvironmentConfigTests(ServiceFixture fix, ITestOutputHelper
     [Fact]
     public void GetById_Returns_Correct_Env_Or_Null()
     {
-        var envSvc   = fix.Services.GetRequiredService<IEnvironmentService>();
+        var envSvc = fix.Services.GetRequiredService<IEnvironmentService>();
         var settings = fix.Services.GetRequiredService<IOptions<AppSettings>>().Value;
 
         foreach (var def in settings.Environments)

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace NxtUI.Web.Services;
 
@@ -17,16 +15,16 @@ public sealed class ServerDiagnosticsMonitor(
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
 
     // Warn when timer fires later than this much past its due time (thread pool saturation).
-    private const double LagWarnMs  = 500;
-    private const double LagInfoMs  = 100;
+    private const double LagWarnMs = 500;
+    private const double LagInfoMs = 100;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         logger.LogInformation("ServerDiagnosticsMonitor started (interval={Interval}s)", Interval.TotalSeconds);
 
-        var process    = Process.GetCurrentProcess();
+        var process = Process.GetCurrentProcess();
         var prevCpuTime = process.TotalProcessorTime;
-        var prevWall    = Stopwatch.GetTimestamp();
+        var prevWall = Stopwatch.GetTimestamp();
 
         while (!ct.IsCancellationRequested)
         {
@@ -44,21 +42,21 @@ public sealed class ServerDiagnosticsMonitor(
             try
             {
                 ThreadPool.GetAvailableThreads(out int workerAvail, out int ioAvail);
-                ThreadPool.GetMaxThreads(out int workerMax,   out int ioMax);
+                ThreadPool.GetMaxThreads(out int workerMax, out int ioMax);
                 int workerUsed = workerMax - workerAvail;
-                int ioUsed     = ioMax     - ioAvail;
+                int ioUsed = ioMax - ioAvail;
 
                 process.Refresh();
-                var nowCpu   = process.TotalProcessorTime;
-                var nowWall  = Stopwatch.GetTimestamp();
+                var nowCpu = process.TotalProcessorTime;
+                var nowWall = Stopwatch.GetTimestamp();
                 var cpuDelta = (nowCpu - prevCpuTime).TotalMilliseconds;
-                var wallMs   = (nowWall - prevWall) * 1000.0 / Stopwatch.Frequency;
-                var cpuPct   = wallMs > 0 ? cpuDelta / wallMs * 100.0 : 0;
-                prevCpuTime  = nowCpu;
-                prevWall     = nowWall;
+                var wallMs = (nowWall - prevWall) * 1000.0 / Stopwatch.Frequency;
+                var cpuPct = wallMs > 0 ? cpuDelta / wallMs * 100.0 : 0;
+                prevCpuTime = nowCpu;
+                prevWall = nowWall;
 
-                var wsMb     = process.WorkingSet64 / 1_048_576.0;
-                var threads  = process.Threads.Count;
+                var wsMb = process.WorkingSet64 / 1_048_576.0;
+                var threads = process.Threads.Count;
 
                 var level = lag.TotalMilliseconds > LagWarnMs ? LogLevel.Warning
                           : lag.TotalMilliseconds > LagInfoMs ? LogLevel.Information

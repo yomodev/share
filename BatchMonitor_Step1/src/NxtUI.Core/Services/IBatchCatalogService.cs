@@ -12,8 +12,8 @@ public interface IBatchCatalogService
     /// body, and calling the batch endpoint.
     /// </summary>
     Task<BatchTriggerResult> TriggerAsync(
-        BatchDefinition              batch,
-        Dictionary<string, string>   values,
-        string                       env,
-        CancellationToken            ct = default);
+        BatchDefinition batch,
+        Dictionary<string, string> values,
+        string env,
+        CancellationToken ct = default);
 }

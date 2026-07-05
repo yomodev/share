@@ -1,6 +1,6 @@
 using NxtUI.Core.Models;
 
-namespace NxtUI.Logging;
+namespace NxtUI.Core.Logging;
 
 /// <summary>
 /// Substitutes the log-path template placeholders for a given service + environment.
@@ -15,10 +15,10 @@ public static class LogPathTemplate
         return template
             // {date-1} before {date} so the longer token wins.
             .Replace("{date-1}", d.AddDays(-1).ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{date}",   d.ToString("yyyy-MM-dd"),             StringComparison.OrdinalIgnoreCase)
-            .Replace("{server}", svc.HostName,                         StringComparison.OrdinalIgnoreCase)
-            .Replace("{service}", svc.ServiceName,                     StringComparison.OrdinalIgnoreCase)
-            .Replace("{pid}",    svc.ProcessId.ToString(),             StringComparison.OrdinalIgnoreCase)
-            .Replace("{env}",    env,                                  StringComparison.OrdinalIgnoreCase);
+            .Replace("{date}", d.ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase)
+            .Replace("{service}", svc.ServiceName, StringComparison.OrdinalIgnoreCase)
+            .Replace("{pid}", svc.ProcessId.ToString(), StringComparison.OrdinalIgnoreCase)
+            .Replace("{env}", env, StringComparison.OrdinalIgnoreCase);
     }
 }

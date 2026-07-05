@@ -1,5 +1,5 @@
-using NxtUI.Core.Services;
 using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -14,17 +14,17 @@ public class TimelineRun(
     SignalRConnectionService signalR,
     Func<Task> onUpdated) : IAsyncDisposable
 {
-    public string   RunId       { get; }          = runId;
-    public string   Env         { get; }          = env;
-    public string   Description { get; internal set; } = string.Empty;
-    public bool     IsLive      { get; internal set; }
-    public DateTime RunStart  { get; internal set; }
+    public string RunId { get; } = runId;
+    public string Env { get; } = env;
+    public string Description { get; internal set; } = string.Empty;
+    public bool IsLive { get; internal set; }
+    public DateTime RunStart { get; internal set; }
 
     private readonly Dictionary<string, PerformanceEvent> _events = new();
     private readonly object _lock = new();
 
-    private IDisposable?               _signalRSub;
-    private CancellationTokenSource?   _timeoutCts;
+    private IDisposable? _signalRSub;
+    private CancellationTokenSource? _timeoutCts;
 
     private static readonly TimeSpan LiveTimeout = TimeSpan.FromHours(3);
 
@@ -40,7 +40,7 @@ public class TimelineRun(
         var details = await runService.GetRunDetailsAsync(Env, RunId);
         Description = details.Description;
         RunStart = details.Start;
-        IsLive   = details.Status == RunStatus.Running;
+        IsLive = details.Status == RunStatus.Running;
 
         var events = await runService.GetRunEventsAsync(Env, RunId, details.Start);
         UpsertEvents(events);
@@ -98,8 +98,8 @@ public class TimelineRun(
         var run = new TimelineRun(env, runId, null!, null!, () => Task.CompletedTask)
         {
             Description = runId,
-            RunStart    = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
-            IsLive      = false,
+            RunStart = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
+            IsLive = false,
         };
         foreach (var e in eventList) run.UpsertEvent(e);
         return run;

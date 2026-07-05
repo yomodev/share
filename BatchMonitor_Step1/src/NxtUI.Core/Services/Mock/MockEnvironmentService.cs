@@ -38,10 +38,10 @@ public sealed class MockEnvironmentService : IEnvironmentService
             var (bg, text) = PickPair(e.Id);
             return new EnvironmentInfo
             {
-                Id             = e.Id,
-                Label          = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
-                Tier           = e.Tier,
-                BadgeColor     = bg,
+                Id = e.Id,
+                Label = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label,
+                Tier = e.Tier,
+                BadgeColor = bg,
                 BadgeTextColor = text,
             };
         }).ToList();
@@ -52,8 +52,8 @@ public sealed class MockEnvironmentService : IEnvironmentService
             StringComparer.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyList<EnvironmentInfo> GetAll()    => _environments;
-    public EnvironmentInfo? GetById(string id)        => _environments.FirstOrDefault(e =>
+    public IReadOnlyList<EnvironmentInfo> GetAll() => _environments;
+    public EnvironmentInfo? GetById(string id) => _environments.FirstOrDefault(e =>
         e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
     public IReadOnlyList<string> GetServers(string environmentId) =>
         _servers.TryGetValue(environmentId, out var list) ? list : [];

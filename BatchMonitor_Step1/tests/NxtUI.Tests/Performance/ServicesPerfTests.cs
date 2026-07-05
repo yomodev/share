@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
 using NxtUI.Web.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -21,10 +21,10 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
     public async Task ServicesPage_InitialLoad_Timing()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var metrics = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         // Check if cache is already warm (page shows immediately in this case).
         var cached = heartbeat.GetServices(env);
@@ -47,7 +47,7 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         var services = heartbeat.GetServices(env) ?? [];
         out_.WriteLine($"[{sw.Elapsed:c}] Total services: {services.Count}");
 
-        var online  = services.Count(s => s.IsOnline);
+        var online = services.Count(s => s.IsOnline);
         var offline = services.Count - online;
         out_.WriteLine($"  Online: {online}, Offline: {offline}");
 
@@ -81,9 +81,9 @@ public sealed class ServicesPerfTests(ServiceFixture fix, ITestOutputHelper out_
         // Bypass HeartbeatMonitor and call IHeartbeatService directly.
         // This isolates the raw MongoDB / network cost of the heartbeat query.
         var heartbeatSvc = fix.Services.GetRequiredService<IHeartbeatService>();
-        var env          = fix.DefaultEnv;
-        var sw           = Stopwatch.StartNew();
-        var ct           = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Calling IHeartbeatService.GetServiceStatusesAsync('{env}')…");
         var services = await heartbeatSvc.GetServiceStatusesAsync(env, ct: ct);

@@ -117,10 +117,10 @@ public sealed class MessageRegistry : IMessageRegistry
 
         while (pos < data.Length)
         {
-            var tag        = ReadVarint(data, ref pos);
-            var fieldNum   = (int)(tag >> 3);
-            var wireType   = (int)(tag & 7);
-            var field      = FindField(desc, fieldNum);
+            var tag = ReadVarint(data, ref pos);
+            var fieldNum = (int)(tag >> 3);
+            var wireType = (int)(tag & 7);
+            var field = FindField(desc, fieldNum);
 
             object? value = wireType switch
             {
@@ -190,30 +190,30 @@ public sealed class MessageRegistry : IMessageRegistry
 
     private object? DecodeVarintTyped(FieldDescriptorProto? field, ulong raw) => field?.type switch
     {
-        FieldDescriptorProto.Type.TypeBool   => raw != 0,
-        FieldDescriptorProto.Type.TypeInt32  => unchecked((int)raw),
-        FieldDescriptorProto.Type.TypeInt64  => unchecked((long)raw),
+        FieldDescriptorProto.Type.TypeBool => raw != 0,
+        FieldDescriptorProto.Type.TypeInt32 => unchecked((int)raw),
+        FieldDescriptorProto.Type.TypeInt64 => unchecked((long)raw),
         FieldDescriptorProto.Type.TypeUint32 => unchecked((uint)raw),
         FieldDescriptorProto.Type.TypeUint64 => raw,
         FieldDescriptorProto.Type.TypeSint32 => ZigZagDecode32((uint)raw),
         FieldDescriptorProto.Type.TypeSint64 => ZigZagDecode64(raw),
-        FieldDescriptorProto.Type.TypeEnum   => EnumName(field.TypeName, unchecked((int)raw)),
-        null                                  => (long)raw, // unknown field, best-effort raw value
-        _                                     => (long)raw,
+        FieldDescriptorProto.Type.TypeEnum => EnumName(field.TypeName, unchecked((int)raw)),
+        null => (long)raw, // unknown field, best-effort raw value
+        _ => (long)raw,
     };
 
     private object? DecodeFixed64Typed(FieldDescriptorProto? field, ulong raw) => field?.type switch
     {
-        FieldDescriptorProto.Type.TypeDouble  => BitConverter.Int64BitsToDouble(unchecked((long)raw)),
+        FieldDescriptorProto.Type.TypeDouble => BitConverter.Int64BitsToDouble(unchecked((long)raw)),
         FieldDescriptorProto.Type.TypeSfixed64 => unchecked((long)raw),
-        _                                       => raw, // TypeFixed64 or unknown
+        _ => raw, // TypeFixed64 or unknown
     };
 
     private object? DecodeFixed32Typed(FieldDescriptorProto? field, uint raw) => field?.type switch
     {
-        FieldDescriptorProto.Type.TypeFloat    => BitConverter.Int32BitsToSingle(unchecked((int)raw)),
+        FieldDescriptorProto.Type.TypeFloat => BitConverter.Int32BitsToSingle(unchecked((int)raw)),
         FieldDescriptorProto.Type.TypeSfixed32 => unchecked((int)raw),
-        _                                        => raw, // TypeFixed32 or unknown
+        _ => raw, // TypeFixed32 or unknown
     };
 
     private object? DecodeLengthDelimited(FieldDescriptorProto? field, ReadOnlySpan<byte> bytes)
@@ -295,9 +295,9 @@ public sealed class MessageRegistry : IMessageRegistry
     {
         if (typeName == ".google.protobuf.Timestamp")
         {
-            var obj     = DecodeMessage(nested, bytes);
+            var obj = DecodeMessage(nested, bytes);
             var seconds = obj["seconds"]?.GetValue<long>() ?? 0L;
-            var nanos   = obj["nanos"]?.GetValue<int>() ?? 0;
+            var nanos = obj["nanos"]?.GetValue<int>() ?? 0;
             var dt = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.AddTicks(nanos / 100);
             result = JsonValue.Create(dt.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFZ", CultureInfo.InvariantCulture));
             return true;
@@ -305,10 +305,10 @@ public sealed class MessageRegistry : IMessageRegistry
 
         if (typeName == ".google.protobuf.Duration")
         {
-            var obj     = DecodeMessage(nested, bytes);
+            var obj = DecodeMessage(nested, bytes);
             var seconds = obj["seconds"]?.GetValue<long>() ?? 0L;
-            var nanos   = obj["nanos"]?.GetValue<int>() ?? 0;
-            var total   = seconds + nanos / 1_000_000_000.0;
+            var nanos = obj["nanos"]?.GetValue<int>() ?? 0;
+            var total = seconds + nanos / 1_000_000_000.0;
             result = JsonValue.Create(total.ToString("0.#########", CultureInfo.InvariantCulture) + "s");
             return true;
         }
@@ -332,15 +332,15 @@ public sealed class MessageRegistry : IMessageRegistry
     private static JsonNode? DefaultWrapperValue(string typeName) => typeName switch
     {
         ".google.protobuf.StringValue" => JsonValue.Create(""),
-        ".google.protobuf.BytesValue"  => JsonValue.Create("byte[0]"),
-        ".google.protobuf.BoolValue"   => JsonValue.Create(false),
-        ".google.protobuf.FloatValue"  => JsonValue.Create(0f),
+        ".google.protobuf.BytesValue" => JsonValue.Create("byte[0]"),
+        ".google.protobuf.BoolValue" => JsonValue.Create(false),
+        ".google.protobuf.FloatValue" => JsonValue.Create(0f),
         ".google.protobuf.DoubleValue" => JsonValue.Create(0d),
-        ".google.protobuf.Int32Value"  => JsonValue.Create(0),
-        ".google.protobuf.Int64Value"  => JsonValue.Create(0L),
+        ".google.protobuf.Int32Value" => JsonValue.Create(0),
+        ".google.protobuf.Int64Value" => JsonValue.Create(0L),
         ".google.protobuf.UInt32Value" => JsonValue.Create(0u),
         ".google.protobuf.UInt64Value" => JsonValue.Create(0UL),
-        _                                => null,
+        _ => null,
     };
 
     private string EnumName(string fqn, int number)
@@ -355,17 +355,17 @@ public sealed class MessageRegistry : IMessageRegistry
 
     private static JsonNode? ToJsonNode(object? value) => value switch
     {
-        null                => null,
-        JsonNode node       => node,
-        bool b              => JsonValue.Create(b),
-        string s            => JsonValue.Create(s),
-        int i               => JsonValue.Create(i),
-        long l              => JsonValue.Create(l),
-        uint ui             => JsonValue.Create(ui),
-        ulong ul            => JsonValue.Create(ul),
-        double d            => JsonValue.Create(d),
-        float f             => JsonValue.Create(f),
-        _                    => JsonValue.Create(value.ToString()),
+        null => null,
+        JsonNode node => node,
+        bool b => JsonValue.Create(b),
+        string s => JsonValue.Create(s),
+        int i => JsonValue.Create(i),
+        long l => JsonValue.Create(l),
+        uint ui => JsonValue.Create(ui),
+        ulong ul => JsonValue.Create(ul),
+        double d => JsonValue.Create(d),
+        float f => JsonValue.Create(f),
+        _ => JsonValue.Create(value.ToString()),
     };
 
     // ── Low-level wire readers ───────────────────────────────────────────────
@@ -406,6 +406,6 @@ public sealed class MessageRegistry : IMessageRegistry
         return slice;
     }
 
-    private static int  ZigZagDecode32(uint n)  => (int)(n >> 1) ^ -(int)(n & 1);
+    private static int ZigZagDecode32(uint n) => (int)(n >> 1) ^ -(int)(n & 1);
     private static long ZigZagDecode64(ulong n) => (long)(n >> 1) ^ -(long)(n & 1);
 }

@@ -1,6 +1,6 @@
-using NxtUI.Filtering;
 using AwesomeAssertions;
-using MatchType = NxtUI.Filtering.MatchType;
+using NxtUI.Core.Filtering;
+using MatchType = NxtUI.Core.Filtering.MatchType;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -132,9 +132,9 @@ public class FilterParserTests
     // ── Comparison operators ───────────────────────────────────────────────
 
     [Theory]
-    [InlineData(">5",  MatchType.GreaterThan)]
+    [InlineData(">5", MatchType.GreaterThan)]
     [InlineData(">=5", MatchType.GreaterThanOrEqual)]
-    [InlineData("<5",  MatchType.LessThan)]
+    [InlineData("<5", MatchType.LessThan)]
     [InlineData("<=5", MatchType.LessThanOrEqual)]
     public void Comparison_operators_parsed_correctly(string expr, MatchType expected)
     {
@@ -195,8 +195,8 @@ public class FilterParserTests
     public void Negative_relative_offset_parses_as_now_minus_N(string input)
     {
         var before = DateTime.UtcNow;
-        var node   = Parse($"updated:>{input}") as FieldTermNode;
-        var after  = DateTime.UtcNow;
+        var node = Parse($"updated:>{input}") as FieldTermNode;
+        var after = DateTime.UtcNow;
 
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
@@ -207,7 +207,7 @@ public class FilterParserTests
     public void Positive_minutes_offset_parses_as_today_plus_minutes()
     {
         var today = DateTime.UtcNow.Date;
-        var node  = Parse("updated:<10m") as FieldTermNode;
+        var node = Parse("updated:<10m") as FieldTermNode;
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
         dv.Value.Should().Be(today.AddMinutes(10));
@@ -217,7 +217,7 @@ public class FilterParserTests
     public void Positive_hours_offset_parses_as_today_plus_hours()
     {
         var today = DateTime.UtcNow.Date;
-        var node  = Parse("updated:<2h") as FieldTermNode;
+        var node = Parse("updated:<2h") as FieldTermNode;
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
         dv.Value.Should().Be(today.AddHours(2));
@@ -227,7 +227,7 @@ public class FilterParserTests
     public void Positive_days_offset_parses_as_today_plus_days()
     {
         var today = DateTime.UtcNow.Date;
-        var node  = Parse("updated:<1d") as FieldTermNode;
+        var node = Parse("updated:<1d") as FieldTermNode;
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
         dv.Value.Should().Be(today.AddDays(1));
@@ -237,7 +237,7 @@ public class FilterParserTests
     public void Time_only_parses_as_today_plus_time()
     {
         var today = DateTime.UtcNow.Date;
-        var node  = Parse("updated:<00:10") as FieldTermNode;
+        var node = Parse("updated:<00:10") as FieldTermNode;
 
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
@@ -247,7 +247,7 @@ public class FilterParserTests
     [Fact]
     public void Positive_10m_and_time_00_10_resolve_to_same_value()
     {
-        var n1 = (Parse("updated:<10m")   as FieldTermNode)!.Value as DateValue;
+        var n1 = (Parse("updated:<10m") as FieldTermNode)!.Value as DateValue;
         var n2 = (Parse("updated:<00:10") as FieldTermNode)!.Value as DateValue;
 
         n1.Should().NotBeNull();
@@ -272,8 +272,8 @@ public class FilterParserTests
     public void Relative_date_range_produces_Between_with_DateValues()
     {
         var before = DateTime.UtcNow;
-        var node   = Parse("updated:-7d..-1d") as FieldTermNode;
-        var after  = DateTime.UtcNow;
+        var node = Parse("updated:-7d..-1d") as FieldTermNode;
+        var after = DateTime.UtcNow;
 
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Between);
@@ -302,7 +302,7 @@ public class FilterParserTests
     [Fact]
     public void Double_NOT_produces_nested_NotNodes()
     {
-        var node  = Parse("!!Service:svcA");
+        var node = Parse("!!Service:svcA");
         var outer = node.Should().BeOfType<NotNode>().Subject;
         var inner = outer.Operand.Should().BeOfType<NotNode>().Subject;
         inner.Operand.Should().BeOfType<FieldTermNode>();
@@ -313,7 +313,7 @@ public class FilterParserTests
     [Fact]
     public void Three_way_OR_collects_three_leaf_nodes()
     {
-        var node   = Parse("Service:a, Service:b, Service:c");
+        var node = Parse("Service:a, Service:b, Service:c");
         var leaves = CollectLeaves(node!);
         leaves.Should().HaveCount(3)
               .And.AllSatisfy(l => l.Field.Should().Be("Service"));
@@ -358,7 +358,7 @@ public class FilterParserTests
     public void Time_only_with_seconds_parses_to_DateValue()
     {
         var today = DateTime.UtcNow.Date;
-        var node  = Parse("updated:<01:30:45") as FieldTermNode;
+        var node = Parse("updated:<01:30:45") as FieldTermNode;
         node.Should().NotBeNull();
         var dv = node!.Value.Should().BeOfType<DateValue>().Subject;
         dv.Value.Should().Be(today.AddHours(1).AddMinutes(30).AddSeconds(45));
@@ -396,7 +396,7 @@ public class FilterParserTests
         switch (node)
         {
             case FieldTermNode f: acc.Add(f); break;
-            case OrNode or:  Collect(or.Left, acc);  Collect(or.Right, acc); break;
+            case OrNode or: Collect(or.Left, acc); Collect(or.Right, acc); break;
             case AndNode and: Collect(and.Left, acc); Collect(and.Right, acc); break;
             case NotNode not: Collect(not.Operand, acc); break;
         }
@@ -405,8 +405,8 @@ public class FilterParserTests
     // ── Boolean values ──────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("true",  true)]
-    [InlineData("TRUE",  true)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
     [InlineData("False", false)]
     [InlineData("false", false)]
     public void Bare_true_false_keyword_produces_BoolValue(string literal, bool expected)

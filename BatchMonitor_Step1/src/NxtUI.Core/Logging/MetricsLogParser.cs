@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace NxtUI.Logging;
+namespace NxtUI.Core.Logging;
 
 /// <summary>
 /// Parses the memory-metrics lines emitted by MetricsTrackerService. A log file
@@ -21,10 +21,10 @@ public static class MetricsLogParser
 
     // Order matters only for "peak usage" vs "child peak usage": the negative
     // lookbehind keeps the parent "peak usage" from matching the child one.
-    private static readonly Regex RxCurrent   = new(@"current usage:\s*(\d+)",         RegexOptions.Compiled);
-    private static readonly Regex RxPeak      = new(@"(?<!child )peak usage:\s*(\d+)", RegexOptions.Compiled);
-    private static readonly Regex RxChild     = new(@"child usage:\s*(\d+)",           RegexOptions.Compiled);
-    private static readonly Regex RxChildPeak = new(@"child peak usage:\s*(\d+)",      RegexOptions.Compiled);
+    private static readonly Regex RxCurrent = new(@"current usage:\s*(\d+)", RegexOptions.Compiled);
+    private static readonly Regex RxPeak = new(@"(?<!child )peak usage:\s*(\d+)", RegexOptions.Compiled);
+    private static readonly Regex RxChild = new(@"child usage:\s*(\d+)", RegexOptions.Compiled);
+    private static readonly Regex RxChildPeak = new(@"child peak usage:\s*(\d+)", RegexOptions.Compiled);
 
     /// <summary>
     /// Returns true and a populated sample if the line is a metrics line.
@@ -43,18 +43,18 @@ public static class MetricsLogParser
 
         // Current usage is the anchor value — if it's missing this isn't a usable line.
         if (!TryLong(RxCurrent, message, out var current)) return false;
-        TryLong(RxPeak,      message, out var peak);
-        TryLong(RxChild,     message, out var child);
+        TryLong(RxPeak, message, out var peak);
+        TryLong(RxChild, message, out var child);
         TryLong(RxChildPeak, message, out var childPeak);
 
         DateTime.TryParse(fields[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var ts);
 
         sample = new MetricsSample
         {
-            Timestamp           = ts,
-            CurrentUsageBytes   = current,
-            PeakUsageBytes      = peak,
-            ChildUsageBytes     = child,
+            Timestamp = ts,
+            CurrentUsageBytes = current,
+            PeakUsageBytes = peak,
+            ChildUsageBytes = child,
             ChildPeakUsageBytes = childPeak,
         };
         return true;

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace NxtUI.Logging;
+namespace NxtUI.Core.Logging;
 
 /// <summary>
 /// Reads only the bytes appended since a previous read, without locking the file
@@ -29,9 +29,9 @@ public static class IncrementalFileReader
 
         fs.Seek(offset, SeekOrigin.Begin);
 
-        var count  = (int)(length - offset);
+        var count = (int)(length - offset);
         var buffer = new byte[count];
-        var read   = 0;
+        var read = 0;
         while (read < count)
         {
             var n = fs.Read(buffer, read, count - read);
@@ -43,7 +43,7 @@ public static class IncrementalFileReader
         var lastNl = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
         if (lastNl < 0) return new Result(Array.Empty<string>(), offset);
 
-        var text  = encoding.GetString(buffer, 0, lastNl + 1);
+        var text = encoding.GetString(buffer, 0, lastNl + 1);
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         for (var i = 0; i < lines.Length; i++)
             lines[i] = lines[i].TrimEnd('\r');

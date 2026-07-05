@@ -1,8 +1,7 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Core.Services;
 using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -23,7 +22,7 @@ public class EnvironmentSelectorService
         ILogger<EnvironmentSelectorService> log)
     {
         _envService = envService;
-        _log        = log;
+        _log = log;
         _selectedId = settings.Value.DefaultEnvironment;
 
         if (_envService.GetById(_selectedId) is null && _envService.GetAll().Count > 0)

@@ -1,8 +1,8 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using NxtUI.Configuration;
+using NxtUI.Core.Filtering;
 using NxtUI.Core.Models;
-using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services.Sql;
 

@@ -1,7 +1,7 @@
 using System.Text;
 using Microsoft.Data.SqlClient;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 /// <summary>
 /// Translates a <see cref="FilterNode"/> AST into a parameterised SQL Server WHERE fragment.
@@ -15,13 +15,13 @@ public static class SqlFilterBuilder
     private static readonly Dictionary<string, string> ColumnMap =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["RunId"]       = "r.RunId",
-            ["RequestId"]   = "r.RequestId",
-            ["Status"]      = "r.Status",
-            ["Type"]        = "r.Type",
+            ["RunId"] = "r.RunId",
+            ["RequestId"] = "r.RequestId",
+            ["Status"] = "r.Status",
+            ["Type"] = "r.Type",
             ["Description"] = "r.Description",
-            ["StartTime"]   = "r.StartTime",
-            ["EndTime"]     = "r.EndTime",
+            ["StartTime"] = "r.StartTime",
+            ["EndTime"] = "r.EndTime",
         };
 
     /// <summary>
@@ -54,28 +54,28 @@ public static class SqlFilterBuilder
     public static bool ReferencesField(FilterNode? node, string field) =>
         node switch
         {
-            null                                                      => false,
-            AndNode and                                                => ReferencesField(and.Left, field) || ReferencesField(and.Right, field),
-            OrNode or                                                  => ReferencesField(or.Left, field)  || ReferencesField(or.Right, field),
-            NotNode not                                                => ReferencesField(not.Operand, field),
+            null => false,
+            AndNode and => ReferencesField(and.Left, field) || ReferencesField(and.Right, field),
+            OrNode or => ReferencesField(or.Left, field) || ReferencesField(or.Right, field),
+            NotNode not => ReferencesField(not.Operand, field),
             FieldTermNode t when t.Field.Equals(field, StringComparison.OrdinalIgnoreCase) => true,
-            _                                                          => false,
+            _ => false,
         };
 
     private static string BuildNode(FilterNode? node, BuildContext ctx) =>
         node switch
         {
-            null            => "",
-            AndNode and     => Combine("AND", BuildNode(and.Left, ctx), BuildNode(and.Right, ctx)),
-            OrNode or       => Combine("OR",  BuildNode(or.Left,  ctx), BuildNode(or.Right,  ctx)),
-            NotNode not     => NotWrap(BuildNode(not.Operand, ctx)),
+            null => "",
+            AndNode and => Combine("AND", BuildNode(and.Left, ctx), BuildNode(and.Right, ctx)),
+            OrNode or => Combine("OR", BuildNode(or.Left, ctx), BuildNode(or.Right, ctx)),
+            NotNode not => NotWrap(BuildNode(not.Operand, ctx)),
             FieldTermNode t => BuildTerm(t, ctx),
-            _               => "",
+            _ => "",
         };
 
     private static string Combine(string op, string left, string right)
     {
-        if (string.IsNullOrEmpty(left))  return right;
+        if (string.IsNullOrEmpty(left)) return right;
         if (string.IsNullOrEmpty(right)) return left;
         return $"({left} {op} {right})";
     }
@@ -107,29 +107,29 @@ public static class SqlFilterBuilder
             // A bare number/date with no operator parses to Exact (equality) —
             // see FilterParser's "Number or Date with no comparison operator".
             (MatchType.Exact, NumberValue nv) => EqualTerm(col, nv.Value, ctx),
-            (MatchType.Exact, DateValue dv)   => EqualTerm(col, dv.Value, ctx),
+            (MatchType.Exact, DateValue dv) => EqualTerm(col, dv.Value, ctx),
 
             // Booleans only ever parse to Exact, but ParseBareTerm's global-term
             // expansion can produce Contains for a bare "true"/"false" — both mean
             // the same thing for a boolean value, so both map to equality.
-            (MatchType.Exact,    BoolValue bv) => EqualTerm(col, bv.Value, ctx),
+            (MatchType.Exact, BoolValue bv) => EqualTerm(col, bv.Value, ctx),
             (MatchType.Contains, BoolValue bv) => EqualTerm(col, bv.Value, ctx),
 
-            (MatchType.GreaterThan,        NumberValue nv) => CompareTerm(col, ">",  nv.Value, ctx),
+            (MatchType.GreaterThan, NumberValue nv) => CompareTerm(col, ">", nv.Value, ctx),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => CompareTerm(col, ">=", nv.Value, ctx),
-            (MatchType.LessThan,           NumberValue nv) => CompareTerm(col, "<",  nv.Value, ctx),
-            (MatchType.LessThanOrEqual,    NumberValue nv) => CompareTerm(col, "<=", nv.Value, ctx),
+            (MatchType.LessThan, NumberValue nv) => CompareTerm(col, "<", nv.Value, ctx),
+            (MatchType.LessThanOrEqual, NumberValue nv) => CompareTerm(col, "<=", nv.Value, ctx),
 
-            (MatchType.GreaterThan,        DateValue dv) => CompareTerm(col, ">",  dv.Value, ctx),
+            (MatchType.GreaterThan, DateValue dv) => CompareTerm(col, ">", dv.Value, ctx),
             (MatchType.GreaterThanOrEqual, DateValue dv) => CompareTerm(col, ">=", dv.Value, ctx),
-            (MatchType.LessThan,           DateValue dv) => CompareTerm(col, "<",  dv.Value, ctx),
-            (MatchType.LessThanOrEqual,    DateValue dv) => CompareTerm(col, "<=", dv.Value, ctx),
+            (MatchType.LessThan, DateValue dv) => CompareTerm(col, "<", dv.Value, ctx),
+            (MatchType.LessThanOrEqual, DateValue dv) => CompareTerm(col, "<=", dv.Value, ctx),
 
             // Time-of-day: extract seconds-since-midnight from a datetime column
-            (MatchType.GreaterThan,        TimeOfDayValue tv) => TimeOfDayTerm(col, ">",  tv.Seconds, ctx),
+            (MatchType.GreaterThan, TimeOfDayValue tv) => TimeOfDayTerm(col, ">", tv.Seconds, ctx),
             (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => TimeOfDayTerm(col, ">=", tv.Seconds, ctx),
-            (MatchType.LessThan,           TimeOfDayValue tv) => TimeOfDayTerm(col, "<",  tv.Seconds, ctx),
-            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => TimeOfDayTerm(col, "<=", tv.Seconds, ctx),
+            (MatchType.LessThan, TimeOfDayValue tv) => TimeOfDayTerm(col, "<", tv.Seconds, ctx),
+            (MatchType.LessThanOrEqual, TimeOfDayValue tv) => TimeOfDayTerm(col, "<=", tv.Seconds, ctx),
 
             (MatchType.Between, RangeValue rv) => BuildRange(col, rv, ctx),
 
@@ -168,17 +168,17 @@ public static class SqlFilterBuilder
     {
         var low = range.Low switch
         {
-            NumberValue    ln => CompareTerm(col, ">=", ln.Value, ctx),
-            DateValue      ld => CompareTerm(col, ">=", ld.Value, ctx),
+            NumberValue ln => CompareTerm(col, ">=", ln.Value, ctx),
+            DateValue ld => CompareTerm(col, ">=", ld.Value, ctx),
             TimeOfDayValue lt => TimeOfDayTerm(col, ">=", lt.Seconds, ctx),
-            _                 => "",
+            _ => "",
         };
         var high = range.High switch
         {
-            NumberValue    hn => CompareTerm(col, "<=", hn.Value, ctx),
-            DateValue      hd => CompareTerm(col, "<=", hd.Value, ctx),
+            NumberValue hn => CompareTerm(col, "<=", hn.Value, ctx),
+            DateValue hd => CompareTerm(col, "<=", hd.Value, ctx),
             TimeOfDayValue ht => TimeOfDayTerm(col, "<=", ht.Seconds, ctx),
-            _                 => "",
+            _ => "",
         };
         return Combine("AND", low, high);
     }
@@ -195,12 +195,12 @@ public static class SqlFilterBuilder
         {
             sb.Append(ch switch
             {
-                '*'  => "%",
-                '?'  => "_",
-                '%'  => "\\%",
-                '_'  => "\\_",
+                '*' => "%",
+                '?' => "_",
+                '%' => "\\%",
+                '_' => "\\_",
                 '\\' => "\\\\",
-                _    => ch.ToString(),
+                _ => ch.ToString(),
             });
         }
         return sb.ToString();

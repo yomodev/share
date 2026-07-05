@@ -14,14 +14,14 @@ public sealed class BlazorCircuitFilter(ILogger<BlazorCircuitFilter> logger) : I
     // Hub method names used by the Blazor protocol — friendlier to log than raw names.
     private static readonly Dictionary<string, string> MethodLabels = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["BeginInvokeDotNetFromJS"]  = "JS→.NET call",
-        ["EndInvokeJSFromDotNet"]    = ".NET→JS result",
-        ["DispatchBrowserEvent"]     = "browser event",
-        ["OnRenderCompleted"]        = "render ack",
-        ["OnErrorFromRenderer"]      = "renderer error",
+        ["BeginInvokeDotNetFromJS"] = "JS→.NET call",
+        ["EndInvokeJSFromDotNet"] = ".NET→JS result",
+        ["DispatchBrowserEvent"] = "browser event",
+        ["OnRenderCompleted"] = "render ack",
+        ["OnErrorFromRenderer"] = "renderer error",
     };
 
-    private const int WarnMs  = 200;
+    private const int WarnMs = 200;
     private const int ErrorMs = 1000;
 
     public async ValueTask<object?> InvokeMethodAsync(
@@ -42,7 +42,7 @@ public sealed class BlazorCircuitFilter(ILogger<BlazorCircuitFilter> logger) : I
         finally
         {
             sw.Stop();
-            var ms    = sw.ElapsedMilliseconds;
+            var ms = sw.ElapsedMilliseconds;
             var label = MethodLabels.GetValueOrDefault(ctx.HubMethodName, ctx.HubMethodName);
 
             if (caught is not null)

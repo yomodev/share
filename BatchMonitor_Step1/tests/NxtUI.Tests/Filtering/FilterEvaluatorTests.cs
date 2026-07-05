@@ -1,5 +1,5 @@
-using NxtUI.Filtering;
 using AwesomeAssertions;
+using NxtUI.Core.Filtering;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -62,7 +62,7 @@ public class FilterEvaluatorTests
     public void Exact_requires_full_value_match()
     {
         Eval("ChunkId:=chk-0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:=chk",      new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("ChunkId:=chk", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
     }
 
     [Fact]
@@ -107,12 +107,12 @@ public class FilterEvaluatorTests
     private static readonly FilterParser NumParser = new(["Count"]);
 
     [Theory]
-    [InlineData(">5",   6, true)]
-    [InlineData(">5",   5, false)]
-    [InlineData(">=5",  5, true)]
-    [InlineData("<5",   4, true)]
-    [InlineData("<5",   5, false)]
-    [InlineData("<=5",  5, true)]
+    [InlineData(">5", 6, true)]
+    [InlineData(">5", 5, false)]
+    [InlineData(">=5", 5, true)]
+    [InlineData("<5", 4, true)]
+    [InlineData("<5", 5, false)]
+    [InlineData("<=5", 5, true)]
     public void Numeric_comparisons(string expr, int value, bool expected)
     {
         var ast = NumParser.Parse($"Count:{expr}");
@@ -253,10 +253,10 @@ public class FilterEvaluatorTests
     [Fact]
     public void DateTime_Between_matches_date_in_range()
     {
-        var obj      = new Dated(UpdatedAt: new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc));
-        var inRange  = DateParser.Parse("UpdatedAt:2024-01-01..2024-12-31");
+        var obj = new Dated(UpdatedAt: new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc));
+        var inRange = DateParser.Parse("UpdatedAt:2024-01-01..2024-12-31");
         var outRange = DateParser.Parse("UpdatedAt:2025-01-01..2025-12-31");
-        FilterEvaluator.Evaluate(inRange,  obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(inRange, obj).Should().BeTrue();
         FilterEvaluator.Evaluate(outRange, obj).Should().BeFalse();
     }
 
@@ -269,8 +269,8 @@ public class FilterEvaluatorTests
     public void TimeSpan_property_compared_as_total_seconds()
     {
         var obj = new Timed(Duration: TimeSpan.FromMinutes(5)); // 300 seconds
-        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:>200"),    obj).Should().BeTrue();
-        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:<200"),    obj).Should().BeFalse();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:>200"), obj).Should().BeTrue();
+        FilterEvaluator.Evaluate(TimeParser.Parse("Duration:<200"), obj).Should().BeFalse();
         FilterEvaluator.Evaluate(TimeParser.Parse("Duration:100..400"), obj).Should().BeTrue();
         FilterEvaluator.Evaluate(TimeParser.Parse("Duration:400..600"), obj).Should().BeFalse();
     }

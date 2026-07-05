@@ -1,14 +1,12 @@
+using Microsoft.Extensions.Options;
+using NxtUI.Configuration;
+using NxtUI.Core.Filtering;
 using NxtUI.Core.Services;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
-using NxtUI.Filtering;
-using NxtUI.Web.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -24,12 +22,12 @@ public class LogBrowserService : ILogBrowserService
     // Internal record for content filtering — property names match FilterParser aliases.
     private sealed record LogLine(
         DateTime Timestamp,
-        string   Level,
-        string   Machine,
-        int      Pid,
-        int      ThreadId,
-        string   Message,
-        string?  Caller);
+        string Level,
+        string Machine,
+        int Pid,
+        int ThreadId,
+        string Message,
+        string? Caller);
 
     public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config)
     {
@@ -53,10 +51,10 @@ public class LogBrowserService : ILogBrowserService
     public async Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default)
     {
-        var tasks   = servers.Select(s => GetSubfoldersForServerAsync(s, relativePath, ct));
+        var tasks = servers.Select(s => GetSubfoldersForServerAsync(s, relativePath, ct));
         var results = await Task.WhenAll(tasks);
 
-        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var merged = new List<LogFolderNode>();
         foreach (var list in results)
             foreach (var node in list)
@@ -70,10 +68,10 @@ public class LogBrowserService : ILogBrowserService
     public async Task<IReadOnlyList<LogFileEntry>> GetFilesAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default)
     {
-        var tasks   = servers.Select(s => GetFilesForServerAsync(s, relativePath, ct));
+        var tasks = servers.Select(s => GetFilesForServerAsync(s, relativePath, ct));
         var results = await Task.WhenAll(tasks);
         return results.SelectMany(x => x)
-                      .OrderBy(f => f.Server,  StringComparer.OrdinalIgnoreCase)
+                      .OrderBy(f => f.Server, StringComparer.OrdinalIgnoreCase)
                       .ThenBy(f => f.FileName, StringComparer.OrdinalIgnoreCase)
                       .ToList();
     }
@@ -101,7 +99,7 @@ public class LogBrowserService : ILogBrowserService
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var serverList = servers.ToList();
-        var channel    = Channel.CreateUnbounded<LogFileEntry>(
+        var channel = Channel.CreateUnbounded<LogFileEntry>(
             new UnboundedChannelOptions { SingleWriter = false, SingleReader = true });
 
         var producers = serverList.Select(server => Task.Run(async () =>
@@ -140,7 +138,7 @@ public class LogBrowserService : ILogBrowserService
                     .Select(d =>
                     {
                         var name = Path.GetFileName(d);
-                        var rel  = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
+                        var rel = string.IsNullOrEmpty(relativePath) ? name : relativePath + "\\" + name;
                         // Assume children exist; expand will reveal an empty node.
                         // Probing each child on a network share is prohibitively slow.
                         return new LogFolderNode(name, rel, HasChildren: true);
@@ -203,7 +201,7 @@ public class LogBrowserService : ILogBrowserService
         ct.ThrowIfCancellationRequested();
 
         string[] files;
-        try   { files = Directory.GetFiles(dir, fileGlob); }
+        try { files = Directory.GetFiles(dir, fileGlob); }
         catch { files = []; }
 
         foreach (var f in files)
@@ -223,7 +221,7 @@ public class LogBrowserService : ILogBrowserService
         }
 
         string[] subdirs;
-        try   { subdirs = Directory.GetDirectories(dir); }
+        try { subdirs = Directory.GetDirectories(dir); }
         catch { subdirs = []; }
 
         foreach (var sub in subdirs)
@@ -242,8 +240,8 @@ public class LogBrowserService : ILogBrowserService
             using var reader = new StreamReader(filePath, Encoding.UTF8,
                 detectEncodingFromByteOrderMarks: true, bufferSize: 65536);
 
-            string? firstLine    = null;
-            var     continuation = new StringBuilder();
+            string? firstLine = null;
+            var continuation = new StringBuilder();
 
             string? raw;
             while ((raw = reader.ReadLine()) is not null)
@@ -295,9 +293,9 @@ public class LogBrowserService : ILogBrowserService
             DateTime.TryParse(Group(m, "timestamp"), CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var ts);
 
-            var level   = Group(m, "level");
+            var level = Group(m, "level");
             var machine = Group(m, "host");
-            int.TryParse(Group(m, "pid"),    out var pid);
+            int.TryParse(Group(m, "pid"), out var pid);
             int.TryParse(Group(m, "thread"), out var tid);
 
             var message = Group(m, "message");
@@ -323,7 +321,7 @@ public class LogBrowserService : ILogBrowserService
         DateTime.TryParse(parts[0].Trim(), CultureInfo.InvariantCulture,
             DateTimeStyles.None, out var ts);
 
-        var level   = parts[1].Trim();
+        var level = parts[1].Trim();
         var machine = parts[2].Trim();
         int.TryParse(parts[3].Trim(), out var pid);
         int.TryParse(parts[4].Trim(), out var tid);
@@ -365,7 +363,7 @@ public class LogBrowserService : ILogBrowserService
         if (string.IsNullOrEmpty(formatStr)) return null;
 
         var tokens = new List<(bool IsPlaceholder, string Value)>();
-        var last   = 0;
+        var last = 0;
         foreach (Match m in TokenRegex.Matches(formatStr))
         {
             if (m.Index > last) tokens.Add((false, formatStr[last..m.Index]));
@@ -374,7 +372,7 @@ public class LogBrowserService : ILogBrowserService
         }
         if (last < formatStr.Length) tokens.Add((false, formatStr[last..]));
 
-        var pattern    = new StringBuilder("^");
+        var pattern = new StringBuilder("^");
         var fieldCount = 0;
 
         for (var i = 0; i < tokens.Count; i++)
@@ -383,8 +381,8 @@ public class LogBrowserService : ILogBrowserService
             if (!isPlaceholder) { pattern.Append(Regex.Escape(val)); continue; }
 
             if (val == "newline") { pattern.Append(@"\n"); continue; }
-            if (val == "$")       { pattern.Append(@"(?=$|\n)"); continue; }
-            if (val == "*")       { pattern.Append(@"[^\n]*"); continue; }
+            if (val == "$") { pattern.Append(@"(?=$|\n)"); continue; }
+            if (val == "*") { pattern.Append(@"[^\n]*"); continue; }
 
             // Determine the stopper based on what follows this field, same as the JS compiler.
             string stopper;
@@ -402,9 +400,9 @@ public class LogBrowserService : ILogBrowserService
             }
             else
             {
-                var fc    = next.Value.Value.Length > 0 ? next.Value.Value[0] : '\0';
+                var fc = next.Value.Value.Length > 0 ? next.Value.Value[0] : '\0';
                 var fcEsc = fc is ']' or '\\' or '^' or '-' ? "\\" + fc : fc.ToString();
-                stopper   = fc == '\0' ? "[^\\n]*" : $"[^\\n{fcEsc}]*";
+                stopper = fc == '\0' ? "[^\\n]*" : $"[^\\n{fcEsc}]*";
             }
 
             if (CaptureFields.Contains(val))

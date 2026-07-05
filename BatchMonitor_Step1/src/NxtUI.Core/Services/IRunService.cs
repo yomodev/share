@@ -1,5 +1,5 @@
+using NxtUI.Core.Filtering;
 using NxtUI.Core.Models;
-using NxtUI.Filtering;
 
 namespace NxtUI.Core.Services;
 
@@ -82,6 +82,6 @@ public class RunFilter
     public bool IsEmpty =>
         string.IsNullOrWhiteSpace(SearchText) &&
         (Statuses is null || Statuses.Count == 0) &&
-        (Types    is null || Types.Count    == 0) &&
+        (Types is null || Types.Count == 0) &&
         FilterAst is null;
 }

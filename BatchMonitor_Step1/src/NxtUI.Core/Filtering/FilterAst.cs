@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 // ── Node hierarchy ─────────────────────────────────────────────────────────────
 //
@@ -10,9 +10,9 @@ namespace NxtUI.Filtering;
 // configured searchable fields before the AST leaves either parser.
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
-[JsonDerivedType(typeof(AndNode),       "and")]
-[JsonDerivedType(typeof(OrNode),        "or")]
-[JsonDerivedType(typeof(NotNode),       "not")]
+[JsonDerivedType(typeof(AndNode), "and")]
+[JsonDerivedType(typeof(OrNode), "or")]
+[JsonDerivedType(typeof(NotNode), "not")]
 [JsonDerivedType(typeof(FieldTermNode), "field")]
 public abstract record FilterNode;
 
@@ -26,22 +26,22 @@ public record NotNode(FilterNode Operand) : FilterNode;
 /// document field name (alias resolution also done at parse time).
 /// </summary>
 public record FieldTermNode(
-    string      Field,
-    MatchType   MatchType,
-    bool        CaseSensitive,
+    string Field,
+    MatchType MatchType,
+    bool CaseSensitive,
     FilterValue Value
 ) : FilterNode;
 
 // ── Value hierarchy ────────────────────────────────────────────────────────────
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
-[JsonDerivedType(typeof(StringValue),     "string")]
-[JsonDerivedType(typeof(NumberValue),     "number")]
-[JsonDerivedType(typeof(BoolValue),       "bool")]
-[JsonDerivedType(typeof(DateValue),       "date")]
-[JsonDerivedType(typeof(TimeOfDayValue),  "time")]
-[JsonDerivedType(typeof(NullValue),       "null")]
-[JsonDerivedType(typeof(RangeValue),      "range")]
+[JsonDerivedType(typeof(StringValue), "string")]
+[JsonDerivedType(typeof(NumberValue), "number")]
+[JsonDerivedType(typeof(BoolValue), "bool")]
+[JsonDerivedType(typeof(DateValue), "date")]
+[JsonDerivedType(typeof(TimeOfDayValue), "time")]
+[JsonDerivedType(typeof(NullValue), "null")]
+[JsonDerivedType(typeof(RangeValue), "range")]
 public abstract record FilterValue;
 
 public record StringValue(string Value) : FilterValue;

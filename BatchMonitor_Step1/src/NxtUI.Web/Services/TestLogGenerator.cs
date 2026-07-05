@@ -1,8 +1,8 @@
-using NxtUI.Core.Services;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Logging;
+using NxtUI.Core.Logging;
 using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -17,13 +17,13 @@ namespace NxtUI.Web.Services;
 public sealed class TestLogGenerator : BackgroundService
 {
     private readonly TestLogGeneratorSettings _gen;
-    private readonly LogPathSettings           _paths;
-    private readonly AppSettings               _app;
-    private readonly IHeartbeatService         _heartbeat;
+    private readonly LogPathSettings _paths;
+    private readonly AppSettings _app;
+    private readonly IHeartbeatService _heartbeat;
     private readonly ILogger<TestLogGenerator> _log;
-    private readonly Random                    _rng = new();
-    private readonly List<MetricsTarget>       _metricsTargets = new();
-    private readonly List<AppLogTarget>        _appLogTargets  = new();
+    private readonly Random _rng = new();
+    private readonly List<MetricsTarget> _metricsTargets = new();
+    private readonly List<AppLogTarget> _appLogTargets = new();
 
     // ── realistic app-log vocabulary ─────────────────────────────────────────
     private static readonly string[] InfoMessages =
@@ -96,27 +96,27 @@ public sealed class TestLogGenerator : BackgroundService
 
     public TestLogGenerator(
         IOptions<TestLogGeneratorSettings> gen,
-        IOptions<LogPathSettings>          paths,
-        IOptions<AppSettings>              app,
-        IHeartbeatService                  heartbeat,
-        ILogger<TestLogGenerator>          log)
+        IOptions<LogPathSettings> paths,
+        IOptions<AppSettings> app,
+        IHeartbeatService heartbeat,
+        ILogger<TestLogGenerator> log)
     {
-        _gen       = gen.Value;
-        _paths     = paths.Value;
-        _app       = app.Value;
+        _gen = gen.Value;
+        _paths = paths.Value;
+        _app = app.Value;
         _heartbeat = heartbeat;
-        _log       = log;
+        _log = log;
     }
 
     private sealed class MetricsTarget
     {
-        public required string   FilePath   { get; init; }
-        public required string   Server     { get; init; }
-        public required int      Pid        { get; init; }
-        public required string   StreamName { get; init; }
-        public required string   MsgId      { get; init; }
-        public required DateTime ProcStart  { get; init; }
-        public required int      Thread     { get; init; }
+        public required string FilePath { get; init; }
+        public required string Server { get; init; }
+        public required int Pid { get; init; }
+        public required string StreamName { get; init; }
+        public required string MsgId { get; init; }
+        public required DateTime ProcStart { get; init; }
+        public required int Thread { get; init; }
         public long Current;
         public long Peak;
         public long Child;
@@ -125,10 +125,10 @@ public sealed class TestLogGenerator : BackgroundService
 
     private sealed class AppLogTarget
     {
-        public required string FilePath  { get; init; }
-        public required string Server    { get; init; }
-        public required int    Pid       { get; init; }
-        public required string Service   { get; init; }
+        public required string FilePath { get; init; }
+        public required string Server { get; init; }
+        public required int Pid { get; init; }
+        public required string Service { get; init; }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -156,7 +156,7 @@ public sealed class TestLogGenerator : BackgroundService
 
     private async Task SeedAsync(CancellationToken ct)
     {
-        var template    = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
+        var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
         var metricsFile = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
 
         var envs = _gen.Environments.Count > 0
@@ -186,22 +186,22 @@ public sealed class TestLogGenerator : BackgroundService
 
                 var mt = new MetricsTarget
                 {
-                    FilePath   = Path.Combine(metricsFolder, metricsFile),
-                    Server     = svc.HostName,
-                    Pid        = svc.ProcessId,
+                    FilePath = Path.Combine(metricsFolder, metricsFile),
+                    Server = svc.HostName,
+                    Pid = svc.ProcessId,
                     StreamName = $"{svc.ServiceName}Stream-{env.Id}",
-                    MsgId      = RandomHex(24),
-                    ProcStart  = DateTime.UtcNow.AddHours(-_rng.Next(1, 8)),
-                    Thread     = 200 + _rng.Next(0, 50),
-                    Current    = Mb(200 + _rng.Next(0, 120)),
-                    Child      = 0,
-                    ChildPeak  = Mb(500 + _rng.Next(0, 200)),
+                    MsgId = RandomHex(24),
+                    ProcStart = DateTime.UtcNow.AddHours(-_rng.Next(1, 8)),
+                    Thread = 200 + _rng.Next(0, 50),
+                    Current = Mb(200 + _rng.Next(0, 120)),
+                    Child = 0,
+                    ChildPeak = Mb(500 + _rng.Next(0, 200)),
                 };
                 mt.Peak = mt.Current;
 
-                var now      = DateTime.Now;
+                var now = DateTime.Now;
                 var totalSec = (int)(now - now.Date).TotalSeconds;
-                var steps    = Math.Max(_gen.InitialLineCount, totalSec / Math.Max(1, _gen.WriteIntervalSeconds));
+                var steps = Math.Max(_gen.InitialLineCount, totalSec / Math.Max(1, _gen.WriteIntervalSeconds));
                 for (var k = steps; k >= 1; k--)
                 {
                     AdvanceMetrics(mt);
@@ -241,13 +241,13 @@ public sealed class TestLogGenerator : BackgroundService
                         // Some services randomly skipped on past days to simulate services not running every day
                         if (_rng.Next(3) == 0) continue;
 
-                        var date      = DateTime.Today.AddDays(-daysBack);
+                        var date = DateTime.Today.AddDays(-daysBack);
                         var appFolder = Path.Combine(serverRoot, date.ToString("yyyy-MM-dd"), svc.ServiceName);
                         Directory.CreateDirectory(appFolder);
                         if (svc.ProcessId % 2 == 0)
                             Directory.CreateDirectory(Path.Combine(appFolder, "Errors"));
 
-                        var at    = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
+                        var at = new AppLogTarget { FilePath = Path.Combine(appFolder, "App.log"), Server = svc.HostName, Pid = svc.ProcessId, Service = svc.ServiceName };
                         var start = date; // midnight
                         for (var k = 86400 / appIntervalSec; k >= 1; k--)
                             WriteAppLine(at, start.AddSeconds((long)(86400 / appIntervalSec - k) * appIntervalSec));
@@ -295,9 +295,9 @@ public sealed class TestLogGenerator : BackgroundService
 
     private void AdvanceMetrics(MetricsTarget t)
     {
-        t.Current   = Math.Clamp(t.Current + Mb(_rng.Next(-20, 41)), Mb(50), Mb(2048));
-        t.Peak      = Math.Max(t.Peak, t.Current);
-        t.Child     = _rng.Next(0, 5) == 0 ? Mb(_rng.Next(0, 50)) : 0;
+        t.Current = Math.Clamp(t.Current + Mb(_rng.Next(-20, 41)), Mb(50), Mb(2048));
+        t.Peak = Math.Max(t.Peak, t.Current);
+        t.Child = _rng.Next(0, 5) == 0 ? Mb(_rng.Next(0, 50)) : 0;
         t.ChildPeak = Math.Max(t.ChildPeak, t.Child);
     }
 
@@ -326,31 +326,31 @@ public sealed class TestLogGenerator : BackgroundService
 
         if (roll < 60)
         {
-            level   = "INFO";
+            level = "INFO";
             message = Fill(Pick(InfoMessages), t);
-            caller  = Pick(Callers);
+            caller = Pick(Callers);
         }
         else if (roll < 80)
         {
-            level   = "DEBUG";
+            level = "DEBUG";
             message = Fill(Pick(DebugMessages), t);
-            caller  = Pick(Callers);
+            caller = Pick(Callers);
         }
         else if (roll < 92)
         {
-            level   = "WARN";
+            level = "WARN";
             message = Fill(Pick(WarnMessages), t);
-            caller  = Pick(Callers);
+            caller = Pick(Callers);
         }
         else
         {
-            level   = "ERROR";
+            level = "ERROR";
             var errMsg = Fill(Pick(ErrorMessages), t);
             var exType = Pick(ExceptionTypes);
             var lineNo = 40 + _rng.Next(200);
             message = errMsg;
-            caller  = Pick(Callers);
-            extras  =
+            caller = Pick(Callers);
+            extras =
             [
                 $"   {exType}: {errMsg}",
                 $"   at {t.Service}.{caller}() in {t.Service}.cs:line {lineNo}",
@@ -358,7 +358,7 @@ public sealed class TestLogGenerator : BackgroundService
             ];
         }
 
-        var tid  = 10 + _rng.Next(90);
+        var tid = 10 + _rng.Next(90);
         var main = $"{ts:yyyy-MM-dd HH:mm:ss.ffff}|{level}|{t.Server}|{t.Pid}|{tid}|{message}|{caller}";
         var lines = extras is null
             ? main
@@ -369,21 +369,21 @@ public sealed class TestLogGenerator : BackgroundService
 
     private string Fill(string template, AppLogTarget t) =>
         template
-            .Replace("{ms}",   (10 + _rng.Next(990)).ToString())
-            .Replace("{b}",    _rng.Next(50).ToString())
-            .Replace("{n}",    _rng.Next(1000).ToString())
+            .Replace("{ms}", (10 + _rng.Next(990)).ToString())
+            .Replace("{b}", _rng.Next(50).ToString())
+            .Replace("{n}", _rng.Next(1000).ToString())
             .Replace("{host}", t.Server)
             .Replace("{port}", "9092")
-            .Replace("{k}",    "key-" + _rng.Next(999))
-            .Replace("{t}",    "orders")
-            .Replace("{op}",   "db-write")
-            .Replace("{p}",    _rng.Next(4).ToString())
-            .Replace("{r}",    Pick(Resources))
-            .Replace("{m}",    "12")
-            .Replace("{c}",    Pick(Components))
-            .Replace("{dep}",  Pick(Components))
-            .Replace("{src}",  "appsettings.json")
-            .Replace("{id}",   RandomHex(8))
+            .Replace("{k}", "key-" + _rng.Next(999))
+            .Replace("{t}", "orders")
+            .Replace("{op}", "db-write")
+            .Replace("{p}", _rng.Next(4).ToString())
+            .Replace("{r}", Pick(Resources))
+            .Replace("{m}", "12")
+            .Replace("{c}", Pick(Components))
+            .Replace("{dep}", Pick(Components))
+            .Replace("{src}", "appsettings.json")
+            .Replace("{id}", RandomHex(8))
             .Replace("{caller}", Pick(Callers));
 
     private static void AppendLine(string path, string content)

@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 /// <summary>
 /// Evaluates a <see cref="FilterNode"/> AST against a plain C# object using
@@ -15,12 +15,12 @@ public static class FilterEvaluator
 {
     public static bool Evaluate(FilterNode? node, object obj) => node switch
     {
-        null            => true,
-        AndNode and     => Evaluate(and.Left, obj) && Evaluate(and.Right, obj),
-        OrNode or       => Evaluate(or.Left, obj) || Evaluate(or.Right, obj),
-        NotNode not     => !Evaluate(not.Operand, obj),
+        null => true,
+        AndNode and => Evaluate(and.Left, obj) && Evaluate(and.Right, obj),
+        OrNode or => Evaluate(or.Left, obj) || Evaluate(or.Right, obj),
+        NotNode not => !Evaluate(not.Operand, obj),
         FieldTermNode t => EvalField(t, obj),
-        _               => true,
+        _ => true,
     };
 
     private static bool EvalField(FieldTermNode t, object obj)
@@ -52,26 +52,26 @@ public static class FilterEvaluator
             // Booleans only ever parse to Exact, but ParseBareTerm's global-term
             // expansion can produce Contains for a bare "true"/"false" — both mean
             // the same thing for a boolean value, so both map to equality.
-            (MatchType.Exact,    BoolValue bv) => ToBool(raw) == bv.Value,
+            (MatchType.Exact, BoolValue bv) => ToBool(raw) == bv.Value,
             (MatchType.Contains, BoolValue bv) => ToBool(raw) == bv.Value,
 
             (MatchType.Glob, StringValue sv) =>
                 GlobMatch(raw.ToString() ?? "", sv.Value, t.CaseSensitive),
 
-            (MatchType.GreaterThan,        NumberValue nv) => ToDouble(raw) >  nv.Value,
+            (MatchType.GreaterThan, NumberValue nv) => ToDouble(raw) > nv.Value,
             (MatchType.GreaterThanOrEqual, NumberValue nv) => ToDouble(raw) >= nv.Value,
-            (MatchType.LessThan,           NumberValue nv) => ToDouble(raw) <  nv.Value,
-            (MatchType.LessThanOrEqual,    NumberValue nv) => ToDouble(raw) <= nv.Value,
+            (MatchType.LessThan, NumberValue nv) => ToDouble(raw) < nv.Value,
+            (MatchType.LessThanOrEqual, NumberValue nv) => ToDouble(raw) <= nv.Value,
 
-            (MatchType.GreaterThan,        DateValue dv) => ToDateTime(raw) >  dv.Value,
+            (MatchType.GreaterThan, DateValue dv) => ToDateTime(raw) > dv.Value,
             (MatchType.GreaterThanOrEqual, DateValue dv) => ToDateTime(raw) >= dv.Value,
-            (MatchType.LessThan,           DateValue dv) => ToDateTime(raw) <  dv.Value,
-            (MatchType.LessThanOrEqual,    DateValue dv) => ToDateTime(raw) <= dv.Value,
+            (MatchType.LessThan, DateValue dv) => ToDateTime(raw) < dv.Value,
+            (MatchType.LessThanOrEqual, DateValue dv) => ToDateTime(raw) <= dv.Value,
 
-            (MatchType.GreaterThan,        TimeOfDayValue tv) => ToTimeSeconds(raw) >  tv.Seconds,
+            (MatchType.GreaterThan, TimeOfDayValue tv) => ToTimeSeconds(raw) > tv.Seconds,
             (MatchType.GreaterThanOrEqual, TimeOfDayValue tv) => ToTimeSeconds(raw) >= tv.Seconds,
-            (MatchType.LessThan,           TimeOfDayValue tv) => ToTimeSeconds(raw) <  tv.Seconds,
-            (MatchType.LessThanOrEqual,    TimeOfDayValue tv) => ToTimeSeconds(raw) <= tv.Seconds,
+            (MatchType.LessThan, TimeOfDayValue tv) => ToTimeSeconds(raw) < tv.Seconds,
+            (MatchType.LessThanOrEqual, TimeOfDayValue tv) => ToTimeSeconds(raw) <= tv.Seconds,
 
             (MatchType.Between, RangeValue rv) => EvalBetween(raw, rv),
 
@@ -81,8 +81,8 @@ public static class FilterEvaluator
 
     private static bool EvalBetween(object raw, RangeValue rv) => (rv.Low, rv.High) switch
     {
-        (NumberValue    ln, NumberValue    hn) => ToDouble(raw)      >= ln.Value   && ToDouble(raw)      <= hn.Value,
-        (DateValue      ld, DateValue      hd) => ToDateTime(raw)    >= ld.Value   && ToDateTime(raw)    <= hd.Value,
+        (NumberValue ln, NumberValue hn) => ToDouble(raw) >= ln.Value && ToDouble(raw) <= hn.Value,
+        (DateValue ld, DateValue hd) => ToDateTime(raw) >= ld.Value && ToDateTime(raw) <= hd.Value,
         (TimeOfDayValue lt, TimeOfDayValue ht) => ToTimeSeconds(raw) >= lt.Seconds && ToTimeSeconds(raw) <= ht.Seconds,
         _ => false,
     };
@@ -105,7 +105,7 @@ public static class FilterEvaluator
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["StartTime"] = "Start",
-            ["EndTime"]   = "End",
+            ["EndTime"] = "End",
         };
 
     private static object? GetProperty(object obj, string field)
@@ -151,37 +151,37 @@ public static class FilterEvaluator
     private static object? ExtractJsonValue(JsonElement elem) => elem.ValueKind switch
     {
         JsonValueKind.Number when elem.TryGetDouble(out var d) => d,
-        JsonValueKind.String  => elem.GetString(),
-        JsonValueKind.True    => true,
-        JsonValueKind.False   => false,
-        JsonValueKind.Null    => null,
-        _                     => elem.GetRawText(),
+        JsonValueKind.String => elem.GetString(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null => null,
+        _ => elem.GetRawText(),
     };
 
     private static bool ToBool(object? v) => v switch
     {
-        bool b   => b,
-        int i    => i != 0,
-        long l   => l != 0,
+        bool b => b,
+        int i => i != 0,
+        long l => l != 0,
         string s => bool.TryParse(s, out var b2) ? b2 : s == "1",
-        _        => false,
+        _ => false,
     };
 
     private static double ToDouble(object? v) => v switch
     {
-        double d   => d,
-        float  f   => f,
-        int    i   => i,
-        long   l   => l,
+        double d => d,
+        float f => f,
+        int i => i,
+        long l => l,
         TimeSpan t => t.TotalSeconds,
-        _          => double.TryParse(v?.ToString(), out var r) ? r : 0,
+        _ => double.TryParse(v?.ToString(), out var r) ? r : 0,
     };
 
     private static DateTime ToDateTime(object? v) => v switch
     {
-        DateTime        dt  => dt,
-        DateTimeOffset  dto => dto.UtcDateTime,
-        _                   => DateTime.TryParse(v?.ToString(), out var r) ? r : default,
+        DateTime dt => dt,
+        DateTimeOffset dto => dto.UtcDateTime,
+        _ => DateTime.TryParse(v?.ToString(), out var r) ? r : default,
     };
 
     private static int ToTimeSeconds(object? v)

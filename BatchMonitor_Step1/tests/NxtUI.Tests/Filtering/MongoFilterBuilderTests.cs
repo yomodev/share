@@ -1,7 +1,7 @@
+using AwesomeAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
-using NxtUI.Filtering;
-using AwesomeAssertions;
+using NxtUI.Core.Filtering;
 
 namespace NxtUI.Tests.Filtering;
 
@@ -11,7 +11,7 @@ public class MongoFilterBuilderTests
 
     private static string Render(string filterText)
     {
-        var node   = Parser.Parse(filterText);
+        var node = Parser.Parse(filterText);
         var filter = MongoFilterBuilder.Build(node);
         return filter.Render(
             BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
@@ -78,7 +78,7 @@ public class MongoFilterBuilderTests
         // MongoDB.Driver's Builders.And flattens same-level conditions on different
         // fields into one document instead of nesting under $and.
         var parser = new FilterParser(["Name", "IsOnline"]);
-        var node   = parser.Parse("Name:svc IsOnline:true");
+        var node = parser.Parse("Name:svc IsOnline:true");
         var filter = MongoFilterBuilder.Build(node);
         var rendered = filter.Render(
             BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),

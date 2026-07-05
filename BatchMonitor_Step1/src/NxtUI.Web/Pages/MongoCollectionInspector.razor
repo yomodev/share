@@ -1,7 +1,7 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@using NxtUI.Filtering
+@using NxtUI.Core.Filtering
 @inject IMongoReader MongoSvc
 @inject IJSRuntime JS
 @inject ILogger<MongoCollectionInspector> Logger
@@ -151,7 +151,7 @@
     private bool                _loading    = true;
     private long                _totalCount = 0;
     private int                 _page = 1, _pageSize = 25, _totalPages = 1;
-    private string              _sortField  = "_id";
+    private string?             _sortField  = null;
     private bool                _sortDesc   = false;
     private CancellationTokenSource _cts = new();
 

@@ -5,8 +5,8 @@ public class SqlSettings
     public const string SectionName = "Sql";
 
     public string ConnectionString { get; set; } = "";
-    public string Schema           { get; set; } = "dbo";
-    public string RunsTable        { get; set; } = "BatchRun";
+    public string Schema { get; set; } = "dbo";
+    public string RunsTable { get; set; } = "BatchRun";
 
     /// <summary>
     /// Maps each RunStatus name to the values stored in the Status column.
@@ -16,8 +16,8 @@ public class SqlSettings
     public Dictionary<string, string[]> StatusValues { get; set; } =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Running"]   = ["Running"],
+            ["Running"] = ["Running"],
             ["Completed"] = ["Completed"],
-            ["Failed"]    = ["Failed"],
+            ["Failed"] = ["Failed"],
         };
 }

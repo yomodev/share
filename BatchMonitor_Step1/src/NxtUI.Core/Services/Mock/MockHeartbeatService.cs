@@ -22,7 +22,7 @@ public class MockHeartbeatService : IHeartbeatService
 
     public Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default)
     {
-        var now     = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
         var statuses = _instances.Select((inst, i) =>
         {
             var updated = (inst.Service == "Notifier" && inst.Host == "dev1-srv-02")
@@ -31,12 +31,12 @@ public class MockHeartbeatService : IHeartbeatService
 
             return new ServiceStatus
             {
-                ServiceName     = inst.Service,
-                HostName        = inst.Host,
-                ProcessId       = inst.Pid,
+                ServiceName = inst.Service,
+                HostName = inst.Host,
+                ProcessId = inst.Pid,
                 UpdatedDateTime = updated,
                 CreatedDateTime = now.AddHours(-i - 1),
-                IsOnline        = (now - updated).TotalSeconds <= 60,
+                IsOnline = (now - updated).TotalSeconds <= 60,
             };
         }).ToList();
 

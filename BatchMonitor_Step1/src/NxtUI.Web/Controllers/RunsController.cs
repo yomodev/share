@@ -1,7 +1,6 @@
-using NxtUI.Core.Services;
-using NxtUI.Core.Models;
-using NxtUI.Web.Services;
 using Microsoft.AspNetCore.Mvc;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Web.Controllers;
 

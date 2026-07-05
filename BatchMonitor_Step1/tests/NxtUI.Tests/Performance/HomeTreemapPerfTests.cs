@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
 using NxtUI.Web.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -24,9 +24,9 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task HeartbeatCacheFill_Timing()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         out_.WriteLine($"[{sw.Elapsed:c}] Subscribing to env '{env}'…");
 
@@ -52,13 +52,13 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
         if (services is not null)
         {
             var metrics = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
-            var cutoff  = DateTime.UtcNow.AddMinutes(-10);
-            var hosts   = services
+            var cutoff = DateTime.UtcNow.AddMinutes(-10);
+            var hosts = services
                 .Where(s => s.IsOnline && s.UpdatedDateTime >= cutoff)
                 .GroupBy(s => s.HostName)
                 .Select(g => new
                 {
-                    host     = g.Key,
+                    host = g.Key,
                     services = g.Select(s =>
                     {
                         var m = metrics.GetLatest(env, s);
@@ -81,10 +81,10 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
     public async Task MetricsAvailability_AfterHeartbeatFills()
     {
         var heartbeat = fix.Services.GetRequiredService<IHeartbeatMonitor>();
-        var metrics   = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
-        var env       = fix.DefaultEnv;
-        var sw        = Stopwatch.StartNew();
-        var ct        = TestContext.Current.CancellationToken;
+        var metrics = fix.Services.GetRequiredService<IServiceMetricsMonitor>();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         // Ensure heartbeat is filled.
         var hbDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -105,7 +105,7 @@ public sealed class HomeTreemapPerfTests(ServiceFixture fix, ITestOutputHelper o
 
         // Sample how many services have RAM data.
         var services = heartbeat.GetServices(env) ?? [];
-        var withRam  = services.Count(s => metrics.GetLatest(env, s) is not null);
+        var withRam = services.Count(s => metrics.GetLatest(env, s) is not null);
         out_.WriteLine($"[{sw.Elapsed:c}] {withRam}/{services.Count} services have RAM data.");
     }
 }

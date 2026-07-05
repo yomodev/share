@@ -8,5 +8,6 @@ namespace NxtUI.Core.Services.Kafka;
 public interface IMessageRegistry
 {
     bool TryParseToJson(string typeName, byte[] bytes, out string? json);
+
     IReadOnlyCollection<string> RegisteredTypes { get; }
 }

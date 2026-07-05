@@ -1,6 +1,6 @@
-using NxtUI.Core.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
+using NxtUI.Core.Models;
 
 namespace NxtUI.Web.Services;
 
@@ -18,7 +18,7 @@ public class SignalRConnectionService(
     NavigationManager nav) : IAsyncDisposable
 {
     private HubConnection? _connection;
-    private IDisposable?   _eventSubscription;
+    private IDisposable? _eventSubscription;
 
     private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
     private readonly SemaphoreSlim _lock = new(1, 1);

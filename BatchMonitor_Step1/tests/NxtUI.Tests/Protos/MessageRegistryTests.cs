@@ -1,10 +1,10 @@
-using System.Runtime.CompilerServices;
-using System.Text.Json.Nodes;
 using AwesomeAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using NxtUI.Protos;
 using NxtUI.Tests.Protos.Fixtures;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 
 namespace NxtUI.Tests.Protos;
 
@@ -32,13 +32,13 @@ public class MessageRegistryTests
     {
         var order = new global::NxtUI.Protos.OrderEvent
         {
-            OrderId       = "ord-123",
-            CustomerId    = "cust-456",
-            Status        = global::NxtUI.Protos.OrderStatus.Confirmed,
-            TotalAmount   = 199.95,
-            Currency      = "EUR",
+            OrderId = "ord-123",
+            CustomerId = "cust-456",
+            Status = global::NxtUI.Protos.OrderStatus.Confirmed,
+            TotalAmount = 199.95,
+            Currency = "EUR",
             CorrelationId = "corr-abc",
-            OccurredAt    = Timestamp.FromDateTime(new DateTime(2026, 7, 2, 10, 30, 0, DateTimeKind.Utc)),
+            OccurredAt = Timestamp.FromDateTime(new DateTime(2026, 7, 2, 10, 30, 0, DateTimeKind.Utc)),
         };
         order.Lines.Add(new global::NxtUI.Protos.OrderLine { Sku = "SKU-1", Quantity = 2, Price = 49.99 });
         order.Lines.Add(new global::NxtUI.Protos.OrderLine { Sku = "SKU-2", Quantity = 1, Price = 99.97 });
@@ -84,7 +84,7 @@ public class MessageRegistryTests
             TypeUrl = "type.googleapis.com/nxtui.OrderEvent",
             Payload = ByteString.CopyFrom([1, 2, 3]),
         };
-        msg.Metadata["source"]  = "unit-test";
+        msg.Metadata["source"] = "unit-test";
         msg.Metadata["version"] = "1";
 
         AppRegistry.TryParseToJson("ProtoMsg", msg.ToByteArray(), out var json).Should().BeTrue();
@@ -144,10 +144,10 @@ public class MessageRegistryTests
         var msg = new WellKnownTest
         {
             Nickname = "yomo",
-            Retries  = 0,          // present but zero-valued — must be 0, not null
+            Retries = 0,          // present but zero-valued — must be 0, not null
             BigCount = 42,
-            Active   = true,
-            Score    = 3.5,
+            Active = true,
+            Score = 3.5,
         };
 
         FixtureRegistry.TryParseToJson("WellKnownTest", msg.ToByteArray(), out var json).Should().BeTrue();

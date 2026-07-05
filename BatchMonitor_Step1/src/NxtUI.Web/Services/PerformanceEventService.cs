@@ -1,6 +1,5 @@
-using NxtUI.Core.Services;
 using NxtUI.Core.Models;
-using System.Threading.Tasks;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Web.Services;
 
@@ -21,10 +20,10 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public class PerformanceEventService : IDisposable
 {
-    public const int FocusedPollIntervalMs   = 3_000;
+    public const int FocusedPollIntervalMs = 3_000;
     public const int UnfocusedPollIntervalMs = 15_000;
     // When SignalR push is active, poll much less frequently (safety net only).
-    public const int SignalRFallbackPollMs   = 30_000;
+    public const int SignalRFallbackPollMs = 30_000;
 
     private readonly IRunService _runService;
     private readonly PerformanceEventStore _eventStore;
@@ -50,7 +49,7 @@ public class PerformanceEventService : IDisposable
     public PerformanceEventService(IRunService runService)
     {
         _runService = runService ?? throw new ArgumentNullException(nameof(runService));
-        _eventStore   = new PerformanceEventStore();
+        _eventStore = new PerformanceEventStore();
     }
 
     public IReadOnlyDictionary<string, PerformanceEvent> Events => _eventStore.Snapshot;
@@ -73,7 +72,7 @@ public class PerformanceEventService : IDisposable
         CancellationToken ct = default)
     {
         _onEventsUpdated = onEventsUpdated;
-        IsFocused        = isFocused;
+        IsFocused = isFocused;
 
         StopPolling();
 
@@ -104,10 +103,11 @@ public class PerformanceEventService : IDisposable
 
     // ── SignalR push handler ──────────────────────────────────────────────
 
-    private async Task OnSignalREvent(PerformanceEvent evt)
+    private Task OnSignalREvent(PerformanceEvent evt)
     {
         _eventStore.UpsertEvent(evt);
         _onEventsUpdated?.Invoke();
+        return Task.CompletedTask;
     }
 
     // ── Polling loop ──────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ public class PerformanceEventService : IDisposable
     {
         _signalRSubscription?.Dispose();
         _signalRSubscription = null;
-        _signalRActive       = false;
+        _signalRActive = false;
 
         if (_cts is not null)
         {
@@ -184,7 +184,7 @@ public class PerformanceEventService : IDisposable
 
                 if (ct.IsCancellationRequested) break;
 
-                var from   = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
+                var from = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
                 var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
                 if (events?.Count > 0)
                 {

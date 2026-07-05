@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -21,9 +21,9 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
     [Fact]
     public async Task RootFolderEnumeration_Timing()
     {
-        var browser  = fix.Services.GetRequiredService<ILogBrowserService>();
+        var browser = fix.Services.GetRequiredService<ILogBrowserService>();
         var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
-        var sw       = Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
 
         var servers = logPaths.Servers;
         out_.WriteLine($"[{sw.Elapsed:c}] Servers configured: {servers.Count}");
@@ -57,9 +57,9 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
     [Fact]
     public async Task FileSearch_Timing()
     {
-        var browser  = fix.Services.GetRequiredService<ILogBrowserService>();
+        var browser = fix.Services.GetRequiredService<ILogBrowserService>();
         var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
-        var sw       = Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
 
         var servers = logPaths.Servers;
         if (servers.Count == 0)
@@ -69,9 +69,9 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
         }
 
         // Simulates the user searching for *.log files with no content filter.
-        using var cts   = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var fileCount   = 0;
-        var totalBytes  = 0L;
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var fileCount = 0;
+        var totalBytes = 0L;
 
         out_.WriteLine($"[{sw.Elapsed:c}] SearchAsync *.log (no content filter, root path)…");
 

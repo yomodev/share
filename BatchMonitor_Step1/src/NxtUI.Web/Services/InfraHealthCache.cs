@@ -1,6 +1,4 @@
-using Microsoft.Extensions.Options;
 using MongoDB.Bson;
-using NxtUI.Configuration;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Mongo;
@@ -16,13 +14,13 @@ public sealed class InfraHealthCache : BackgroundService
 {
     private const int PollIntervalSeconds = 30;
 
-    private readonly IKafkaMonitor          _kafka;
+    private readonly IKafkaMonitor _kafka;
     private readonly MongoConnectionFactory _mongoFactory;
     private readonly ILogger<InfraHealthCache> _log;
     private readonly OperationTracker _ops;
 
     private readonly Dictionary<string, KafkaHealth> _kafkaCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, MongoHealth>  _mongoCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MongoHealth> _mongoCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
     private CancellationToken _ct = CancellationToken.None;
 
@@ -30,10 +28,10 @@ public sealed class InfraHealthCache : BackgroundService
 
     public InfraHealthCache(IKafkaMonitor kafka, MongoConnectionFactory mongoFactory, ILogger<InfraHealthCache> log, OperationTracker ops)
     {
-        _kafka        = kafka;
+        _kafka = kafka;
         _mongoFactory = mongoFactory;
-        _log          = log;
-        _ops          = ops;
+        _log = log;
+        _ops = ops;
     }
 
     public KafkaHealth GetKafka(string env)
@@ -95,19 +93,19 @@ public sealed class InfraHealthCache : BackgroundService
         {
             var info = await _kafka.GetClusterInfoAsync(env, ct);
             var onlineBrokers = info.Brokers.Count(b => b.IsOnline);
-            var totalBrokers  = info.Brokers.Count;
+            var totalBrokers = info.Brokers.Count;
             result = new KafkaHealth
             {
-                Status    = onlineBrokers == totalBrokers ? HealthStatus.Healthy
-                          : onlineBrokers == 0            ? HealthStatus.Down
+                Status = onlineBrokers == totalBrokers ? HealthStatus.Healthy
+                          : onlineBrokers == 0 ? HealthStatus.Down
                                                          : HealthStatus.Degraded,
-                Brokers   = info.Brokers.Select(b => new BrokerHealth
-                            {
-                                Id       = b.Id,
-                                Host     = b.Host,
-                                Port     = b.Port,
-                                IsOnline = b.IsOnline,
-                            }).ToList(),
+                Brokers = info.Brokers.Select(b => new BrokerHealth
+                {
+                    Id = b.Id,
+                    Host = b.Host,
+                    Port = b.Port,
+                    IsOnline = b.IsOnline,
+                }).ToList(),
                 CheckedAt = DateTime.UtcNow,
             };
         }

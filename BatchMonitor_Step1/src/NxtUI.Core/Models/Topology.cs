@@ -9,8 +9,8 @@ using System.Text.Json.Serialization;
 /// </summary>
 public class Topology
 {
-    public List<TopologyNode> Nodes { get; set; } = new();
-    public List<TopologyEdge> Edges { get; set; } = new();
+    public List<TopologyNode> Nodes { get; set; } = [];
+    public List<TopologyEdge> Edges { get; set; } = [];
 
     /// <summary>Total unique chunkIds seen so far.</summary>
     public int TotalChunks { get; set; }

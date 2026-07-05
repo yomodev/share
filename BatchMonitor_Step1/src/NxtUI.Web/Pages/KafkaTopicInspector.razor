@@ -1,7 +1,7 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
-@using NxtUI.Filtering
+@using NxtUI.Core.Filtering
 @inject IKafkaMonitor KafkaSvc
 @inject IJSRuntime JS
 @inject ILogger<KafkaTopicInspector> Logger
@@ -117,7 +117,7 @@
                     <tbody>
                         @foreach (var s in _stats)
                         {
-                            <tr class="bm-kafka-stats-row" @onclick="@(() => ApplyPartitionFilter(s.Partition))">
+                            <tr>
                                 <td><span class="bm-kafka-mono">@s.Partition</span></td>
                                 <td><span class="bm-kafka-mono">@s.LowWatermark</span></td>
                                 <td><span class="bm-kafka-mono">@s.HighWatermark</span></td>
@@ -128,7 +128,6 @@
                         }
                     </tbody>
                 </table>
-                <MudText Typo="Typo.caption" Class="bm-muted" Style="padding:4px 0;">Click a row to filter by partition and close</MudText>
             }
         </DialogContent>
         <DialogActions>
@@ -496,15 +495,6 @@
             TabService.NotifyChanged();
             StateHasChanged();
         }
-    }
-
-    private void ApplyPartitionFilter(int partition)
-    {
-        _showStats = false;
-        var cleaned = RemoveKafkaSeekTerms(_filterText).Replace($"partition:{partition}", "").Trim();
-        _filterText = (cleaned + $" partition:{partition}").Trim();
-        _filterParseError = null;
-        ResetStream();
     }
 
     // ── Filter ────────────────────────────────────────────────────────────────

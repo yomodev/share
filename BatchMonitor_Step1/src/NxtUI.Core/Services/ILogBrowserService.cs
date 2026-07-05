@@ -1,16 +1,16 @@
-using NxtUI.Filtering;
+using NxtUI.Core.Filtering;
 
 namespace NxtUI.Core.Services;
 
 public record LogFolderNode(string Name, string RelativePath, bool HasChildren);
 
 public record LogFileEntry(
-    string   Server,
-    string   FileName,
-    long     SizeBytes,
+    string Server,
+    string FileName,
+    long SizeBytes,
     DateTime CreatedUtc,
     DateTime LastModifiedUtc,
-    string   FullPath);
+    string FullPath);
 
 public interface ILogBrowserService
 {

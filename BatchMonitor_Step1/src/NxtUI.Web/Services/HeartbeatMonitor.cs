@@ -15,36 +15,36 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
 {
-    private readonly IHeartbeatService         _heartbeat;
-    private readonly HeartbeatSettings         _settings;
+    private readonly IHeartbeatService _heartbeat;
+    private readonly HeartbeatSettings _settings;
     private readonly ILogger<HeartbeatMonitor> _log;
-    private readonly OperationTracker          _ops;
+    private readonly OperationTracker _ops;
 
     private CancellationToken _ct = CancellationToken.None;
 
     private sealed class EnvState
     {
-        public readonly object Lock                   = new();
-        public int             Subscribers;
-        public DateTime        IdleSince              = DateTime.MinValue;
+        public readonly object Lock = new();
+        public int Subscribers;
+        public DateTime IdleSince = DateTime.MinValue;
         public volatile IReadOnlyList<ServiceStatus> Services = [];
     }
 
-    private readonly ConcurrentDictionary<string, EnvState>        _states = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim>   _gates  = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, EnvState> _states = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string>? OnServicesUpdated;
 
     public HeartbeatMonitor(
-        IHeartbeatService           heartbeat,
+        IHeartbeatService heartbeat,
         IOptions<HeartbeatSettings> settings,
-        ILogger<HeartbeatMonitor>   log,
-        OperationTracker            ops)
+        ILogger<HeartbeatMonitor> log,
+        OperationTracker ops)
     {
         _heartbeat = heartbeat;
-        _settings  = settings.Value;
-        _log       = log;
-        _ops       = ops;
+        _settings = settings.Value;
+        _log = log;
+        _ops = ops;
     }
 
     // ── IHeartbeatMonitor ─────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
             while (await timer.WaitForNextTickAsync(ct))
             {
                 var idleTimeout = TimeSpan.FromMinutes(_settings.IdleReleaseMinutes);
-                var now         = DateTime.UtcNow;
+                var now = DateTime.UtcNow;
 
                 foreach (var (env, state) in _states)
                 {
@@ -88,9 +88,9 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
                     lock (state.Lock)
                     {
                         shouldRelease = state.Subscribers == 0 &&
-                                        state.IdleSince   != DateTime.MinValue &&
+                                        state.IdleSince != DateTime.MinValue &&
                                         (now - state.IdleSince) > idleTimeout;
-                        shouldPoll    = !shouldRelease && state.Subscribers > 0;
+                        shouldPoll = !shouldRelease && state.Subscribers > 0;
                     }
 
                     if (shouldRelease)

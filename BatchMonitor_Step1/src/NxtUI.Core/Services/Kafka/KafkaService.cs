@@ -24,9 +24,9 @@ public class KafkaService(
         var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
         return Task.FromResult(new KafkaClusterInfo
         {
-            ClusterId    = meta.OriginatingBrokerId.ToString(),
+            ClusterId = meta.OriginatingBrokerId.ToString(),
             ControllerId = meta.OriginatingBrokerId,
-            Brokers      = [.. meta.Brokers.Select(b => new KafkaBroker
+            Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
                 { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
         });
     }
@@ -68,17 +68,17 @@ public class KafkaService(
         string Str(string k, string d) =>
             cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
 
-        var meta      = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
         var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
 
         return new KafkaTopicConfig
         {
-            RetentionMs       = Lng("retention.ms",       604_800_000),
-            CleanupPolicy     = Str("cleanup.policy",     "delete"),
-            MaxMessageBytes   = Lng("max.message.bytes",  1_048_576),
-            MinInSyncReplicas = Int("min.insync.replicas",1),
-            CompressionType   = Str("compression.type",   "producer"),
-            PartitionCount    = topicMeta?.Partitions.Count ?? 0,
+            RetentionMs = Lng("retention.ms", 604_800_000),
+            CleanupPolicy = Str("cleanup.policy", "delete"),
+            MaxMessageBytes = Lng("max.message.bytes", 1_048_576),
+            MinInSyncReplicas = Int("min.insync.replicas", 1),
+            CompressionType = Str("compression.type", "producer"),
+            PartitionCount = topicMeta?.Partitions.Count ?? 0,
             ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
         };
     }
@@ -127,7 +127,7 @@ public class KafkaService(
         var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
         for (var i = 0; i < withPartitions.Count; i++)
         {
-            var t   = withPartitions[i];
+            var t = withPartitions[i];
             var cfg = i < configs.Count ? configs[i] : null;
             var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
                 ? e.Value : "delete";
@@ -152,12 +152,12 @@ public class KafkaService(
         log.LogDebug("kafka [{Env}]: consumer groups for '{Topic}'", env, topicName);
         using var admin = BuildAdmin(env);
 
-        var listing   = await admin.ListConsumerGroupsAsync();
-        var groupIds  = listing.Valid.Select(g => g.GroupId).ToList();
+        var listing = await admin.ListConsumerGroupsAsync();
+        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
         if (groupIds.Count == 0) return [];
 
         var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result    = new List<KafkaTopicConsumerGroup>();
+        var result = new List<KafkaTopicConsumerGroup>();
 
         foreach (var desc in described.ConsumerGroupDescriptions)
         {
@@ -165,7 +165,7 @@ public class KafkaService(
                 continue;
             var lag = await ComputeGroupLagForTopicAsync(env, desc.GroupId, topicName, ct);
             result.Add(new KafkaTopicConsumerGroup
-                { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
+            { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
         }
         return result;
     }
@@ -177,10 +177,10 @@ public class KafkaService(
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
         var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
-        var config  = factory.BuildConsumerConfig(env, groupId);
+        var config = factory.BuildConsumerConfig(env, groupId);
 
-        using var admin    = BuildAdmin(env);
-        var meta           = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        using var admin = BuildAdmin(env);
+        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
         var topicPartitions = meta.Topics
             .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
 
@@ -199,14 +199,14 @@ public class KafkaService(
         await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
 
         int consumed = 0;
-        int cap      = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue
+        int cap = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue
             ? _global.MaxFetchMessages  // bounded mode still has a safety cap
             : _global.MaxFetchMessages; // live mode cap
 
         while (!ct.IsCancellationRequested && consumed < cap)
         {
             ConsumeResult<string?, byte[]>? cr;
-            try   { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
+            try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { log.LogWarning(ex, "kafka: consume error"); break; }
 
@@ -219,7 +219,7 @@ public class KafkaService(
             }
 
             // End-of-range checks
-            if (directive.OffsetTo.HasValue    && cr.Offset.Value > directive.OffsetTo.Value)    break;
+            if (directive.OffsetTo.HasValue && cr.Offset.Value > directive.OffsetTo.Value) break;
             if (directive.TimestampTo.HasValue && cr.Message.Timestamp.UtcDateTime > directive.TimestampTo.Value) break;
 
             var headers = new Dictionary<string, string>();
@@ -234,11 +234,11 @@ public class KafkaService(
 
             yield return new KafkaMessage
             {
-                Offset      = cr.Offset.Value,
-                Partition   = cr.Partition.Value,
-                Key         = cr.Message.Key,
-                Timestamp   = cr.Message.Timestamp.UtcDateTime,
-                Headers     = headers,
+                Offset = cr.Offset.Value,
+                Partition = cr.Partition.Value,
+                Key = cr.Message.Key,
+                Timestamp = cr.Message.Timestamp.UtcDateTime,
+                Headers = headers,
                 JsonPayload = json,
                 PayloadType = payloadType,
                 RawSizeBytes = rawBytes.Length,
@@ -255,9 +255,9 @@ public class KafkaService(
     {
         log.LogDebug("kafka [{Env}]: partition stats for '{Topic}'", env, topicName);
 
-        var groupId  = $"nxtui-stats-{Guid.NewGuid():N}";
-        var config   = factory.BuildConsumerConfig(env, groupId);
-        using var admin    = BuildAdmin(env);
+        var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
+        var config = factory.BuildConsumerConfig(env, groupId);
+        using var admin = BuildAdmin(env);
         using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
 
         var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
@@ -270,22 +270,22 @@ public class KafkaService(
             var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
 
             DateTime? firstTs = null;
-            DateTime? lastTs  = null;
+            DateTime? lastTs = null;
 
             // Fetch first message timestamp
             if (wm.Low.Value < wm.High.Value)
             {
                 firstTs = FetchTimestampAt(consumer, tp, wm.Low.Value);
-                lastTs  = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
+                lastTs = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
             }
 
             result.Add(new KafkaPartitionStats
             {
-                Partition              = p.PartitionId,
-                LowWatermark           = wm.Low.Value,
-                HighWatermark          = wm.High.Value,
-                FirstMessageTimestamp  = firstTs,
-                LastMessageTimestamp   = lastTs,
+                Partition = p.PartitionId,
+                LowWatermark = wm.Low.Value,
+                HighWatermark = wm.High.Value,
+                FirstMessageTimestamp = firstTs,
+                LastMessageTimestamp = lastTs,
             });
         }
 
@@ -297,8 +297,8 @@ public class KafkaService(
     {
         return Task.Run<byte[]?>(() =>
         {
-            var groupId  = $"nxtui-dl-{Guid.NewGuid():N}";
-            var config   = factory.BuildConsumerConfig(env, groupId);
+            var groupId = $"nxtui-dl-{Guid.NewGuid():N}";
+            var config = factory.BuildConsumerConfig(env, groupId);
             using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
 
             var tp = new TopicPartition(topicName, partition);
@@ -314,7 +314,7 @@ public class KafkaService(
                     var cr = consumer.Consume(TimeSpan.FromMilliseconds(500));
                     if (cr is null || cr.IsPartitionEOF) break;
                     if (cr.Offset.Value == offset) return cr.Message.Value;
-                    if (cr.Offset.Value > offset)  break;
+                    if (cr.Offset.Value > offset) break;
                 }
             }
             catch (OperationCanceledException) { }
@@ -328,13 +328,13 @@ public class KafkaService(
         string env, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: all consumer groups", env);
-        using var admin   = BuildAdmin(env);
-        var listing       = await admin.ListConsumerGroupsAsync();
-        var groupIds      = listing.Valid.Select(g => g.GroupId).ToList();
+        using var admin = BuildAdmin(env);
+        var listing = await admin.ListConsumerGroupsAsync();
+        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
         if (groupIds.Count == 0) return [];
 
         var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result    = new List<KafkaConsumerGroupOverview>();
+        var result = new List<KafkaConsumerGroupOverview>();
 
         foreach (var desc in described.ConsumerGroupDescriptions)
         {
@@ -343,8 +343,13 @@ public class KafkaService(
                 .Distinct().OrderBy(t => t).ToList();
             var lag = await ComputeGroupTotalLagAsync(env, desc.GroupId, ct);
             result.Add(new KafkaConsumerGroupOverview
-                { GroupId = desc.GroupId, State = desc.State.ToString(),
-                  TopicCount = topics.Count, TotalLag = lag, Topics = topics });
+            {
+                GroupId = desc.GroupId,
+                State = desc.State.ToString(),
+                TopicCount = topics.Count,
+                TotalLag = lag,
+                Topics = topics
+            });
         }
         return [.. result.OrderBy(g => g.GroupId)];
     }
@@ -353,9 +358,9 @@ public class KafkaService(
         string env, string groupId, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: lag for group '{Group}'", env, groupId);
-        using var admin   = BuildAdmin(env);
-        var described     = await admin.DescribeConsumerGroupsAsync([groupId]);
-        var desc          = described.ConsumerGroupDescriptions.First();
+        using var admin = BuildAdmin(env);
+        var described = await admin.DescribeConsumerGroupsAsync([groupId]);
+        var desc = described.ConsumerGroupDescriptions.First();
 
         var topicPartitions = desc.Members
             .SelectMany(m => m.Assignment.TopicPartitions)
@@ -471,8 +476,8 @@ public class KafkaService(
             {
                 var cfg = factory.BuildConsumerConfig(env, $"{groupId}__lag_{Guid.NewGuid():N}");
                 using var consumer = new ConsumerBuilder<Ignore, Ignore>(cfg).Build();
-                using var admin    = BuildAdmin(env);
-                var meta      = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+                using var admin = BuildAdmin(env);
+                var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
                 var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
                 if (topicMeta is null) return 0L;
 
@@ -493,7 +498,7 @@ public class KafkaService(
     private async Task<long> ComputeGroupTotalLagAsync(string env, string groupId, CancellationToken ct)
     {
         using var admin = BuildAdmin(env);
-        var meta   = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
         var topics = meta.Topics.Where(t => !t.Topic.StartsWith("__")).Select(t => t.Topic).ToList();
         long total = 0;
         foreach (var topic in topics)

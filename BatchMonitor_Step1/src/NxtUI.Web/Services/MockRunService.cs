@@ -1,15 +1,15 @@
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
-using NxtUI.Filtering;
 using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
 using Microsoft.AspNetCore.SignalR;
+using NxtUI.Core.Filtering;
 
 namespace NxtUI.Web.Services;
 
 public class MockRunService : IRunService
 {
-    private static readonly string[] RunTypes    = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
+    private static readonly string[] RunTypes = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] RunEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
 
     // Hosts match App:Environments[].Servers in appsettings.json (union of all envs)
@@ -54,13 +54,13 @@ public class MockRunService : IRunService
 
     // Deterministic service → pipeline[] and pipeline → source[] assignments.
     private static readonly Dictionary<string, string[]> ServicePipelines = new();
-    private static readonly Dictionary<string, string[]> PipelineSources  = new();
+    private static readonly Dictionary<string, string[]> PipelineSources = new();
 
     static MockRunService()
     {
-        var rng   = new Random(7);
+        var rng = new Random(7);
         var pipes = AllPipelines.OrderBy(_ => rng.Next()).ToArray();
-        int pi    = 0;
+        int pi = 0;
         foreach (var svc in Services)
         {
             int n = rng.Next(1, 4);
@@ -74,7 +74,7 @@ public class MockRunService : IRunService
         }
     }
 
-    private static string PickService(Random rng)  => Services[rng.Next(Services.Length)];
+    private static string PickService(Random rng) => Services[rng.Next(Services.Length)];
     private static string PickPipeline(string svc, Random rng)
     {
         var p = ServicePipelines.GetValueOrDefault(svc, AllPipelines);
@@ -86,7 +86,7 @@ public class MockRunService : IRunService
         return s[rng.Next(s.Length)];
     }
     private static string PickServer(Random rng) => Servers[rng.Next(Servers.Length)];
-    private static string PickPid(Random rng)    => rng.Next(1000, 65000).ToString();
+    private static string PickPid(Random rng) => rng.Next(1000, 65000).ToString();
 
     // ── State ─────────────────────────────────────────────────────────────
 
@@ -106,29 +106,29 @@ public class MockRunService : IRunService
 
     public MockRunService(IHubContext<RunEventsHub>? hubContext = null, RunsSettings? runsSettings = null)
     {
-        _hubContext   = hubContext;
+        _hubContext = hubContext;
         _runsSettings = runsSettings ?? new RunsSettings();
         var rng = new Random(42);
 
         _store = Enumerable.Range(1, 200).Select(i =>
         {
-            var type   = RunTypes[i % RunTypes.Length];
+            var type = RunTypes[i % RunTypes.Length];
             var entity = RunEntities[i % RunEntities.Length];
-            var start  = DateTime.UtcNow.AddMinutes(-(i * 7 + rng.Next(0, 5)));
+            var start = DateTime.UtcNow.AddMinutes(-(i * 7 + rng.Next(0, 5)));
             var status = i switch
             {
                 1 or 2 => RunStatus.Running,
                 3 or 7 => RunStatus.Failed,
-                _      => RunStatus.Completed,
+                _ => RunStatus.Completed,
             };
             return new RunSummary
             {
-                RunId       = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
+                RunId = $"RUN-{DateTime.UtcNow:yyyyMMdd}-{i:D3}",
                 Description = $"{type}_{entity}",
-                Type        = type,
-                Status      = status,
-                Start       = start,
-                End         = status != RunStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
+                Type = type,
+                Status = status,
+                Start = start,
+                End = status != RunStatus.Running ? start.AddSeconds(rng.Next(60, 1800)) : null,
             };
         }).OrderByDescending(b => b.Start).ToList();
 
@@ -158,7 +158,7 @@ public class MockRunService : IRunService
                     b.Description.Contains(text, StringComparison.OrdinalIgnoreCase));
             }
             if (filter.Statuses?.Count > 0) query = query.Where(b => filter.Statuses.Contains(b.Status));
-            if (filter.Types?.Count > 0)    query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
+            if (filter.Types?.Count > 0) query = query.Where(b => filter.Types.Contains(b.Type, StringComparer.OrdinalIgnoreCase));
         }
 
         query = SortByField(query, filter?.SortField, filter?.SortDescending ?? true);
@@ -172,12 +172,12 @@ public class MockRunService : IRunService
     {
         Func<RunSummary, IComparable> keySelector = field switch
         {
-            "RunId"       => b => b.RunId,
-            "Type"        => b => b.Type,
-            "Status"      => b => b.Status,
+            "RunId" => b => b.RunId,
+            "Type" => b => b.Type,
+            "Status" => b => b.Status,
             "Description" => b => b.Description,
-            "EndTime"     => b => b.End ?? DateTime.MinValue,
-            _             => b => b.Start,
+            "EndTime" => b => b.End ?? DateTime.MinValue,
+            _ => b => b.Start,
         };
         return descending ? query.OrderByDescending(keySelector) : query.OrderBy(keySelector);
     }
@@ -188,7 +188,7 @@ public class MockRunService : IRunService
         if (batch is not null && batch.Status == RunStatus.Running)
         {
             batch.Status = RunStatus.Failed;
-            batch.End    = DateTime.UtcNow;
+            batch.End = DateTime.UtcNow;
             return Task.FromResult(true);
         }
         return Task.FromResult(false);
@@ -199,19 +199,19 @@ public class MockRunService : IRunService
         var summary = _store.FirstOrDefault(b => b.RunId == runId);
         var details = new RunDetails
         {
-            RunId       = runId ?? "RUN-UNKNOWN",
+            RunId = runId ?? "RUN-UNKNOWN",
             Description = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
-            Type        = summary?.Type ?? "FullLoad",
-            Status    = summary?.Status ?? RunStatus.Completed,
-            Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
-            End       = summary?.End,
-            Metadata  = new Dictionary<string, string>
+            Type = summary?.Type ?? "FullLoad",
+            Status = summary?.Status ?? RunStatus.Completed,
+            Start = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
+            End = summary?.End,
+            Metadata = new Dictionary<string, string>
             {
-                ["Source"]           = "s3://bucket/path",
-                ["Target"]           = "mongo://cluster/db/col",
+                ["Source"] = "s3://bucket/path",
+                ["Target"] = "mongo://cluster/db/col",
                 ["RecordsProcessed"] = "12,345",
-                ["WorkerNode"]       = "node-7",
-                ["RequestId"]        = Guid.NewGuid().ToString(),
+                ["WorkerNode"] = "node-7",
+                ["RequestId"] = Guid.NewGuid().ToString(),
             },
         };
         return Task.FromResult(details);
@@ -239,9 +239,9 @@ public class MockRunService : IRunService
     {
         foreach (var batch in _store.Take(10))
         {
-            var events   = new List<PerformanceEvent>();
+            var events = new List<PerformanceEvent>();
             var duration = (batch.End ?? batch.Start.AddMinutes(30)) - batch.Start;
-            int chunks   = rng.Next(200, 400);
+            int chunks = rng.Next(200, 400);
 
             for (int ci = 0; ci < chunks; ci++)
             {
@@ -252,29 +252,29 @@ public class MockRunService : IRunService
                 int hops = rng.Next(3, 11);
                 for (int h = 0; h < hops; h++)
                 {
-                    var svc      = PickService(rng);
+                    var svc = PickService(rng);
                     var pipeline = PickPipeline(svc, rng);
-                    var src      = PickSource(pipeline, rng);
-                    var server   = PickServer(rng);
-                    var pid      = PickPid(rng);
+                    var src = PickSource(pipeline, rng);
+                    var server = PickServer(rng);
+                    var pid = PickPid(rng);
 
                     var startOffset = TimeSpan.FromSeconds(rng.Next(0, Math.Max(1, (int)duration.TotalSeconds)));
-                    var start       = batch.Start + startOffset;
-                    var dur         = rng.Next(1, 45);
-                    var isInProg    = batch.Status == RunStatus.Running && rng.Next(0, 100) < 8;
-                    var isError     = !isInProg && rng.Next(0, 100) < 4;
+                    var start = batch.Start + startOffset;
+                    var dur = rng.Next(1, 45);
+                    var isInProg = batch.Status == RunStatus.Running && rng.Next(0, 100) < 8;
+                    var isError = !isInProg && rng.Next(0, 100) < 4;
 
                     events.Add(new PerformanceEvent
                     {
-                        ChunkId     = chunkId,
-                        Service     = svc,
-                        Pipeline    = pipeline,
-                        Source      = src,
-                        Server      = server,
-                        ProcessId   = pid,
-                        Start       = start,
-                        Finish      = isInProg ? null : start.AddSeconds(dur),
-                        Error       = isError ? "Processing error: schema mismatch" : null,
+                        ChunkId = chunkId,
+                        Service = svc,
+                        Pipeline = pipeline,
+                        Source = src,
+                        Server = server,
+                        ProcessId = pid,
+                        Start = start,
+                        Finish = isInProg ? null : start.AddSeconds(dur),
+                        Error = isError ? "Processing error: schema mismatch" : null,
                         RecordCount = rng.Next(10, 500),
                     });
                 }
@@ -299,7 +299,7 @@ public class MockRunService : IRunService
 
                 foreach (var batch in _store.Where(b => b.Status == RunStatus.Running))
                 {
-                    var env   = "DEV1";
+                    var env = "DEV1";
                     var group = RunEventsHub.GroupName(env, batch.RunId);
 
                     foreach (var evt in GenerateLiveEvents(ref chunkCounter, rng))
@@ -328,11 +328,11 @@ public class MockRunService : IRunService
         for (int i = 0; i < newChunks; i++)
         {
             var chunkId = $"LIVE-{counter++:D5}";
-            int hops    = rng.Next(4, 13);
+            int hops = rng.Next(4, 13);
             var pending = new List<(string, string, string, string, string)>(hops);
             for (int h = 0; h < hops; h++)
             {
-                var svc  = PickService(rng);
+                var svc = PickService(rng);
                 var pipe = PickPipeline(svc, rng);
                 pending.Add((svc, pipe, PickSource(pipe, rng), PickServer(rng), PickPid(rng)));
             }
@@ -350,21 +350,21 @@ public class MockRunService : IRunService
                 var (svc, pipeline, src, server, pid) = hops[0];
                 hops.RemoveAt(0);
 
-                var start   = DateTime.UtcNow.AddSeconds(-rng.Next(1, 12));
+                var start = DateTime.UtcNow.AddSeconds(-rng.Next(1, 12));
                 var isError = rng.Next(0, 100) < 5;
-                var inProg  = !isError && rng.Next(0, 100) < 8;
+                var inProg = !isError && rng.Next(0, 100) < 8;
 
                 events.Add(new PerformanceEvent
                 {
-                    ChunkId     = chunkId,
-                    Service     = svc,
-                    Pipeline    = pipeline,
-                    Source      = src,
-                    Server      = server,
-                    ProcessId   = pid,
-                    Start       = start,
-                    Finish      = inProg ? null : start.AddSeconds(rng.Next(1, 20)),
-                    Error       = isError ? "Live processing error" : null,
+                    ChunkId = chunkId,
+                    Service = svc,
+                    Pipeline = pipeline,
+                    Source = src,
+                    Server = server,
+                    ProcessId = pid,
+                    Start = start,
+                    Finish = inProg ? null : start.AddSeconds(rng.Next(1, 20)),
+                    Error = isError ? "Live processing error" : null,
                     RecordCount = rng.Next(10, 500),
                 });
             }

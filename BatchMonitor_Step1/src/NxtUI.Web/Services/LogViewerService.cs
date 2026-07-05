@@ -1,6 +1,5 @@
+using NxtUI.Core.Logging;
 using NxtUI.Core.Services;
-using NxtUI.Logging;
-using NxtUI.Web.Services;
 using System.Text;
 
 namespace NxtUI.Web.Services;
@@ -13,8 +12,8 @@ public class LogViewerService : ILogViewerService
             path, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
 
-        using var sr  = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var text      = await sr.ReadToEndAsync(ct);
+        using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var text = await sr.ReadToEndAsync(ct);
         return (text, fs.Position);
     }
 

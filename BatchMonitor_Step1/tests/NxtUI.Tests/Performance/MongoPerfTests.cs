@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NxtUI.Core.Services;
+using System.Diagnostics;
 
 namespace NxtUI.Tests.Performance;
 
@@ -16,9 +16,9 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task DatabaseNames_Fast_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var names = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         out_.WriteLine($"[{sw.Elapsed:c}] GetDatabaseNamesAsync: {names.Count} databases");
@@ -30,9 +30,9 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task CollectionPage_WithStats_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var dbNames = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (dbNames.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
@@ -65,14 +65,14 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task Documents_Pagination_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        var db    = databases[0];
+        var db = databases[0];
         var names = (await mongo.GetCollectionNamesAsync(env, db, ct)).ToList();
         if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
 
@@ -102,14 +102,14 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task Document_Search_With_Filter_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
 
-        var db    = databases[0];
+        var db = databases[0];
         var names = (await mongo.GetCollectionNamesAsync(env, db, ct)).ToList();
         if (names.Count == 0) { out_.WriteLine($"No collections in '{db}' — skipping."); return; }
 
@@ -127,9 +127,9 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task CollectionDetails_With_Indexes_Timing()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
-        var ct    = TestContext.Current.CancellationToken;
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
+        var ct = TestContext.Current.CancellationToken;
 
         var databases = (await mongo.GetDatabaseNamesAsync(env, ct)).ToList();
         if (databases.Count == 0) { out_.WriteLine("No databases — skipping."); return; }
@@ -141,7 +141,7 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
 
             await Task.WhenAll(names.Take(5).Select(async col =>
             {
-                var dSw     = Stopwatch.StartNew();
+                var dSw = Stopwatch.StartNew();
                 var details = await mongo.GetCollectionDetailsAsync(env, dbName, col, ct);
                 out_.WriteLine($"  [{dSw.Elapsed:c}] {col}: {details.Summary.DocumentCount:N0} docs, " +
                                $"{details.Indexes.Count} indexes");
@@ -157,8 +157,8 @@ public sealed class MongoPerfTests(ServiceFixture fix, ITestOutputHelper out_)
     public async Task Slow_Mongo_Connection_Stays_Within_Timeout()
     {
         var mongo = fix.Services.GetRequiredService<IMongoReader>();
-        var env   = fix.DefaultEnv;
-        var sw    = Stopwatch.StartNew();
+        var env = fix.DefaultEnv;
+        var sw = Stopwatch.StartNew();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try

@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 /// <summary>
 /// Parses a filter string into a <see cref="FilterNode"/> AST.
@@ -22,7 +22,7 @@ namespace NxtUI.Filtering;
 /// </summary>
 public sealed class FilterParser
 {
-    private readonly string[]                          _searchableFields;
+    private readonly string[] _searchableFields;
     private readonly IReadOnlyDictionary<string, string> _aliases;
 
     // ── Standard alias table (both short and full forms resolve to the same name) ──
@@ -31,44 +31,44 @@ public sealed class FilterParser
         new(StringComparer.OrdinalIgnoreCase)
         {
             // PerformanceEvent
-            ["svc"]       = "Service",
-            ["service"]   = "Service",
-            ["pipe"]      = "Pipeline",
-            ["pipeline"]  = "Pipeline",
-            ["srv"]       = "Server",
-            ["server"]    = "Server",
-            ["pid"]       = "ProcessId",
+            ["svc"] = "Service",
+            ["service"] = "Service",
+            ["pipe"] = "Pipeline",
+            ["pipeline"] = "Pipeline",
+            ["srv"] = "Server",
+            ["server"] = "Server",
+            ["pid"] = "ProcessId",
             ["processid"] = "ProcessId",
-            ["src"]       = "Source",
-            ["source"]    = "Source",
-            ["chunk"]     = "ChunkId",
-            ["chunkid"]   = "ChunkId",
+            ["src"] = "Source",
+            ["source"] = "Source",
+            ["chunk"] = "ChunkId",
+            ["chunkid"] = "ChunkId",
             // RunSummary
-            ["run"]         = "RunId",
-            ["runid"]       = "RunId",
-            ["requestid"]   = "RequestId",
-            ["reqid"]       = "RequestId",
-            ["type"]        = "Type",
-            ["status"]      = "Status",
-            ["desc"]        = "Description",
+            ["run"] = "RunId",
+            ["runid"] = "RunId",
+            ["requestid"] = "RequestId",
+            ["reqid"] = "RequestId",
+            ["type"] = "Type",
+            ["status"] = "Status",
+            ["desc"] = "Description",
             ["description"] = "Description",
-            ["start"]       = "StartTime",
-            ["started"]     = "StartTime",
-            ["end"]         = "EndTime",
-            ["ended"]       = "EndTime",
-            ["finish"]      = "EndTime",
-            ["finished"]    = "EndTime",
+            ["start"] = "StartTime",
+            ["started"] = "StartTime",
+            ["end"] = "EndTime",
+            ["ended"] = "EndTime",
+            ["finish"] = "EndTime",
+            ["finished"] = "EndTime",
             // ServiceStatus
-            ["svcname"]   = "ServiceName",
+            ["svcname"] = "ServiceName",
             ["servicename"] = "ServiceName",
-            ["host"]      = "HostName",
-            ["hostname"]  = "HostName",
-            ["ram"]       = "RamMb",
-            ["mem"]       = "RamMb",
-            ["memory"]    = "RamMb",
-            ["peak"]      = "PeakMb",
-            ["updated"]   = "UpdatedDateTime",
-            ["update"]    = "UpdatedDateTime",
+            ["host"] = "HostName",
+            ["hostname"] = "HostName",
+            ["ram"] = "RamMb",
+            ["mem"] = "RamMb",
+            ["memory"] = "RamMb",
+            ["peak"] = "PeakMb",
+            ["updated"] = "UpdatedDateTime",
+            ["update"] = "UpdatedDateTime",
         };
 
     public FilterParser(
@@ -76,7 +76,7 @@ public sealed class FilterParser
         IReadOnlyDictionary<string, string>? aliases = null)
     {
         _searchableFields = searchableFields;
-        _aliases          = aliases ?? DefaultAliases;
+        _aliases = aliases ?? DefaultAliases;
     }
 
     /// <summary>Parses <paramref name="input"/> and returns the AST root, or null for empty input.</summary>
@@ -88,8 +88,8 @@ public sealed class FilterParser
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
         var tokens = Tokenize(input);
-        var ctx    = new ParseContext(tokens, useUtc);
-        var node   = ParseOr(ctx);
+        var ctx = new ParseContext(tokens, useUtc);
+        var node = ParseOr(ctx);
         return node;
     }
 
@@ -123,41 +123,41 @@ public sealed class FilterParser
 
             switch (c)
             {
-                case '!':  tokens.Add(new(TK.Not,    "!", '\0')); i++; break;
-                case ',':  tokens.Add(new(TK.Comma,  ",", '\0')); i++; break;
-                case '(':  tokens.Add(new(TK.LParen, "(", '\0')); i++; break;
-                case ')':  tokens.Add(new(TK.RParen, ")", '\0')); i++; break;
+                case '!': tokens.Add(new(TK.Not, "!", '\0')); i++; break;
+                case ',': tokens.Add(new(TK.Comma, ",", '\0')); i++; break;
+                case '(': tokens.Add(new(TK.LParen, "(", '\0')); i++; break;
+                case ')': tokens.Add(new(TK.RParen, ")", '\0')); i++; break;
 
                 case '"':
                 case '\'':
-                {
-                    char q   = c; i++;
-                    int  start = i;
-                    while (i < len && input[i] != q) i++;
-                    tokens.Add(new(TK.Quoted, input[start..i], q));
-                    if (i < len) i++; // consume closing quote
-                    break;
-                }
+                    {
+                        char q = c; i++;
+                        int start = i;
+                        while (i < len && input[i] != q) i++;
+                        tokens.Add(new(TK.Quoted, input[start..i], q));
+                        if (i < len) i++; // consume closing quote
+                        break;
+                    }
 
                 case ':':
                     if (i + 1 < len && input[i + 1] == '=')
                     { tokens.Add(new(TK.ColonEq, ":=", '\0')); i += 2; }
                     else
-                    { tokens.Add(new(TK.Colon,   ":",  '\0')); i++; }
+                    { tokens.Add(new(TK.Colon, ":", '\0')); i++; }
                     break;
 
                 case '>':
                     if (i + 1 < len && input[i + 1] == '=')
                     { tokens.Add(new(TK.Gte, ">=", '\0')); i += 2; }
                     else
-                    { tokens.Add(new(TK.Gt,  ">",  '\0')); i++; }
+                    { tokens.Add(new(TK.Gt, ">", '\0')); i++; }
                     break;
 
                 case '<':
                     if (i + 1 < len && input[i + 1] == '=')
                     { tokens.Add(new(TK.Lte, "<=", '\0')); i += 2; }
                     else
-                    { tokens.Add(new(TK.Lt,  "<",  '\0')); i++; }
+                    { tokens.Add(new(TK.Lt, "<", '\0')); i++; }
                     break;
 
                 case '.':
@@ -228,7 +228,7 @@ public sealed class FilterParser
         {
             ctx.Consume();
             var right = ParseAnd(ctx);
-            if (left is null)        left = right;
+            if (left is null) left = right;
             else if (right is not null) left = new OrNode(left, right);
         }
         return left;
@@ -289,8 +289,8 @@ public sealed class FilterParser
     private FilterNode? ParseFieldTerm(ParseContext ctx)
     {
         var fieldRaw = ctx.Consume().Text;
-        var field    = ResolveAlias(fieldRaw);
-        bool exact   = ctx.Current.Kind == TK.ColonEq;
+        var field = ResolveAlias(fieldRaw);
+        bool exact = ctx.Current.Kind == TK.ColonEq;
         ctx.Consume(); // consume ':' or ':='
 
         // Field-scoped group: svc:(Loader, Transformer)
@@ -313,7 +313,7 @@ public sealed class FilterParser
         {
             ctx.Consume();
             var right = ParseFieldScopedAnd(ctx, field);
-            if (left is null)           left = right;
+            if (left is null) left = right;
             else if (right is not null) left = new OrNode(left, right);
         }
         return left;
@@ -337,11 +337,11 @@ public sealed class FilterParser
         // Optional comparison operator.
         MatchType? cmpOp = ctx.Current.Kind switch
         {
-            TK.Gt  => MatchType.GreaterThan,
+            TK.Gt => MatchType.GreaterThan,
             TK.Gte => MatchType.GreaterThanOrEqual,
-            TK.Lt  => MatchType.LessThan,
+            TK.Lt => MatchType.LessThan,
             TK.Lte => MatchType.LessThanOrEqual,
-            _      => null,
+            _ => null,
         };
         if (cmpOp.HasValue) ctx.Consume();
 
@@ -402,9 +402,9 @@ public sealed class FilterParser
     private static string DescribeValueKind(FilterValue v) => v switch
     {
         StringValue => "a string",
-        BoolValue   => "a true/false value",
-        NullValue   => "null",
-        _           => "this value",
+        BoolValue => "a true/false value",
+        NullValue => "null",
+        _ => "this value",
     };
 
     // Parses a bare term (no field prefix) and expands it across searchable fields.
@@ -417,11 +417,11 @@ public sealed class FilterParser
 
         MatchType matchType = value switch
         {
-            NullValue              => MatchType.IsNull,
+            NullValue => MatchType.IsNull,
             StringValue sv when MongoFilterBuilder.HasWildcard(sv.Value)
                                => MatchType.Glob,
-            StringValue        => MatchType.Contains,
-            _                  => MatchType.Contains, // numbers/dates fall through
+            StringValue => MatchType.Contains,
+            _ => MatchType.Contains, // numbers/dates fall through
         };
 
         FilterNode? result = null;
@@ -517,7 +517,7 @@ public sealed class FilterParser
         var textLower = text.ToLowerInvariant();
 
         // Z suffix forces UTC interpretation regardless of the useUtc setting.
-        bool hasZ  = textLower.EndsWith('z');
+        bool hasZ = textLower.EndsWith('z');
         bool asUtc = useUtc || hasZ;
 
         // Named dates — "now" is always UTC; today/yesterday respect setting.
@@ -542,7 +542,7 @@ public sealed class FilterParser
         if (relMatch.Success)
         {
             bool negative = relMatch.Groups[1].Value == "-";
-            int  amount   = int.Parse(relMatch.Groups[2].Value);
+            int amount = int.Parse(relMatch.Groups[2].Value);
             if (negative)
             {
                 result = relMatch.Groups[3].Value.ToLower() switch
@@ -552,7 +552,7 @@ public sealed class FilterParser
                     "h" => DateTime.UtcNow.AddHours(-amount),
                     "d" => DateTime.UtcNow.AddDays(-amount),
                     "w" => DateTime.UtcNow.AddDays(-amount * 7),
-                    _   => DateTime.UtcNow,
+                    _ => DateTime.UtcNow,
                 };
             }
             else
@@ -565,7 +565,7 @@ public sealed class FilterParser
                     "h" => todayBase.AddHours(amount),
                     "d" => todayBase.AddDays(amount),
                     "w" => todayBase.AddDays(amount * 7),
-                    _   => todayBase,
+                    _ => todayBase,
                 };
             }
             return true;

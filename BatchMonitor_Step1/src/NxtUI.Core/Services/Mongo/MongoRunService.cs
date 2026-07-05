@@ -14,14 +14,14 @@ namespace NxtUI.Core.Services.Mongo;
 /// </summary>
 public class MongoRunService : IRunService
 {
-    private readonly MongoSettings  _settings;
+    private readonly MongoSettings _settings;
     private readonly MongoConnectionFactory _factory;
     private readonly RunsSettings _runsSettings;
 
     public MongoRunService(MongoConnectionFactory factory, IOptions<MongoSettings> settings, RunsSettings runsSettings)
     {
-        _factory      = factory;
-        _settings     = settings.Value;
+        _factory = factory;
+        _settings = settings.Value;
         _runsSettings = runsSettings;
     }
 
@@ -29,11 +29,11 @@ public class MongoRunService : IRunService
         string env, DateTime before, int count,
         RunFilter? filter = null, CancellationToken ct = default)
     {
-        var db         = _factory.GetDatabase(env);
+        var db = _factory.GetDatabase(env);
         var collection = db.GetCollection<BsonDocument>(_settings.PerformanceTrackerCollection);
 
         // Build filter — adapt field names to match your actual MongoDB schema
-        var builder    = Builders<BsonDocument>.Filter;
+        var builder = Builders<BsonDocument>.Filter;
         var baseFilter = builder.Lt("Start", before);
 
         if (filter is not null && !filter.IsEmpty)
@@ -42,7 +42,7 @@ public class MongoRunService : IRunService
             {
                 var text = filter.SearchText.Trim();
                 var textFilter = builder.Or(
-                    builder.Regex("RunId",     new BsonRegularExpression(text, "i")),
+                    builder.Regex("RunId", new BsonRegularExpression(text, "i")),
                     builder.Regex("RequestId", new BsonRegularExpression(text, "i")));
                 baseFilter &= textFilter;
             }
@@ -60,8 +60,8 @@ public class MongoRunService : IRunService
         var sortField = filter?.SortField switch
         {
             "StartTime" or null => "Start",
-            "EndTime"            => "End",
-            var f                => f,
+            "EndTime" => "End",
+            var f => f,
         };
         var sort = (filter?.SortDescending ?? true)
             ? Builders<BsonDocument>.Sort.Descending(sortField)
@@ -123,11 +123,11 @@ public class MongoRunService : IRunService
     {
         return new RunSummary
         {
-            RunId     = doc.GetValue("RunId",     BsonNull.Value).AsString     ?? string.Empty,
-            Type      = doc.GetValue("Type",      BsonNull.Value).AsString     ?? string.Empty,
-            Status    = ParseStatus(doc.GetValue("Status", BsonNull.Value).AsString ?? string.Empty),
-            Start     = doc.GetValue("Start",     BsonNull.Value).ToUniversalTime(),
-            End       = doc.Contains("End") && !doc["End"].IsBsonNull
+            RunId = doc.GetValue("RunId", BsonNull.Value).AsString ?? string.Empty,
+            Type = doc.GetValue("Type", BsonNull.Value).AsString ?? string.Empty,
+            Status = ParseStatus(doc.GetValue("Status", BsonNull.Value).AsString ?? string.Empty),
+            Start = doc.GetValue("Start", BsonNull.Value).ToUniversalTime(),
+            End = doc.Contains("End") && !doc["End"].IsBsonNull
                             ? doc["End"].ToUniversalTime()
                             : null,
         };
@@ -136,10 +136,10 @@ public class MongoRunService : IRunService
     private static RunStatus ParseStatus(string value) =>
         value.ToLowerInvariant() switch
         {
-            "running"   => RunStatus.Running,
+            "running" => RunStatus.Running,
             "completed" => RunStatus.Completed,
-            "failed"    => RunStatus.Failed,
-            _           => RunStatus.Unknown
+            "failed" => RunStatus.Failed,
+            _ => RunStatus.Unknown
         };
 
     public Task<List<PerformanceEvent>> GetRunEventsAsync(string env, string runId, DateTime from, CancellationToken ct = default)

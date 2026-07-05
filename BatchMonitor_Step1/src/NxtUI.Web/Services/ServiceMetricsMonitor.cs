@@ -1,9 +1,9 @@
-using NxtUI.Core.Services;
-using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Logging;
+using NxtUI.Core.Logging;
 using NxtUI.Core.Models;
+using NxtUI.Core.Services;
+using System.Collections.Concurrent;
 
 namespace NxtUI.Web.Services;
 
@@ -21,37 +21,37 @@ namespace NxtUI.Web.Services;
 /// </summary>
 public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMonitor
 {
-    private const int MaxHistory   = 1000;
-    private const int MaxParallel  = 48;   // max concurrent file reads across all envs
+    private const int MaxHistory = 1000;
+    private const int MaxParallel = 48;   // max concurrent file reads across all envs
 
-    private readonly IHeartbeatMonitor               _heartbeatMonitor;
-    private readonly ILogPathDiscoveryService        _discovery;
-    private readonly LogPathSettings                 _paths;
-    private readonly ILogger<ServiceMetricsMonitor>  _log;
+    private readonly IHeartbeatMonitor _heartbeatMonitor;
+    private readonly ILogPathDiscoveryService _discovery;
+    private readonly LogPathSettings _paths;
+    private readonly ILogger<ServiceMetricsMonitor> _log;
 
     // Limits simultaneous network file reads to avoid overwhelming the servers.
     private readonly SemaphoreSlim _ioGate = new(MaxParallel, MaxParallel);
 
-    private readonly object                             _subLock  = new();
-    private readonly Dictionary<string, int>            _envRefs  = new();   // env -> subscriber count
-    private readonly Dictionary<string, DateTime>       _envIdle  = new();   // env -> idle-since (no subscribers)
-    private readonly Dictionary<string, IDisposable>    _hbSubs   = new();   // env -> HeartbeatMonitor subscription
-    private readonly ConcurrentDictionary<string, Entry>          _entries  = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim>  _envGates = new();
+    private readonly object _subLock = new();
+    private readonly Dictionary<string, int> _envRefs = new();   // env -> subscriber count
+    private readonly Dictionary<string, DateTime> _envIdle = new();   // env -> idle-since (no subscribers)
+    private readonly Dictionary<string, IDisposable> _hbSubs = new();   // env -> HeartbeatMonitor subscription
+    private readonly ConcurrentDictionary<string, Entry> _entries = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _envGates = new();
     private CancellationToken _ct = CancellationToken.None;
 
     public event Action<string>? OnMetricsUpdated;
 
     public ServiceMetricsMonitor(
-        IHeartbeatMonitor               heartbeatMonitor,
-        ILogPathDiscoveryService        discovery,
-        IOptions<LogPathSettings>       paths,
-        ILogger<ServiceMetricsMonitor>  log)
+        IHeartbeatMonitor heartbeatMonitor,
+        ILogPathDiscoveryService discovery,
+        IOptions<LogPathSettings> paths,
+        ILogger<ServiceMetricsMonitor> log)
     {
         _heartbeatMonitor = heartbeatMonitor;
-        _discovery        = discovery;
-        _paths            = paths.Value;
-        _log              = log;
+        _discovery = discovery;
+        _paths = paths.Value;
+        _log = log;
 
         // A freshly resolved path means there may be a file to read right away —
         // poll that env immediately instead of waiting for the next interval.
@@ -73,12 +73,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private sealed class Entry
     {
-        public readonly object              Sync         = new();
-        public string?                      FilePath;    // cached once discovered; never re-searched
-        public long                         Offset;
-        public DateTime                     LastWriteUtc = DateTime.MinValue;
-        public MetricsSample?               Latest;
-        public readonly List<MetricsSample> History      = new();
+        public readonly object Sync = new();
+        public string? FilePath;    // cached once discovered; never re-searched
+        public long Offset;
+        public DateTime LastWriteUtc = DateTime.MinValue;
+        public MetricsSample? Latest;
+        public readonly List<MetricsSample> History = new();
     }
 
     // ── Subscription ───────────────────────────────────────────────────────────
@@ -234,7 +234,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
         await Task.WhenAll(services.Select(async svc =>
         {
-            var key   = LogPathDiscoveryService.CacheKey(svc, env);
+            var key = LogPathDiscoveryService.CacheKey(svc, env);
             var entry = _entries.GetOrAdd(key, _ => new Entry());
 
             // Resolve and cache the file path once; never re-search after that.
@@ -267,9 +267,9 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
             await _ioGate.WaitAsync(ct);
             IncrementalFileReader.Result result;
-            try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
+            try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
             catch (Exception ex) when (ex is not OperationCanceledException)
-                  { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+            { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
             finally { _ioGate.Release(); }
 
             if (result.Lines.Count == 0)
@@ -281,7 +281,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             var parsedAny = false;
             lock (entry.Sync)
             {
-                entry.Offset      = result.NewOffset;
+                entry.Offset = result.NewOffset;
                 entry.LastWriteUtc = mtime;
                 foreach (var line in result.Lines)
                 {
@@ -315,7 +315,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private sealed class Subscription : IDisposable
     {
         private ServiceMetricsMonitor? _owner;
-        private readonly string        _env;
+        private readonly string _env;
 
         public Subscription(ServiceMetricsMonitor owner, string env) { _owner = owner; _env = env; }
 

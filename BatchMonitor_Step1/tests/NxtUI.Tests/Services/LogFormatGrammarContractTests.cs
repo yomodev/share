@@ -1,7 +1,7 @@
-using System.Runtime.CompilerServices;
-using System.Text.Json;
 using AwesomeAssertions;
 using NxtUI.Web.Services;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace NxtUI.Tests.Services;
 
@@ -32,10 +32,10 @@ public sealed class LogFormatGrammarContractTests
         var cases = new List<Case>();
         foreach (var el in doc.RootElement.EnumerateArray())
         {
-            var name   = el.GetProperty("name").GetString()!;
+            var name = el.GetProperty("name").GetString()!;
             var format = el.GetProperty("format").GetString()!;
-            var line   = el.GetProperty("line").GetString()!;
-            var valid  = el.GetProperty("valid").GetBoolean();
+            var line = el.GetProperty("line").GetString()!;
+            var valid = el.GetProperty("valid").GetBoolean();
 
             Dictionary<string, string>? expected = null;
             if (el.TryGetProperty("expected", out var expEl))

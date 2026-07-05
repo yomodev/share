@@ -26,12 +26,6 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
         return GetClient(envId).GetDatabase(settings.DatabaseName);
     }
 
-    public IMongoDatabase GetHeartbeatsDatabase(string envId)
-    {
-        var settings = loader.GetMongo(envId);
-        return GetClient(envId).GetDatabase(settings.HeartbeatsCollection);
-    }
-
     /// <summary>
     /// False when the connection string is the default localhost placeholder,
     /// meaning no real MongoDB has been configured for this environment.

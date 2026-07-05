@@ -1,12 +1,11 @@
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
+using NxtUI.Core.Filtering;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
-using NxtUI.Filtering;
 
 namespace NxtUI.Tests.Integration;
 
@@ -23,7 +22,7 @@ public sealed class KafkaIntegrationTests
 
     private static KafkaConnectionFactory BuildFactory(string? bootstrapServers = null)
     {
-        var servers  = bootstrapServers ?? Brokers;
+        var servers = bootstrapServers ?? Brokers;
         var basePath = Path.Combine(Path.GetTempPath(), $"kafka-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(basePath);
         File.WriteAllText(
@@ -109,7 +108,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_Partition_SingleValue()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("partition:2");
+        var ast = parser.Parse("partition:2");
         var (dir, remaining) = KafkaFilterExtractor.Extract(ast);
 
         dir.Partitions.Should().BeEquivalentTo([2]);
@@ -120,7 +119,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_Partition_List()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("partition:0,2,4");
+        var ast = parser.Parse("partition:0,2,4");
         var (dir, _) = KafkaFilterExtractor.Extract(ast);
 
         dir.Partitions.Should().BeEquivalentTo([0, 2, 4]);
@@ -130,7 +129,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_Partition_Range()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("partition:0..3");
+        var ast = parser.Parse("partition:0..3");
         var (dir, _) = KafkaFilterExtractor.Extract(ast);
 
         dir.Partitions.Should().BeEquivalentTo([0, 1, 2, 3]);
@@ -140,7 +139,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_OffsetRange()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("offset:1000..2000");
+        var ast = parser.Parse("offset:1000..2000");
         var (dir, remaining) = KafkaFilterExtractor.Extract(ast);
 
         dir.OffsetFrom.Should().Be(1000);
@@ -152,7 +151,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_OffsetGreaterThan()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("offset:>500");
+        var ast = parser.Parse("offset:>500");
         var (dir, _) = KafkaFilterExtractor.Extract(ast);
 
         dir.OffsetFrom.Should().Be(501);
@@ -162,7 +161,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_Latest()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("latest:500");
+        var ast = parser.Parse("latest:500");
         var (dir, remaining) = KafkaFilterExtractor.Extract(ast);
 
         dir.Latest.Should().Be(500);
@@ -173,7 +172,7 @@ public sealed class KafkaIntegrationTests
     public void Extractor_MixedTerms_NonKafkaRemains()
     {
         var parser = BuildParser();
-        var ast    = parser.Parse("partition:0 latest:100 key:abc");
+        var ast = parser.Parse("partition:0 latest:100 key:abc");
         var (dir, remaining) = KafkaFilterExtractor.Extract(ast);
 
         dir.Partitions.Should().BeEquivalentTo([0]);
@@ -188,15 +187,15 @@ public sealed class KafkaIntegrationTests
     {
         var msg = new KafkaMessage
         {
-            Offset      = 1,
-            Partition   = 0,
-            Timestamp   = DateTime.UtcNow,
+            Offset = 1,
+            Partition = 0,
+            Timestamp = DateTime.UtcNow,
             JsonPayload = """{"amount":150,"orderId":"abc"}""",
             PayloadType = "OrderEvent",
         };
 
         var parser = BuildParser();
-        var ast    = parser.Parse("amount:>100");
+        var ast = parser.Parse("amount:>100");
 
         FilterEvaluator.Evaluate(ast, msg).Should().BeTrue();
     }
@@ -206,15 +205,15 @@ public sealed class KafkaIntegrationTests
     {
         var msg = new KafkaMessage
         {
-            Offset      = 1,
-            Partition   = 0,
-            Timestamp   = DateTime.UtcNow,
+            Offset = 1,
+            Partition = 0,
+            Timestamp = DateTime.UtcNow,
             JsonPayload = """{"orderId":"ORDER-12345","status":"CREATED"}""",
             PayloadType = "OrderEvent",
         };
 
         var parser = BuildParser();
-        var ast    = parser.Parse("orderId:ORDER");
+        var ast = parser.Parse("orderId:ORDER");
 
         FilterEvaluator.Evaluate(ast, msg).Should().BeTrue();
     }
@@ -224,15 +223,15 @@ public sealed class KafkaIntegrationTests
     [KafkaIntegrationTestFact]
     public async Task TailTopicAsync_FromBeginning_ReceivesMessages()
     {
-        var factory  = BuildFactory();
+        var factory = BuildFactory();
         var pipeline = BuildPipeline();
         var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 10 });
-        var svc      = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
 
         var topics = await svc.GetTopicsAsync("test");
         if (topics.Count == 0) return; // no topics — not a failure
 
-        var topic    = topics[0].Name;
+        var topic = topics[0].Name;
         var messages = new List<KafkaMessage>();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -249,15 +248,15 @@ public sealed class KafkaIntegrationTests
     [KafkaIntegrationTestFact]
     public async Task TailTopicAsync_Latest10_SeeksCorrectly()
     {
-        var factory  = BuildFactory();
+        var factory = BuildFactory();
         var pipeline = BuildPipeline();
         var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 10 });
-        var svc      = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
 
         var topics = await svc.GetTopicsAsync("test");
         if (topics.Count == 0) return;
 
-        var topic    = topics[0].Name;
+        var topic = topics[0].Name;
         var messages = new List<KafkaMessage>();
         var directive = new KafkaSeekDirective { Latest = 10 };
 
@@ -271,10 +270,10 @@ public sealed class KafkaIntegrationTests
     [KafkaIntegrationTestFact]
     public async Task GetPartitionStatsAsync_ReturnsWatermarks()
     {
-        var factory  = BuildFactory();
+        var factory = BuildFactory();
         var pipeline = BuildPipeline();
         var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 10 });
-        var svc      = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
 
         var topics = await svc.GetTopicsAsync("test");
         if (topics.Count == 0) return;
@@ -288,10 +287,10 @@ public sealed class KafkaIntegrationTests
     [KafkaIntegrationTestFact]
     public async Task FetchRawBytesAsync_ReturnsBytes_ForKnownOffset()
     {
-        var factory  = BuildFactory();
+        var factory = BuildFactory();
         var pipeline = BuildPipeline();
         var settings = Options.Create(new KafkaSettings { MaxFetchMessages = 5 });
-        var svc      = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
+        var svc = new KafkaService(factory, pipeline, settings, NullLogger<KafkaService>.Instance);
 
         var topics = await svc.GetTopicsAsync("test");
         if (topics.Count == 0) return;
@@ -318,8 +317,12 @@ public sealed class KafkaIntegrationTests
         ["Key", "PayloadType", "Partition", "Offset", "Timestamp", "latest"],
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["key"] = "Key", ["partition"] = "Partition", ["offset"] = "Offset",
-            ["timestamp"] = "Timestamp", ["ts"] = "Timestamp", ["type"] = "PayloadType",
+            ["key"] = "Key",
+            ["partition"] = "Partition",
+            ["offset"] = "Offset",
+            ["timestamp"] = "Timestamp",
+            ["ts"] = "Timestamp",
+            ["type"] = "PayloadType",
             ["latest"] = "latest",
         });
 

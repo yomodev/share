@@ -1,6 +1,6 @@
 using NxtUI.Core.Models;
 
-namespace NxtUI.Filtering;
+namespace NxtUI.Core.Filtering;
 
 /// <summary>
 /// Walks a parsed filter AST and extracts Kafka-level seek terms
@@ -14,7 +14,7 @@ public static class KafkaFilterExtractor
 
     public static (KafkaSeekDirective Directive, FilterNode? Remaining) Extract(FilterNode? root)
     {
-        var builder  = new DirectiveBuilder();
+        var builder = new DirectiveBuilder();
         var remaining = Visit(root, builder);
         return (builder.Build(), remaining);
     }
@@ -23,13 +23,13 @@ public static class KafkaFilterExtractor
 
     private static FilterNode? Visit(FilterNode? node, DirectiveBuilder b) => node switch
     {
-        null            => null,
-        AndNode and     => Merge(Visit(and.Left, b), Visit(and.Right, b)),
-        OrNode or       => new OrNode(Visit(or.Left,  b) ?? TrueNode.Instance,
+        null => null,
+        AndNode and => Merge(Visit(and.Left, b), Visit(and.Right, b)),
+        OrNode or => new OrNode(Visit(or.Left, b) ?? TrueNode.Instance,
                                       Visit(or.Right, b) ?? TrueNode.Instance),
-        NotNode not     => new NotNode(Visit(not.Operand, b) ?? TrueNode.Instance),
+        NotNode not => new NotNode(Visit(not.Operand, b) ?? TrueNode.Instance),
         FieldTermNode t => IsKafka(t) ? Consume(t, b) : t,
-        _               => node,
+        _ => node,
     };
 
     private static bool IsKafka(FieldTermNode t) =>
@@ -69,7 +69,7 @@ public static class KafkaFilterExtractor
                         break;
                     case (MatchType.Between, RangeValue { Low: NumberValue lo, High: NumberValue hi }):
                         b.OffsetFrom = (long)lo.Value;
-                        b.OffsetTo   = (long)hi.Value;
+                        b.OffsetTo = (long)hi.Value;
                         break;
                 }
                 break;
@@ -85,7 +85,7 @@ public static class KafkaFilterExtractor
                         break;
                     case (MatchType.Between, RangeValue { Low: DateValue lo, High: DateValue hi }):
                         b.TimestampFrom = lo.Value;
-                        b.TimestampTo   = hi.Value;
+                        b.TimestampTo = hi.Value;
                         break;
                 }
                 break;
@@ -98,9 +98,9 @@ public static class KafkaFilterExtractor
         (left, right) switch
         {
             (null, null) => null,
-            (null, _)    => right,
-            (_, null)    => left,
-            _            => new AndNode(left, right),
+            (null, _) => right,
+            (_, null) => left,
+            _ => new AndNode(left, right),
         };
 
     // ── Builder ───────────────────────────────────────────────────────────────
@@ -108,11 +108,11 @@ public static class KafkaFilterExtractor
     private sealed class DirectiveBuilder
     {
         private HashSet<int>? _partitions;
-        public long?      OffsetFrom    { get; set; }
-        public long?      OffsetTo      { get; set; }
-        public DateTime?  TimestampFrom { get; set; }
-        public DateTime?  TimestampTo   { get; set; }
-        public int?       Latest        { get; set; }
+        public long? OffsetFrom { get; set; }
+        public long? OffsetTo { get; set; }
+        public DateTime? TimestampFrom { get; set; }
+        public DateTime? TimestampTo { get; set; }
+        public int? Latest { get; set; }
 
         public void AddPartitions(FieldTermNode t)
         {
@@ -139,12 +139,12 @@ public static class KafkaFilterExtractor
 
         public KafkaSeekDirective Build() => new()
         {
-            Partitions    = _partitions is { Count: > 0 } ? _partitions : null,
-            OffsetFrom    = OffsetFrom,
-            OffsetTo      = OffsetTo,
+            Partitions = _partitions is { Count: > 0 } ? _partitions : null,
+            OffsetFrom = OffsetFrom,
+            OffsetTo = OffsetTo,
             TimestampFrom = TimestampFrom,
-            TimestampTo   = TimestampTo,
-            Latest        = Latest,
+            TimestampTo = TimestampTo,
+            Latest = Latest,
         };
     }
 }

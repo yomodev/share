@@ -657,7 +657,7 @@ html, body {
     font-family: var(--bm-font-mono);
 }
 .bm-status-running    { color: #3FB950; }
-.bm-status-completed  { color: #8B949E; }
+.bm-status-completed  { color: #58A6FF; }
 .bm-status-failed     { color: #F85149; }
 .bm-status-terminated { color: #D29922; }
 .bm-status-purged     { color: #8B949E; }
@@ -825,14 +825,14 @@ html, body {
     font-family: var(--bm-font-mono); white-space:nowrap;
 }
 .bm-status-chip-dot.bm-status-running     { background-color:#3FB950; }
-.bm-status-chip-dot.bm-status-completed   { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-completed   { background-color:#58A6FF; }
 .bm-status-chip-dot.bm-status-failed      { background-color:#F85149; }
 .bm-status-chip-dot.bm-status-terminated  { background-color:#D29922; }
 .bm-status-chip-dot.bm-status-purged      { background-color:#8B949E; }
 .bm-status-chip-dot.bm-status-unknown     { background-color:#8B949E; }
 
 .bm-status-chip-label.bm-status-running     { color:#3FB950; }
-.bm-status-chip-label.bm-status-completed   { color:#8B949E; }
+.bm-status-chip-label.bm-status-completed   { color:#58A6FF; }
 .bm-status-chip-label.bm-status-failed      { color:#F85149; }
 .bm-status-chip-label.bm-status-terminated  { color:#D29922; }
 .bm-status-chip-label.bm-status-purged      { color:#8B949E; }
@@ -2862,9 +2862,6 @@ tr.bm-row-searching td:first-child {
 }
 
 .bm-kafka-stats-table td { padding: 3px 10px; white-space: nowrap; }
-
-.bm-kafka-stats-row { cursor: pointer; transition: background .1s; }
-.bm-kafka-stats-row:hover { background: var(--mud-palette-action-hover); }
 
 /* ================================================================
    ENVIRONMENT PAGE

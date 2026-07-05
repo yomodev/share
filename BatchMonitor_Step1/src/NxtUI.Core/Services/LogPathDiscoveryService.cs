@@ -1,10 +1,9 @@
-using System.Collections.Concurrent;
-using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
-using NxtUI.Logging;
+using NxtUI.Core.Logging;
 using NxtUI.Core.Models;
+using System.Collections.Concurrent;
 
 namespace NxtUI.Core.Services;
 
@@ -92,22 +91,22 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         if (!path.Contains('*'))
             return Directory.Exists(path) ? path : null;
 
-        var starIdx   = path.IndexOf('*');
+        var starIdx = path.IndexOf('*');
         var slashPrev = path.LastIndexOf('\\', starIdx);
         if (slashPrev < 0) return null;
 
-        var basePath  = path[..slashPrev];
+        var basePath = path[..slashPrev];
         var slashNext = path.IndexOf('\\', starIdx);
 
         string segment, remainder;
         if (slashNext < 0)
         {
-            segment   = path[(slashPrev + 1)..];
+            segment = path[(slashPrev + 1)..];
             remainder = string.Empty;
         }
         else
         {
-            segment   = path[(slashPrev + 1)..slashNext];
+            segment = path[(slashPrev + 1)..slashNext];
             remainder = path[slashNext..]; // includes leading backslash
         }
 

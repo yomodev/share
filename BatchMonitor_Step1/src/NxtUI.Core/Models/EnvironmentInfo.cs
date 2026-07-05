@@ -8,9 +8,9 @@ namespace NxtUI.Core.Models;
 /// </summary>
 public class EnvironmentInfo
 {
-    public string Id           { get; init; } = string.Empty;
-    public string Label        { get; init; } = string.Empty;
-    public string Tier         { get; init; } = string.Empty;
-    public string BadgeColor   { get; init; } = "#546E7A";
+    public string Id { get; init; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
+    public string Tier { get; init; } = string.Empty;
+    public string BadgeColor { get; init; } = "#546E7A";
     public string BadgeTextColor { get; init; } = "#ffffff";
 }
