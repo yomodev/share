@@ -14,11 +14,3 @@ public class RunSummary
 
     public TimeSpan Duration => (End ?? DateTime.UtcNow) - Start;
 }
-
-public enum RunStatus
-{
-    Unknown,
-    Running,
-    Completed,
-    Failed
-}

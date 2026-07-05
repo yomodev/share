@@ -31,16 +31,6 @@ redesign plan — nothing here has been acted on unless explicitly marked
 
 ## Open observations
 
-### Repeated "refresh button + last-updated timestamp" markup
-
-The same toolbar fragment — an icon button bound to a `RefreshAsync`
-method, a `bm-infra-lastupdate`-styled timestamp, disabled state tied to a
-loading flag — is hand-copied across ServicesPage, LogBrowser, Runs,
-KafkaDashboard, KafkaGroupsDashboard, MongoDashboard, and
-MongoCollectionInspector. A small shared component (`<ToolbarRefresh
-Loading="@_loading" LastUpdated="@_lastUpdated" Label="Updated"
-OnRefresh="RefreshAsync" />`) would remove ~7 copies of the same markup and
-make future styling changes a one-file edit instead of a seven-file grep.
 
 ### Two different table-sort paradigms coexist
 
@@ -54,14 +44,4 @@ deliberate per-page decision (documented, not just incidental) rather than
 each page picking whichever pattern was closest to hand when it was
 written.
 
-### `LogBrowserFileTree.razor` is a hand-unrolled 4-level tree
-
-Root → child → grandchild → great-grandchild is written out as four nested
-copies of essentially the same `<MudTreeViewItem>` block, which both caps
-the tree at a hardcoded depth and quadruples the markup that has to change
-if the row template ever needs a tweak. A genuinely recursive component
-(rendering itself for each level of children) would remove both problems.
-Not fixed this session since it's a structural change to a component that
-already just got new props (`RootNodes`/`ChildCache` filtering) — better
-done as its own isolated change with its own before/after screenshots.
 

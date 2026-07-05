@@ -34,6 +34,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
+	ProjectSection(SolutionItems) = preProject
+		.gitattributes = .gitattributes
+		.gitignore = .gitignore
+		src\NxtUI.Web\appsettings.Development.json = src\NxtUI.Web\appsettings.Development.json
+		src\NxtUI.Web\appsettings.json = src\NxtUI.Web\appsettings.json
+		src\NxtUI.Web\nlog.config = src\NxtUI.Web\nlog.config
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

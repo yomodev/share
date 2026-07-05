@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 7779
+LENGTH 8254
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -91,6 +91,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
 		docs\09_Features.md = docs\09_Features.md
 		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
+	ProjectSection(SolutionItems) = preProject
+		.gitattributes = .gitattributes
+		.gitignore = .gitignore
+		src\NxtUI.Web\appsettings.Development.json = src\NxtUI.Web\appsettings.Development.json
+		src\NxtUI.Web\appsettings.json = src\NxtUI.Web\appsettings.json
+		src\NxtUI.Web\nlog.config = src\NxtUI.Web\nlog.config
 	EndProjectSection
 EndProject
 Global
@@ -2784,7 +2793,7 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   moment to parse, and the spinner now reflects that instead of
   disappearing early.
 FILE docs/10_CodeReviewNotes.md
-LENGTH 3555
+LENGTH 2274
 # 10 — Code Review Notes
 
 A running list of smells, inconsistencies, and improvement opportunities
@@ -2818,16 +2827,6 @@ redesign plan — nothing here has been acted on unless explicitly marked
 
 ## Open observations
 
-### Repeated "refresh button + last-updated timestamp" markup
-
-The same toolbar fragment — an icon button bound to a `RefreshAsync`
-method, a `bm-infra-lastupdate`-styled timestamp, disabled state tied to a
-loading flag — is hand-copied across ServicesPage, LogBrowser, Runs,
-KafkaDashboard, KafkaGroupsDashboard, MongoDashboard, and
-MongoCollectionInspector. A small shared component (`<ToolbarRefresh
-Loading="@_loading" LastUpdated="@_lastUpdated" Label="Updated"
-OnRefresh="RefreshAsync" />`) would remove ~7 copies of the same markup and
-make future styling changes a one-file edit instead of a seven-file grep.
 
 ### Two different table-sort paradigms coexist
 
@@ -2841,16 +2840,6 @@ deliberate per-page decision (documented, not just incidental) rather than
 each page picking whichever pattern was closest to hand when it was
 written.
 
-### `LogBrowserFileTree.razor` is a hand-unrolled 4-level tree
-
-Root → child → grandchild → great-grandchild is written out as four nested
-copies of essentially the same `<MudTreeViewItem>` block, which both caps
-the tree at a hardcoded depth and quadruples the markup that has to change
-if the row template ever needs a tweak. A genuinely recursive component
-(rendering itself for each level of children) would remove both problems.
-Not fixed this session since it's a structural change to a component that
-already just got new props (`RootNodes`/`ChildCache` filtering) — better
-done as its own isolated change with its own before/after screenshots.
 
 FILE docs/old/01_Shell_Theme_Tabs.md
 LENGTH 6829
@@ -5685,7 +5674,7 @@ LENGTH 652
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 2228
+LENGTH 2227
 {
   "AllowedHosts": "*",
 
@@ -5734,7 +5723,7 @@ LENGTH 2228
   },
 
   "Diagnostics": {
-    "Enabled": false
+    "Enabled": true
   },
 
   "TestLogGenerator": {
@@ -5860,7 +5849,7 @@ LENGTH 997
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 16496
+LENGTH 16319
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -5872,7 +5861,6 @@ using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
-using NxtUI.Core.Services.Sql;
 using NxtUI.Protos;
 using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
@@ -5970,9 +5958,9 @@ public class Program
         // ── Kafka ─────────────────────────────────────────────────────────────
         // Mock: no broker required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockKafkaService>();
-        builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
-        builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
-        builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaMonitor>(sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaAdmin>(sp => sp.GetRequiredService<MockKafkaService>());
         // builder.Services.AddSingleton<KafkaService>();
         // builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<KafkaService>());
         // builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<KafkaService>());
@@ -5981,9 +5969,9 @@ public class Program
         // ── MongoDB collections ───────────────────────────────────────────────
         // Mock: no MongoDB required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockMongoService>();
-        builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
-        builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
-        builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoReader>(sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoAdmin>(sp => sp.GetRequiredService<MockMongoService>());
         // builder.Services.AddSingleton<MongoService>();
         // builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MongoService>());
         // builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MongoService>());
@@ -6061,8 +6049,8 @@ public class Program
         // so the data never travels over SignalR.
         app.MapGet("/api/treemap/{env}", (
             string env,
-            HeartbeatMonitor        heartbeat,
-            ServiceMetricsMonitor   metrics) =>
+            HeartbeatMonitor heartbeat,
+            ServiceMetricsMonitor metrics) =>
         {
             var services = heartbeat.GetServices(env);
             if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
@@ -6073,16 +6061,16 @@ public class Program
                 .GroupBy(s => s.HostName)
                 .Select(g => new
                 {
-                    name     = g.Key,
+                    name = g.Key,
                     children = g.Select(s =>
                     {
                         var m = metrics.GetLatest(env, s);
                         return new
                         {
-                            name   = s.ServiceName,
-                            pid    = s.ProcessId,
+                            name = s.ServiceName,
+                            pid = s.ProcessId,
                             online = s.IsOnline,
-                            ram    = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                            ram = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
                         };
                     })
                     .OrderByDescending(s => s.ram ?? 0)
@@ -6102,35 +6090,35 @@ public class Program
     {
         // ANSI escape sequences —  is the ESC character, valid in C# string literals
         const string Esc = "";
-        string R  = Esc + "[0m";   // reset
-        string T  = Esc + "[96m";  // bright cyan    - timestamp
+        string R = Esc + "[0m";   // reset
+        string T = Esc + "[96m";  // bright cyan    - timestamp
         string TH = Esc + "[35m";  // magenta        - thread id
-        string C  = Esc + "[93m";  // bright yellow  - caller method
+        string C = Esc + "[93m";  // bright yellow  - caller method
 
         // Per-level color via NLog ${when} — the ESC byte is embedded as a C# escape
         string levelColor =
             "${when:when=level==LogLevel.Trace:inner=" + Esc + "[90m}"
           + "${when:when=level==LogLevel.Debug:inner=" + Esc + "[37m}"
-          + "${when:when=level==LogLevel.Info:inner="  + Esc + "[92m}"
-          + "${when:when=level==LogLevel.Warn:inner="  + Esc + "[33m}"
+          + "${when:when=level==LogLevel.Info:inner=" + Esc + "[92m}"
+          + "${when:when=level==LogLevel.Warn:inner=" + Esc + "[33m}"
           + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
           + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
 
         string consoleLayout =
-            T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
+            T + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
           + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
           + "${message} ${exception:format=tostring} "
-          + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
+          + C + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
         var console = new NLog.Targets.ConsoleTarget("console") { Layout = consoleLayout };
 
         // ── File target — per-class files, one folder per process run ─────────
         // Stamp GDC once so the folder name is fixed for the lifetime of this process.
         var startStamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var pid        = System.Diagnostics.Process.GetCurrentProcess().Id;
+        var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
         NLog.GlobalDiagnosticsContext.Set("startStamp", startStamp);
-        NLog.GlobalDiagnosticsContext.Set("pid",        pid.ToString());
+        NLog.GlobalDiagnosticsContext.Set("pid", pid.ToString());
 
         // Format: datetime_utc | threadid | level | message | exception | callsite
         const string fileLayout =
@@ -6142,12 +6130,12 @@ public class Program
 
         var file = new NLog.Targets.FileTarget("file")
         {
-            FileName         = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
-            Layout           = fileLayout,
-            KeepFileOpen     = true,
+            FileName = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
+            Layout = fileLayout,
+            KeepFileOpen = true,
             ConcurrentWrites = false,
-            Encoding         = System.Text.Encoding.UTF8,
-            CreateDirs       = true,
+            Encoding = System.Text.Encoding.UTF8,
+            CreateDirs = true,
         };
 
         var cfg = new NLog.Config.LoggingConfiguration();
@@ -6155,16 +6143,16 @@ public class Program
         cfg.AddTarget(file);
 
         // ── Console rules ─────────────────────────────────────────────────────
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "Microsoft.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "System.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
-        cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+        cfg.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, console);
 
         // ── File rules (NxtUI app code + ASP.NET warnings) ───────────────────
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, file, "NxtUI.*");
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
 
         LogManager.Configuration = cfg;
     }
@@ -6692,7 +6680,7 @@ public class LogPathSettings
     public int IdleReleaseMinutes { get; set; } = 10;
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
-LENGTH 3124
+LENGTH 2158
 using System.Security.Cryptography;
 using System.Text;
 
@@ -6711,7 +6699,6 @@ public class MongoSettings
     public string? ServerName { get; set; }
 
     public string? DatabaseName { get; set; }
-
 
     /// <summary>
     /// Database name prefix. The actual database name is built as
@@ -6735,30 +6722,9 @@ public class MongoSettings
 
     // ── TLS ──────────────────────────────────────────────────────────────────
 
-    public bool    TlsEnabled            { get; set; }
-    public string? TlsCertificatePath    { get; set; }
-    public string? TlsCertificatePassword{ get; set; }
-
-    /// <summary>
-    /// Optional database prefix for the heartbeats database.
-    /// Builds as "{HeartbeatsDatabasePrefix}_{environmentId}".
-    /// Leave empty to share the same database as the other collections.
-    /// </summary>
-    public string HeartbeatsDatabasePrefix { get; set; } = string.Empty;
-
-    /// <summary>Returns the fully qualified database name for a given environment.</summary>
-    public string GetDatabaseName(string environmentId) =>
-        $"{DatabasePrefix}_{environmentId}";
-
-    /// <summary>Returns the heartbeats database name for a given environment.
-    /// Uses HeartbeatsDatabasePrefix when set, otherwise falls back to DatabasePrefix.</summary>
-    public string GetHeartbeatsDatabaseName(string environmentId)
-    {
-        var prefix = string.IsNullOrWhiteSpace(HeartbeatsDatabasePrefix)
-            ? DatabasePrefix
-            : HeartbeatsDatabasePrefix;
-        return $"{prefix}{environmentId}";
-    }
+    public bool? TlsEnabled { get; set; }
+    public string? TlsCertificatePath { get; set; }
+    public string? TlsCertificatePassword { get; set; }
 
     public string GetFingerprint()
     {
@@ -6845,7 +6811,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
-LENGTH 3750
+LENGTH 4078
 using System.Text.Json.Serialization;
 
 namespace NxtUI.Filtering;
@@ -6885,6 +6851,7 @@ public record FieldTermNode(
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(StringValue),     "string")]
 [JsonDerivedType(typeof(NumberValue),     "number")]
+[JsonDerivedType(typeof(BoolValue),       "bool")]
 [JsonDerivedType(typeof(DateValue),       "date")]
 [JsonDerivedType(typeof(TimeOfDayValue),  "time")]
 [JsonDerivedType(typeof(NullValue),       "null")]
@@ -6893,6 +6860,11 @@ public abstract record FilterValue;
 
 public record StringValue(string Value) : FilterValue;
 public record NumberValue(double Value) : FilterValue;
+
+/// <summary>A bare `true`/`false` literal — always resolves to MatchType.Exact
+/// (equality); comparison operators and ranges are rejected for it at parse time
+/// since "greater than true" etc. has no meaning.</summary>
+public record BoolValue(bool Value) : FilterValue;
 
 /// <summary>UTC instant. Both the JS and C# parsers convert local literals to UTC before
 /// storing them here so the MongoDB builder never has to think about time zones.</summary>
@@ -6933,7 +6905,7 @@ public enum MatchType
     Between,
 }
 FILE src/NxtUI.Core/Filtering/FilterEvaluator.cs
-LENGTH 7826
+LENGTH 8461
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -6984,6 +6956,12 @@ public static class FilterEvaluator
 
             // A bare number with no comparison operator (e.g. "thread:5") means exact equality.
             (MatchType.Exact, NumberValue nv) => ToDouble(raw) == nv.Value,
+
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => ToBool(raw) == bv.Value,
+            (MatchType.Contains, BoolValue bv) => ToBool(raw) == bv.Value,
 
             (MatchType.Glob, StringValue sv) =>
                 GlobMatch(raw.ToString() ?? "", sv.Value, t.CaseSensitive),
@@ -7088,6 +7066,15 @@ public static class FilterEvaluator
         _                     => elem.GetRawText(),
     };
 
+    private static bool ToBool(object? v) => v switch
+    {
+        bool b   => b,
+        int i    => i != 0,
+        long l   => l != 0,
+        string s => bool.TryParse(s, out var b2) ? b2 : s == "1",
+        _        => false,
+    };
+
     private static double ToDouble(object? v) => v switch
     {
         double d   => d,
@@ -7122,7 +7109,7 @@ public static class FilterEvaluator
     }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 22973
+LENGTH 24596
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -7477,12 +7464,29 @@ public sealed class FilterParser
         if (exact && value is StringValue sv && MongoFilterBuilder.HasWildcard(sv.Value))
             throw new FilterParseException($"Wildcards are not allowed with exact match (:=): '{sv.Value}'");
 
+        // Comparison operators and ranges only make sense for orderable values
+        // (number/date/time-of-day). Reject strings/bools/null here rather than
+        // silently falling through to inconsistent per-backend defaults (Mongo
+        // matches everything, SQL drops the clause, the in-memory evaluator
+        // matches nothing) for the same unsupported input.
+        if (cmpOp.HasValue && !IsComparable(value))
+            throw new FilterParseException(
+                $"Comparison operators are only supported for numbers, dates, and times, not {DescribeValueKind(value)}: '{field}'");
+
         // Range: value '..' value
         if (!cmpOp.HasValue && !exact && ctx.Current.Kind == TK.DotDot)
         {
+            if (!IsComparable(value))
+                throw new FilterParseException(
+                    $"Ranges are only supported for numbers, dates, and times, not {DescribeValueKind(value)}: '{field}'");
+
             ctx.Consume();
             var (high, _) = ParseValueAtom(ctx);
             if (high is null) throw new FilterParseException("Expected value after '..'");
+            if (!IsComparable(high))
+                throw new FilterParseException(
+                    $"Ranges are only supported for numbers, dates, and times, not {DescribeValueKind(high)}: '{field}'");
+
             return new FieldTermNode(field, MatchType.Between, false, new RangeValue(value, high));
         }
 
@@ -7504,6 +7508,16 @@ public sealed class FilterParser
         // Number or Date with no comparison operator → exact equality.
         return new FieldTermNode(field, MatchType.Exact, false, value);
     }
+
+    private static bool IsComparable(FilterValue v) => v is NumberValue or DateValue or TimeOfDayValue;
+
+    private static string DescribeValueKind(FilterValue v) => v switch
+    {
+        StringValue => "a string",
+        BoolValue   => "a true/false value",
+        NullValue   => "null",
+        _           => "this value",
+    };
 
     // Parses a bare term (no field prefix) and expands it across searchable fields.
     private FilterNode? ParseBareTerm(ParseContext ctx)
@@ -7558,6 +7572,12 @@ public sealed class FilterParser
         // null keyword
         if (text.Equals("null", StringComparison.OrdinalIgnoreCase))
             return new NullValue();
+
+        // Bare true/false keyword
+        if (text.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return new BoolValue(true);
+        if (text.Equals("false", StringComparison.OrdinalIgnoreCase))
+            return new BoolValue(false);
 
         // Number
         if (TryParseNumber(text, out var num))
@@ -7874,7 +7894,7 @@ file sealed record TrueNode : FilterNode
     public static readonly TrueNode Instance = new();
 }
 FILE src/NxtUI.Core/Filtering/MongoFilterBuilder.cs
-LENGTH 7945
+LENGTH 8651
 using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -7927,6 +7947,17 @@ public static class MongoFilterBuilder
 
             (MatchType.Exact, StringValue sv) =>
                 B.Regex(t.Field, ExactRegex(sv.Value, t.CaseSensitive)),
+
+            // A bare number/date with no operator parses to Exact (equality) —
+            // see FilterParser's "Number or Date with no comparison operator".
+            (MatchType.Exact, NumberValue nv) => B.Eq(t.Field, nv.Value),
+            (MatchType.Exact, DateValue dv)   => B.Eq(t.Field, dv.Value),
+
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => B.Eq(t.Field, bv.Value),
+            (MatchType.Contains, BoolValue bv) => B.Eq(t.Field, bv.Value),
 
             // ── Numeric comparisons ────────────────────────────────────────
             (MatchType.GreaterThan,        NumberValue nv) => B.Gt(t.Field,  nv.Value),
@@ -8044,7 +8075,7 @@ public static class MongoFilterBuilder
         value.Contains('*') || value.Contains('?');
 }
 FILE src/NxtUI.Core/Filtering/SqlFilterBuilder.cs
-LENGTH 9085
+LENGTH 9815
 using System.Text;
 using Microsoft.Data.SqlClient;
 
@@ -8151,6 +8182,17 @@ public static class SqlFilterBuilder
             (MatchType.Exact, StringValue sv) =>
                 EqualTerm(col, sv.Value, ctx),
 
+            // A bare number/date with no operator parses to Exact (equality) —
+            // see FilterParser's "Number or Date with no comparison operator".
+            (MatchType.Exact, NumberValue nv) => EqualTerm(col, nv.Value, ctx),
+            (MatchType.Exact, DateValue dv)   => EqualTerm(col, dv.Value, ctx),
+
+            // Booleans only ever parse to Exact, but ParseBareTerm's global-term
+            // expansion can produce Contains for a bare "true"/"false" — both mean
+            // the same thing for a boolean value, so both map to equality.
+            (MatchType.Exact,    BoolValue bv) => EqualTerm(col, bv.Value, ctx),
+            (MatchType.Contains, BoolValue bv) => EqualTerm(col, bv.Value, ctx),
+
             (MatchType.GreaterThan,        NumberValue nv) => CompareTerm(col, ">",  nv.Value, ctx),
             (MatchType.GreaterThanOrEqual, NumberValue nv) => CompareTerm(col, ">=", nv.Value, ctx),
             (MatchType.LessThan,           NumberValue nv) => CompareTerm(col, "<",  nv.Value, ctx),
@@ -8181,7 +8223,7 @@ public static class SqlFilterBuilder
         return $"({col} LIKE {p} ESCAPE '\\')";
     }
 
-    private static string EqualTerm(string col, string value, BuildContext ctx)
+    private static string EqualTerm(string col, object value, BuildContext ctx)
     {
         var p = ctx.Add(value);
         return $"({col} = {p})";
@@ -8584,7 +8626,7 @@ public class HeartbeatDocument
     public string HostName { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Core/Models/KafkaModels.cs
-LENGTH 4311
+LENGTH 4495
 namespace NxtUI.Core.Models;
 
 public record KafkaTopicConfig
@@ -8703,6 +8745,9 @@ public record KafkaTopicSummary
     /// <summary>False until per-topic config has been loaded from the broker.</summary>
     public bool ConfigLoaded { get; init; }
 }
+
+/// <summary>Cheap, batched per-topic enrichment — see IKafkaMonitor.GetTopicEnrichmentAsync.</summary>
+public record KafkaTopicEnrichment(string CleanupPolicy, long MessageCount);
 FILE src/NxtUI.Core/Models/MongoModels.cs
 LENGTH 1190
 namespace NxtUI.Core.Models;
@@ -8809,7 +8854,7 @@ public class PerformanceEvent
     public DateTime Timestamp => Start;
 }
 FILE src/NxtUI.Core/Models/RunDetails.cs
-LENGTH 615
+LENGTH 622
 namespace NxtUI.Core.Models;
 
 /// <summary>
@@ -8818,15 +8863,28 @@ namespace NxtUI.Core.Models;
 public class RunDetails
 {
     public string RunId { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public RunStatus Status { get; set; } = RunStatus.Unknown;
     public DateTime Start { get; set; }
     public DateTime? End { get; set; }
     public Dictionary<string, string> Metadata { get; set; } = new();
     public TimeSpan Duration => (End ?? DateTime.UtcNow) - Start;
-}FILE src/NxtUI.Core/Models/RunSummary.cs
-LENGTH 632
+}FILE src/NxtUI.Core/Models/RunStatus.cs
+LENGTH 137
+namespace NxtUI.Core.Models;
+
+public enum RunStatus
+{
+    Unknown,
+    Running,
+    Completed,
+    Terminated,
+    Failed,
+    Purged,
+}
+FILE src/NxtUI.Core/Models/RunSummary.cs
+LENGTH 553
 namespace NxtUI.Core.Models;
 
 /// <summary>
@@ -8842,14 +8900,6 @@ public class RunSummary
     public DateTime? End      { get; set; }
 
     public TimeSpan Duration => (End ?? DateTime.UtcNow) - Start;
-}
-
-public enum RunStatus
-{
-    Unknown,
-    Running,
-    Completed,
-    Failed
 }
 FILE src/NxtUI.Core/Models/ServiceStatus.cs
 LENGTH 660
@@ -9045,7 +9095,7 @@ public class TopologyEdge
     public PipelineState State { get; set; } = PipelineState.NotStarted;
 }
 FILE src/NxtUI.Core/Services/EnvironmentConfigLoader.cs
-LENGTH 2162
+LENGTH 2040
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -9072,35 +9122,33 @@ public sealed class EnvironmentConfigLoader(
     private readonly ConcurrentDictionary<string, EnvironmentConfig> _cache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly JsonSerializerOptions _json =
+    private static readonly JsonSerializerOptions _jsonOptions =
         new() { PropertyNameCaseInsensitive = true };
 
-    public KafkaSettings  GetKafka(string envId) => Get(envId).Kafka;
-    public MongoSettings  GetMongo(string envId) => Get(envId).Mongo;
-    public SqlSettings    GetSql  (string envId) => Get(envId).Sql;
+    public KafkaSettings GetKafka(string envId) => Get(envId).Kafka;
+    public MongoSettings GetMongo(string envId) => Get(envId).Mongo;
+    public SqlSettings GetSql(string envId) => Get(envId).Sql;
 
     private EnvironmentConfig Get(string envId) =>
         _cache.GetOrAdd(envId, Load);
 
     private EnvironmentConfig Load(string envId)
     {
-        var path = Path.Combine(options.BasePath, $"{envId.ToLowerInvariant()}.json");
-        if (!File.Exists(path))
-        {
-            log.LogWarning("No environment config at {Path} — using defaults", path);
-            return new EnvironmentConfig();
-        }
+        var config = new EnvironmentConfig();
+        var path = string.Empty;
 
         try
         {
+            path = Path.Combine(options.BasePath, $"{envId.ToLowerInvariant()}.json");
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<EnvironmentConfig>(json, _json) ?? new EnvironmentConfig();
+            return JsonSerializer.Deserialize<EnvironmentConfig>(json, _jsonOptions) ?? new EnvironmentConfig();
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Failed to load environment config from {Path}", path);
-            return new EnvironmentConfig();
         }
+
+        return config;
     }
 }
 
@@ -9108,7 +9156,7 @@ public sealed class EnvironmentConfig
 {
     public KafkaSettings Kafka { get; set; } = new();
     public MongoSettings Mongo { get; set; } = new();
-    public SqlSettings   Sql   { get; set; } = new();
+    public SqlSettings Sql { get; set; } = new();
 }
 FILE src/NxtUI.Core/Services/IBatchCatalogService.cs
 LENGTH 658
@@ -9154,7 +9202,7 @@ public interface IHeartbeatService
     Task<List<ServiceStatus>> GetServiceStatusesAsync(string env, DateTime? since = null, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IKafkaService.cs
-LENGTH 2846
+LENGTH 3510
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9165,6 +9213,16 @@ public interface IKafkaMonitor
     Task<KafkaClusterInfo>                       GetClusterInfoAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicSummary>>       GetTopicsAsync(string env, CancellationToken ct = default);
     Task<KafkaTopicConfig>                       GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Cheap, batched enrichment for a whole topic list — cleanup policy (for the "~"
+    /// compacted-topic marker) and an estimated message count (sum of high-low watermark
+    /// per partition; a live snapshot, not a total-ever-produced count). Uses one shared
+    /// admin client and a small constant number of broker round trips regardless of how
+    /// many topics are passed in — unlike calling GetTopicConfigAsync once per topic.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(string env, string topicName, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<KafkaGroupTopicLag>>         GetGroupTopicLagsAsync(string env, string groupId, CancellationToken ct = default);
@@ -9301,7 +9359,7 @@ public interface ILogViewerService
     (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
-LENGTH 2187
+LENGTH 2537
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9311,6 +9369,13 @@ public interface IMongoReader
 {
     /// <summary>Returns database names only — no stats. Fast even with 100+ databases.</summary>
     Task<IReadOnlyList<string>> GetDatabaseNamesAsync(string env, CancellationToken ct = default);
+
+    /// <summary>
+    /// The database this environment is actually configured to use (Mongo:DatabaseName),
+    /// as opposed to just any database visible on the server. Pure config lookup, no I/O —
+    /// null if the environment has no configured default (e.g. mock/dev mode).
+    /// </summary>
+    string? GetDefaultDatabaseName(string env);
     Task<IReadOnlyList<MongoDatabaseInfo>>      GetDatabasesAsync(string env, CancellationToken ct = default);
     Task<IReadOnlyList<string>>                 GetCollectionNamesAsync(string env, string database, CancellationToken ct = default);
     Task<MongoCollectionSummary?>               GetCollectionStatsAsync(string env, string database, string name, CancellationToken ct = default);
@@ -10092,17 +10157,19 @@ LENGTH 2251
     }
 }
 FILE src/NxtUI.Web/Components/BmRunsTable.razor
-LENGTH 7550
+LENGTH 7592
 @namespace NxtUI.Web.Components
 @using NxtUI.Core.Models
 @using NxtUI.Web.Services
 @inject DateTimeDisplayService DtSvc
 
 <div class="bm-table-wrap">
+    @if (Loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+    }
     <MudTable T="RunSummary"
               Items="@Rows"
-              Loading="@Loading"
-              LoadingProgressColor="Color.Primary"
               Dense="true"
               Hover="true"
               Elevation="0"
@@ -14186,7 +14253,7 @@ LENGTH 4212
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 27234
+LENGTH 26816
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14286,8 +14353,7 @@ LENGTH 27234
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
-                        @if (context.ConfigLoaded) { <span>@context.PartitionCount</span> }
-                        else { <span class="bm-muted">—</span> }
+                        <span>@context.PartitionCount</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
                         @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
@@ -14556,35 +14622,24 @@ LENGTH 27234
                 ApplyFilter();
                 _loading   = false;
                 _enriching = true;
-                StateHasChanged(); // show topic table while config enriches
+                StateHasChanged(); // show topic table (partitions already known) while enrichment loads
 
-                // Phase 2 — per-topic config: cleanup policy + retention.
-                // Skip topics whose config is already known (e.g. mock service).
-                var needsConfig = _allTopics
-                    .Select((t, i) => (t, i))
-                    .Where(x => !x.t.ConfigLoaded)
-                    .ToList();
-
-                if (needsConfig.Count > 0)
+                // Phase 2 — cleanup policy (for the "~" compacted marker) + an estimated
+                // message count, for every topic in one batched call (a handful of broker
+                // round trips total, not one AdminClient + one-or-two round trips per topic).
+                var enrichment = await KafkaSvc.GetTopicEnrichmentAsync(Environment, _allTopics, ct);
+                if (!ct.IsCancellationRequested)
                 {
-                    var enrichTask = Task.WhenAll(needsConfig.Select(async x =>
+                    for (var i = 0; i < _allTopics.Count; i++)
                     {
-                        var cfg = await KafkaSvc.GetTopicConfigAsync(Environment, x.t.Name, ct);
-                        if (ct.IsCancellationRequested) return;
-                        _allTopics[x.i] = _allTopics[x.i] with
+                        if (!enrichment.TryGetValue(_allTopics[i].Name, out var e)) continue;
+                        _allTopics[i] = _allTopics[i] with
                         {
-                            CleanupPolicy = cfg.CleanupPolicy,
-                            RetentionMs   = cfg.RetentionMs,
+                            CleanupPolicy = e.CleanupPolicy,
+                            MessageCount  = e.MessageCount,
                             ConfigLoaded  = true,
                         };
-                    }));
-
-                    while (!enrichTask.IsCompleted)
-                    {
-                        await Task.WhenAny(enrichTask, Task.Delay(300, ct));
-                        if (!ct.IsCancellationRequested) { ApplyFilter(); StateHasChanged(); }
                     }
-                    await enrichTask;
                     ApplyFilter();
                 }
             }
@@ -14797,7 +14852,7 @@ LENGTH 27234
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 10204
+LENGTH 10254
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14834,10 +14889,12 @@ LENGTH 10204
         {
             <MudAlert Severity="Severity.Error" Dense="true" Class="bm-data-error ma-2">@_result.Error</MudAlert>
         }
+        @if (_result.IsLoading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
+        }
         <MudTable T="KafkaConsumerGroupOverview"
                   Items="_filtered"
-                  Loading="@_result.IsLoading"
-                  LoadingProgressColor="Color.Primary"
                   Dense="true"
                   Hover="true"
                   Elevation="0"
@@ -15679,7 +15736,7 @@ LENGTH 27660
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 33730
+LENGTH 33947
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -15740,31 +15797,32 @@ LENGTH 33730
             </MudTooltip>
         </div>
 
-        @if (_searchBarOpen)
-        {
-            <div class="bm-lb-toolbar-row">
-                <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
-                              Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
-                              Class="bm-lb-search-half" />
+        <div class="bm-lb-search-collapse @(_searchBarOpen ? "bm-lb-search-collapse-open" : "")">
+            <div class="bm-lb-search-collapse-inner">
+                <div class="bm-lb-toolbar-row">
+                    <MudTextField T="string" Value="@_fileGlob" ValueChanged="OnGlobChanged"
+                                  Placeholder="Filename glob" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.FilterAlt"
+                                  Class="bm-lb-search-half" />
 
-                <FilterBox Value="@_contentFilterStr"
-                           OnFilterChanged="OnContentFilterChanged"
-                           ParseError="@_contentFilterError"
-                           Placeholder="Content filter…"
-                           Class="bm-lb-search-half"
-                           FieldHints="@ContentFieldHints" />
+                    <FilterBox Value="@_contentFilterStr"
+                               OnFilterChanged="OnContentFilterChanged"
+                               ParseError="@_contentFilterError"
+                               Placeholder="Content filter…"
+                               Class="bm-lb-search-half"
+                               FieldHints="@ContentFieldHints" />
 
-                <MudButton Variant="Variant.Filled"
-                           Color="@(_isSearching ? Color.Error : Color.Primary)"
-                           Size="Size.Small"
-                           Disabled="@(!_isSearching && _selectedPath is null)"
-                           OnClick="OnSearchButtonClickAsync"
-                           Class="bm-lb-search-btn">
-                    @(_isSearching ? "Stop" : "Start Search")
-                </MudButton>
+                    <MudButton Variant="Variant.Filled"
+                               Color="@(_isSearching ? Color.Error : Color.Primary)"
+                               Size="Size.Small"
+                               Disabled="@(!_isSearching && _selectedPath is null)"
+                               OnClick="OnSearchButtonClickAsync"
+                               Class="bm-lb-search-btn">
+                        @(_isSearching ? "Stop" : "Start Search")
+                    </MudButton>
+                </div>
             </div>
-        }
+        </div>
     </div>
 
     <!-- ── Toolbar row 2: breadcrumb ─────────────────────────────────── -->
@@ -17149,7 +17207,7 @@ LENGTH 4161
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 17211
+LENGTH 18201
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17267,6 +17325,13 @@ LENGTH 17211
     private DateTime?            _lastUpdated;
     private List<ServiceStatus>  _services = [];
 
+    // OnMetricsUpdated now fires per-service (progressively) rather than once per
+    // env-wide poll batch — debounce so a burst of per-service updates collapses
+    // into a single rebuild/render instead of one per service.
+    private readonly object _renderGate      = new();
+    private bool             _renderScheduled;
+    private bool             _disposed;
+
     private sealed class LegendItem
     {
         public string  Key       { get; init; } = "";
@@ -17363,12 +17428,33 @@ LENGTH 17211
     private void OnMetricsUpdated(string env)
     {
         if (env != Env || _paused) return;
-        _ = InvokeAsync(async () =>
+
+        lock (_renderGate)
         {
-            _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
-            Rebuild();
-            StateHasChanged();
-        });
+            if (_renderScheduled || _disposed) return;
+            _renderScheduled = true;
+        }
+        _ = DebouncedRebuildAsync();
+    }
+
+    private async Task DebouncedRebuildAsync()
+    {
+        try
+        {
+            await Task.Delay(400);
+            lock (_renderGate) { _renderScheduled = false; }
+            if (_disposed) return;
+
+            await InvokeAsync(async () =>
+            {
+                _services = await HeartbeatSvc.GetServiceStatusesAsync(Env);
+                Rebuild();
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)    { }
+        catch (JSDisconnectedException)    { }
+        catch (OperationCanceledException) { }
     }
 
     private void TogglePaused()
@@ -17567,6 +17653,7 @@ LENGTH 17211
 
     public async ValueTask DisposeAsync()
     {
+        lock (_renderGate) { _disposed = true; }
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
         try { await JS.InvokeVoidAsync("memoryLineChart.destroy", _chartRef); }
@@ -18002,7 +18089,7 @@ LENGTH 12718
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11439
+LENGTH 11781
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -18187,7 +18274,12 @@ LENGTH 11439
         _databaseNames = (await MongoSvc.GetDatabaseNamesAsync(Environment, _cts.Token)).ToList();
         if (_databaseNames.Count > 0)
         {
-            _selectedDb = _databaseNames[0];
+            // Prefer the environment's actually-configured database (Mongo:DatabaseName)
+            // over whichever one happens to sort first alphabetically.
+            var defaultDb = MongoSvc.GetDefaultDatabaseName(Environment);
+            _selectedDb = defaultDb is not null && _databaseNames.Contains(defaultDb)
+                ? defaultDb
+                : _databaseNames[0];
             await LoadCollectionsAsync();
         }
     }
@@ -18320,7 +18412,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16383
+LENGTH 16390
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -18594,7 +18686,7 @@ LENGTH 16383
                 @EffectiveStatus
             </span>
 
-            <span class="bm-detail-batch-name">@(_details?.Name ?? "Loading…")</span>
+            <span class="bm-detail-batch-name">@(_details?.Description ?? "Loading…")</span>
 
             @if (IsReplay)
             {
@@ -18738,7 +18830,7 @@ LENGTH 16383
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 7053
+LENGTH 7096
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -18774,8 +18866,9 @@ LENGTH 7053
     }
 
     <!-- Table shell (headers, toolbar, pagination) renders immediately; only
-         the rows populate progressively. Loading="" shows MudTable's own
-         progress bar without hiding the structure underneath. -->
+         the rows populate progressively. BmRunsTable shows the shared
+         bottom-anchored loading bar (not MudTable's own) so it's consistent
+         with every other page. -->
     <BmRunsTable Rows="@_paged"
                  Loading="@_result.IsLoading"
                  TotalCount="@_all.Count"
@@ -19896,7 +19989,7 @@ LENGTH 10289
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 31130
+LENGTH 31144
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -20120,7 +20213,7 @@ LENGTH 31130
             {
                 runId             = b.RunId,
                 env               = b.Env,
-                batchName         = b.Name,
+                batchName         = b.Description,
                 isLive            = b.IsLive,
                 batchStartEpochMs = new DateTimeOffset(b.RunStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
@@ -20528,7 +20621,7 @@ LENGTH 31130
                             var runId = b.RunId;
                             var env   = b.Env;
                             <MudMenuItem OnClick="@(() => RemoveAsync(runId, env))">
-                                @b.Name <span class="bm-muted">@b.RunId</span>
+                                @b.Description <span class="bm-muted">@b.RunId</span>
                             </MudMenuItem>
                         }
                         <MudDivider />
@@ -20698,7 +20791,7 @@ LENGTH 22164
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=43" rel="stylesheet" />
+    <link href="css/app.css?v=45" rel="stylesheet" />
     <link href="css/d3-graph.css" rel="stylesheet" />
     <link href="css/d3-timeline.css" rel="stylesheet" />
     <link href="css/log-viewer.css" rel="stylesheet" />
@@ -21450,7 +21543,8 @@ public class DateTimeDisplayService
     public event Action? OnChange;
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
-LENGTH 1300
+LENGTH 1778
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
@@ -21466,15 +21560,22 @@ namespace NxtUI.Web.Services;
 public class EnvironmentSelectorService
 {
     private readonly IEnvironmentService _envService;
+    private readonly ILogger<EnvironmentSelectorService> _log;
     private string _selectedId;
 
-    public EnvironmentSelectorService(IEnvironmentService envService, IOptions<AppSettings> settings)
+    public EnvironmentSelectorService(
+        IEnvironmentService envService,
+        IOptions<AppSettings> settings,
+        ILogger<EnvironmentSelectorService> log)
     {
         _envService = envService;
+        _log        = log;
         _selectedId = settings.Value.DefaultEnvironment;
 
         if (_envService.GetById(_selectedId) is null && _envService.GetAll().Count > 0)
             _selectedId = _envService.GetAll()[0].Id;
+
+        LogHostCount(_selectedId);
     }
 
     public IReadOnlyList<EnvironmentInfo> Environments => _envService.GetAll();
@@ -21486,8 +21587,15 @@ public class EnvironmentSelectorService
         {
             if (_selectedId == value) return;
             _selectedId = value;
+            LogHostCount(value);
             OnChange?.Invoke();
         }
+    }
+
+    private void LogHostCount(string envId)
+    {
+        var hosts = _envService.GetServers(envId);
+        _log.LogInformation("environment switched to {Env}: {HostCount} host(s) found", envId, hosts.Count);
     }
 
     public EnvironmentInfo? Selected => _envService.GetById(_selectedId);
@@ -22440,7 +22548,7 @@ public class LogViewerService : ILogViewerService
     }
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 17125
+LENGTH 17131
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Filtering;
@@ -22642,9 +22750,9 @@ public class MockRunService : IRunService
         var summary = _store.FirstOrDefault(b => b.RunId == runId);
         var details = new RunDetails
         {
-            RunId     = runId ?? "RUN-UNKNOWN",
-            Name      = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
-            Type      = summary?.Type ?? "FullLoad",
+            RunId       = runId ?? "RUN-UNKNOWN",
+            Description = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Type        = summary?.Type ?? "FullLoad",
             Status    = summary?.Status ?? RunStatus.Completed,
             Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
             End       = summary?.End,
@@ -23149,7 +23257,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 12144
+LENGTH 12836
 using NxtUI.Core.Services;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
@@ -23336,107 +23444,131 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         }
     }
 
+    // Coalesced rerun flag: set when a trigger (timer / subscribe / path-resolved)
+    // arrives while a poll for that env is already running. Instead of dropping
+    // the trigger outright, the in-flight poll checks this after it finishes and
+    // runs once more immediately — so a burst of triggers during a busy poll
+    // results in exactly one extra pass, not zero (silently dropped) and not N
+    // (queued/piled up).
+    private readonly ConcurrentDictionary<string, bool> _envRerunPending = new();
+
     private async Task PollEnvAsync(string env, CancellationToken ct)
     {
         if (!HasSubscribers(env)) return;
         if (string.IsNullOrWhiteSpace(_paths.MetricsFileName)) return;
 
-        // Skip if a poll for this env is already in flight (timer vs immediate-subscribe).
         var gate = _envGates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
-        if (!await gate.WaitAsync(0, ct)) return;
+        if (!await gate.WaitAsync(0, ct))
+        {
+            _envRerunPending[env] = true;
+            return;
+        }
+
         try
         {
-            var services = _heartbeatMonitor.GetServices(env);
-            if (services is null)
+            do
             {
-                _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
-                return;
+                _envRerunPending[env] = false;
+                await PollEnvOnceAsync(env, ct);
             }
-
-            _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
-
-            var changed = 0;
-            var parsed  = 0;
-
-            await Task.WhenAll(services.Select(async svc =>
-            {
-                var key   = LogPathDiscoveryService.CacheKey(svc, env);
-                var entry = _entries.GetOrAdd(key, _ => new Entry());
-
-                // Resolve and cache the file path once; never re-search after that.
-                if (entry.FilePath is null)
-                {
-                    var folder = _discovery.GetCachedPath(svc, env);
-                    if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
-                    entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
-                }
-
-                var file = entry.FilePath;
-
-                // Cheap stat — skip the read entirely if the file hasn't changed.
-                // Runs unthrottled because a stat is far cheaper than a read.
-                DateTime mtime;
-                try
-                {
-                    mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
-                }
-                catch { return; }
-
-                lock (entry.Sync)
-                {
-                    if (mtime <= entry.LastWriteUtc) return;
-                }
-
-                // File changed — throttle concurrent reads to avoid saturating servers.
-                long offset;
-                lock (entry.Sync) offset = entry.Offset;
-
-                await _ioGate.WaitAsync(ct);
-                IncrementalFileReader.Result result;
-                try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                      { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
-                finally { _ioGate.Release(); }
-
-                if (result.Lines.Count == 0)
-                {
-                    lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
-                    return;
-                }
-
-                lock (entry.Sync)
-                {
-                    entry.Offset      = result.NewOffset;
-                    entry.LastWriteUtc = mtime;
-                    foreach (var line in result.Lines)
-                    {
-                        if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
-                        entry.Latest = sample;
-                        entry.History.Add(sample);
-                        if (entry.History.Count > MaxHistory)
-                            entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
-                        Interlocked.Increment(ref changed);
-                        Interlocked.Increment(ref parsed);
-                    }
-                }
-            }));
-
-            if (parsed > 0)
-                _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
-
-            // Prune entries for services no longer reported by heartbeat.
-            var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
-            foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
-            {
-                _entries.TryRemove(key, out _);
-                _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
-            }
-
-            if (changed > 0) OnMetricsUpdated?.Invoke(env);
+            while (_envRerunPending.TryGetValue(env, out var pending) && pending && HasSubscribers(env));
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    private async Task PollEnvOnceAsync(string env, CancellationToken ct)
+    {
+        var services = _heartbeatMonitor.GetServices(env);
+        if (services is null)
+        {
+            _log.LogDebug("metrics [{Env}]: heartbeat cache empty, skipping", env);
+            return;
+        }
+
+        _log.LogDebug("metrics [{Env}]: polling {Count} services", env, services.Count);
+
+        var parsed = 0;
+
+        await Task.WhenAll(services.Select(async svc =>
+        {
+            var key   = LogPathDiscoveryService.CacheKey(svc, env);
+            var entry = _entries.GetOrAdd(key, _ => new Entry());
+
+            // Resolve and cache the file path once; never re-search after that.
+            if (entry.FilePath is null)
+            {
+                var folder = _discovery.GetCachedPath(svc, env);
+                if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
+                entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
+            }
+
+            var file = entry.FilePath;
+
+            // Cheap stat — skip the read entirely if the file hasn't changed.
+            // Runs unthrottled because a stat is far cheaper than a read.
+            DateTime mtime;
+            try
+            {
+                mtime = await Task.Run(() => new FileInfo(file).LastWriteTimeUtc, ct);
+            }
+            catch { return; }
+
+            lock (entry.Sync)
+            {
+                if (mtime <= entry.LastWriteUtc) return;
+            }
+
+            // File changed — throttle concurrent reads to avoid saturating servers.
+            long offset;
+            lock (entry.Sync) offset = entry.Offset;
+
+            await _ioGate.WaitAsync(ct);
+            IncrementalFileReader.Result result;
+            try   { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+                  { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+            finally { _ioGate.Release(); }
+
+            if (result.Lines.Count == 0)
+            {
+                lock (entry.Sync) entry.LastWriteUtc = mtime; // mark seen even with no new metrics lines
+                return;
+            }
+
+            var parsedAny = false;
+            lock (entry.Sync)
+            {
+                entry.Offset      = result.NewOffset;
+                entry.LastWriteUtc = mtime;
+                foreach (var line in result.Lines)
+                {
+                    if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
+                    entry.Latest = sample;
+                    entry.History.Add(sample);
+                    if (entry.History.Count > MaxHistory)
+                        entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
+                    parsedAny = true;
+                    Interlocked.Increment(ref parsed);
+                }
+            }
+
+            // Report this service's update the moment it's parsed, instead of
+            // waiting for every other service in the env to finish reading too.
+            if (parsedAny) OnMetricsUpdated?.Invoke(env);
+        }));
+
+        if (parsed > 0)
+            _log.LogDebug("metrics [{Env}]: {Parsed} new samples parsed", env, parsed);
+
+        // Prune entries for services no longer reported by heartbeat.
+        var activeKeys = services.Select(svc => LogPathDiscoveryService.CacheKey(svc, env)).ToHashSet();
+        foreach (var key in _entries.Keys.Where(k => k.StartsWith(env + "|", StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+        {
+            _entries.TryRemove(key, out _);
+            _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
         }
     }
 
@@ -24351,7 +24483,7 @@ public class ThemeService
     };
 }
 FILE src/NxtUI.Web/Services/TimelineRun.cs
-LENGTH 4954
+LENGTH 4990
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
 
@@ -24368,10 +24500,10 @@ public class TimelineRun(
     SignalRConnectionService signalR,
     Func<Task> onUpdated) : IAsyncDisposable
 {
-    public string   RunId     { get; }          = runId;
-    public string   Env       { get; }          = env;
-    public string   Name   { get; internal set; } = string.Empty;
-    public bool     IsLive    { get; internal set; }
+    public string   RunId       { get; }          = runId;
+    public string   Env         { get; }          = env;
+    public string   Description { get; internal set; } = string.Empty;
+    public bool     IsLive      { get; internal set; }
     public DateTime RunStart  { get; internal set; }
 
     private readonly Dictionary<string, PerformanceEvent> _events = new();
@@ -24392,7 +24524,7 @@ public class TimelineRun(
     public async Task LoadAsync()
     {
         var details = await runService.GetRunDetailsAsync(Env, RunId);
-        Name  = details.Name;
+        Description = details.Description;
         RunStart = details.Start;
         IsLive   = details.Status == RunStatus.Running;
 
@@ -24451,9 +24583,9 @@ public class TimelineRun(
         var eventList = events.ToList();
         var run = new TimelineRun(env, runId, null!, null!, () => Task.CompletedTask)
         {
-            Name  = runId,
-            RunStart = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
-            IsLive   = false,
+            Description = runId,
+            RunStart    = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
+            IsLive      = false,
         };
         foreach (var e in eventList) run.UpsertEvent(e);
         return run;
@@ -24560,7 +24692,7 @@ else
     [Parameter] public EventCallback OnClick { get; set; }
 }
 FILE src/NxtUI.Web/Shared/StatusIcon.razor
-LENGTH 740
+LENGTH 875
 @namespace NxtUI.Shared
 @* Status icon with colour and pulse animation for Running *@
 
@@ -24576,10 +24708,12 @@ LENGTH 740
 
     private string GetIcon() => Status switch
     {
-        RunStatus.Running   => Icons.Material.Filled.PlayCircle,
-        RunStatus.Completed => Icons.Material.Filled.CheckCircle,
-        RunStatus.Failed    => Icons.Material.Filled.Error,
-        _                     => Icons.Material.Outlined.HelpOutline
+        RunStatus.Running    => Icons.Material.Filled.PlayCircle,
+        RunStatus.Completed  => Icons.Material.Filled.CheckCircle,
+        RunStatus.Failed     => Icons.Material.Filled.Error,
+        RunStatus.Terminated => Icons.Material.Filled.StopCircle,
+        RunStatus.Purged     => Icons.Material.Filled.DeleteSweep,
+        _                    => Icons.Material.Outlined.HelpOutline
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
@@ -24668,7 +24802,7 @@ FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
-LENGTH 11792
+LENGTH 14786
 using NxtUI.Filtering;
 using AwesomeAssertions;
 
@@ -24957,6 +25091,87 @@ public class FilterEvaluatorTests
         FilterEvaluator.Evaluate(ast, new NumObj(0)).Should().BeFalse();
         FilterEvaluator.Evaluate(ast, new NumObj(10)).Should().BeFalse();
     }
+
+    // ── Boolean values ──────────────────────────────────────────────────────
+
+    private record Flagged(bool IsOnline);
+    private static readonly FilterParser BoolParser = new(["IsOnline"]);
+
+    [Fact]
+    public void Bool_true_matches_true_property()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:true"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:true"), new Flagged(false)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Bool_false_matches_false_property()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:false"), new Flagged(false)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:false"), new Flagged(true)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Bool_is_case_insensitive_keyword()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:TRUE"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:False"), new Flagged(false)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NOT_negates_bool_match()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("!IsOnline:true"), new Flagged(false)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("!IsOnline:true"), new Flagged(true)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Explicit_exact_operator_works_the_same_for_bool()
+    {
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:=true"), new Flagged(true)).Should().BeTrue();
+        FilterEvaluator.Evaluate(BoolParser.Parse("IsOnline:=true"), new Flagged(false)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(">true")]
+    [InlineData(">=false")]
+    [InlineData("<true")]
+    [InlineData("<=false")]
+    public void Comparison_operators_are_rejected_for_bool(string expr)
+    {
+        var act = () => BoolParser.Parse($"IsOnline:{expr}");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_is_rejected_for_bool()
+    {
+        var act = () => BoolParser.Parse("IsOnline:true..false");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    // ── Comparison/range only valid on orderable values ─────────────────────
+
+    [Fact]
+    public void Comparison_operator_on_string_field_throws_at_parse_time()
+    {
+        var act = () => Parser.Parse("ChunkId:>abc");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_between_strings_throws_at_parse_time()
+    {
+        var act = () => Parser.Parse("ChunkId:abc..xyz");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Mixed_type_range_throws_at_parse_time()
+    {
+        var act = () => BoolParser.Parse("IsOnline:5..true");
+        act.Should().Throw<FilterParseException>();
+    }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterIntegrationTests.cs
 LENGTH 10505
@@ -25218,7 +25433,7 @@ public class FilterIntegrationTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterParserTests.cs
-LENGTH 15709
+LENGTH 19775
 using NxtUI.Filtering;
 using AwesomeAssertions;
 using MatchType = NxtUI.Filtering.MatchType;
@@ -25621,6 +25836,293 @@ public class FilterParserTests
             case AndNode and: Collect(and.Left, acc); Collect(and.Right, acc); break;
             case NotNode not: Collect(not.Operand, acc); break;
         }
+    }
+
+    // ── Boolean values ──────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("true",  true)]
+    [InlineData("TRUE",  true)]
+    [InlineData("False", false)]
+    [InlineData("false", false)]
+    public void Bare_true_false_keyword_produces_BoolValue(string literal, bool expected)
+    {
+        var node = Parse($"ChunkId:{literal}") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Exact);
+        node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Explicit_exact_operator_also_produces_BoolValue()
+    {
+        var node = Parse("ChunkId:=true") as FieldTermNode;
+        node!.MatchType.Should().Be(MatchType.Exact);
+        node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("ChunkId:>true")]
+    [InlineData("ChunkId:>=true")]
+    [InlineData("ChunkId:<true")]
+    [InlineData("ChunkId:<=false")]
+    public void Comparison_operator_on_bool_throws(string input)
+    {
+        var act = () => Parse(input);
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_on_bool_throws()
+    {
+        var act = () => Parse("ChunkId:true..false");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    // ── Comparison operators only valid on orderable values ─────────────────
+
+    [Theory]
+    [InlineData("ChunkId:>abc")]
+    [InlineData("ChunkId:>=abc")]
+    [InlineData("ChunkId:<abc")]
+    [InlineData("ChunkId:<=abc")]
+    public void Comparison_operator_on_plain_string_throws(string input)
+    {
+        var act = () => Parse(input);
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Comparison_operator_on_null_throws()
+    {
+        var act = () => Parse("ChunkId:>null");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Comparison_operator_on_number_still_works()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var node = numParser.Parse("Count:>5") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+    }
+
+    [Fact]
+    public void Comparison_operator_on_date_still_works()
+    {
+        var dateParser = new FilterParser(["StartTime"]);
+        var node = dateParser.Parse("StartTime:>2024-01-01") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.GreaterThan);
+        node.Value.Should().BeOfType<DateValue>();
+    }
+
+    // ── Ranges only valid between orderable values ──────────────────────────
+
+    [Fact]
+    public void Range_between_plain_strings_throws()
+    {
+        var act = () => Parse("ChunkId:abc..xyz");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_with_number_low_and_bool_high_throws()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var act = () => numParser.Parse("Count:5..true");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_with_bool_low_and_number_high_throws()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var act = () => numParser.Parse("Count:true..5");
+        act.Should().Throw<FilterParseException>();
+    }
+
+    [Fact]
+    public void Range_between_numbers_still_works()
+    {
+        var numParser = new FilterParser(["Count"]);
+        var node = numParser.Parse("Count:1..10") as FieldTermNode;
+        node.Should().NotBeNull();
+        node!.MatchType.Should().Be(MatchType.Between);
+        var range = node.Value.Should().BeOfType<RangeValue>().Subject;
+        range.Low.Should().BeOfType<NumberValue>().Which.Value.Should().Be(1);
+        range.High.Should().BeOfType<NumberValue>().Which.Value.Should().Be(10);
+    }
+}
+FILE tests/NxtUI.Tests/Filtering/MongoFilterBuilderTests.cs
+LENGTH 3020
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using NxtUI.Filtering;
+using AwesomeAssertions;
+
+namespace NxtUI.Tests.Filtering;
+
+public class MongoFilterBuilderTests
+{
+    private static readonly FilterParser Parser = new(["Name"]);
+
+    private static string Render(string filterText)
+    {
+        var node   = Parser.Parse(filterText);
+        var filter = MongoFilterBuilder.Build(node);
+        return filter.Render(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry).ToString();
+    }
+
+    // ── Exact equality on Number/Date/Bool — the "matches everything" bug ──
+
+    [Fact]
+    public void Bare_number_produces_real_equality_filter_not_empty()
+    {
+        Render("ProcessId:34568").Should().Be("{ \"ProcessId\" : 34568.0 }");
+    }
+
+    [Fact]
+    public void Bare_date_produces_real_equality_filter_not_empty()
+    {
+        var rendered = Render("StartTime:2024-06-15");
+        rendered.Should().NotBe("{ }");
+        rendered.Should().Contain("StartTime");
+    }
+
+    [Fact]
+    public void Bare_bool_true_produces_equality_filter()
+    {
+        Render("IsOnline:true").Should().Be("{ \"IsOnline\" : true }");
+    }
+
+    [Fact]
+    public void Bare_bool_false_produces_equality_filter()
+    {
+        Render("IsOnline:false").Should().Be("{ \"IsOnline\" : false }");
+    }
+
+    [Fact]
+    public void Explicit_exact_operator_on_bool_produces_equality_filter()
+    {
+        Render("IsOnline:=true").Should().Be("{ \"IsOnline\" : true }");
+    }
+
+    // ── Numeric comparisons still work ──────────────────────────────────────
+
+    [Fact]
+    public void Greater_than_produces_gt_filter()
+    {
+        Render("ProcessId:>100").Should().Be("{ \"ProcessId\" : { \"$gt\" : 100.0 } }");
+    }
+
+    // ── NOT works generically over any leaf, including bool ─────────────────
+
+    [Fact]
+    public void NOT_wraps_bool_equality_in_nor()
+    {
+        var rendered = Render("!IsOnline:true");
+        rendered.Should().Contain("IsOnline");
+        rendered.Should().Contain("true");
+    }
+
+    // ── AND / OR combine bool terms with others ─────────────────────────────
+
+    [Fact]
+    public void AND_combines_bool_and_string_terms()
+    {
+        // MongoDB.Driver's Builders.And flattens same-level conditions on different
+        // fields into one document instead of nesting under $and.
+        var parser = new FilterParser(["Name", "IsOnline"]);
+        var node   = parser.Parse("Name:svc IsOnline:true");
+        var filter = MongoFilterBuilder.Build(node);
+        var rendered = filter.Render(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry).ToString();
+        rendered.Should().Contain("IsOnline");
+        rendered.Should().Contain("true");
+    }
+}
+FILE tests/NxtUI.Tests/Filtering/SqlFilterBuilderTests.cs
+LENGTH 2714
+using NxtUI.Filtering;
+using AwesomeAssertions;
+
+namespace NxtUI.Tests.Filtering;
+
+public class SqlFilterBuilderTests
+{
+    private static readonly FilterParser Parser = new(["RunId"]);
+
+    private static (string Sql, List<Microsoft.Data.SqlClient.SqlParameter> Params) Build(string filterText)
+    {
+        var node = Parser.Parse(filterText);
+        return SqlFilterBuilder.Build(node);
+    }
+
+    // ── Exact equality on Number/Date — the "empty clause" bug ──────────────
+
+    [Fact]
+    public void Bare_number_produces_real_equality_clause_not_empty()
+    {
+        var (sql, ps) = Build("RequestId:34568");
+        sql.Should().NotBeEmpty();
+        sql.Should().Contain("=");
+        ps.Should().ContainSingle().Which.Value.Should().Be(34568.0);
+    }
+
+    [Fact]
+    public void Bare_date_produces_real_equality_clause_not_empty()
+    {
+        var (sql, ps) = Build("StartTime:2024-06-15");
+        sql.Should().NotBeEmpty();
+        sql.Should().Contain("=");
+        ps.Should().ContainSingle();
+    }
+
+    // ── Boolean equality ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Bare_bool_true_produces_equality_clause()
+    {
+        var parser = new FilterParser(["IsOnline"]);
+        var node   = parser.Parse("IsOnline:true");
+        var (sql, ps) = SqlFilterBuilder.Build(node);
+        sql.Should().Contain("=");
+        ps.Should().ContainSingle().Which.Value.Should().Be(true);
+    }
+
+    [Fact]
+    public void Bare_bool_false_produces_equality_clause()
+    {
+        var parser = new FilterParser(["IsOnline"]);
+        var node   = parser.Parse("IsOnline:false");
+        var (sql, ps) = SqlFilterBuilder.Build(node);
+        ps.Should().ContainSingle().Which.Value.Should().Be(false);
+    }
+
+    // ── Numeric comparisons still work ──────────────────────────────────────
+
+    [Fact]
+    public void Greater_than_produces_comparison_clause()
+    {
+        var (sql, ps) = Build("RequestId:>100");
+        sql.Should().Contain(">");
+        ps.Should().ContainSingle().Which.Value.Should().Be(100.0);
+    }
+
+    // ── NOT wraps any leaf, including bool ───────────────────────────────────
+
+    [Fact]
+    public void NOT_wraps_bool_equality()
+    {
+        var parser = new FilterParser(["IsOnline"]);
+        var node   = parser.Parse("!IsOnline:true");
+        var (sql, _) = SqlFilterBuilder.Build(node);
+        sql.Should().StartWith("NOT");
     }
 }
 FILE tests/NxtUI.Tests/Integration/IntegrationTestAttribute.cs
@@ -27907,7 +28409,7 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 18913
+LENGTH 22319
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -27991,6 +28493,69 @@ public class KafkaService(
             PartitionCount    = topicMeta?.Partitions.Count ?? 0,
             ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
         };
+    }
+
+    public async Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
+    {
+        var withPartitions = topics.Where(t => t.PartitionCount > 0).ToList();
+        if (withPartitions.Count == 0) return new Dictionary<string, KafkaTopicEnrichment>();
+
+        // Partitions are numbered contiguously from 0, so the list can be built from
+        // the partition count everyone already has — no metadata round trip needed.
+        var partitions = new List<TopicPartition>();
+        foreach (var t in withPartitions)
+            for (var p = 0; p < t.PartitionCount; p++)
+                partitions.Add(new TopicPartition(t.Name, new Partition(p)));
+
+        log.LogDebug("kafka [{Env}]: enriching {TopicCount} topics ({PartitionCount} partitions) — 3 round trips total",
+            env, withPartitions.Count, partitions.Count);
+
+        using var admin = BuildAdmin(env);
+        var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
+
+        // One batched DescribeConfigs call for every topic's cleanup.policy (result list
+        // is index-aligned with the request list — DescribeConfigsResult carries no
+        // topic name of its own), and one batched ListOffsets call each for the earliest
+        // and latest offset of every partition — 3 broker round trips total, regardless
+        // of topic/partition count, instead of up to 2 per topic.
+        var configsTask = admin.DescribeConfigsAsync(
+            withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
+        var earliestTask = admin.ListOffsetsAsync(
+            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
+            timeout);
+        var latestTask = admin.ListOffsetsAsync(
+            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
+            timeout);
+
+        await Task.WhenAll(configsTask, earliestTask, latestTask);
+
+        var configs = configsTask.Result;
+        var earliest = earliestTask.Result.ResultInfos.ToDictionary(
+            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+        var latest = latestTask.Result.ResultInfos.ToDictionary(
+            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+
+        var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
+        for (var i = 0; i < withPartitions.Count; i++)
+        {
+            var t   = withPartitions[i];
+            var cfg = i < configs.Count ? configs[i] : null;
+            var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
+                ? e.Value : "delete";
+
+            long messageCount = 0;
+            for (var p = 0; p < t.PartitionCount; p++)
+            {
+                var tp = new TopicPartition(t.Name, new Partition(p));
+                if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
+                    messageCount += Math.Max(0, hi - lo);
+            }
+
+            result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
@@ -28541,7 +29106,7 @@ public class MockHeartbeatService : IHeartbeatService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockKafkaService.cs
-LENGTH 14686
+LENGTH 15114
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -28594,6 +29159,15 @@ public class MockKafkaService : IKafkaService
         IReadOnlyList<KafkaTopicSummary> result = _deletedTopics.Count == 0
             ? _topics
             : (IReadOnlyList<KafkaTopicSummary>)_topics.Where(t => !_deletedTopics.Contains(t.Name)).ToList();
+        return Task.FromResult(result);
+    }
+
+    public Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+        string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
+    {
+        IReadOnlyDictionary<string, KafkaTopicEnrichment> result = topics.ToDictionary(
+            t => t.Name,
+            t => new KafkaTopicEnrichment(t.CleanupPolicy, t.MessageCount));
         return Task.FromResult(result);
     }
 
@@ -28794,7 +29368,7 @@ public class MockKafkaService : IKafkaService
     }
 }
 FILE src/NxtUI.Core/Services/Mock/MockMongoService.cs
-LENGTH 16989
+LENGTH 17176
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -28989,6 +29563,10 @@ public class MockMongoService : IMongoService
         return Task.FromResult(names);
     }
 
+    // No per-env configured database in mock mode — caller falls back to picking
+    // one from GetDatabaseNamesAsync.
+    public string? GetDefaultDatabaseName(string env) => null;
+
     public Task<(IReadOnlyList<MongoCollectionSummary> Collections, long TotalCount)> GetCollectionPageAsync(
         string env, string database, string? search, int skip, int limit, CancellationToken ct = default)
     {
@@ -29080,7 +29658,7 @@ public class MockMongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoConnectionFactory.cs
-LENGTH 2443
+LENGTH 2330
 using System.Collections.Concurrent;
 using MongoDB.Driver;
 using NxtUI.Core.Configuration;
@@ -29098,7 +29676,7 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
 
     public IMongoClient GetClient(string envId)
     {
-        var settings    = loader.GetMongo(envId);
+        var settings = loader.GetMongo(envId);
         var fingerprint = settings.GetFingerprint();
         return _cache.GetOrAdd(fingerprint, _ => Build(settings));
     }
@@ -29106,13 +29684,13 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     public IMongoDatabase GetDatabase(string envId)
     {
         var settings = loader.GetMongo(envId);
-        return GetClient(envId).GetDatabase(settings.GetDatabaseName(envId));
+        return GetClient(envId).GetDatabase(settings.DatabaseName);
     }
 
     public IMongoDatabase GetHeartbeatsDatabase(string envId)
     {
         var settings = loader.GetMongo(envId);
-        return GetClient(envId).GetDatabase(settings.GetHeartbeatsDatabaseName(envId));
+        return GetClient(envId).GetDatabase(settings.HeartbeatsCollection);
     }
 
     /// <summary>
@@ -29122,20 +29700,19 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     public bool IsConfigured(string envId)
     {
         var cs = loader.GetMongo(envId).ConnectionString;
-        return !string.IsNullOrWhiteSpace(cs) &&
-               !cs.Equals("mongodb://localhost:27017", StringComparison.OrdinalIgnoreCase);
+        return !string.IsNullOrWhiteSpace(cs);
     }
 
-    private static IMongoClient Build(MongoSettings s)
+    private static MongoClient Build(MongoSettings s)
     {
-        var url  = new MongoUrl(s.ConnectionString);
+        var url = new MongoUrl(s.ConnectionString);
         var opts = MongoClientSettings.FromUrl(url);
 
         if (!string.IsNullOrWhiteSpace(s.Username) && !string.IsNullOrWhiteSpace(s.Password))
             opts.Credential = MongoCredential.CreateCredential(
                 url.DatabaseName ?? "admin", s.Username, s.Password);
 
-        if (s.TlsEnabled)
+        if (s.TlsEnabled is true)
         {
             opts.UseTls = true;
             if (!string.IsNullOrWhiteSpace(s.TlsCertificatePath))
@@ -29150,7 +29727,7 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1874
+LENGTH 1864
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29175,7 +29752,7 @@ public class MongoHeartbeatService(
         log.LogDebug("heartbeat [{Env}]: querying '{Col}' updated since {Since:HH:mm:ss}",
             env, _heartbeat.CollectionName, since.Value);
 
-        var db = factory.GetHeartbeatsDatabase(env);
+        var db = factory.GetDatabase(env);
         var collection = db.GetCollection<HeartbeatDocument>(_heartbeat.CollectionName);
 
         var sw = Stopwatch.StartNew();
@@ -29202,7 +29779,7 @@ public class MongoHeartbeatService(
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoRunService.cs
-LENGTH 6060
+LENGTH 6067
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -29297,7 +29874,7 @@ public class MongoRunService : IRunService
         var details = new RunDetails
         {
             RunId = runId ?? "RUN-UNKNOWN",
-            Name = $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Description = $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
             Type = "FullLoad",
             Status = RunStatus.Completed,
             Start = DateTime.UtcNow.AddMinutes(-42),
@@ -29358,7 +29935,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 13123
+LENGTH 13246
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -29377,6 +29954,9 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     private static readonly FilterParser DocFilterParser = new(
         searchableFields: ["_id"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+    public string? GetDefaultDatabaseName(string env) =>
+        factory.GetDatabase(env).DatabaseNamespace.DatabaseName;
 
     public async Task<IReadOnlyList<MongoDatabaseInfo>> GetDatabasesAsync(string env, CancellationToken ct = default)
     {
@@ -29654,7 +30234,7 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 8431
+LENGTH 8303
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using NxtUI.Configuration;
@@ -29670,8 +30250,8 @@ namespace NxtUI.Core.Services.Sql;
 /// </summary>
 public class SqlRunService(
     EnvironmentConfigLoader configLoader,
-    RunsSettings            runsSettings,
-    ILogger<SqlRunService>  log)
+    RunsSettings runsSettings,
+    ILogger<SqlRunService> log)
     : IRunService
 {
     // Fields bare filter terms expand to (e.g. "myrun" → matches RunId OR Description).
@@ -29689,7 +30269,7 @@ public class SqlRunService(
             return [];
         }
 
-        var windowStart    = before.AddMonths(-runsSettings.WindowMonths);
+        var windowStart = before.AddMonths(-runsSettings.WindowMonths);
         var effectiveCount = Math.Min(count > 0 ? count : runsSettings.PageSize, runsSettings.MaxResults);
 
         // An explicit StartTime term in the filter (e.g. "start:2024-01-01..2024-03-01") means the
@@ -29767,7 +30347,7 @@ public class SqlRunService(
         // Sort column comes from an allow-listed lookup (SqlFilterBuilder.TryGetColumn) —
         // never interpolate the caller-supplied field name directly into ORDER BY.
         var sortColumn = SqlFilterBuilder.TryGetColumn(filter?.SortField, out var col) ? col : "r.StartTime";
-        var sortDir    = (filter?.SortDescending ?? true) ? "DESC" : "ASC";
+        var sortDir = (filter?.SortDescending ?? true) ? "DESC" : "ASC";
 
         var where = string.Join("\n  AND ", clauses);
         var sql = $"""
@@ -29802,12 +30382,12 @@ public class SqlRunService(
         {
             results.Add(new RunSummary
             {
-                RunId       = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status      = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
-                Type        = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                Status = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                 Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                Start       = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                End         = reader.IsDBNull(5) ? null
+                Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
+                End = reader.IsDBNull(5) ? null
                               : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
             });
         }
@@ -29834,9 +30414,11 @@ public class SqlRunService(
     private static RunStatus ParseStatus(string? value) =>
         value?.Trim().ToUpperInvariant() switch
         {
-            "R" or "RUNNING"   or "STARTED"  or "IN PROGRESS" or "INPROGRESS" => RunStatus.Running,
-            "C" or "COMPLETED" or "COMPLETE" or "DONE"        or "SUCCESS"     => RunStatus.Completed,
-            "F" or "FAILED"    or "FAIL"     or "ERROR"       or "ABORTED"    => RunStatus.Failed,
+            "CREATED" => RunStatus.Running,
+            "SUCCESS" => RunStatus.Completed,
+            "FAILED" => RunStatus.Failed,
+            "TERMINATED" => RunStatus.Terminated,
+            "PURGED" => RunStatus.Purged,
             _ => RunStatus.Unknown,
         };
 
@@ -29844,7 +30426,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 86652
+LENGTH 87866
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -30503,10 +31085,12 @@ html, body {
     text-transform: uppercase; letter-spacing: 0.04em;
     font-family: var(--bm-font-mono);
 }
-.bm-status-running   { color: #3FB950; }
-.bm-status-completed { color: #8B949E; }
-.bm-status-failed    { color: #F85149; }
-.bm-status-unknown   { color: #8B949E; }
+.bm-status-running    { color: #3FB950; }
+.bm-status-completed  { color: #8B949E; }
+.bm-status-failed     { color: #F85149; }
+.bm-status-terminated { color: #D29922; }
+.bm-status-purged     { color: #8B949E; }
+.bm-status-unknown    { color: #8B949E; }
 
 /* Footer: count + pagination + rows selector */
 .bm-batch-footer {
@@ -30669,15 +31253,19 @@ html, body {
     font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
     font-family: var(--bm-font-mono); white-space:nowrap;
 }
-.bm-status-chip-dot.bm-status-running    { background-color:#3FB950; }
-.bm-status-chip-dot.bm-status-completed  { background-color:#8B949E; }
-.bm-status-chip-dot.bm-status-failed     { background-color:#F85149; }
-.bm-status-chip-dot.bm-status-unknown    { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-running     { background-color:#3FB950; }
+.bm-status-chip-dot.bm-status-completed   { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-failed      { background-color:#F85149; }
+.bm-status-chip-dot.bm-status-terminated  { background-color:#D29922; }
+.bm-status-chip-dot.bm-status-purged      { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-unknown     { background-color:#8B949E; }
 
-.bm-status-chip-label.bm-status-running    { color:#3FB950; }
-.bm-status-chip-label.bm-status-completed  { color:#8B949E; }
-.bm-status-chip-label.bm-status-failed     { color:#F85149; }
-.bm-status-chip-label.bm-status-unknown    { color:#8B949E; }
+.bm-status-chip-label.bm-status-running     { color:#3FB950; }
+.bm-status-chip-label.bm-status-completed   { color:#8B949E; }
+.bm-status-chip-label.bm-status-failed      { color:#F85149; }
+.bm-status-chip-label.bm-status-terminated  { color:#D29922; }
+.bm-status-chip-label.bm-status-purged      { color:#8B949E; }
+.bm-status-chip-label.bm-status-unknown     { color:#8B949E; }
 
 .bm-status-chip-dot.bm-status-running { animation: bm-pulse 2s ease-in-out infinite; }
 
@@ -32162,13 +32750,15 @@ tr.bm-row-searching td:first-child {
 /* ── Log Browser ──────────────────────────────────────────────────── */
 .bm-lb-page { display: flex; flex-direction: column; }
 
-/* bm-lb-toolbar-multiline: same bordered container as before, but now holds
-   one or two .bm-lb-toolbar-row lines (main row + optional search row) so a
-   collapsed search row leaves no border/height artifact behind. */
+/* bm-lb-toolbar-multiline: same bordered container as before, holding one or
+   two .bm-lb-toolbar-row lines (main row + animated search row) — the second
+   row lives inside .bm-lb-search-collapse so it can grow/shrink smoothly
+   without ever leaving a border/height artifact behind when collapsed.
+   No `gap` on the container itself — the search row supplies its own
+   top margin only while open, so a collapsed row leaves zero residual space. */
 .bm-lb-filter-toolbar.bm-lb-toolbar-multiline {
     display: flex;
     flex-direction: column;
-    gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
     flex-shrink: 0;
@@ -32177,6 +32767,28 @@ tr.bm-row-searching td:first-child {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Animated reveal: grid-template-rows 0fr -> 1fr lets the row expand to its
+   natural content height (no hardcoded max-height guess), with a quick
+   opacity fade so the fields don't just snap into view. */
+.bm-lb-search-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.22s ease;
+}
+.bm-lb-search-collapse-open {
+    grid-template-rows: 1fr;
+    margin-top: 8px;
+}
+.bm-lb-search-collapse-inner {
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.bm-lb-search-collapse-open .bm-lb-search-collapse-inner {
+    opacity: 1;
+    transition-delay: 0.05s;
 }
 
 .bm-lb-search-half { flex: 1 1 50%; min-width: 0; }

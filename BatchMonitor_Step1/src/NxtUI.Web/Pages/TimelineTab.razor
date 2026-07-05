@@ -221,7 +221,7 @@
             {
                 runId             = b.RunId,
                 env               = b.Env,
-                batchName         = b.Name,
+                batchName         = b.Description,
                 isLive            = b.IsLive,
                 batchStartEpochMs = new DateTimeOffset(b.RunStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
@@ -629,7 +629,7 @@
                             var runId = b.RunId;
                             var env   = b.Env;
                             <MudMenuItem OnClick="@(() => RemoveAsync(runId, env))">
-                                @b.Name <span class="bm-muted">@b.RunId</span>
+                                @b.Description <span class="bm-muted">@b.RunId</span>
                             </MudMenuItem>
                         }
                         <MudDivider />

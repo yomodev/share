@@ -6,7 +6,7 @@ namespace NxtUI.Core.Models;
 public class RunDetails
 {
     public string RunId { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public RunStatus Status { get; set; } = RunStatus.Unknown;
     public DateTime Start { get; set; }

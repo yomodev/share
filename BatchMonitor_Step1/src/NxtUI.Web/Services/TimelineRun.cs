@@ -14,10 +14,10 @@ public class TimelineRun(
     SignalRConnectionService signalR,
     Func<Task> onUpdated) : IAsyncDisposable
 {
-    public string   RunId     { get; }          = runId;
-    public string   Env       { get; }          = env;
-    public string   Name   { get; internal set; } = string.Empty;
-    public bool     IsLive    { get; internal set; }
+    public string   RunId       { get; }          = runId;
+    public string   Env         { get; }          = env;
+    public string   Description { get; internal set; } = string.Empty;
+    public bool     IsLive      { get; internal set; }
     public DateTime RunStart  { get; internal set; }
 
     private readonly Dictionary<string, PerformanceEvent> _events = new();
@@ -38,7 +38,7 @@ public class TimelineRun(
     public async Task LoadAsync()
     {
         var details = await runService.GetRunDetailsAsync(Env, RunId);
-        Name  = details.Name;
+        Description = details.Description;
         RunStart = details.Start;
         IsLive   = details.Status == RunStatus.Running;
 
@@ -97,9 +97,9 @@ public class TimelineRun(
         var eventList = events.ToList();
         var run = new TimelineRun(env, runId, null!, null!, () => Task.CompletedTask)
         {
-            Name  = runId,
-            RunStart = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
-            IsLive   = false,
+            Description = runId,
+            RunStart    = eventList.Count > 0 ? eventList.Min(e => e.Start) : DateTime.UtcNow,
+            IsLive      = false,
         };
         foreach (var e in eventList) run.UpsertEvent(e);
         return run;

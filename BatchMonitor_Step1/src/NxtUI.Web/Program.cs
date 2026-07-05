@@ -9,7 +9,6 @@ using NxtUI.Core.Services;
 using NxtUI.Core.Services.Kafka;
 using NxtUI.Core.Services.Mock;
 using NxtUI.Core.Services.Mongo;
-using NxtUI.Core.Services.Sql;
 using NxtUI.Protos;
 using NxtUI.Web.Hubs;
 using NxtUI.Web.Services;
@@ -107,9 +106,9 @@ public class Program
         // ── Kafka ─────────────────────────────────────────────────────────────
         // Mock: no broker required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockKafkaService>();
-        builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<MockKafkaService>());
-        builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<MockKafkaService>());
-        builder.Services.AddSingleton<IKafkaAdmin>   (sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaService>(sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaMonitor>(sp => sp.GetRequiredService<MockKafkaService>());
+        builder.Services.AddSingleton<IKafkaAdmin>(sp => sp.GetRequiredService<MockKafkaService>());
         // builder.Services.AddSingleton<KafkaService>();
         // builder.Services.AddSingleton<IKafkaService> (sp => sp.GetRequiredService<KafkaService>());
         // builder.Services.AddSingleton<IKafkaMonitor> (sp => sp.GetRequiredService<KafkaService>());
@@ -118,9 +117,9 @@ public class Program
         // ── MongoDB collections ───────────────────────────────────────────────
         // Mock: no MongoDB required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockMongoService>();
-        builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MockMongoService>());
-        builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MockMongoService>());
-        builder.Services.AddSingleton<IMongoAdmin>   (sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoService>(sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoReader>(sp => sp.GetRequiredService<MockMongoService>());
+        builder.Services.AddSingleton<IMongoAdmin>(sp => sp.GetRequiredService<MockMongoService>());
         // builder.Services.AddSingleton<MongoService>();
         // builder.Services.AddSingleton<IMongoService> (sp => sp.GetRequiredService<MongoService>());
         // builder.Services.AddSingleton<IMongoReader>  (sp => sp.GetRequiredService<MongoService>());
@@ -198,8 +197,8 @@ public class Program
         // so the data never travels over SignalR.
         app.MapGet("/api/treemap/{env}", (
             string env,
-            HeartbeatMonitor        heartbeat,
-            ServiceMetricsMonitor   metrics) =>
+            HeartbeatMonitor heartbeat,
+            ServiceMetricsMonitor metrics) =>
         {
             var services = heartbeat.GetServices(env);
             if (services is null) return Results.Ok(new { name = "root", children = Array.Empty<object>() });
@@ -210,16 +209,16 @@ public class Program
                 .GroupBy(s => s.HostName)
                 .Select(g => new
                 {
-                    name     = g.Key,
+                    name = g.Key,
                     children = g.Select(s =>
                     {
                         var m = metrics.GetLatest(env, s);
                         return new
                         {
-                            name   = s.ServiceName,
-                            pid    = s.ProcessId,
+                            name = s.ServiceName,
+                            pid = s.ProcessId,
                             online = s.IsOnline,
-                            ram    = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
+                            ram = m is not null ? (double?)((m.CurrentUsageBytes + m.ChildUsageBytes) / 1_048_576.0) : null,
                         };
                     })
                     .OrderByDescending(s => s.ram ?? 0)
@@ -239,35 +238,35 @@ public class Program
     {
         // ANSI escape sequences —  is the ESC character, valid in C# string literals
         const string Esc = "";
-        string R  = Esc + "[0m";   // reset
-        string T  = Esc + "[96m";  // bright cyan    - timestamp
+        string R = Esc + "[0m";   // reset
+        string T = Esc + "[96m";  // bright cyan    - timestamp
         string TH = Esc + "[35m";  // magenta        - thread id
-        string C  = Esc + "[93m";  // bright yellow  - caller method
+        string C = Esc + "[93m";  // bright yellow  - caller method
 
         // Per-level color via NLog ${when} — the ESC byte is embedded as a C# escape
         string levelColor =
             "${when:when=level==LogLevel.Trace:inner=" + Esc + "[90m}"
           + "${when:when=level==LogLevel.Debug:inner=" + Esc + "[37m}"
-          + "${when:when=level==LogLevel.Info:inner="  + Esc + "[92m}"
-          + "${when:when=level==LogLevel.Warn:inner="  + Esc + "[33m}"
+          + "${when:when=level==LogLevel.Info:inner=" + Esc + "[92m}"
+          + "${when:when=level==LogLevel.Warn:inner=" + Esc + "[33m}"
           + "${when:when=level==LogLevel.Error:inner=" + Esc + "[91m}"
           + "${when:when=level==LogLevel.Fatal:inner=" + Esc + "[95m}";
 
         string consoleLayout =
-            T  + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
+            T + "${date:format=HH\\:mm\\:ss.fff}" + R + " "
           + TH + "${threadid:padding=3}" + R + " "
           + levelColor + "${pad:padding=-5:inner=${level:uppercase=true}}" + R + " "
           + "${message} ${exception:format=tostring} "
-          + C  + "${callsite:className=true:methodName=true:fileName=false}" + R;
+          + C + "${callsite:className=true:methodName=true:fileName=false}" + R;
 
         var console = new NLog.Targets.ConsoleTarget("console") { Layout = consoleLayout };
 
         // ── File target — per-class files, one folder per process run ─────────
         // Stamp GDC once so the folder name is fixed for the lifetime of this process.
         var startStamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var pid        = System.Diagnostics.Process.GetCurrentProcess().Id;
+        var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
         NLog.GlobalDiagnosticsContext.Set("startStamp", startStamp);
-        NLog.GlobalDiagnosticsContext.Set("pid",        pid.ToString());
+        NLog.GlobalDiagnosticsContext.Set("pid", pid.ToString());
 
         // Format: datetime_utc | threadid | level | message | exception | callsite
         const string fileLayout =
@@ -279,12 +278,12 @@ public class Program
 
         var file = new NLog.Targets.FileTarget("file")
         {
-            FileName         = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
-            Layout           = fileLayout,
-            KeepFileOpen     = true,
+            FileName = @"C:\temp\logs\NxtUI_${gdc:item=startStamp}_PID_${gdc:item=pid}\${logger:shortName=true}.log",
+            Layout = fileLayout,
+            KeepFileOpen = true,
             ConcurrentWrites = false,
-            Encoding         = System.Text.Encoding.UTF8,
-            CreateDirs       = true,
+            Encoding = System.Text.Encoding.UTF8,
+            CreateDirs = true,
         };
 
         var cfg = new NLog.Config.LoggingConfiguration();
@@ -292,16 +291,16 @@ public class Program
         cfg.AddTarget(file);
 
         // ── Console rules ─────────────────────────────────────────────────────
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.*",                         true);
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "System.*",                            true);
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "Microsoft.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "System.*", true);
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, console, "Microsoft.Extensions.Localization.*", true);
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, console, "NxtUI.*");
-        cfg.AddRule(NLog.LogLevel.Info,  NLog.LogLevel.Fatal, console);
+        cfg.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, console);
 
         // ── File rules (NxtUI app code + ASP.NET warnings) ───────────────────
         cfg.AddRule(NLog.LogLevel.Debug, NLog.LogLevel.Fatal, file, "NxtUI.*");
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
-        cfg.AddRule(NLog.LogLevel.Warn,  NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, file, "Microsoft.AspNetCore.*");
+        cfg.AddRule(NLog.LogLevel.Warn, NLog.LogLevel.Fatal, file, "Microsoft.Hosting.*");
 
         LogManager.Configuration = cfg;
     }

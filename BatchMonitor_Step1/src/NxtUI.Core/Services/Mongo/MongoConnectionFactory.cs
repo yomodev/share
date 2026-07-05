@@ -15,7 +15,7 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
 
     public IMongoClient GetClient(string envId)
     {
-        var settings    = loader.GetMongo(envId);
+        var settings = loader.GetMongo(envId);
         var fingerprint = settings.GetFingerprint();
         return _cache.GetOrAdd(fingerprint, _ => Build(settings));
     }
@@ -23,13 +23,13 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     public IMongoDatabase GetDatabase(string envId)
     {
         var settings = loader.GetMongo(envId);
-        return GetClient(envId).GetDatabase(settings.GetDatabaseName(envId));
+        return GetClient(envId).GetDatabase(settings.DatabaseName);
     }
 
     public IMongoDatabase GetHeartbeatsDatabase(string envId)
     {
         var settings = loader.GetMongo(envId);
-        return GetClient(envId).GetDatabase(settings.GetHeartbeatsDatabaseName(envId));
+        return GetClient(envId).GetDatabase(settings.HeartbeatsCollection);
     }
 
     /// <summary>
@@ -39,20 +39,19 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     public bool IsConfigured(string envId)
     {
         var cs = loader.GetMongo(envId).ConnectionString;
-        return !string.IsNullOrWhiteSpace(cs) &&
-               !cs.Equals("mongodb://localhost:27017", StringComparison.OrdinalIgnoreCase);
+        return !string.IsNullOrWhiteSpace(cs);
     }
 
-    private static IMongoClient Build(MongoSettings s)
+    private static MongoClient Build(MongoSettings s)
     {
-        var url  = new MongoUrl(s.ConnectionString);
+        var url = new MongoUrl(s.ConnectionString);
         var opts = MongoClientSettings.FromUrl(url);
 
         if (!string.IsNullOrWhiteSpace(s.Username) && !string.IsNullOrWhiteSpace(s.Password))
             opts.Credential = MongoCredential.CreateCredential(
                 url.DatabaseName ?? "admin", s.Username, s.Password);
 
-        if (s.TlsEnabled)
+        if (s.TlsEnabled is true)
         {
             opts.UseTls = true;
             if (!string.IsNullOrWhiteSpace(s.TlsCertificatePath))

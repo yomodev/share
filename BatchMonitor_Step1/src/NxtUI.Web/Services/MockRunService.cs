@@ -199,9 +199,9 @@ public class MockRunService : IRunService
         var summary = _store.FirstOrDefault(b => b.RunId == runId);
         var details = new RunDetails
         {
-            RunId     = runId ?? "RUN-UNKNOWN",
-            Name      = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
-            Type      = summary?.Type ?? "FullLoad",
+            RunId       = runId ?? "RUN-UNKNOWN",
+            Description = summary?.Description ?? $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Type        = summary?.Type ?? "FullLoad",
             Status    = summary?.Status ?? RunStatus.Completed,
             Start     = summary?.Start ?? DateTime.UtcNow.AddMinutes(-42),
             End       = summary?.End,

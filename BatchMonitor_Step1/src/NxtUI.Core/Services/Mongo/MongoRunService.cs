@@ -92,7 +92,7 @@ public class MongoRunService : IRunService
         var details = new RunDetails
         {
             RunId = runId ?? "RUN-UNKNOWN",
-            Name = $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
+            Description = $"DemoRun_{runId?.Split('-').LastOrDefault() ?? "X"}",
             Type = "FullLoad",
             Status = RunStatus.Completed,
             Start = DateTime.UtcNow.AddMinutes(-42),

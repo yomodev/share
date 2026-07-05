@@ -13,8 +13,8 @@ namespace NxtUI.Core.Services.Sql;
 /// </summary>
 public class SqlRunService(
     EnvironmentConfigLoader configLoader,
-    RunsSettings            runsSettings,
-    ILogger<SqlRunService>  log)
+    RunsSettings runsSettings,
+    ILogger<SqlRunService> log)
     : IRunService
 {
     // Fields bare filter terms expand to (e.g. "myrun" → matches RunId OR Description).
@@ -32,7 +32,7 @@ public class SqlRunService(
             return [];
         }
 
-        var windowStart    = before.AddMonths(-runsSettings.WindowMonths);
+        var windowStart = before.AddMonths(-runsSettings.WindowMonths);
         var effectiveCount = Math.Min(count > 0 ? count : runsSettings.PageSize, runsSettings.MaxResults);
 
         // An explicit StartTime term in the filter (e.g. "start:2024-01-01..2024-03-01") means the
@@ -110,7 +110,7 @@ public class SqlRunService(
         // Sort column comes from an allow-listed lookup (SqlFilterBuilder.TryGetColumn) —
         // never interpolate the caller-supplied field name directly into ORDER BY.
         var sortColumn = SqlFilterBuilder.TryGetColumn(filter?.SortField, out var col) ? col : "r.StartTime";
-        var sortDir    = (filter?.SortDescending ?? true) ? "DESC" : "ASC";
+        var sortDir = (filter?.SortDescending ?? true) ? "DESC" : "ASC";
 
         var where = string.Join("\n  AND ", clauses);
         var sql = $"""
@@ -145,12 +145,12 @@ public class SqlRunService(
         {
             results.Add(new RunSummary
             {
-                RunId       = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status      = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
-                Type        = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                Status = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                 Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                Start       = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                End         = reader.IsDBNull(5) ? null
+                Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
+                End = reader.IsDBNull(5) ? null
                               : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
             });
         }
@@ -177,9 +177,11 @@ public class SqlRunService(
     private static RunStatus ParseStatus(string? value) =>
         value?.Trim().ToUpperInvariant() switch
         {
-            "R" or "RUNNING"   or "STARTED"  or "IN PROGRESS" or "INPROGRESS" => RunStatus.Running,
-            "C" or "COMPLETED" or "COMPLETE" or "DONE"        or "SUCCESS"     => RunStatus.Completed,
-            "F" or "FAILED"    or "FAIL"     or "ERROR"       or "ABORTED"    => RunStatus.Failed,
+            "CREATED" => RunStatus.Running,
+            "SUCCESS" => RunStatus.Completed,
+            "FAILED" => RunStatus.Failed,
+            "TERMINATED" => RunStatus.Terminated,
+            "PURGED" => RunStatus.Purged,
             _ => RunStatus.Unknown,
         };
 

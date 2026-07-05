@@ -24,35 +24,33 @@ public sealed class EnvironmentConfigLoader(
     private readonly ConcurrentDictionary<string, EnvironmentConfig> _cache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly JsonSerializerOptions _json =
+    private static readonly JsonSerializerOptions _jsonOptions =
         new() { PropertyNameCaseInsensitive = true };
 
-    public KafkaSettings  GetKafka(string envId) => Get(envId).Kafka;
-    public MongoSettings  GetMongo(string envId) => Get(envId).Mongo;
-    public SqlSettings    GetSql  (string envId) => Get(envId).Sql;
+    public KafkaSettings GetKafka(string envId) => Get(envId).Kafka;
+    public MongoSettings GetMongo(string envId) => Get(envId).Mongo;
+    public SqlSettings GetSql(string envId) => Get(envId).Sql;
 
     private EnvironmentConfig Get(string envId) =>
         _cache.GetOrAdd(envId, Load);
 
     private EnvironmentConfig Load(string envId)
     {
-        var path = Path.Combine(options.BasePath, $"{envId.ToLowerInvariant()}.json");
-        if (!File.Exists(path))
-        {
-            log.LogWarning("No environment config at {Path} — using defaults", path);
-            return new EnvironmentConfig();
-        }
+        var config = new EnvironmentConfig();
+        var path = string.Empty;
 
         try
         {
+            path = Path.Combine(options.BasePath, $"{envId.ToLowerInvariant()}.json");
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<EnvironmentConfig>(json, _json) ?? new EnvironmentConfig();
+            return JsonSerializer.Deserialize<EnvironmentConfig>(json, _jsonOptions) ?? new EnvironmentConfig();
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Failed to load environment config from {Path}", path);
-            return new EnvironmentConfig();
         }
+
+        return config;
     }
 }
 
@@ -60,5 +58,5 @@ public sealed class EnvironmentConfig
 {
     public KafkaSettings Kafka { get; set; } = new();
     public MongoSettings Mongo { get; set; } = new();
-    public SqlSettings   Sql   { get; set; } = new();
+    public SqlSettings Sql { get; set; } = new();
 }
