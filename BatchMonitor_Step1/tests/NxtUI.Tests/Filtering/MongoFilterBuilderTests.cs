@@ -86,4 +86,86 @@ public class MongoFilterBuilderTests
         rendered.Should().Contain("IsOnline");
         rendered.Should().Contain("true");
     }
+
+    // ── BuildCollectionNameFilter (MongoDashboard collection-name search) ───────
+    // Regression coverage for the raw-regex passthrough this replaced: "!ccr" and
+    // "wcr*"/"*str" must use the shared grammar's NOT/glob semantics, not literal
+    // regex syntax, and literal regex metacharacters in a name must be escaped.
+
+    private static string RenderCollectionFilter(string? search)
+    {
+        var filter = MongoFilterBuilder.BuildCollectionNameFilter(search);
+        return filter.Render(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry).ToString();
+    }
+
+    [Fact]
+    public void Null_or_blank_search_produces_empty_filter()
+    {
+        RenderCollectionFilter(null).Should().Be("{ }");
+        RenderCollectionFilter("  ").Should().Be("{ }");
+    }
+
+    [Fact]
+    public void Plain_bare_term_is_a_case_insensitive_contains_on_name()
+    {
+        RenderCollectionFilter("ccr").Should()
+            .Be("{ \"name\" : /ccr/i }");
+    }
+
+    [Fact]
+    public void Negated_bare_term_wraps_contains_in_not_instead_of_matching_everything()
+    {
+        // Previously "!ccr" was passed straight through as a raw regex (where '!' has no
+        // special meaning), so it matched names literally containing "!ccr" instead of
+        // excluding names that contain "ccr".
+        var rendered = RenderCollectionFilter("!ccr");
+        rendered.Should().Contain("name");
+        rendered.Should().Contain("ccr");
+        rendered.Should().Contain("$not");
+    }
+
+    [Fact]
+    public void Leading_glob_star_anchors_to_starts_with()
+    {
+        // Previously "wcr*" was raw regex — '*' quantifies the preceding char, not a
+        // "starts with" wildcard — so this only coincidentally looked like it worked.
+        RenderCollectionFilter("wcr*").Should()
+            .Be("{ \"name\" : /^wcr.*$/i }");
+    }
+
+    [Fact]
+    public void Trailing_glob_star_anchors_to_ends_with()
+    {
+        RenderCollectionFilter("*str").Should()
+            .Be("{ \"name\" : /^.*str$/i }");
+    }
+
+    [Fact]
+    public void Literal_regex_metacharacters_in_name_are_escaped()
+    {
+        // Previously the raw regex passthrough let '.' and '+' act as regex metacharacters
+        // (any-char / quantifier), so e.g. searching "log.events" would also match
+        // "logXevents". The shared grammar escapes literal characters via Regex.Escape.
+        RenderCollectionFilter("log.events").Should()
+            .Be("{ \"name\" : /log\\.events/i }");
+    }
+
+    [Theory]
+    [InlineData("name:ccr")]
+    [InlineData("collection:ccr")]
+    public void Field_prefixed_aliases_resolve_to_the_name_field(string search)
+    {
+        RenderCollectionFilter(search).Should().Be("{ \"name\" : /ccr/i }");
+    }
+
+    [Fact]
+    public void Unparseable_input_falls_back_to_a_literal_escaped_contains_match()
+    {
+        // An unbalanced paren is a parse error in the shared grammar — the search box
+        // must never just throw or silently return nothing for odd input.
+        RenderCollectionFilter("(ccr").Should()
+            .Be("{ \"name\" : /\\(ccr/i }");
+    }
 }

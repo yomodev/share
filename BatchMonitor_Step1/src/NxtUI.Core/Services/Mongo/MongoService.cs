@@ -65,14 +65,13 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
 
         var db = factory.GetClient(env).GetDatabase(database);
 
-        // Build optional name filter using a case-insensitive regex.
+        // Same shared filter grammar (glob/NOT/OR/quoting) as every other filter box in the
+        // app, scoped to "name" — the one real field a listCollections result document has.
         // ListCollectionsAsync (not ListCollectionNamesAsync) supports a filter document.
-        var options = new ListCollectionsOptions();
-        if (!string.IsNullOrWhiteSpace(search))
+        var options = new ListCollectionsOptions
         {
-            options.Filter = new BsonDocument("name",
-                new BsonDocument("$regex", new BsonRegularExpression(search.Trim(), "i")));
-        }
+            Filter = MongoFilterBuilder.BuildCollectionNameFilter(search),
+        };
 
         // Fetch all matching names to get the total count, then slice the page.
         // nameOnly:true makes this metadata-only — fast even with 50k collections.

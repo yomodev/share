@@ -29,6 +29,42 @@ public static class MongoFilterBuilder
             _ => B.Empty,
         };
 
+    // Collection-name search (MongoDashboard): a `listCollections` result document has
+    // exactly one field worth searching — "name" — so a bare term always means "name"
+    // with no ambiguity, unlike the arbitrary-schema document browser.
+    private static readonly FilterParser CollectionNameParser = new(
+        searchableFields: ["name"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["name"] = "name",
+            ["collection"] = "name",
+        });
+
+    /// <summary>
+    /// Builds a filter for a MongoDB <c>listCollections</c> result document (shape:
+    /// <c>{ name, type, options, info }</c>) using the same shared grammar (glob, NOT,
+    /// OR, quoting) as every other filter box, instead of passing the raw input straight
+    /// through as a regex — which let unescaped regex metacharacters (e.g. <c>.</c>, <c>+</c>)
+    /// leak into the match and gave <c>!</c>/<c>*</c> regex meanings instead of NOT/glob.
+    /// Falls back to a literal (escaped) contains match on <c>name</c> if the input can't
+    /// be parsed by the grammar, so the search box never just breaks on odd input.
+    /// </summary>
+    public static FilterDefinition<BsonDocument> BuildCollectionNameFilter(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search)) return B.Empty;
+
+        var trimmed = search.Trim();
+        try
+        {
+            var node = CollectionNameParser.Parse(trimmed);
+            return Build(node);
+        }
+        catch (FilterParseException)
+        {
+            return B.Regex("name", ContainsRegex(trimmed, caseSensitive: false));
+        }
+    }
+
     // ── Field term ─────────────────────────────────────────────────────────
 
     private static FilterDefinition<BsonDocument> BuildTerm(FieldTermNode t) =>

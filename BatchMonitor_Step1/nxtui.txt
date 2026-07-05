@@ -5806,7 +5806,7 @@ LENGTH 3057
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 3810
+LENGTH 5114
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
   ANSI color codes used below (&#27; = ESC):
@@ -5863,6 +5863,22 @@ LENGTH 3810
             concurrentWrites="false"
             keepFileOpen="true"
             layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
+
+    <!-- Kafka (topic browsing/admin calls in KafkaService, plus the metrics consumer's
+         source-of-truth decisions in ServiceMetricsMonitor: consumer start/stop, whether an
+         env is getting live data from Kafka or falling back to disk, and any consume/seek
+         errors): plain-text rolling file, one per day, kept 14 days. Check this file first
+         when diagnosing whether metrics for an environment are coming from Kafka or disk. -->
+    <target xsi:type="File" name="kafka-file"
+            fileName="${basedir}/logs/kafka.log"
+            archiveFileName="${basedir}/logs/kafka.{#}.log"
+            archiveEvery="Day"
+            archiveNumbering="Date"
+            archiveDateFormat="yyyy-MM-dd"
+            maxArchiveFiles="14"
+            concurrentWrites="false"
+            keepFileOpen="true"
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
   </targets>
 
   <rules>
@@ -5876,6 +5892,10 @@ LENGTH 3810
 
     <!-- mongo queries → console + file -->
     <logger name="NxtUI.Core.Services.Mongo.*" minlevel="Debug" writeTo="console,mongo-file" final="true" />
+
+    <!-- kafka (topic browsing/admin + metrics consumer) → console + file -->
+    <logger name="NxtUI.Core.Services.Kafka.*"          minlevel="Debug" writeTo="console,kafka-file" final="true" />
+    <logger name="NxtUI.Web.Services.ServiceMetricsMonitor" minlevel="Debug" writeTo="console,kafka-file" final="true" />
 
     <!-- app code at Debug and above -->
     <logger name="NxtUI.*" minlevel="Debug" writeTo="console" />
@@ -6712,7 +6732,7 @@ public class TopicDeserializerRule
     public List<string> Types { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
-LENGTH 2468
+LENGTH 2850
 namespace NxtUI.Configuration;
 
 public class LogPathSettings
@@ -6767,6 +6787,13 @@ public class LogPathSettings
     /// re-subscribing resumes from where it left off without re-reading files from the start.
     /// </summary>
     public int IdleReleaseMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Caps how many matches a single recursive Log Browser search (Start Search) accumulates
+    /// before it stops itself. Without a cap, searching a huge/misconfigured tree can grow the
+    /// result list and the render workload without bound for as long as the search keeps running.
+    /// </summary>
+    public int MaxSearchResults { get; set; } = 5000;
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
 LENGTH 2158
@@ -8047,7 +8074,7 @@ file sealed record TrueNode : FilterNode
     public static readonly TrueNode Instance = new();
 }
 FILE src/NxtUI.Core/Filtering/MongoFilterBuilder.cs
-LENGTH 8528
+LENGTH 10189
 using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -8078,6 +8105,42 @@ public static class MongoFilterBuilder
             FieldTermNode t => BuildTerm(t),
             _ => B.Empty,
         };
+
+    // Collection-name search (MongoDashboard): a `listCollections` result document has
+    // exactly one field worth searching — "name" — so a bare term always means "name"
+    // with no ambiguity, unlike the arbitrary-schema document browser.
+    private static readonly FilterParser CollectionNameParser = new(
+        searchableFields: ["name"],
+        aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["name"] = "name",
+            ["collection"] = "name",
+        });
+
+    /// <summary>
+    /// Builds a filter for a MongoDB <c>listCollections</c> result document (shape:
+    /// <c>{ name, type, options, info }</c>) using the same shared grammar (glob, NOT,
+    /// OR, quoting) as every other filter box, instead of passing the raw input straight
+    /// through as a regex — which let unescaped regex metacharacters (e.g. <c>.</c>, <c>+</c>)
+    /// leak into the match and gave <c>!</c>/<c>*</c> regex meanings instead of NOT/glob.
+    /// Falls back to a literal (escaped) contains match on <c>name</c> if the input can't
+    /// be parsed by the grammar, so the search box never just breaks on odd input.
+    /// </summary>
+    public static FilterDefinition<BsonDocument> BuildCollectionNameFilter(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search)) return B.Empty;
+
+        var trimmed = search.Trim();
+        try
+        {
+            var node = CollectionNameParser.Parse(trimmed);
+            return Build(node);
+        }
+        catch (FilterParseException)
+        {
+            return B.Regex("name", ContainsRegex(trimmed, caseSensitive: false));
+        }
+    }
 
     // ── Field term ─────────────────────────────────────────────────────────
 
@@ -9483,7 +9546,7 @@ public interface ILogBrowserService
         CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/ILogPathDiscoveryService.cs
-LENGTH 1334
+LENGTH 1913
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9517,6 +9580,17 @@ public interface ILogPathDiscoveryService
     /// so subscribers can call StateHasChanged selectively.
     /// </summary>
     event Action<string>? OnPathResolved;
+
+    /// <summary>
+    /// Removes cached entries for <paramref name="env"/> whose key isn't in
+    /// <paramref name="activeKeys"/> (a service no longer reported by heartbeat).
+    /// Without this the cache — keyed by (env, host, service, PID) — grows without
+    /// bound for the lifetime of the process as services restart with new PIDs.
+    /// </summary>
+    void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys);
+
+    /// <summary>Removes every cached entry for an environment (e.g. once it's gone fully idle).</summary>
+    void ClearEnv(string env);
 }
 FILE src/NxtUI.Core/Services/ILogViewerService.cs
 LENGTH 626
@@ -9700,7 +9774,7 @@ public interface IServiceMetricsMonitor
     event Action<string>? OnMetricsUpdated;
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 4939
+LENGTH 5689
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -9751,6 +9825,25 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         var task = RunSearchAsync(svc, env, key);
         _cache[key] = task;
         return await task;
+    }
+
+    public void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys)
+    {
+        var prefix = env + "|";
+        var removed = 0;
+        foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
+        {
+            if (_cache.TryRemove(key, out _)) removed++;
+        }
+        if (removed > 0)
+            log.LogDebug("discovery [{Env}]: pruned {Count} stale cache entr{Suffix}", env, removed, removed == 1 ? "y" : "ies");
+    }
+
+    public void ClearEnv(string env)
+    {
+        var prefix = env + "|";
+        foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _cache.TryRemove(key, out _);
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────
@@ -10368,7 +10461,7 @@ LENGTH 2238
     }
 }
 FILE src/NxtUI.Web/Components/BmRunsTable.razor
-LENGTH 7592
+LENGTH 8912
 @namespace NxtUI.Web.Components
 @using NxtUI.Core.Models
 @using NxtUI.Web.Services
@@ -10387,7 +10480,8 @@ LENGTH 7592
               Striped="true"
               Class="bm-batch-table"
               FixedHeader="@FixedHeader"
-              Height="@(FixedHeader ? "100%" : null)">
+              Height="@(FixedHeader ? "100%" : null)"
+              RowClassFunc="@RowClassFunc">
         <HeaderContent>
             <MudTh Style="width:36px;"></MudTh>
             <MudTh>@HeaderContent("Run ID", "RunId")</MudTh>
@@ -10396,59 +10490,73 @@ LENGTH 7592
             <MudTh>@HeaderContent("Started (UTC)", "StartTime")</MudTh>
             <MudTh>Duration</MudTh>
             <MudTh>@HeaderContent("Status", "Status")</MudTh>
-            <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+            @if (ShowActions)
+            {
+                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+            }
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="padding-left:12px;" @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd Style="padding-left:12px;"
+                   @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <StatusIcon Status="@context.Status" />
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2">@context.Description</MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
                     @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                 </MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace">
                     @FormatDuration(context.Duration)
                 </MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
                     @context.Status
                 </span>
             </MudTd>
-            <MudTd Style="text-align:center;">
-                <div class="bm-row-actions">
-                    <MudTooltip Text="Open Detail">
-                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
-                    </MudTooltip>
-                    <MudTooltip Text="Open Timeline">
-                        <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
-                    </MudTooltip>
-                    <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
-                        <span>
-                            <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+            @if (ShowActions)
+            {
+                <MudTd Style="text-align:center;">
+                    <div class="bm-row-actions">
+                        <MudTooltip Text="Open Detail">
+                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
                                            Size="Size.Small"
-                                           Color="Color.Error"
-                                           Disabled="@(context.Status != RunStatus.Running)"
-                                           OnClick="@(() => OnStopRun.InvokeAsync(context))" />
-                        </span>
-                    </MudTooltip>
-                </div>
-            </MudTd>
+                                           OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Open Timeline">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
+                            <span>
+                                <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               Disabled="@(context.Status != RunStatus.Running)"
+                                               OnClick="@(() => OnStopRun.InvokeAsync(context))" />
+                            </span>
+                        </MudTooltip>
+                    </div>
+                </MudTd>
+            }
         </RowTemplate>
     </MudTable>
 </div>
@@ -10488,6 +10596,16 @@ LENGTH 7592
     [Parameter] public bool Loading { get; set; }
     [Parameter] public bool FixedHeader { get; set; } = true;
 
+    // When false, the Actions column (open detail / timeline / stop) is omitted —
+    // used by pickers like the Timeline "Add Run" dialog where rows are selected,
+    // not acted on directly.
+    [Parameter] public bool ShowActions { get; set; } = true;
+
+    // Row-level single-click selection (distinct from the per-cell OnOpenDetail
+    // double-click), and a per-row CSS class hook for highlighting the selection.
+    [Parameter] public EventCallback<RunSummary> OnRowClick { get; set; }
+    [Parameter] public Func<RunSummary, int, string>? RowClassFunc { get; set; }
+
     // When false (Home's "recent runs" use case), no footer/pagination is shown
     // and no header sort links are wired — just the same columns/actions as
     // the full Runs page, with whatever rows the caller already fetched.
@@ -10506,8 +10624,8 @@ LENGTH 7592
     [Parameter] public EventCallback<string> OnSort { get; set; }
 
     [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenDetail { get; set; }
-    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
-    [Parameter, EditorRequired] public EventCallback<RunSummary> OnStopRun { get; set; }
+    [Parameter] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
+    [Parameter] public EventCallback<RunSummary> OnStopRun { get; set; }
 
     private RenderFragment HeaderContent(string label, string field)
     {
@@ -16011,7 +16129,7 @@ LENGTH 28156
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 36933
+LENGTH 38567
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -16104,7 +16222,9 @@ LENGTH 36933
             @if (_isSearchMode)
             {
                 <span class="bm-lb-bc-sep bm-muted"> — </span>
-                <span class="bm-muted bm-toolbar-hint">search results</span>
+                <span class="bm-muted bm-toolbar-hint">
+                    search results@(_searchCapped ? $" (stopped at {LogSettings.Value.MaxSearchResults} results)" : "")
+                </span>
             }
             <MudTooltip Text="Clear all">
                 <MudIconButton Icon="@Icons.Material.Outlined.ClearAll" Size="Size.Small" OnClick="ClearSelection" />
@@ -16461,6 +16581,7 @@ LENGTH 36933
     private CancellationTokenSource? _searchCts;
     private FocusGatedPoller?        _poller;
     private bool                     _previousIsFocused;
+    private bool                     _searchCapped;
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -16729,21 +16850,50 @@ LENGTH 36933
         _isSearching  = true;
         _isSearchMode = true;
         _loadingFiles = true;
+        _searchCapped = false;
         _files.Clear();
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
         StateHasChanged();
 
-        var paths  = _checkedPaths.ToList();
-        var glob   = _fileGlob;
-        var filter = _contentFilterNode;
-        var ct     = _searchCts.Token;
+        var paths      = _checkedPaths.ToList();
+        var glob       = _fileGlob;
+        var filter     = _contentFilterNode;
+        var ct         = _searchCts.Token;
+        var maxResults = LogSettings.Value.MaxSearchResults;
+
+        // Batches UI updates instead of one StateHasChanged per match — a recursive search
+        // over a large tree can yield matches far faster than a render round trip keeps up
+        // with, and doing one full render per match is what made the tab feel unresponsive
+        // during a big search. All callbacks below run through InvokeAsync, which marshals
+        // onto Blazor Server's single renderer sync context, so this shared state is safe
+        // even though multiple checked-path searches run in parallel.
+        var lastFlush = DateTime.UtcNow;
+        var flushInterval = TimeSpan.FromMilliseconds(200);
 
         try
         {
             await Task.WhenAll(paths.Select(async path =>
             {
                 await foreach (var entry in BrowserSvc.SearchAsync(_servers, path, glob, filter, ct))
-                    await InvokeAsync(() => { _files.Add(entry); StateHasChanged(); });
+                {
+                    var reachedCap = false;
+                    await InvokeAsync(() =>
+                    {
+                        if (_files.Count >= maxResults) return;
+                        _files.Add(entry);
+                        if (_files.Count >= maxResults)
+                        {
+                            _searchCapped = true;
+                            reachedCap = true;
+                        }
+                        if (reachedCap || DateTime.UtcNow - lastFlush >= flushInterval)
+                        {
+                            lastFlush = DateTime.UtcNow;
+                            StateHasChanged();
+                        }
+                    });
+                    if (reachedCap) { await _searchCts.CancelAsync(); break; }
+                }
             }));
             _lastScan = DateTime.UtcNow;
         }
@@ -20309,13 +20459,16 @@ LENGTH 11113
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 31135
+LENGTH 32069
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
+@using NxtUI.Core.Filtering
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject TabService TabService
+@inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
+@inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @implements IAsyncDisposable
 
 @code {
@@ -20353,15 +20506,33 @@ LENGTH 31135
     // ── Shortcuts dialog ──────────────────────────────────────────────────
     private bool _shortcutsOpen = false;
 
-    // ── Add Batch dialog ──────────────────────────────────────────────────
+    // ── Add Run dialog ───────────────────────────────────────────────────
     private bool _addDialogOpen = false;
+    private List<RunSummary> _dialogAll = new();
     private List<RunSummary> _dialogBatches = new();
     private RunSummary? _dialogSelected;
-    private string _dialogFilter = string.Empty;
     private string _dialogEnv = string.Empty;
     private bool _dialogLoading = false;
     private int _dialogPage = 1;
-    private const int DialogPageSize = 25;
+    private int _dialogPageSize = 25;
+    private int _dialogTotalPages => Math.Max(1, (int)Math.Ceiling((double)_dialogAll.Count / _dialogPageSize));
+
+    private string      _dialogFilterText       = string.Empty;
+    private string?     _dialogFilterParseError = null;
+    private FilterNode?  _dialogFilterAst        = null;
+
+    private static readonly string[] DialogSearchableFields = ["RunId", "Description"];
+    private static readonly FilterParser DialogFilterParser = new(DialogSearchableFields);
+
+    private static readonly (string Aliases, string Label)[] _dialogFieldHints =
+    [
+        ("run / runid",                 "run identifier"),
+        ("type",                        "run type"),
+        ("status",                      "Running / Completed / Failed"),
+        ("start / started",             "start time"),
+        ("end / ended / finish",        "end time"),
+        ("desc / description",          "description"),
+    ];
 
     // ── JS interop ────────────────────────────────────────────────────────
     private string _instanceKey = Guid.NewGuid().ToString("N");
@@ -20737,14 +20908,16 @@ LENGTH 31135
         return result.ToArray();
     }
 
-    // ── Add Batch dialog ──────────────────────────────────────────────────
+    // ── Add Run dialog ───────────────────────────────────────────────────
 
     private async Task OpenAddDialog()
     {
-        _addDialogOpen    = true;
-        _dialogSelected   = null;
-        _dialogFilter     = string.Empty;
-        _dialogPage       = 1;
+        _addDialogOpen          = true;
+        _dialogSelected         = null;
+        _dialogFilterText       = string.Empty;
+        _dialogFilterParseError = null;
+        _dialogFilterAst        = null;
+        _dialogPage             = 1;
         await LoadDialogAsync();
     }
 
@@ -20754,31 +20927,44 @@ LENGTH 31135
         StateHasChanged();
         try
         {
-            var filter = new RunFilter { SearchText = _dialogFilter };
-            var page   = await RunService.GetRunsAsync(
-                _dialogEnv, DateTime.UtcNow, DialogPageSize * _dialogPage, filter);
-            // Poor man's pagination: fetch N items and skip to page.
-            _dialogBatches = page
-                .Skip((_dialogPage - 1) * DialogPageSize)
-                .Take(DialogPageSize)
-                .ToList();
+            _dialogAll = await RunService.GetRunsAsync(
+                _dialogEnv, DateTime.UtcNow, RunsOptions.Value.MaxResults,
+                filter: new RunFilter { FilterAst = _dialogFilterAst });
+            _dialogPage = 1;
+            RebuildDialogPage();
         }
         finally { _dialogLoading = false; StateHasChanged(); }
     }
 
+    private void RebuildDialogPage() =>
+        _dialogBatches = _dialogAll.Skip((_dialogPage - 1) * _dialogPageSize).Take(_dialogPageSize).ToList();
+
+    private void OnDialogPageChanged(int page) { _dialogPage = page; RebuildDialogPage(); }
+
+    private void OnDialogPageSizeChanged(int size) { _dialogPageSize = size; _dialogPage = 1; RebuildDialogPage(); }
+
     private async Task OnDialogEnvChanged(string env)
     {
         _dialogEnv      = env;
-        _dialogPage     = 1;
         _dialogSelected = null;
         await LoadDialogAsync();
     }
 
     private async Task OnDialogFilterChanged(string text)
     {
-        _dialogFilter   = text;
-        _dialogPage     = 1;
-        _dialogSelected = null;
+        _dialogFilterText       = text;
+        _dialogFilterParseError = null;
+        _dialogSelected         = null;
+
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = DialogFilterParser.Parse(text); }
+            catch (FilterParseException ex) { _dialogFilterParseError = ex.Message; }
+        }
+        _dialogFilterAst = node;
+
+        if (_dialogFilterParseError is not null) { StateHasChanged(); return; }
         await LoadDialogAsync();
     }
 
@@ -20791,19 +20977,15 @@ LENGTH 31135
         await PushDataAsync();
     }
 
-    // ── Dialog row click / double-click ───────────────────────────────────
-    // MouseEventArgs.Detail = click count: 1 = single, 2 = double.
-    private async Task OnDialogRowClick(RunSummary item, MouseEventArgs mouse)
+    // ── Dialog row selection ───────────────────────────────────────────────
+
+    private void OnDialogRowClick(RunSummary item) =>
+        _dialogSelected = _dialogSelected?.RunId == item.RunId ? null : item;
+
+    private async Task OnDialogRowDoubleClick(RunSummary item)
     {
-        if (mouse.Detail == 2)
-        {
-            _dialogSelected = item;
-            await ConfirmAdd();
-        }
-        else
-        {
-            _dialogSelected = _dialogSelected?.RunId == item.RunId ? null : item;
-        }
+        _dialogSelected = item;
+        await ConfirmAdd();
     }
 
     private bool IsAlreadyLoaded(RunSummary b) =>
@@ -21009,58 +21191,47 @@ LENGTH 31135
         </DialogActions>
     </MudDialog>
 
-    <!-- Add Batch dialog -->
-    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">
+    <!-- Add Run dialog -->
+    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true })">
         <TitleContent>
-            <MudText Typo="Typo.h6">Add Batch</MudText>
+            <MudText Typo="Typo.h6">Add Run</MudText>
         </TitleContent>
         <DialogContent>
             <div class="bm-tl-dialog-controls">
-                <MudSelect T="string" Label="Environment" Value="_dialogEnv"
-                           ValueChanged="OnDialogEnvChanged"
-                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-dialog-env">
-                    @* environments populated from EnvironmentSelectorService in a real impl *@
-                    <MudSelectItem Value="@Environment">@Environment</MudSelectItem>
-                </MudSelect>
+                <div class="bm-tl-dialog-env-wrap">
+                    <span class="bm-toolbar-label">Environment</span>
+                    <MudSelect T="string" Value="_dialogEnv"
+                               ValueChanged="OnDialogEnvChanged"
+                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Class="bm-tl-dialog-env" PopoverClass="bm-tl-dialog-env-popover">
+                        @foreach (var env in EnvService.Environments)
+                        {
+                            <MudSelectItem Value="@env.Id">@env.Id</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
 
-                <MudTextField T="string" Placeholder="Search RunId / Description…"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Outlined.Search"
-                              Value="@_dialogFilter" ValueChanged="OnDialogFilterChanged"
-                              Immediate="true" DebounceInterval="300"
-                              Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Class="bm-tl-dialog-filter" />
+                <FilterBox Value="@_dialogFilterText"
+                           OnFilterChanged="OnDialogFilterChanged"
+                           ParseError="@_dialogFilterParseError"
+                           Placeholder="Filter runs…"
+                           Class="bm-filter-input"
+                           FieldHints="@_dialogFieldHints" />
             </div>
 
-            @if (_dialogLoading)
-            {
-                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-            }
-            else
-            {
-                <MudDataGrid T="RunSummary" Items="@_dialogBatches"
-                             RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
-                             RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
-                             Dense="true" Hover="true" Striped="true" Bordered="false">
-                    <Columns>
-                        <PropertyColumn Property="x => x.RunId" Title="RunId" />
-                        <PropertyColumn Property="x => x.Description" Title="Description" />
-                        <TemplateColumn Title="Status">
-                            <CellTemplate>
-                                <StatusIcon Status="@context.Item.Status" />
-                            </CellTemplate>
-                        </TemplateColumn>
-                        <PropertyColumn Property="x => x.Start" Title="Start" Format="HH:mm" />
-                        <TemplateColumn Title="Duration">
-                            <CellTemplate>
-                                @(context.Item.End.HasValue
-                                    ? FormatDuration(context.Item.End.Value - context.Item.Start)
-                                    : "—")
-                            </CellTemplate>
-                        </TemplateColumn>
-                    </Columns>
-                </MudDataGrid>
-            }
+            <BmRunsTable Rows="@_dialogBatches"
+                         Loading="@_dialogLoading"
+                         FixedHeader="false"
+                         ShowActions="false"
+                         TotalCount="@_dialogAll.Count"
+                         Page="@_dialogPage"
+                         PageSize="@_dialogPageSize"
+                         TotalPages="@_dialogTotalPages"
+                         PageChanged="OnDialogPageChanged"
+                         PageSizeChanged="OnDialogPageSizeChanged"
+                         RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
+                         OnRowClick="@(r => OnDialogRowClick(r))"
+                         OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />
 
             @if (_dialogSelected is not null && IsAlreadyLoaded(_dialogSelected))
             {
@@ -22448,7 +22619,7 @@ public sealed class InfraHealthCache : BackgroundService
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 16539
+LENGTH 16868
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Filtering;
@@ -22550,8 +22721,11 @@ public class LogBrowserService : ILogBrowserService
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var serverList = servers.ToList();
-        var channel = Channel.CreateUnbounded<LogFileEntry>(
-            new UnboundedChannelOptions { SingleWriter = false, SingleReader = true });
+        // Bounded (not unbounded): if the reader (Blazor UI, one StateHasChanged round trip
+        // per batch) falls behind a fast recursive scan across many servers, WriteAsync below
+        // simply awaits until there's room instead of buffering every match unboundedly in memory.
+        var channel = Channel.CreateBounded<LogFileEntry>(
+            new BoundedChannelOptions(256) { SingleWriter = false, SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
 
         var producers = serverList.Select(server => Task.Run(async () =>
         {
@@ -23659,7 +23833,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 25081
+LENGTH 27790
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
@@ -23889,6 +24063,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                          .Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
                 _entries.TryRemove(key, out _);
             _kafkaHasData.TryRemove(env, out _);
+            _discovery.ClearEnv(env);
             _log.LogInformation("metrics [{Env}]: idle cache released", env);
         }
     }
@@ -24030,6 +24205,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             _entries.TryRemove(key, out _);
             _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
         }
+        _discovery.PruneStaleEntries(env, activeKeys);
     }
 
     // ── Kafka metrics consumer ──────────────────────────────────────────────────
@@ -24051,28 +24227,58 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
             : KafkaSeekDirective.Default;
 
+        _log.LogInformation(
+            "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
+            "until the first matching message arrives, this env is served from disk-log polling",
+            env, topic, directive);
+
+        var otherTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         try
         {
             var first = true;
+            var messageCount = 0;
             await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))
             {
                 if (ct.IsCancellationRequested) break;
-                if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase)) continue;
+                messageCount++;
+
+                if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (otherTypes.Add(msg.PayloadType ?? "(null)"))
+                        _log.LogDebug(
+                            "metrics [{Env}]: topic '{Topic}' also carries payload type '{Type}' — ignored (not MetricsTracker)",
+                            env, topic, msg.PayloadType);
+                    continue;
+                }
 
                 _kafkaHasData[env] = true;
                 if (first)
                 {
-                    _log.LogInformation("metrics [{Env}]: Kafka topic '{Topic}' has data, earliest={Ts:HH:mm:ss}", env, topic, msg.Timestamp);
+                    _log.LogInformation("metrics [{Env}]: Kafka topic '{Topic}' has data, earliest={Ts:HH:mm:ss} — env is now served from Kafka", env, topic, msg.Timestamp);
                     first = false;
                 }
 
                 await HandleMetricsMessageAsync(env, msg, ct);
             }
+
+            // The tail loop only returns without throwing when the topic run ends on its own
+            // (e.g. broker closed the connection) rather than via cancellation — that's not
+            // supposed to happen for a continuous "uncapped" tail, so it's worth flagging:
+            // metrics for this env silently fall back to disk polling until the next subscribe.
+            if (!ct.IsCancellationRequested)
+                _log.LogWarning(
+                    "metrics [{Env}]: Kafka consumer for topic '{Topic}' ended unexpectedly after {Count} message(s) " +
+                    "without being cancelled — this env now falls back to disk-log polling until re-subscribed",
+                    env, topic, messageCount);
         }
         catch (OperationCanceledException) { /* unsubscribed / shutting down */ }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "metrics [{Env}]: Kafka consumer for topic '{Topic}' failed", env, topic);
+            _log.LogError(ex,
+                "metrics [{Env}]: Kafka consumer for topic '{Topic}' failed — this env falls back to disk-log " +
+                "polling until re-subscribed (check broker connectivity/credentials for this environment)",
+                env, topic);
         }
     }
 
@@ -24080,7 +24286,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         JsonDocument doc;
         try { doc = JsonDocument.Parse(msg.JsonPayload ?? "{}"); }
-        catch { return; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "metrics [{Env}]: could not parse MetricsTracker JSON payload (offset={Offset}, partition={Partition})",
+                env, msg.Offset, msg.Partition);
+            return;
+        }
 
         using (doc)
         {
@@ -24088,7 +24300,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             var hostName    = GetStringCI(root, "HostName");
             var serviceName = GetStringCI(root, "ServiceName");
             var instanceId  = GetStringCI(root, "ServiceInstanceId");
-            if (hostName is null || serviceName is null || instanceId is null) return;
+            if (hostName is null || serviceName is null || instanceId is null)
+            {
+                _log.LogWarning(
+                    "metrics [{Env}]: MetricsTracker message missing HostName/ServiceName/ServiceInstanceId " +
+                    "(offset={Offset}, partition={Partition}) — dropped",
+                    env, msg.Offset, msg.Partition);
+                return;
+            }
 
             // Kafka carries no ProcessId — join against the heartbeat-reported instance by
             // (host, service, instance id) to find the same ServiceStatus/Entry the file
@@ -24099,7 +24318,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 string.Equals(s.HostName, hostName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ServiceInstanceId, instanceId, StringComparison.OrdinalIgnoreCase));
-            if (svc is null) return;
+            if (svc is null)
+            {
+                _log.LogDebug(
+                    "metrics [{Env}]: no heartbeat match yet for {Service}@{Host} (instance={Instance}) — " +
+                    "message skipped, will retry once heartbeat reports this instance",
+                    env, serviceName, hostName, instanceId);
+                return;
+            }
 
             var startStr = GetStringCI(root, "ProcessStartTime");
             DateTime.TryParse(startStr, System.Globalization.CultureInfo.InvariantCulture,
@@ -26662,7 +26888,7 @@ public class FilterParserTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/MongoFilterBuilderTests.cs
-LENGTH 3021
+LENGTH 6198
 using AwesomeAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -26750,6 +26976,88 @@ public class MongoFilterBuilderTests
             BsonSerializer.SerializerRegistry).ToString();
         rendered.Should().Contain("IsOnline");
         rendered.Should().Contain("true");
+    }
+
+    // ── BuildCollectionNameFilter (MongoDashboard collection-name search) ───────
+    // Regression coverage for the raw-regex passthrough this replaced: "!ccr" and
+    // "wcr*"/"*str" must use the shared grammar's NOT/glob semantics, not literal
+    // regex syntax, and literal regex metacharacters in a name must be escaped.
+
+    private static string RenderCollectionFilter(string? search)
+    {
+        var filter = MongoFilterBuilder.BuildCollectionNameFilter(search);
+        return filter.Render(
+            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            BsonSerializer.SerializerRegistry).ToString();
+    }
+
+    [Fact]
+    public void Null_or_blank_search_produces_empty_filter()
+    {
+        RenderCollectionFilter(null).Should().Be("{ }");
+        RenderCollectionFilter("  ").Should().Be("{ }");
+    }
+
+    [Fact]
+    public void Plain_bare_term_is_a_case_insensitive_contains_on_name()
+    {
+        RenderCollectionFilter("ccr").Should()
+            .Be("{ \"name\" : /ccr/i }");
+    }
+
+    [Fact]
+    public void Negated_bare_term_wraps_contains_in_not_instead_of_matching_everything()
+    {
+        // Previously "!ccr" was passed straight through as a raw regex (where '!' has no
+        // special meaning), so it matched names literally containing "!ccr" instead of
+        // excluding names that contain "ccr".
+        var rendered = RenderCollectionFilter("!ccr");
+        rendered.Should().Contain("name");
+        rendered.Should().Contain("ccr");
+        rendered.Should().Contain("$not");
+    }
+
+    [Fact]
+    public void Leading_glob_star_anchors_to_starts_with()
+    {
+        // Previously "wcr*" was raw regex — '*' quantifies the preceding char, not a
+        // "starts with" wildcard — so this only coincidentally looked like it worked.
+        RenderCollectionFilter("wcr*").Should()
+            .Be("{ \"name\" : /^wcr.*$/i }");
+    }
+
+    [Fact]
+    public void Trailing_glob_star_anchors_to_ends_with()
+    {
+        RenderCollectionFilter("*str").Should()
+            .Be("{ \"name\" : /^.*str$/i }");
+    }
+
+    [Fact]
+    public void Literal_regex_metacharacters_in_name_are_escaped()
+    {
+        // Previously the raw regex passthrough let '.' and '+' act as regex metacharacters
+        // (any-char / quantifier), so e.g. searching "log.events" would also match
+        // "logXevents". The shared grammar escapes literal characters via Regex.Escape.
+        RenderCollectionFilter("log.events").Should()
+            .Be("{ \"name\" : /log\\.events/i }");
+    }
+
+    [Theory]
+    [InlineData("name:ccr")]
+    [InlineData("collection:ccr")]
+    public void Field_prefixed_aliases_resolve_to_the_name_field(string search)
+    {
+        RenderCollectionFilter(search).Should().Be("{ \"name\" : /ccr/i }");
+    }
+
+    [Fact]
+    public void Unparseable_input_falls_back_to_a_literal_escaped_contains_match()
+    {
+        // An unbalanced paren is a parse error in the shared grammar — the search box
+        // must never just throw or silently return nothing for odd input.
+        RenderCollectionFilter("(ccr").Should()
+            .Be("{ \"name\" : /\\(ccr/i }");
     }
 }
 FILE tests/NxtUI.Tests/Filtering/SqlFilterBuilderTests.cs
@@ -29390,7 +29698,7 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 24365
+LENGTH 24798
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -29574,7 +29882,16 @@ public class KafkaService(
         var config = factory.BuildConsumerConfig(env, groupId);
 
         using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        Confluent.Kafka.Metadata meta;
+        try
+        {
+            meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
+            throw;
+        }
         var topicPartitions = meta.Topics
             .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
 
@@ -29613,7 +29930,11 @@ public class KafkaService(
             ConsumeResult<string?, byte[]>? cr;
             try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { log.LogWarning(ex, "kafka: consume error"); break; }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
+                break;
+            }
 
             if (cr is null) continue;
             if (cr.IsPartitionEOF)
@@ -30965,7 +31286,7 @@ public class MongoRunService : IRunService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoService.cs
-LENGTH 13188
+LENGTH 13185
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -31033,14 +31354,13 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
 
         var db = factory.GetClient(env).GetDatabase(database);
 
-        // Build optional name filter using a case-insensitive regex.
+        // Same shared filter grammar (glob/NOT/OR/quoting) as every other filter box in the
+        // app, scoped to "name" — the one real field a listCollections result document has.
         // ListCollectionsAsync (not ListCollectionNamesAsync) supports a filter document.
-        var options = new ListCollectionsOptions();
-        if (!string.IsNullOrWhiteSpace(search))
+        var options = new ListCollectionsOptions
         {
-            options.Filter = new BsonDocument("name",
-                new BsonDocument("$regex", new BsonRegularExpression(search.Trim(), "i")));
-        }
+            Filter = MongoFilterBuilder.BuildCollectionNameFilter(search),
+        };
 
         // Fetch all matching names to get the total count, then slice the page.
         // nameOnly:true makes this metadata-only — fast even with 50k collections.
@@ -31485,7 +31805,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 88377
+LENGTH 89819
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -32543,6 +32863,24 @@ html, body {
     gap: 6px;
     flex-shrink: 0;
 }
+
+/* Add Run dialog — environment select sized to content, full list, matching
+   the DB-select style used elsewhere (Dense + external label span). */
+.bm-tl-dialog-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.bm-tl-dialog-env-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.bm-tl-dialog-env,
+.bm-tl-dialog-env .mud-form-control { width: fit-content; min-width: 120px; }
+.bm-tl-dialog-env-popover { min-width: max-content !important; }
+.bm-tl-dialog-env-popover .mud-list-item {
+    white-space: nowrap !important;
+    min-height: 0 !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    padding-left: 12px !important;
+    padding-right: 16px !important;
+}
+
+.bm-tl-dialog-selected td { background: var(--mud-palette-primary-lighten) !important; }
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
@@ -33898,9 +34236,27 @@ tr.bm-row-searching td:first-child {
 /* height: auto so content overflows the panel and triggers the scrollbar */
 .bm-lb-tree { font-size: 11px; user-select: none; min-width: max-content; }
 .bm-lb-tree .mud-treeview-item-label { font-size: 11px; }
-/* tighten vertical spacing between tree nodes */
-.bm-lb-tree .mud-treeview-item-content { min-height: 18px !important; padding-top: 0 !important; padding-bottom: 0 !important; }
-.bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
+/* Tighten vertical spacing between tree nodes AND force every row to the same
+   height regardless of whether it has an expand arrow — leaf nodes (deepest
+   level) render no arrow button at all, so without an explicit (not just
+   min-) height the arrow-having rows were taller than leaf rows. */
+.bm-lb-tree .mud-treeview-item-content {
+    height: 18px !important;
+    min-height: 18px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+.bm-lb-tree .mud-treeview-item-arrow {
+    height: 18px !important;
+    width: 18px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+.bm-lb-tree .mud-treeview-item-arrow .mud-icon-root { font-size: 14px !important; }
 
 .bm-lb-tree-row {
     display: flex;
@@ -37948,7 +38304,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 48486
+LENGTH 48357
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -37976,7 +38332,7 @@ const TIMELINE_ALIASES = {
 
     // ── Constants ─────────────────────────────────────────────────────────
     const HEADER_H  = 26;
-    const SUBROW_H  = 12;
+    const SUBROW_H  = 9;
     const ROW_PAD   = 3;
     const BLOCK_GAP = 2;
     const BLOCK_RX  = 4;
@@ -38552,10 +38908,7 @@ const TIMELINE_ALIASES = {
         }
         const tx   = sec.batch.isLive ? lx + 14 : lx;
         const GAP  = 10;
-        const MAX  = 28;
-        const name = sec.batch.batchName.length > MAX
-            ? sec.batch.batchName.slice(0, MAX) + '…'
-            : sec.batch.batchName;
+        const name = sec.batch.batchName;
 
         // Background rect is sized/positioned after measuring actual rendered text
         // widths (getBBox) rather than estimated char widths, since a proportional
