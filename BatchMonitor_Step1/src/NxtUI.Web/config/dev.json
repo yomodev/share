@@ -9,11 +9,6 @@
   "Sql": {
     "ConnectionString": "",
     "Schema": "dbo",
-    "RunsTable": "BatchRun",
-    "StatusValues": {
-      "Running":   [ "Running" ],
-      "Completed": [ "Completed" ],
-      "Failed":    [ "Failed" ]
-    }
+    "RunsTable": "BatchRun"
   }
 }
