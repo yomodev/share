@@ -36,7 +36,6 @@ else
         @foreach (var node in RootNodes)
         {
             <MudTreeViewItem @key="@node.RelativePath" Value="@node"
-                             Icon="@(LoadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                              Expanded="@Expanded.Contains(node.RelativePath)"
                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
@@ -47,7 +46,6 @@ else
                         @foreach (var c1 in ch1)
                         {
                             <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
-                                             Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                              Expanded="@Expanded.Contains(c1.RelativePath)"
                                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
@@ -58,7 +56,6 @@ else
                                         @foreach (var c2 in ch2)
                                         {
                                             <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
-                                                             Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                              Expanded="@Expanded.Contains(c2.RelativePath)"
                                                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
                                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
@@ -69,7 +66,6 @@ else
                                                         @foreach (var c3 in ch3)
                                                         {
                                                             <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
-                                                                             Icon="@Icons.Material.Outlined.Folder"
                                                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
                                                                 <BodyContent>@RenderRow(c3)</BodyContent>
                                                             </MudTreeViewItem>
@@ -107,13 +103,12 @@ else
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
 
-    // Row body: folder name on the left, a selection checkbox on the right — independent
+    // Row body: a selection checkbox on the left, folder name on the right — independent
     // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
     // a folder never toggles its expansion and vice versa.
     private RenderFragment RenderRow(LogFolderNode node) => __builder =>
     {
         <div class="bm-lb-tree-row">
-            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
             <div @onclick:stopPropagation="true">
                 <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
                              ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
@@ -121,6 +116,11 @@ else
                              Color="Color.Primary"
                              Class="bm-lb-tree-row-checkbox" />
             </div>
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
+            @if (LoadingNodes.Contains(node.RelativePath))
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-lb-tree-row-spinner" />
+            }
         </div>
     };
 }

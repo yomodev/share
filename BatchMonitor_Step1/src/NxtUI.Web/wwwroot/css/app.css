@@ -2411,7 +2411,7 @@ tr.bm-row-searching td:first-child {
 .bm-lb-tree { font-size: 11px; user-select: none; min-width: max-content; }
 .bm-lb-tree .mud-treeview-item-label { font-size: 11px; }
 /* tighten vertical spacing between tree nodes */
-.bm-lb-tree .mud-treeview-item-content { min-height: 22px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
+.bm-lb-tree .mud-treeview-item-content { min-height: 18px !important; padding-top: 0 !important; padding-bottom: 0 !important; }
 .bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
 
 .bm-lb-tree-row {
@@ -2421,8 +2421,10 @@ tr.bm-row-searching td:first-child {
     gap: 6px;
 }
 .bm-lb-tree-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 2px !important; }
+.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 0 !important; }
+.bm-lb-tree-row-checkbox .mud-button-root { width: 18px !important; height: 18px !important; padding: 0 !important; }
 .bm-lb-tree-row-checkbox .mud-icon-root { font-size: 16px !important; }
+.bm-lb-tree-row-spinner { flex-shrink: 0; width: 14px !important; height: 14px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;
