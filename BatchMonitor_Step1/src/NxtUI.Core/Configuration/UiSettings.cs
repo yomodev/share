@@ -1,4 +1,4 @@
-namespace NxtUI.Configuration;
+namespace NxtUI.Core.Configuration;
 
 public class UiSettings
 {

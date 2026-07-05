@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
 
 namespace NxtUI.Core.Services;
