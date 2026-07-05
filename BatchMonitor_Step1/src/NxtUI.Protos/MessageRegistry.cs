@@ -349,6 +349,23 @@ public sealed class MessageRegistry : IMessageRegistry
         {
             var match = e.Values.FirstOrDefault(v => v.Number == number);
             if (match is not null) return match.Name;
+
+            // No exact match — proto has no official "flags enum" concept, but declaring
+            // power-of-two values and OR-ing them on the wire is a common convention for
+            // bitmask fields. Decompose into the declared flags that are actually set;
+            // if some bits aren't covered by any declared value, fall through to the raw
+            // number rather than silently reporting a partial/misleading combination.
+            if (number != 0)
+            {
+                var setFlags = e.Values
+                    .Where(v => v.Number != 0 && (number & v.Number) == v.Number)
+                    .OrderBy(v => v.Number)
+                    .ToList();
+
+                var covered = setFlags.Aggregate(0, (acc, v) => acc | v.Number);
+                if (setFlags.Count > 0 && covered == number)
+                    return string.Join(" | ", setFlags.Select(v => v.Name));
+            }
         }
         return number.ToString(); // unknown enum value — fall back to the raw number
     }

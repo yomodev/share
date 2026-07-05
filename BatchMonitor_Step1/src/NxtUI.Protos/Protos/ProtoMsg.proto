@@ -2,6 +2,17 @@ syntax = "proto3";
 option csharp_namespace = "NxtUI.Protos";
 package nxtui;
 
+// Bitmask flags. Wire format is identical to a plain int32 (varint), so
+// declaring this as an enum instead doesn't change what's on the wire —
+// it just lets the JSON viewer decompose combinations like 3 into
+// "ARCHIVED | URGENT" instead of showing a bare number.
+enum ProtoMsgFlags {
+  PROTO_MSG_FLAGS_NONE      = 0;
+  PROTO_MSG_FLAGS_ARCHIVED  = 1;
+  PROTO_MSG_FLAGS_URGENT    = 2;
+  PROTO_MSG_FLAGS_REPROCESS = 4;
+}
+
 // Generic envelope used when no specific type matches a topic.
 // Services typically set type_url to a fully-qualified type name and
 // place the actual serialised proto in payload.
@@ -9,4 +20,5 @@ message ProtoMsg {
   string type_url = 1;
   bytes  payload  = 2;
   map<string, string> metadata = 3;
+  ProtoMsgFlags flags = 4;
 }
