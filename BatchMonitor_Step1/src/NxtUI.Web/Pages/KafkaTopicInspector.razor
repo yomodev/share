@@ -139,7 +139,7 @@
     <!-- Message table + detail side by side -->
     <div class="bm-inspector-body">
         <div class="bm-table-wrap">
-            @if (_state == StreamState.Running && _messages.Count == 0)
+            @if (_state == StreamState.Running && (_messages.Count == 0 || _boundedFetch))
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
             }
@@ -270,6 +270,7 @@
     private bool                              _jsonDirty;
     private StreamState                       _state       = StreamState.Idle;
     private CancellationTokenSource           _cts         = new();
+    private bool                              _boundedFetch;
 
     private string  _filterText       = string.Empty;
     private string? _filterParseError;
@@ -326,6 +327,7 @@
         StateHasChanged();
 
         var (directive, remaining) = ExtractDirective(_filterText);
+        _boundedFetch = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue;
         var lastRender = DateTime.MinValue;
 
         try

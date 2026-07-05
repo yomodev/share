@@ -195,13 +195,24 @@ public class KafkaService(
         using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
         consumer.Assign(selectedPartitions);
 
+        // Immediately after Assign(), librdkafka hasn't finished transitioning the
+        // assigned partitions to their internal fetch-active state yet — calling
+        // Seek() too early intermittently throws KafkaException "Local: Erroneous
+        // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
+        // that transition to complete before we seek.
+        try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
+
         // Seek to correct starting positions
         await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
 
         int consumed = 0;
-        int cap = directive.Latest.HasValue || directive.OffsetTo.HasValue || directive.TimestampTo.HasValue
-            ? _global.MaxFetchMessages  // bounded mode still has a safety cap
-            : _global.MaxFetchMessages; // live mode cap
+        // Latest is a total across all selected partitions, not per-partition — SeekAsync still
+        // seeks each partition back by Latest so recent messages are available on every partition,
+        // but consumption stops as soon as the combined total is reached, whichever partitions
+        // it came from first.
+        int cap = directive.Latest.HasValue
+            ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
+            : _global.MaxFetchMessages;
 
         while (!ct.IsCancellationRequested && consumed < cap)
         {
