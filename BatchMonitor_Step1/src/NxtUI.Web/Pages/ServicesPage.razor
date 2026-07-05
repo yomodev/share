@@ -61,7 +61,7 @@
     </div>
 
     <!-- ── Content ───────────────────────────────────────────────────── -->
-    <div class="bm-table-wrap">
+    <div class="bm-table-wrap" @ref="_tableWrapRef">
         @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
@@ -289,6 +289,12 @@
     private bool _renderScheduled;
     private bool _disposed;
 
+    // Scroll-position preservation across background-poll re-renders (see bmScrollKeep):
+    // a metrics tick refreshes the table content, and without this the fixed-header
+    // scroll container would jump back to the top on every update.
+    private ElementReference _tableWrapRef;
+    private bool             _restoreScroll;
+
     // Held for the lifetime of this tab; disposing it tells the monitor this env
     // has one fewer subscriber (monitoring stops when the last tab for env closes).
     private IDisposable? _metricsSubscription;
@@ -304,6 +310,16 @@
         _loading = true;
         await InvokeAsync(StateHasChanged);
         await LoadFromMongoAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_restoreScroll)
+        {
+            _restoreScroll = false;
+            try { await JS.InvokeVoidAsync("bmScrollKeep.restore", _tableWrapRef); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     private async Task LoadFromMongoAsync()
@@ -405,11 +421,17 @@
             await Task.Delay(400);
             lock (_renderGate) { _renderScheduled = false; }
             if (!_disposed)
-                await InvokeAsync(() =>
+                await InvokeAsync(async () =>
                 {
+                    // Capture scroll before the refresh so restoring it in OnAfterRenderAsync
+                    // keeps the user exactly where they were (imperceptible background update).
+                    try { await JS.InvokeVoidAsync("bmScrollKeep.save", _tableWrapRef); }
+                    catch (JSDisconnectedException) { }
+
                     // Re-stamp + re-filter so RAM/Peak columns and any ram/peak
                     // filter react to new samples; keep the user's current page.
                     RecomputeFilter(resetPage: false);
+                    _restoreScroll = true;
                     StateHasChanged();
                 });
         }

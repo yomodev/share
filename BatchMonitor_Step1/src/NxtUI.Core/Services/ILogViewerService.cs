@@ -11,6 +11,8 @@ public interface ILogViewerService
     /// <summary>
     /// Read only the bytes appended since <paramref name="fromOffset"/>.
     /// Returns empty text (and the unchanged offset) when nothing is new.
+    /// Runs the (blocking) file read on a background thread so a tail poll never
+    /// touches the caller's (UI) thread.
     /// </summary>
-    (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
+    Task<(string Text, long NewOffset)> ReadDeltaAsync(string path, long fromOffset, CancellationToken ct = default);
 }

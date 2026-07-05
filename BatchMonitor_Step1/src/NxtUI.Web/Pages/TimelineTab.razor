@@ -59,6 +59,11 @@
     private string?     _dialogFilterParseError = null;
     private FilterNode?  _dialogFilterAst        = null;
 
+    // Server-side sort for the picker — forwarded to SqlRunService as ORDER BY, same as
+    // the Runs page, so a header click sorts the whole result set, not just the page.
+    private string _dialogSortField      = "StartTime";
+    private bool   _dialogSortDescending = true;
+
     private static readonly string[] DialogSearchableFields = ["RunId", "Description"];
     private static readonly FilterParser DialogFilterParser = new(DialogSearchableFields);
 
@@ -467,7 +472,12 @@
         {
             _dialogAll = await RunService.GetRunsAsync(
                 _dialogEnv, DateTime.UtcNow, RunsOptions.Value.MaxResults,
-                filter: new RunFilter { FilterAst = _dialogFilterAst });
+                filter: new RunFilter
+                {
+                    FilterAst      = _dialogFilterAst,
+                    SortField      = _dialogSortField,
+                    SortDescending = _dialogSortDescending,
+                });
             _dialogPage = 1;
             RebuildDialogPage();
         }
@@ -480,6 +490,13 @@
     private void OnDialogPageChanged(int page) { _dialogPage = page; RebuildDialogPage(); }
 
     private void OnDialogPageSizeChanged(int size) { _dialogPageSize = size; _dialogPage = 1; RebuildDialogPage(); }
+
+    private async Task OnDialogSort(string field)
+    {
+        if (_dialogSortField == field) _dialogSortDescending = !_dialogSortDescending;
+        else { _dialogSortField = field; _dialogSortDescending = true; }
+        await LoadDialogAsync();
+    }
 
     private async Task OnDialogEnvChanged(string env)
     {
@@ -767,6 +784,9 @@
                          TotalPages="@_dialogTotalPages"
                          PageChanged="OnDialogPageChanged"
                          PageSizeChanged="OnDialogPageSizeChanged"
+                         SortField="@_dialogSortField"
+                         SortDescending="@_dialogSortDescending"
+                         OnSort="OnDialogSort"
                          RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
                          OnRowClick="@(r => OnDialogRowClick(r))"
                          OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />

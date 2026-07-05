@@ -136,7 +136,7 @@
         <div class="bm-lb-resizer" @onmousedown="OnResizerMouseDown"></div>
 
         <!-- right: file table -->
-        <div class="bm-lb-files-panel">
+        <div class="bm-lb-files-panel" @ref="_filesPanelRef">
             @if (_checkedPaths.Count == 0)
             {
                 <div class="bm-lb-empty">
@@ -451,6 +451,10 @@
     private bool                     _previousIsFocused;
     private bool                     _searchCapped;
 
+    // Scroll-position preservation for the file table across auto-poll refreshes.
+    private ElementReference _filesPanelRef;
+    private bool             _restoreScroll;
+
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
@@ -458,9 +462,10 @@
         var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
         _poller = new FocusGatedPoller(interval, async ct =>
         {
-            // Skip auto-refresh while a search is running.
+            // Skip auto-refresh while a search is running. Preserve scroll so the
+            // periodic file-list refresh doesn't yank the user back to the top.
             if (_checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
-                await InvokeAsync(LoadFilesAsync);
+                await InvokeAsync(() => LoadFilesAsync(preserveScroll: true));
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
@@ -518,6 +523,16 @@
     private void RestartPollingIfBrowsing()
     {
         _poller?.SetActive(IsFocused && _checkedPaths.Count > 0 && !_searchBarOpen);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_restoreScroll)
+        {
+            _restoreScroll = false;
+            try { await JS.InvokeVoidAsync("bmScrollKeep.restore", _filesPanelRef); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -658,7 +673,7 @@
 
     // ── file loading (aggregated across all checked folders) ──────────────
 
-    private async Task LoadFilesAsync()
+    private async Task LoadFilesAsync(bool preserveScroll = false)
     {
         var myGen = ++_loadGeneration;
 
@@ -687,9 +702,17 @@
             })));
 
             // Swap in the new list atomically — no intermediate empty-table flash.
-            await InvokeAsync(() =>
+            // preserveScroll (auto-poll only) captures scrollTop right before the swap and
+            // restores it in OnAfterRenderAsync so a background refresh is imperceptible.
+            await InvokeAsync(async () =>
             {
                 if (myGen != _loadGeneration) return; // superseded by a newer selection change
+                if (preserveScroll)
+                {
+                    try { await JS.InvokeVoidAsync("bmScrollKeep.save", _filesPanelRef); }
+                    catch (JSDisconnectedException) { }
+                    _restoreScroll = true;
+                }
                 _files    = [.. pending];
                 _lastScan = DateTime.UtcNow;
                 StateHasChanged();

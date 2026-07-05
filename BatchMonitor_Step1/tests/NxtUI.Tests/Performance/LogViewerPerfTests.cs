@@ -82,13 +82,14 @@ public sealed class LogViewerPerfTests
     // ── ReadDelta ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void ReadDelta_from_zero_returns_full_content()
+    public async Task ReadDelta_from_zero_returns_full_content()
     {
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
-            File.WriteAllText(path, "alpha\nbeta\ngamma\n");
-            var (text, offset) = Viewer.ReadDelta(path, 0);
+            await File.WriteAllTextAsync(path, "alpha\nbeta\ngamma\n", ct);
+            var (text, offset) = await Viewer.ReadDeltaAsync(path, 0, ct);
             text.Should().Contain("alpha").And.Contain("gamma");
             offset.Should().Be(new FileInfo(path).Length);
         }
@@ -105,7 +106,7 @@ public sealed class LogViewerPerfTests
             await File.WriteAllTextAsync(path, "line1\nline2\nline3\n", ct);
             var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
-            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+            var (delta, newOffset) = await Viewer.ReadDeltaAsync(path, offset, ct);
             delta.Should().BeEmpty();
             newOffset.Should().Be(offset);
         }
@@ -123,7 +124,7 @@ public sealed class LogViewerPerfTests
             var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
             await File.AppendAllTextAsync(path, "line3\nline4\n", ct);
-            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+            var (delta, newOffset) = await Viewer.ReadDeltaAsync(path, offset, ct);
 
             delta.Should().Contain("line3").And.Contain("line4");
             delta.Should().NotContain("line1");
@@ -144,12 +145,12 @@ public sealed class LogViewerPerfTests
             var (_, off1) = await Viewer.ReadAllAsync(path, ct);
 
             await File.AppendAllTextAsync(path, "batch2-line1\nbatch2-line2\n", ct);
-            var (delta2, off2) = Viewer.ReadDelta(path, off1);
+            var (delta2, off2) = await Viewer.ReadDeltaAsync(path, off1, ct);
             delta2.Should().Contain("batch2-line1").And.Contain("batch2-line2");
             delta2.Should().NotContain("batch1");
 
             await File.AppendAllTextAsync(path, "batch3-line1\n", ct);
-            var (delta3, off3) = Viewer.ReadDelta(path, off2);
+            var (delta3, off3) = await Viewer.ReadDeltaAsync(path, off2, ct);
             delta3.Should().Contain("batch3-line1");
             delta3.Should().NotContain("batch2");
 

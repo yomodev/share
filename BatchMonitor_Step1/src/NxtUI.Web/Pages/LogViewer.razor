@@ -541,7 +541,7 @@
         if (string.IsNullOrWhiteSpace(Path) || _viewport is null) return;
         try
         {
-            var (text, newOffset) = LogViewerSvc.ReadDelta(Path!, _fileOffset);
+            var (text, newOffset) = await LogViewerSvc.ReadDeltaAsync(Path!, _fileOffset, _cts.Token);
             if (string.IsNullOrEmpty(text)) return;
             _fileOffset = newOffset;
             await _viewport.AppendRawAsync(text);

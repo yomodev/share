@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -20,36 +21,43 @@ public class KafkaService(
     public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: cluster info", env);
-        using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
-        return Task.FromResult(new KafkaClusterInfo
+        // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
+        // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
+        return Task.Run(() =>
         {
-            ClusterId = meta.OriginatingBrokerId.ToString(),
-            ControllerId = meta.OriginatingBrokerId,
-            Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
-                { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
-        });
+            using var admin = BuildAdmin(env);
+            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+            return new KafkaClusterInfo
+            {
+                ClusterId = meta.OriginatingBrokerId.ToString(),
+                ControllerId = meta.OriginatingBrokerId,
+                Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
+                    { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
+            };
+        }, ct);
     }
 
     public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: listing topics", env);
-        using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
+        return Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+        {
+            using var admin = BuildAdmin(env);
+            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
 
-        IReadOnlyList<KafkaTopicSummary> result = [.. meta.Topics
-            .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
-            .Select(t => new KafkaTopicSummary
-            {
-                Name              = t.Topic,
-                PartitionCount    = t.Partitions.Count,
-                ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-                CleanupPolicy     = "delete",
-                RetentionMs       = 604_800_000,
-            })
-            .OrderBy(t => t.Name)];
-
-        return Task.FromResult(result);
+            return [.. meta.Topics
+                .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
+                .Select(t => new KafkaTopicSummary
+                {
+                    Name              = t.Topic,
+                    PartitionCount    = t.Partitions.Count,
+                    ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+                    CleanupPolicy     = "delete",
+                    RetentionMs       = 604_800_000,
+                })
+                .OrderBy(t => t.Name)];
+        }, ct);
     }
 
     public async Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
@@ -68,7 +76,8 @@ public class KafkaService(
         string Str(string k, string d) =>
             cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
 
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
+        var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
         var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
 
         return new KafkaTopicConfig
@@ -177,144 +186,221 @@ public class KafkaService(
     {
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
-        var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
-        var config = factory.BuildConsumerConfig(env, groupId);
+        // Every librdkafka call this method makes — GetMetadata, QueryWatermarkOffsets,
+        // OffsetsForTimes, Seek, Consume, Close — is SYNCHRONOUS and blocking (there is no
+        // async Kafka API). If they ran inline on the caller's thread they would block it;
+        // and in Blazor Server the caller drives this from the circuit's single-threaded
+        // SynchronizationContext, so the entire UI (progress bar, Pause/Stop buttons, even
+        // navigating to another tab) freezes for as long as any of these calls is in flight
+        // — GetMetadata + Seek alone can block for up to ~25s before the first message.
+        //
+        // So the whole blocking pipeline runs on a dedicated thread-pool thread (Task.Run
+        // in ProduceTailAsync) and hands messages to the caller through a bounded channel.
+        // The caller here only ever does cheap, non-blocking channel reads, so the UI thread
+        // stays free to render and respond to input. The bounded channel also applies natural
+        // backpressure: if the UI can't keep up, the producer's WriteAsync simply awaits.
+        var channel = Channel.CreateBounded<KafkaMessage>(
+            new BoundedChannelOptions(1000)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true,
+            });
 
-        using var admin = BuildAdmin(env);
-        Confluent.Kafka.Metadata meta;
+        // Not passing ct to Task.Run: we want the delegate to always start so its own
+        // finally can close/dispose the consumer + admin handles; it observes ct itself.
+        var producer = Task.Run(() =>
+            ProduceTailAsync(channel.Writer, env, topicName, directive, uncapped, ct));
+
         try
         {
-            meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            await foreach (var msg in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+                yield return msg;
         }
-        catch (Exception ex)
+        finally
         {
-            log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
-            throw;
+            // Observe the producer so its broker handles are closed and any fatal error is
+            // surfaced. ProduceTailAsync routes exceptions through the channel (not its own
+            // task result) and swallows cancellation, so this only ever throws if Task.Run
+            // itself was cancelled before starting — which can't happen since we don't pass ct.
+            try { await producer.ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* nothing started; nothing to clean up */ }
         }
-        var topicPartitions = meta.Topics
-            .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
-
-        // Filter to requested partitions
-        var selectedPartitions = topicPartitions
-            .Where(p => directive.Partitions is null || directive.Partitions.Contains(p.PartitionId))
-            .Select(p => new TopicPartition(topicName, p.PartitionId))
-            .ToList();
-
-        if (selectedPartitions.Count == 0) yield break;
-
-        using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
-        consumer.Assign(selectedPartitions);
-
-        // Immediately after Assign(), librdkafka hasn't finished transitioning the
-        // assigned partitions to their internal fetch-active state yet — calling
-        // Seek() too early intermittently throws KafkaException "Local: Erroneous
-        // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
-        // that transition to complete before we seek.
-        try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
-
-        // Seek to correct starting positions
-        await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
-
-        int consumed = 0;
-        // Latest is a total across all selected partitions, not per-partition — SeekAsync still
-        // seeks each partition back by Latest so recent messages are available on every partition,
-        // but consumption stops as soon as the combined total is reached, whichever partitions
-        // it came from first.
-        int cap = directive.Latest.HasValue
-            ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
-            : _global.MaxFetchMessages;
-
-        while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
-        {
-            ConsumeResult<string?, byte[]>? cr;
-            try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex)
-            {
-                log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
-                break;
-            }
-
-            if (cr is null) continue;
-            if (cr.IsPartitionEOF)
-            {
-                // In bounded modes, EOF on all partitions means we're done
-                if (IsBounded(directive)) break;
-                continue;
-            }
-
-            // End-of-range checks
-            if (directive.OffsetTo.HasValue && cr.Offset.Value > directive.OffsetTo.Value) break;
-            if (directive.TimestampTo.HasValue && cr.Message.Timestamp.UtcDateTime > directive.TimestampTo.Value) break;
-
-            var headers = new Dictionary<string, string>();
-            foreach (var h in cr.Message.Headers)
-            {
-                try { headers[h.Key] = System.Text.Encoding.UTF8.GetString(h.GetValueBytes() ?? []); }
-                catch { /* skip non-UTF8 */ }
-            }
-
-            var rawBytes = cr.Message.Value ?? [];
-            var (json, payloadType) = pipeline.Deserialize(topicName, rawBytes);
-
-            yield return new KafkaMessage
-            {
-                Offset = cr.Offset.Value,
-                Partition = cr.Partition.Value,
-                Key = cr.Message.Key,
-                Timestamp = cr.Message.Timestamp.UtcDateTime,
-                Headers = headers,
-                JsonPayload = json,
-                PayloadType = payloadType,
-                RawSizeBytes = rawBytes.Length,
-            };
-
-            consumed++;
-        }
-
-        consumer.Close();
     }
 
-    public async Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
+    // Runs the entire blocking Kafka consume pipeline on a thread-pool thread, writing
+    // decoded messages to <paramref name="writer"/>. Fatal broker errors are completed onto
+    // the channel (so the reader/UI sees them), cancellation is treated as normal completion,
+    // and the consumer/admin handles are always closed in the finally.
+    private async Task ProduceTailAsync(
+        ChannelWriter<KafkaMessage> writer,
+        string env, string topicName, KafkaSeekDirective directive,
+        bool uncapped, CancellationToken ct)
+    {
+        IAdminClient? admin = null;
+        IConsumer<string?, byte[]>? consumer = null;
+        try
+        {
+            var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
+            var config = factory.BuildConsumerConfig(env, groupId);
+
+            admin = BuildAdmin(env);
+            Confluent.Kafka.Metadata meta;
+            try
+            {
+                meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
+                writer.TryComplete(ex);
+                return;
+            }
+
+            var topicPartitions = meta.Topics
+                .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
+
+            // Filter to requested partitions
+            var selectedPartitions = topicPartitions
+                .Where(p => directive.Partitions is null || directive.Partitions.Contains(p.PartitionId))
+                .Select(p => new TopicPartition(topicName, p.PartitionId))
+                .ToList();
+
+            if (selectedPartitions.Count == 0) return;
+
+            consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
+            consumer.Assign(selectedPartitions);
+
+            // Immediately after Assign(), librdkafka hasn't finished transitioning the
+            // assigned partitions to their internal fetch-active state yet — calling
+            // Seek() too early intermittently throws KafkaException "Local: Erroneous
+            // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
+            // that transition to complete before we seek.
+            try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
+
+            // Seek to correct starting positions
+            await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
+
+            int consumed = 0;
+            // Latest is a total across all selected partitions, not per-partition — SeekAsync still
+            // seeks each partition back by Latest so recent messages are available on every partition,
+            // but consumption stops as soon as the combined total is reached, whichever partitions
+            // it came from first.
+            int cap = directive.Latest.HasValue
+                ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
+                : _global.MaxFetchMessages;
+
+            while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
+            {
+                ConsumeResult<string?, byte[]>? cr;
+                try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
+                    break;
+                }
+
+                if (cr is null) continue;
+                if (cr.IsPartitionEOF)
+                {
+                    // In bounded modes, EOF on all partitions means we're done
+                    if (IsBounded(directive)) break;
+                    continue;
+                }
+
+                // End-of-range checks
+                if (directive.OffsetTo.HasValue && cr.Offset.Value > directive.OffsetTo.Value) break;
+                if (directive.TimestampTo.HasValue && cr.Message.Timestamp.UtcDateTime > directive.TimestampTo.Value) break;
+
+                var headers = new Dictionary<string, string>();
+                foreach (var h in cr.Message.Headers)
+                {
+                    try { headers[h.Key] = System.Text.Encoding.UTF8.GetString(h.GetValueBytes() ?? []); }
+                    catch { /* skip non-UTF8 */ }
+                }
+
+                var rawBytes = cr.Message.Value ?? [];
+                var (json, payloadType) = pipeline.Deserialize(topicName, rawBytes);
+
+                await writer.WriteAsync(new KafkaMessage
+                {
+                    Offset = cr.Offset.Value,
+                    Partition = cr.Partition.Value,
+                    Key = cr.Message.Key,
+                    Timestamp = cr.Message.Timestamp.UtcDateTime,
+                    Headers = headers,
+                    JsonPayload = json,
+                    PayloadType = payloadType,
+                    RawSizeBytes = rawBytes.Length,
+                }, ct);
+
+                consumed++;
+            }
+        }
+        catch (OperationCanceledException) { /* normal: paused / navigated away / superseded */ }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "kafka [{Env}]: tail producer for '{Topic}' failed", env, topicName);
+            writer.TryComplete(ex);
+        }
+        finally
+        {
+            if (consumer is not null)
+            {
+                try { consumer.Close(); } catch { /* best-effort close */ }
+                consumer.Dispose();
+            }
+            admin?.Dispose();
+            writer.TryComplete();
+        }
+    }
+
+    public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
         string env, string topicName, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: partition stats for '{Topic}'", env, topicName);
 
-        var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
-        var config = factory.BuildConsumerConfig(env, groupId);
-        using var admin = BuildAdmin(env);
-        using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
-
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
-        var parts = meta.Topics.FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
-
-        var result = new List<KafkaPartitionStats>();
-        foreach (var p in parts)
+        // GetMetadata, QueryWatermarkOffsets and FetchTimestampAt (Consume) are all
+        // synchronous blocking librdkafka calls — run the whole thing off the UI thread.
+        return Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
         {
-            var tp = new TopicPartition(topicName, p.PartitionId);
-            var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
+            var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
+            var config = factory.BuildConsumerConfig(env, groupId);
+            using var admin = BuildAdmin(env);
+            using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
 
-            DateTime? firstTs = null;
-            DateTime? lastTs = null;
+            var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            var parts = meta.Topics.FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
 
-            // Fetch first message timestamp
-            if (wm.Low.Value < wm.High.Value)
+            var result = new List<KafkaPartitionStats>();
+            foreach (var p in parts)
             {
-                firstTs = FetchTimestampAt(consumer, tp, wm.Low.Value);
-                lastTs = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
+                var tp = new TopicPartition(topicName, p.PartitionId);
+                var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
+
+                DateTime? firstTs = null;
+                DateTime? lastTs = null;
+
+                // Fetch first message timestamp
+                if (wm.Low.Value < wm.High.Value)
+                {
+                    firstTs = FetchTimestampAt(consumer, tp, wm.Low.Value);
+                    lastTs = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
+                }
+
+                result.Add(new KafkaPartitionStats
+                {
+                    Partition = p.PartitionId,
+                    LowWatermark = wm.Low.Value,
+                    HighWatermark = wm.High.Value,
+                    FirstMessageTimestamp = firstTs,
+                    LastMessageTimestamp = lastTs,
+                });
             }
 
-            result.Add(new KafkaPartitionStats
-            {
-                Partition = p.PartitionId,
-                LowWatermark = wm.Low.Value,
-                HighWatermark = wm.High.Value,
-                FirstMessageTimestamp = firstTs,
-                LastMessageTimestamp = lastTs,
-            });
-        }
-
-        return result;
+            return result;
+        }, ct);
     }
 
     public Task<byte[]?> FetchRawBytesAsync(
@@ -551,7 +637,8 @@ public class KafkaService(
     private async Task<long> ComputeGroupTotalLagAsync(string env, string groupId, CancellationToken ct)
     {
         using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        // GetMetadata blocks synchronously — offload it off the UI thread.
+        var meta = await Task.Run(() => admin.GetMetadata(TimeSpan.FromSeconds(10)), ct);
         var topics = meta.Topics.Where(t => !t.Topic.StartsWith("__")).Select(t => t.Topic).ToList();
         long total = 0;
         foreach (var topic in topics)

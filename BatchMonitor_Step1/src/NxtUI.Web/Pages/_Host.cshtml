@@ -178,6 +178,29 @@
 
         window.bmSetWsRef = function (ref) { window._wsRef = ref; };
 
+        // Preserves the scroll position of a scrollable container across a Blazor
+        // re-render (e.g. a background poll refreshing a table), so a periodic update
+        // never yanks the user back to the top. save() is called just before the render
+        // that would reset scroll, restore() right after it commits.
+        window.bmScrollKeep = (function () {
+            var store = new WeakMap();
+            function scroller(root) {
+                if (!root) return null;
+                // MudTable's fixed-header mode scrolls an inner container; fall back to root.
+                return root.querySelector('.mud-table-container') || root;
+            }
+            return {
+                save: function (root) {
+                    var el = scroller(root);
+                    if (el) store.set(root, el.scrollTop);
+                },
+                restore: function (root) {
+                    var el = scroller(root);
+                    if (el && store.has(root)) el.scrollTop = store.get(root);
+                }
+            };
+        })();
+
         window.bmOpenLocalLogFile = function (dotnetRef) {
             var input = document.createElement('input');
             input.type = 'file';

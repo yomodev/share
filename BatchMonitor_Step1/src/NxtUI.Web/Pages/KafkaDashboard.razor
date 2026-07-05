@@ -76,15 +76,9 @@
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh Style="width:100%;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="white-space:nowrap;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="white-space:nowrap;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
-                    </MudTh>
+                    <MudTh Style="width:100%;">@SortHeader("Topic", "Name")</MudTh>
+                    <MudTh Style="white-space:nowrap;">@SortHeader("Partitions", "PartitionCount")</MudTh>
+                    <MudTh Style="white-space:nowrap;">@SortHeader("Messages", "MessageCount")</MudTh>
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -295,6 +289,12 @@
     private List<KafkaTopicSummary> _paged          = new();
     private int _page = 1, _pageSize = 25, _totalPages = 1;
 
+    // Client-side sort state for the topic table. Because the whole topic set lives in
+    // memory (_filteredTopics), the sort must be applied to that full set before it's
+    // sliced into the current page — otherwise it would only reorder the visible page.
+    private string _sortColumn     = "Name";
+    private bool   _sortDescending = false;
+
     // Consumers
     private List<KafkaConsumerGroupOverview> _allGroups      = new();
     private List<KafkaConsumerGroupOverview> _filteredGroups = new();
@@ -456,10 +456,48 @@
 
     private void RebuildPage()
     {
-        _totalPages = Math.Max(1, (int)Math.Ceiling(_filteredTopics.Count / (double)_pageSize));
+        // Sort the full filtered set first, THEN slice the page out of it.
+        var sorted = SortTopics(_filteredTopics);
+        _totalPages = Math.Max(1, (int)Math.Ceiling(sorted.Count / (double)_pageSize));
         _page       = Math.Clamp(_page, 1, _totalPages);
-        _paged      = _filteredTopics.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged      = sorted.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
     }
+
+    private List<KafkaTopicSummary> SortTopics(List<KafkaTopicSummary> topics)
+    {
+        var sorted = _sortColumn switch
+        {
+            "PartitionCount" => _sortDescending
+                ? topics.OrderByDescending(t => t.PartitionCount)
+                : topics.OrderBy(t => t.PartitionCount),
+            "MessageCount" => _sortDescending
+                ? topics.OrderByDescending(t => t.MessageCount)
+                : topics.OrderBy(t => t.MessageCount),
+            _ => _sortDescending
+                ? topics.OrderByDescending(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                : topics.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase),
+        };
+        return sorted.ToList();
+    }
+
+    private void OnTopicSort(string field)
+    {
+        if (_sortColumn == field) _sortDescending = !_sortDescending;
+        else { _sortColumn = field; _sortDescending = false; }
+        RebuildPage();
+    }
+
+    private RenderFragment SortHeader(string label, string field) => @<MudLink
+        Underline="Underline.Hover" Color="Color.Inherit"
+        OnClick="@(() => OnTopicSort(field))"
+        Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+        @label
+        @if (_sortColumn == field)
+        {
+            <MudIcon Icon="@(_sortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                     Size="Size.Small" />
+        }
+    </MudLink>;
 
     private void OnPageChanged(int page)   { _page = page;  RebuildPage(); }
     private void OnPageSizeChanged(int sz) { _pageSize = sz; _page = 1; RebuildPage(); }

@@ -2,6 +2,7 @@
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Core.Logging
+@using NxtUI.Core.Filtering
 @inject IHeartbeatService HeartbeatSvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
@@ -79,17 +80,32 @@
         <!-- Legend / filter panel (right side) -->
         <div class="bm-mg-legend" @ref="_legendRef">
             <div class="bm-mg-legend-title">@LegendTitle</div>
-            @{ int _li = 0; }
-            @foreach (var item in _legendItems)
-            {
-                int idx = _li++;
-                <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
-                     @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
-                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
-                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
-                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
-                </div>
-            }
+            <div class="bm-mg-legend-scroll">
+                @{ int _li = 0; }
+                @foreach (var item in FilteredLegendItems)
+                {
+                    int idx = _li++;
+                    <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
+                         @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
+                        <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
+                        <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
+                        <div class="bm-mg-legend-values">
+                            <span class="bm-mg-legend-value" title="@($"Sum across {item.InstanceCount} instance(s)")">@FormatMb(item.CurrentMb)</span>
+                            @if (item.InstanceCount > 1)
+                            {
+                                <span class="bm-mg-legend-avg" title="Average per instance">avg @FormatMb(item.AverageMb)</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <FilterBox Value="@_legendFilterText"
+                       OnFilterChanged="OnLegendFilterChanged"
+                       ParseError="@_legendFilterError"
+                       Placeholder="Filter…"
+                       Class="bm-mg-legend-filter"
+                       ShowHint="false" />
         </div>
 
     </div>
@@ -124,14 +140,43 @@
 
     private sealed class LegendItem
     {
-        public string  Key       { get; init; } = "";
-        public string  Name      { get; init; } = "";
-        public string  Color     { get; init; } = "#888";
-        public bool    Visible   { get; set;  } = true;
-        public double  CurrentMb { get; set;  }
+        public string  Key           { get; init; } = "";
+        public string  Name          { get; init; } = "";
+        public string  Color         { get; init; } = "#888";
+        public bool    Visible       { get; set;  } = true;
+        // Sum of every instance's current memory in this group (e.g. every "OrderService"
+        // instance across all hosts, when grouped by Service) — this is what the chart
+        // line plots too, so the legend value matches what's drawn.
+        public double  CurrentMb     { get; set;  }
+        // CurrentMb / InstanceCount — useful alongside the sum to see whether a group's
+        // total is high because of many small instances or a few large ones.
+        public double  AverageMb     { get; set;  }
+        public int     InstanceCount { get; set;  }
     }
 
     private List<LegendItem>    _legendItems = [];
+
+    // Legend filter (bottom of the right sidebar) — filters which groups are shown in
+    // the list, purely client-side over the already-built legend items.
+    private static readonly FilterParser LegendFilterParser = new(["Name"]);
+    private string      _legendFilterText  = string.Empty;
+    private string?     _legendFilterError;
+    private FilterNode? _legendFilterNode;
+
+    private List<LegendItem> FilteredLegendItems =>
+        _legendFilterNode is null
+            ? _legendItems
+            : _legendItems.Where(i => FilterEvaluator.Evaluate(_legendFilterNode, i)).ToList();
+
+    private void OnLegendFilterChanged(string text)
+    {
+        _legendFilterText  = text;
+        _legendFilterError = null;
+        if (string.IsNullOrWhiteSpace(text)) { _legendFilterNode = null; return; }
+        try   { _legendFilterNode = LegendFilterParser.Parse(text); }
+        catch (FilterParseException ex) { _legendFilterError = ex.Message; _legendFilterNode = null; }
+    }
+
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
     private ElementReference    _brushRef;
@@ -271,11 +316,14 @@
         }
         else if (e.ShiftKey && _lastClickedIndex >= 0)
         {
+            // Range-select operates on the currently filtered/visible list — indices are
+            // positions within it, not the unfiltered _legendItems.
+            var visible = FilteredLegendItems;
             int lo = Math.Min(index, _lastClickedIndex);
             int hi = Math.Max(index, _lastClickedIndex);
             bool target = !item.Visible;
-            for (int i = lo; i <= hi; i++)
-                _legendItems[i].Visible = target;
+            for (int i = lo; i <= hi && i < visible.Count; i++)
+                visible[i].Visible = target;
             _lastClickedIndex = index;
         }
         else
@@ -305,14 +353,17 @@
         _legendItems = groups.Select((kv, idx) =>
         {
             var color = Palette[idx % Palette.Length];
+            var count = kv.Value.Count;
             var mb    = kv.Value.Sum(s => GetCurrentMb(s));
             return new LegendItem
             {
-                Key       = kv.Key,
-                Name      = FormatLegendName(kv.Key),
-                Color     = color,
-                CurrentMb = mb,
-                Visible   = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
+                Key           = kv.Key,
+                Name          = FormatLegendName(kv.Key),
+                Color         = color,
+                CurrentMb     = mb,
+                AverageMb     = count > 0 ? mb / count : 0,
+                InstanceCount = count,
+                Visible       = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
             };
         }).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
 

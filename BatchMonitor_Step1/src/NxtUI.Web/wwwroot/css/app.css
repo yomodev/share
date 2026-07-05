@@ -2527,16 +2527,18 @@ tr.bm-row-searching td:first-child {
 }
 .bm-mg-resize-handle:hover { background: var(--mud-palette-primary); opacity: 0.25; }
 
-/* Legend panel (right side) */
+/* Legend panel (right side). The panel itself no longer scrolls — only
+   .bm-mg-legend-scroll does — so the filter box can stay pinned at the bottom
+   (same pattern as .bm-lb-tree-panel / .bm-lb-tree-filter in the log browser). */
 .bm-mg-legend {
     width: 220px;
     flex-shrink: 0;
-    overflow-y: auto;
+    overflow: hidden;
     border-left: 1px solid var(--mud-palette-divider);
-    padding: 12px 10px;
+    padding: 12px 10px 6px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    min-height: 0;
 }
 
 .bm-mg-legend-title {
@@ -2546,6 +2548,25 @@ tr.bm-row-searching td:first-child {
     letter-spacing: 0.05em;
     color: var(--mud-palette-text-secondary);
     margin-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.bm-mg-legend-scroll {
+    flex: 1 1 0;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-mg-legend-filter {
+    flex-shrink: 0;
+    flex-grow: 0;
+    max-height: 46px;
+    padding: 6px 2px 0;
+    border-top: 1px solid var(--mud-palette-divider);
+    margin-top: 6px;
 }
 
 .bm-mg-legend-item {
@@ -2577,10 +2598,23 @@ tr.bm-row-searching td:first-child {
     white-space: nowrap;
 }
 
-.bm-mg-legend-value {
+.bm-mg-legend-values {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.25;
+}
+
+.bm-mg-legend-value {
     font-size: 11px;
     color: var(--mud-palette-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.bm-mg-legend-avg {
+    font-size: 9.5px;
+    color: var(--mud-palette-text-disabled);
     font-variant-numeric: tabular-nums;
 }
 
