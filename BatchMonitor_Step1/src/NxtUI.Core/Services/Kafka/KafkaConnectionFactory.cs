@@ -20,11 +20,20 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
         return _cache.GetOrAdd(fingerprint, _ => Build(settings));
     }
 
+    // GetClientConfig returns a cached, shared ClientConfig instance per environment
+    // fingerprint. Confluent.Kafka's Config(Config) copy constructor shares the underlying
+    // properties dictionary rather than deep-copying it — building a ConsumerConfig/
+    // AdminClientConfig straight from the shared instance and then setting properties on
+    // it (GroupId, EnableAutoCommit, ...) mutates that same shared dictionary, permanently
+    // leaking consumer-only properties into every other client built from it afterward
+    // (surfaces as librdkafka warnings like "Configuration property group.id is a consumer
+    // property and will be ignored by this producer instance"). Wrapping in a fresh
+    // Dictionary first forces an independent copy regardless of Config's sharing behavior.
     public AdminClientConfig GetAdminConfig(string envId) =>
-        new(GetClientConfig(envId));
+        new(new Dictionary<string, string>(GetClientConfig(envId)));
 
     public ConsumerConfig BuildConsumerConfig(string envId, string groupId) =>
-        new(GetClientConfig(envId))
+        new(new Dictionary<string, string>(GetClientConfig(envId)))
         {
             GroupId = groupId,
             AutoOffsetReset = AutoOffsetReset.Earliest,
