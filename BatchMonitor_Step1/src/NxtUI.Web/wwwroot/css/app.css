@@ -398,14 +398,14 @@ html, body {
 /* Icon picker in rename dialog */
 .bm-icon-picker {
     display: grid;
-    grid-template-columns: repeat(auto-fill, 36px);
+    grid-template-columns: repeat(auto-fill, 32px);
     gap: 4px;
-    max-height: 220px;
+    max-height: 280px;
     overflow-y: auto;
 }
 .bm-icon-picker-item {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -425,9 +425,16 @@ html, body {
     color: var(--mud-palette-primary);
 }
 
+.bm-color-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+}
 .bm-color-picker-item {
-    width: 28px;
-    height: 28px;
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -435,10 +442,12 @@ html, body {
     cursor: pointer;
     border: 2px solid transparent;
     color: #fff;
+    flex-shrink: 0;
     transition: border-color 0.15s, transform 0.1s;
 }
 .bm-color-picker-item:hover { transform: scale(1.08); }
 .bm-color-picker-item.selected { border-color: var(--mud-palette-text-primary); }
+.bm-color-picker-item .mud-icon-root { font-size: 14px; }
 
 /* ================================================================
    PAGE SHELL

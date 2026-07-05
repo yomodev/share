@@ -103,7 +103,7 @@
             { x => x.CurrentIcon,    currentIcon      },
             { x => x.CurrentIconColor, currentIconColor },
         };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true };
         var dialog = await DialogService.ShowAsync<TabRenameDialog>("Rename tab", parameters, options);
         await dialog.Result;
         await InvokeAsync(StateHasChanged);

@@ -5,6 +5,7 @@
 @inject IJSRuntime JS
 @inject ErrorNotificationService Notifications
 @using Microsoft.JSInterop
+@using System.Reflection
 
 <div class="bm-settings-page">
 
@@ -89,11 +90,11 @@
                 <MudText Typo="Typo.subtitle2" Class="bm-section-title mb-4">About</MudText>
                 <div class="bm-about-grid">
                     <MudText Typo="Typo.body2" Class="bm-muted">Version</MudText>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">0.6.22.1</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">@AppVersion</MudText>
                     <MudText Typo="Typo.body2" Class="bm-muted">Framework</MudText>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">.NET 8 / Blazor Server</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">@FrameworkDescription / Blazor Server</MudText>
                     <MudText Typo="Typo.body2" Class="bm-muted">UI Library</MudText>
-                    <MudText Typo="Typo.body2" Class="bm-monospace">MudBlazor 9.5</MudText>
+                    <MudText Typo="Typo.body2" Class="bm-monospace">MudBlazor @MudBlazorVersion</MudText>
                 </div>
             </MudPaper>
         </MudItem>
@@ -148,6 +149,21 @@
 </div>
 
 @code {
+    private static readonly string AppVersion = GetVersion(typeof(Program).Assembly);
+    private static readonly string MudBlazorVersion = GetVersion(typeof(MudBlazor.MudButton).Assembly);
+    private static readonly string FrameworkDescription = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+
+    private static string GetVersion(Assembly asm)
+    {
+        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrEmpty(info))
+        {
+            var plus = info.IndexOf('+'); // strip source-revision suffix (e.g. "9.6.0+abcdef1234")
+            return plus >= 0 ? info[..plus] : info;
+        }
+        return asm.GetName().Version?.ToString() ?? "unknown";
+    }
+
     private ThemeMode _mode;
     private IJSObjectReference? _appModule;
     private List<ErrorNotificationEntry> _errors = [];
