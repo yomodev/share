@@ -16,7 +16,8 @@
               Striped="true"
               Class="bm-batch-table"
               FixedHeader="@FixedHeader"
-              Height="@(FixedHeader ? "100%" : null)">
+              Height="@(FixedHeader ? "100%" : null)"
+              RowClassFunc="@RowClassFunc">
         <HeaderContent>
             <MudTh Style="width:36px;"></MudTh>
             <MudTh>@HeaderContent("Run ID", "RunId")</MudTh>
@@ -25,59 +26,73 @@
             <MudTh>@HeaderContent("Started (UTC)", "StartTime")</MudTh>
             <MudTh>Duration</MudTh>
             <MudTh>@HeaderContent("Status", "Status")</MudTh>
-            <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+            @if (ShowActions)
+            {
+                <MudTh Style="width:110px; text-align:center;">Actions</MudTh>
+            }
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="padding-left:12px;" @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd Style="padding-left:12px;"
+                   @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <StatusIcon Status="@context.Status" />
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2">@context.Description</MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
                     @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                 </MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <MudText Typo="Typo.body2" Class="bm-monospace">
                     @FormatDuration(context.Duration)
                 </MudText>
             </MudTd>
-            <MudTd @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
+                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
                 <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
                     @context.Status
                 </span>
             </MudTd>
-            <MudTd Style="text-align:center;">
-                <div class="bm-row-actions">
-                    <MudTooltip Text="Open Detail">
-                        <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
-                    </MudTooltip>
-                    <MudTooltip Text="Open Timeline">
-                        <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
-                                       Size="Size.Small"
-                                       OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
-                    </MudTooltip>
-                    <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
-                        <span>
-                            <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+            @if (ShowActions)
+            {
+                <MudTd Style="text-align:center;">
+                    <div class="bm-row-actions">
+                        <MudTooltip Text="Open Detail">
+                            <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew"
                                            Size="Size.Small"
-                                           Color="Color.Error"
-                                           Disabled="@(context.Status != RunStatus.Running)"
-                                           OnClick="@(() => OnStopRun.InvokeAsync(context))" />
-                        </span>
-                    </MudTooltip>
-                </div>
-            </MudTd>
+                                           OnClick="@(() => OnOpenDetail.InvokeAsync(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Open Timeline">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Timeline"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OnOpenTimeline.InvokeAsync(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="@(context.Status == RunStatus.Running ? "Stop Run" : "Not running")">
+                            <span>
+                                <MudIconButton Icon="@Icons.Material.Outlined.StopCircle"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               Disabled="@(context.Status != RunStatus.Running)"
+                                               OnClick="@(() => OnStopRun.InvokeAsync(context))" />
+                            </span>
+                        </MudTooltip>
+                    </div>
+                </MudTd>
+            }
         </RowTemplate>
     </MudTable>
 </div>
@@ -117,6 +132,16 @@
     [Parameter] public bool Loading { get; set; }
     [Parameter] public bool FixedHeader { get; set; } = true;
 
+    // When false, the Actions column (open detail / timeline / stop) is omitted —
+    // used by pickers like the Timeline "Add Run" dialog where rows are selected,
+    // not acted on directly.
+    [Parameter] public bool ShowActions { get; set; } = true;
+
+    // Row-level single-click selection (distinct from the per-cell OnOpenDetail
+    // double-click), and a per-row CSS class hook for highlighting the selection.
+    [Parameter] public EventCallback<RunSummary> OnRowClick { get; set; }
+    [Parameter] public Func<RunSummary, int, string>? RowClassFunc { get; set; }
+
     // When false (Home's "recent runs" use case), no footer/pagination is shown
     // and no header sort links are wired — just the same columns/actions as
     // the full Runs page, with whatever rows the caller already fetched.
@@ -135,8 +160,8 @@
     [Parameter] public EventCallback<string> OnSort { get; set; }
 
     [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenDetail { get; set; }
-    [Parameter, EditorRequired] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
-    [Parameter, EditorRequired] public EventCallback<RunSummary> OnStopRun { get; set; }
+    [Parameter] public EventCallback<RunSummary> OnOpenTimeline { get; set; }
+    [Parameter] public EventCallback<RunSummary> OnStopRun { get; set; }
 
     private RenderFragment HeaderContent(string label, string field)
     {

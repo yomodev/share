@@ -1,9 +1,12 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
+@using NxtUI.Core.Filtering
 @inject IRunService RunService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject TabService TabService
+@inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
+@inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @implements IAsyncDisposable
 
 @code {
@@ -41,15 +44,33 @@
     // ── Shortcuts dialog ──────────────────────────────────────────────────
     private bool _shortcutsOpen = false;
 
-    // ── Add Batch dialog ──────────────────────────────────────────────────
+    // ── Add Run dialog ───────────────────────────────────────────────────
     private bool _addDialogOpen = false;
+    private List<RunSummary> _dialogAll = new();
     private List<RunSummary> _dialogBatches = new();
     private RunSummary? _dialogSelected;
-    private string _dialogFilter = string.Empty;
     private string _dialogEnv = string.Empty;
     private bool _dialogLoading = false;
     private int _dialogPage = 1;
-    private const int DialogPageSize = 25;
+    private int _dialogPageSize = 25;
+    private int _dialogTotalPages => Math.Max(1, (int)Math.Ceiling((double)_dialogAll.Count / _dialogPageSize));
+
+    private string      _dialogFilterText       = string.Empty;
+    private string?     _dialogFilterParseError = null;
+    private FilterNode?  _dialogFilterAst        = null;
+
+    private static readonly string[] DialogSearchableFields = ["RunId", "Description"];
+    private static readonly FilterParser DialogFilterParser = new(DialogSearchableFields);
+
+    private static readonly (string Aliases, string Label)[] _dialogFieldHints =
+    [
+        ("run / runid",                 "run identifier"),
+        ("type",                        "run type"),
+        ("status",                      "Running / Completed / Failed"),
+        ("start / started",             "start time"),
+        ("end / ended / finish",        "end time"),
+        ("desc / description",          "description"),
+    ];
 
     // ── JS interop ────────────────────────────────────────────────────────
     private string _instanceKey = Guid.NewGuid().ToString("N");
@@ -425,14 +446,16 @@
         return result.ToArray();
     }
 
-    // ── Add Batch dialog ──────────────────────────────────────────────────
+    // ── Add Run dialog ───────────────────────────────────────────────────
 
     private async Task OpenAddDialog()
     {
-        _addDialogOpen    = true;
-        _dialogSelected   = null;
-        _dialogFilter     = string.Empty;
-        _dialogPage       = 1;
+        _addDialogOpen          = true;
+        _dialogSelected         = null;
+        _dialogFilterText       = string.Empty;
+        _dialogFilterParseError = null;
+        _dialogFilterAst        = null;
+        _dialogPage             = 1;
         await LoadDialogAsync();
     }
 
@@ -442,31 +465,44 @@
         StateHasChanged();
         try
         {
-            var filter = new RunFilter { SearchText = _dialogFilter };
-            var page   = await RunService.GetRunsAsync(
-                _dialogEnv, DateTime.UtcNow, DialogPageSize * _dialogPage, filter);
-            // Poor man's pagination: fetch N items and skip to page.
-            _dialogBatches = page
-                .Skip((_dialogPage - 1) * DialogPageSize)
-                .Take(DialogPageSize)
-                .ToList();
+            _dialogAll = await RunService.GetRunsAsync(
+                _dialogEnv, DateTime.UtcNow, RunsOptions.Value.MaxResults,
+                filter: new RunFilter { FilterAst = _dialogFilterAst });
+            _dialogPage = 1;
+            RebuildDialogPage();
         }
         finally { _dialogLoading = false; StateHasChanged(); }
     }
 
+    private void RebuildDialogPage() =>
+        _dialogBatches = _dialogAll.Skip((_dialogPage - 1) * _dialogPageSize).Take(_dialogPageSize).ToList();
+
+    private void OnDialogPageChanged(int page) { _dialogPage = page; RebuildDialogPage(); }
+
+    private void OnDialogPageSizeChanged(int size) { _dialogPageSize = size; _dialogPage = 1; RebuildDialogPage(); }
+
     private async Task OnDialogEnvChanged(string env)
     {
         _dialogEnv      = env;
-        _dialogPage     = 1;
         _dialogSelected = null;
         await LoadDialogAsync();
     }
 
     private async Task OnDialogFilterChanged(string text)
     {
-        _dialogFilter   = text;
-        _dialogPage     = 1;
-        _dialogSelected = null;
+        _dialogFilterText       = text;
+        _dialogFilterParseError = null;
+        _dialogSelected         = null;
+
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = DialogFilterParser.Parse(text); }
+            catch (FilterParseException ex) { _dialogFilterParseError = ex.Message; }
+        }
+        _dialogFilterAst = node;
+
+        if (_dialogFilterParseError is not null) { StateHasChanged(); return; }
         await LoadDialogAsync();
     }
 
@@ -479,19 +515,15 @@
         await PushDataAsync();
     }
 
-    // ── Dialog row click / double-click ───────────────────────────────────
-    // MouseEventArgs.Detail = click count: 1 = single, 2 = double.
-    private async Task OnDialogRowClick(RunSummary item, MouseEventArgs mouse)
+    // ── Dialog row selection ───────────────────────────────────────────────
+
+    private void OnDialogRowClick(RunSummary item) =>
+        _dialogSelected = _dialogSelected?.RunId == item.RunId ? null : item;
+
+    private async Task OnDialogRowDoubleClick(RunSummary item)
     {
-        if (mouse.Detail == 2)
-        {
-            _dialogSelected = item;
-            await ConfirmAdd();
-        }
-        else
-        {
-            _dialogSelected = _dialogSelected?.RunId == item.RunId ? null : item;
-        }
+        _dialogSelected = item;
+        await ConfirmAdd();
     }
 
     private bool IsAlreadyLoaded(RunSummary b) =>
@@ -697,58 +729,47 @@
         </DialogActions>
     </MudDialog>
 
-    <!-- Add Batch dialog -->
-    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">
+    <!-- Add Run dialog -->
+    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true })">
         <TitleContent>
-            <MudText Typo="Typo.h6">Add Batch</MudText>
+            <MudText Typo="Typo.h6">Add Run</MudText>
         </TitleContent>
         <DialogContent>
             <div class="bm-tl-dialog-controls">
-                <MudSelect T="string" Label="Environment" Value="_dialogEnv"
-                           ValueChanged="OnDialogEnvChanged"
-                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="bm-tl-dialog-env">
-                    @* environments populated from EnvironmentSelectorService in a real impl *@
-                    <MudSelectItem Value="@Environment">@Environment</MudSelectItem>
-                </MudSelect>
+                <div class="bm-tl-dialog-env-wrap">
+                    <span class="bm-toolbar-label">Environment</span>
+                    <MudSelect T="string" Value="_dialogEnv"
+                               ValueChanged="OnDialogEnvChanged"
+                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Class="bm-tl-dialog-env" PopoverClass="bm-tl-dialog-env-popover">
+                        @foreach (var env in EnvService.Environments)
+                        {
+                            <MudSelectItem Value="@env.Id">@env.Id</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
 
-                <MudTextField T="string" Placeholder="Search RunId / Description…"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Outlined.Search"
-                              Value="@_dialogFilter" ValueChanged="OnDialogFilterChanged"
-                              Immediate="true" DebounceInterval="300"
-                              Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Class="bm-tl-dialog-filter" />
+                <FilterBox Value="@_dialogFilterText"
+                           OnFilterChanged="OnDialogFilterChanged"
+                           ParseError="@_dialogFilterParseError"
+                           Placeholder="Filter runs…"
+                           Class="bm-filter-input"
+                           FieldHints="@_dialogFieldHints" />
             </div>
 
-            @if (_dialogLoading)
-            {
-                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-            }
-            else
-            {
-                <MudDataGrid T="RunSummary" Items="@_dialogBatches"
-                             RowClick="@(async e => await OnDialogRowClick(e.Item, e.MouseEventArgs))"
-                             RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
-                             Dense="true" Hover="true" Striped="true" Bordered="false">
-                    <Columns>
-                        <PropertyColumn Property="x => x.RunId" Title="RunId" />
-                        <PropertyColumn Property="x => x.Description" Title="Description" />
-                        <TemplateColumn Title="Status">
-                            <CellTemplate>
-                                <StatusIcon Status="@context.Item.Status" />
-                            </CellTemplate>
-                        </TemplateColumn>
-                        <PropertyColumn Property="x => x.Start" Title="Start" Format="HH:mm" />
-                        <TemplateColumn Title="Duration">
-                            <CellTemplate>
-                                @(context.Item.End.HasValue
-                                    ? FormatDuration(context.Item.End.Value - context.Item.Start)
-                                    : "—")
-                            </CellTemplate>
-                        </TemplateColumn>
-                    </Columns>
-                </MudDataGrid>
-            }
+            <BmRunsTable Rows="@_dialogBatches"
+                         Loading="@_dialogLoading"
+                         FixedHeader="false"
+                         ShowActions="false"
+                         TotalCount="@_dialogAll.Count"
+                         Page="@_dialogPage"
+                         PageSize="@_dialogPageSize"
+                         TotalPages="@_dialogTotalPages"
+                         PageChanged="OnDialogPageChanged"
+                         PageSizeChanged="OnDialogPageSizeChanged"
+                         RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
+                         OnRowClick="@(r => OnDialogRowClick(r))"
+                         OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />
 
             @if (_dialogSelected is not null && IsAlreadyLoaded(_dialogSelected))
             {
