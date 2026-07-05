@@ -134,6 +134,9 @@
             {
                 if (_eventService is null || _topologyService is null) return;
 
+                if (_eventService.DetectedStatus is { } detected && _details is not null)
+                    _details.Status = detected;
+
                 var allEvents = _eventService.Events;
 
                 IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue

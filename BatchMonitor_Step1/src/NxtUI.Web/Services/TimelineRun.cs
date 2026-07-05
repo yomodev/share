@@ -27,6 +27,7 @@ public class TimelineRun(
     private CancellationTokenSource? _timeoutCts;
 
     private static readonly TimeSpan LiveTimeout = TimeSpan.FromHours(3);
+    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromSeconds(30);
 
     public IReadOnlyList<PerformanceEvent> Events
     {
@@ -64,22 +65,62 @@ public class TimelineRun(
             _signalRSub = await signalR.SubscribeToRunAsync(Env, RunId, OnRunEvent);
 
             _timeoutCts = new CancellationTokenSource();
-            _ = Task.Delay(LiveTimeout, _timeoutCts.Token).ContinueWith(async t =>
-            {
-                if (!t.IsCanceled)
-                {
-                    IsLive = false;
-                    _signalRSub?.Dispose();
-                    _signalRSub = null;
-                    Console.WriteLine($"[TimelineRun] Live timeout for {RunId}");
-                    await onUpdated();
-                }
-            });
+            _ = StatusWatchLoopAsync(_timeoutCts.Token);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[TimelineRun] SignalR subscription failed for {RunId}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// While live, periodically re-checks the run's actual status (no backend pushes a
+    /// completion event today — see IRunService docs) and stops the subscription as soon
+    /// as it's no longer Running, instead of only on the 3h hard timeout.
+    /// </summary>
+    private async Task StatusWatchLoopAsync(CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + LiveTimeout;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(StatusPollInterval, ct);
+                if (ct.IsCancellationRequested) break;
+
+                if (DateTime.UtcNow >= deadline)
+                {
+                    await StopLiveAsync("timeout");
+                    return;
+                }
+
+                try
+                {
+                    var details = await runService.GetRunDetailsAsync(Env, RunId, ct);
+                    if (details.Status != RunStatus.Running)
+                    {
+                        await StopLiveAsync($"status={details.Status}");
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Transient error — don't stop the run on one failed check, just retry next tick.
+                    Console.WriteLine($"[TimelineRun] Status check failed for {RunId}: {ex.Message}");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task StopLiveAsync(string reason)
+    {
+        IsLive = false;
+        _signalRSub?.Dispose();
+        _signalRSub = null;
+        Console.WriteLine($"[TimelineRun] Live subscription stopped for {RunId} ({reason})");
+        await onUpdated();
     }
 
     private async Task OnRunEvent(PerformanceEvent evt)

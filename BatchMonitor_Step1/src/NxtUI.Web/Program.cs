@@ -101,6 +101,8 @@ public class Program
         // builder.Services.AddSingleton<IRunService>(sp => new SqlRunService(
         //     sp.GetRequiredService<EnvironmentConfigLoader>(),
         //     sp.GetRequiredService<IOptions<RunsSettings>>().Value,
+        //     sp.GetRequiredService<MongoConnectionFactory>(),
+        //     sp.GetRequiredService<IOptions<MongoSettings>>(),
         //     sp.GetRequiredService<ILogger<SqlRunService>>()));
 
         // ── Kafka ─────────────────────────────────────────────────────────────

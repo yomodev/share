@@ -1,19 +1,29 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
 using NxtUI.Core.Models;
+using NxtUI.Core.Services.Mongo;
 
 namespace NxtUI.Core.Services.Sql;
 
 /// <summary>
 /// SQL Server implementation of <see cref="IRunService"/>.
-/// Reads from <c>[schema].[RunsTable]</c> (configured per environment in <c>config/{env}.json</c>).
+/// Run metadata (list/details) comes from <c>[schema].[RunsTable]</c> (configured per environment
+/// in <c>config/{env}.json</c>). Per-chunk performance events only ever exist in MongoDB's
+/// PerformanceTracker collection — no pipeline writes them to SQL — so this service is a
+/// deliberate hybrid: SQL for run metadata, Mongo for the event stream. See docs/xx for the split.
 /// Register this in Program.cs instead of MockRunService when connecting to a real SQL Server.
 /// </summary>
 public class SqlRunService(
     EnvironmentConfigLoader configLoader,
     RunsSettings runsSettings,
+    MongoConnectionFactory mongoFactory,
+    IOptions<MongoSettings> mongoSettings,
     ILogger<SqlRunService> log)
     : IRunService
 {
@@ -164,9 +174,37 @@ public class SqlRunService(
     public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException("Run details not available from this SQL service.");
 
-    public Task<List<PerformanceEvent>> GetRunEventsAsync(
-        string env, string runId, DateTime from, CancellationToken ct = default) =>
-        throw new NotImplementedException();
+    public async Task<List<PerformanceEvent>> GetRunEventsAsync(
+        string env, string runId, DateTime from, CancellationToken ct = default)
+    {
+        var db  = mongoFactory.GetDatabase(env);
+        var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
+
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq("RunId", runId),
+            Builders<BsonDocument>.Filter.Gte("Start", from.ToUniversalTime()));
+
+        var docs = await col.Find(filter)
+            .Sort(Builders<BsonDocument>.Sort.Ascending("Start"))
+            .ToListAsync(ct);
+
+        return docs.Select(MapToPerformanceEvent).ToList();
+    }
+
+    private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
+    {
+        Id          = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
+        ChunkId     = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
+        Service     = d.GetValue("Service",   BsonNull.Value).AsString ?? string.Empty,
+        Pipeline    = d.GetValue("Pipeline",  BsonNull.Value).AsString ?? string.Empty,
+        Server      = d.GetValue("Server",    BsonNull.Value).AsString ?? string.Empty,
+        ProcessId   = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
+        Start       = d.GetValue("Start",     BsonNull.Value).ToUniversalTime(),
+        Finish      = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
+        Error       = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
+        Source      = d.GetValue("Source", BsonNull.Value).AsString ?? string.Empty,
+        RecordCount = d.Contains("RecordCount") && !d["RecordCount"].IsBsonNull ? d["RecordCount"].ToInt32() : 0,
+    };
 
     public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException();

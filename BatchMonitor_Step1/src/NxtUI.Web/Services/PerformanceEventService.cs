@@ -24,6 +24,10 @@ public class PerformanceEventService : IDisposable
     public const int UnfocusedPollIntervalMs = 15_000;
     // When SignalR push is active, poll much less frequently (safety net only).
     public const int SignalRFallbackPollMs = 30_000;
+    // No backend pushes a completion event today — periodically re-check the run's own
+    // status while live so SignalR gets torn down (and the UI's status chip updates)
+    // as soon as it finishes, instead of only relying on events stopping.
+    private static readonly TimeSpan StatusCheckInterval = TimeSpan.FromSeconds(30);
 
     private readonly IRunService _runService;
     private readonly PerformanceEventStore _eventStore;
@@ -32,6 +36,16 @@ public class PerformanceEventService : IDisposable
     private Action? _onEventsUpdated;
     private IDisposable? _signalRSubscription;
     private bool _signalRActive;
+    private bool _isRunning;
+    private DateTime _nextStatusCheck;
+
+    /// <summary>
+    /// Set once a status re-check discovers the run is no longer Running. Null until then.
+    /// Callers (e.g. RunDetail.razor) should read this from their onEventsUpdated callback
+    /// and update their own displayed status, since _details is loaded once and never
+    /// otherwise refreshed.
+    /// </summary>
+    public RunStatus? DetectedStatus { get; private set; }
 
     public bool IsFocused
     {
@@ -73,6 +87,9 @@ public class PerformanceEventService : IDisposable
     {
         _onEventsUpdated = onEventsUpdated;
         IsFocused = isFocused;
+        _isRunning = isRunning;
+        DetectedStatus = null;
+        _nextStatusCheck = DateTime.UtcNow + StatusCheckInterval;
 
         StopPolling();
 
@@ -192,9 +209,40 @@ public class PerformanceEventService : IDisposable
                     _onEventsUpdated?.Invoke();
                     Console.WriteLine($"[EventService] Poll: {events.Count} events, total={_eventStore.Count}");
                 }
+
+                if (_isRunning && DateTime.UtcNow >= _nextStatusCheck)
+                    await CheckRunStatusAsync(env, runId, ct);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Console.WriteLine($"[EventService] Poll error: {ex.Message}"); }
+        }
+    }
+
+    private async Task CheckRunStatusAsync(string env, string runId, CancellationToken ct)
+    {
+        try
+        {
+            var details = await _runService.GetRunDetailsAsync(env, runId, ct);
+            if (details.Status != RunStatus.Running)
+            {
+                _isRunning = false;
+                DetectedStatus = details.Status;
+                _signalRSubscription?.Dispose();
+                _signalRSubscription = null;
+                _signalRActive = false;
+                _onEventsUpdated?.Invoke();
+                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped SignalR, falling back to slow poll.");
+            }
+            else
+            {
+                _nextStatusCheck = DateTime.UtcNow + StatusCheckInterval;
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // Transient error — don't flip status on one failed check, just retry next tick.
+            Console.WriteLine($"[EventService] Status check failed for {runId}: {ex.Message}");
         }
     }
 
