@@ -25,7 +25,7 @@ const TIMELINE_ALIASES = {
 
     // ── Constants ─────────────────────────────────────────────────────────
     const HEADER_H  = 26;
-    const SUBROW_H  = 12;
+    const SUBROW_H  = 9;
     const ROW_PAD   = 3;
     const BLOCK_GAP = 2;
     const BLOCK_RX  = 4;
@@ -601,10 +601,7 @@ const TIMELINE_ALIASES = {
         }
         const tx   = sec.batch.isLive ? lx + 14 : lx;
         const GAP  = 10;
-        const MAX  = 28;
-        const name = sec.batch.batchName.length > MAX
-            ? sec.batch.batchName.slice(0, MAX) + '…'
-            : sec.batch.batchName;
+        const name = sec.batch.batchName;
 
         // Background rect is sized/positioned after measuring actual rendered text
         // widths (getBBox) rather than estimated char widths, since a proportional
