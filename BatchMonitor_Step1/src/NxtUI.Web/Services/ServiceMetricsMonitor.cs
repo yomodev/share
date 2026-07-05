@@ -227,6 +227,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                          .Where(k => k.StartsWith(env + "|", StringComparison.Ordinal)).ToList())
                 _entries.TryRemove(key, out _);
             _kafkaHasData.TryRemove(env, out _);
+            _discovery.ClearEnv(env);
             _log.LogInformation("metrics [{Env}]: idle cache released", env);
         }
     }
@@ -368,6 +369,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             _entries.TryRemove(key, out _);
             _log.LogDebug("metrics [{Env}]: dropped stale entry {Key}", env, key);
         }
+        _discovery.PruneStaleEntries(env, activeKeys);
     }
 
     // ── Kafka metrics consumer ──────────────────────────────────────────────────
@@ -389,28 +391,58 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
             : KafkaSeekDirective.Default;
 
+        _log.LogInformation(
+            "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
+            "until the first matching message arrives, this env is served from disk-log polling",
+            env, topic, directive);
+
+        var otherTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         try
         {
             var first = true;
+            var messageCount = 0;
             await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))
             {
                 if (ct.IsCancellationRequested) break;
-                if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase)) continue;
+                messageCount++;
+
+                if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (otherTypes.Add(msg.PayloadType ?? "(null)"))
+                        _log.LogDebug(
+                            "metrics [{Env}]: topic '{Topic}' also carries payload type '{Type}' — ignored (not MetricsTracker)",
+                            env, topic, msg.PayloadType);
+                    continue;
+                }
 
                 _kafkaHasData[env] = true;
                 if (first)
                 {
-                    _log.LogInformation("metrics [{Env}]: Kafka topic '{Topic}' has data, earliest={Ts:HH:mm:ss}", env, topic, msg.Timestamp);
+                    _log.LogInformation("metrics [{Env}]: Kafka topic '{Topic}' has data, earliest={Ts:HH:mm:ss} — env is now served from Kafka", env, topic, msg.Timestamp);
                     first = false;
                 }
 
                 await HandleMetricsMessageAsync(env, msg, ct);
             }
+
+            // The tail loop only returns without throwing when the topic run ends on its own
+            // (e.g. broker closed the connection) rather than via cancellation — that's not
+            // supposed to happen for a continuous "uncapped" tail, so it's worth flagging:
+            // metrics for this env silently fall back to disk polling until the next subscribe.
+            if (!ct.IsCancellationRequested)
+                _log.LogWarning(
+                    "metrics [{Env}]: Kafka consumer for topic '{Topic}' ended unexpectedly after {Count} message(s) " +
+                    "without being cancelled — this env now falls back to disk-log polling until re-subscribed",
+                    env, topic, messageCount);
         }
         catch (OperationCanceledException) { /* unsubscribed / shutting down */ }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "metrics [{Env}]: Kafka consumer for topic '{Topic}' failed", env, topic);
+            _log.LogError(ex,
+                "metrics [{Env}]: Kafka consumer for topic '{Topic}' failed — this env falls back to disk-log " +
+                "polling until re-subscribed (check broker connectivity/credentials for this environment)",
+                env, topic);
         }
     }
 
@@ -418,7 +450,13 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         JsonDocument doc;
         try { doc = JsonDocument.Parse(msg.JsonPayload ?? "{}"); }
-        catch { return; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "metrics [{Env}]: could not parse MetricsTracker JSON payload (offset={Offset}, partition={Partition})",
+                env, msg.Offset, msg.Partition);
+            return;
+        }
 
         using (doc)
         {
@@ -426,7 +464,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             var hostName    = GetStringCI(root, "HostName");
             var serviceName = GetStringCI(root, "ServiceName");
             var instanceId  = GetStringCI(root, "ServiceInstanceId");
-            if (hostName is null || serviceName is null || instanceId is null) return;
+            if (hostName is null || serviceName is null || instanceId is null)
+            {
+                _log.LogWarning(
+                    "metrics [{Env}]: MetricsTracker message missing HostName/ServiceName/ServiceInstanceId " +
+                    "(offset={Offset}, partition={Partition}) — dropped",
+                    env, msg.Offset, msg.Partition);
+                return;
+            }
 
             // Kafka carries no ProcessId — join against the heartbeat-reported instance by
             // (host, service, instance id) to find the same ServiceStatus/Entry the file
@@ -437,7 +482,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 string.Equals(s.HostName, hostName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ServiceInstanceId, instanceId, StringComparison.OrdinalIgnoreCase));
-            if (svc is null) return;
+            if (svc is null)
+            {
+                _log.LogDebug(
+                    "metrics [{Env}]: no heartbeat match yet for {Service}@{Host} (instance={Instance}) — " +
+                    "message skipped, will retry once heartbeat reports this instance",
+                    env, serviceName, hostName, instanceId);
+                return;
+            }
 
             var startStr = GetStringCI(root, "ProcessStartTime");
             DateTime.TryParse(startStr, System.Globalization.CultureInfo.InvariantCulture,

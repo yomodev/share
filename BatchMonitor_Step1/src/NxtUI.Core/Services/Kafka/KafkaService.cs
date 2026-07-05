@@ -181,7 +181,16 @@ public class KafkaService(
         var config = factory.BuildConsumerConfig(env, groupId);
 
         using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        Confluent.Kafka.Metadata meta;
+        try
+        {
+            meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
+            throw;
+        }
         var topicPartitions = meta.Topics
             .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
 
@@ -220,7 +229,11 @@ public class KafkaService(
             ConsumeResult<string?, byte[]>? cr;
             try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { log.LogWarning(ex, "kafka: consume error"); break; }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
+                break;
+            }
 
             if (cr is null) continue;
             if (cr.IsPartitionEOF)
