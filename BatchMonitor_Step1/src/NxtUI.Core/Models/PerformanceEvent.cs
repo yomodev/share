@@ -42,6 +42,15 @@ public class PerformanceEvent
     /// <summary>Records processed in this chunk.</summary>
     public int RecordCount { get; set; }
 
+    /// <summary>Free-form supplementary text from the PerformanceTracker document.</summary>
+    public string Info { get; set; } = string.Empty;
+
+    /// <summary>Optional numeric measurement from the PerformanceTracker document.</summary>
+    public double? Value { get; set; }
+
+    /// <summary>Mongo document's own last-modified timestamp.</summary>
+    public DateTime LastUpdate { get; set; }
+
     /// <summary>
     /// Composite key for deduplication/upsert: (name, service, pipeline, processId).
     /// </summary>

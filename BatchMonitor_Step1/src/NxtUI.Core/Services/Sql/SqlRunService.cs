@@ -93,7 +93,7 @@ public class SqlRunService(
             if (filter?.Statuses?.Count > 0)
             {
                 var dbValues = filter.Statuses
-                    .SelectMany(s => sqlCfg.StatusValues.TryGetValue(s.ToString(), out var v) ? v : [])
+                    .SelectMany(sqlCfg.StatusValuesFor)
                     .Distinct()
                     .ToList();
 
@@ -156,7 +156,7 @@ public class SqlRunService(
             results.Add(new RunSummary
             {
                 RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
                 Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                 Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
                 Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
@@ -177,7 +177,7 @@ public class SqlRunService(
     public async Task<List<PerformanceEvent>> GetRunEventsAsync(
         string env, string runId, DateTime from, CancellationToken ct = default)
     {
-        var db  = mongoFactory.GetDatabase(env);
+        var db = mongoFactory.GetDatabase(env);
         var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
 
         var filter = Builders<BsonDocument>.Filter.And(
@@ -193,35 +193,28 @@ public class SqlRunService(
 
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {
-        Id          = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
-        Name        = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
-        Service     = d.GetValue("Service",   BsonNull.Value).AsString ?? string.Empty,
-        Pipeline    = d.GetValue("Pipeline",  BsonNull.Value).AsString ?? string.Empty,
-        Server      = d.GetValue("Server",    BsonNull.Value).AsString ?? string.Empty,
-        ProcessId   = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
-        Start       = d.GetValue("Start",     BsonNull.Value).ToUniversalTime(),
-        Finish      = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
-        Error       = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
-        Source      = d.GetValue("Source", BsonNull.Value).AsString ?? string.Empty,
+        Id = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
+        Name = d.GetValue("ChunkId", BsonNull.Value).AsString ?? string.Empty,
+        Service = d.GetValue("Service", BsonNull.Value).AsString ?? string.Empty,
+        Pipeline = d.GetValue("Pipeline", BsonNull.Value).AsString ?? string.Empty,
+        Server = d.GetValue("Server", BsonNull.Value).AsString ?? string.Empty,
+        ProcessId = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
+        Start = d.GetValue("Start", BsonNull.Value).ToUniversalTime(),
+        Finish = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
+        Error = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
+        Source = d.GetValue("Source", BsonNull.Value).AsString ?? string.Empty,
         RecordCount = d.Contains("RecordCount") && !d["RecordCount"].IsBsonNull ? d["RecordCount"].ToInt32() : 0,
+        Info = d.GetValue("Info", BsonNull.Value).AsString ?? string.Empty,
+        Value = d.Contains("Value") && !d["Value"].IsBsonNull ? d["Value"].ToDouble() : null,
+        LastUpdate = d.Contains("LastUpdate") && !d["LastUpdate"].IsBsonNull
+            ? d["LastUpdate"].ToUniversalTime()
+            : DateTime.UtcNow,
     };
 
     public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException();
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    // Maps whatever the DB stores → RunStatus. Covers common short codes and full names.
-    private static RunStatus ParseStatus(string? value) =>
-        value?.Trim().ToUpperInvariant() switch
-        {
-            "CREATED" => RunStatus.Running,
-            "SUCCESS" => RunStatus.Completed,
-            "FAILED" => RunStatus.Failed,
-            "TERMINATED" => RunStatus.Terminated,
-            "PURGED" => RunStatus.Purged,
-            _ => RunStatus.Unknown,
-        };
 
     private static string EscapeLike(string value) =>
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");

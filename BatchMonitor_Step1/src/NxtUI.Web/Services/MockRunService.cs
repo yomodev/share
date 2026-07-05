@@ -276,6 +276,7 @@ public class MockRunService : IRunService
                         Finish = isInProg ? null : start.AddSeconds(dur),
                         Error = isError ? "Processing error: schema mismatch" : null,
                         RecordCount = rng.Next(10, 500),
+                        LastUpdate = isInProg ? start : start.AddSeconds(dur),
                     });
                 }
             }
@@ -366,6 +367,7 @@ public class MockRunService : IRunService
                     Finish = inProg ? null : start.AddSeconds(rng.Next(1, 20)),
                     Error = isError ? "Live processing error" : null,
                     RecordCount = rng.Next(10, 500),
+                    LastUpdate = DateTime.UtcNow,
                 });
             }
             if (hops.Count == 0) done.Add(chunkId);
