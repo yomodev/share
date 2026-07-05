@@ -377,10 +377,22 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         var topic = _kafkaSettings.MetricsTopicName;
         if (string.IsNullOrWhiteSpace(topic)) return;
 
+        // Seek from the oldest currently-known service's start time instead of the topic's
+        // true beginning. OffsetsForTimes resolves the correct starting offset directly on
+        // the broker — it doesn't scan — so this is cheap regardless of retention length,
+        // and stays correct (worst case: replays a bit more than strictly necessary) even
+        // if retention later grows from a few hours to a week. Falls back to Beginning only
+        // when heartbeat data isn't available yet (e.g. this env's very first subscribe).
+        var services = _heartbeatMonitor.GetServices(env);
+        var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
+        var directive = oldestStart.HasValue
+            ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
+            : KafkaSeekDirective.Default;
+
         try
         {
             var first = true;
-            await foreach (var msg in _kafka.TailTopicAsync(env, topic, KafkaSeekDirective.Default, ct, uncapped: true))
+            await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))
             {
                 if (ct.IsCancellationRequested) break;
                 if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase)) continue;
@@ -502,6 +514,17 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 UpsertSample(entry, sample);
                 filled++;
             }
+
+            // Hand off our read position to the file poller — without this, PollEnvOnceAsync
+            // doesn't know this file was already read to the end and re-parses it from byte 0
+            // the next time it touches this entry, duplicating a potentially large (tens of
+            // thousands of lines) synchronous parse. This was the actual bug: real-world
+            // metrics files can be big, and doing that parse twice is exactly the kind of
+            // CPU-bound work on the shared thread pool that starves out SignalR's keep-alive
+            // processing and shows up to users as "attempting to reconnect".
+            entry.FilePath     = file;
+            entry.Offset       = result.NewOffset;
+            entry.LastWriteUtc = DateTime.UtcNow;
             entry.DiskBackfilled = true;
         }
 

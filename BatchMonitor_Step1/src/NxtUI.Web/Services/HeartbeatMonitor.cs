@@ -27,8 +27,18 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         public readonly object Lock = new();
         public int Subscribers;
         public DateTime IdleSince = DateTime.MinValue;
+        // Null means "no successful poll yet" — the next poll does a full fetch. Once set,
+        // subsequent polls only ask Mongo for documents changed since this timestamp.
+        public DateTime? LastPollUtc;
+        // Keyed by (host, service, pid) — accumulates across incremental polls; a service
+        // that stops heartbeating just stops getting new entries, it isn't dropped by an
+        // incremental fetch (which only returns what changed), so IsOnline is recomputed
+        // from the current time on every poll instead of trusted from whenever it was fetched.
+        public readonly Dictionary<string, ServiceStatus> ServiceMap = new(StringComparer.OrdinalIgnoreCase);
         public volatile IReadOnlyList<ServiceStatus> Services = [];
     }
+
+    private static string Key(ServiceStatus s) => $"{s.HostName}|{s.ServiceName}|{s.ProcessId}";
 
     private readonly ConcurrentDictionary<string, EnvState> _states = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
@@ -115,7 +125,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
 
     private async Task PollEnvAsync(string env, CancellationToken ct)
     {
-        if (!_states.ContainsKey(env)) return;
+        if (!_states.TryGetValue(env, out var state)) return;
 
         // Prevent concurrent polls for the same env (timer vs. immediate-subscribe race).
         var gate = _gates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
@@ -123,12 +133,41 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         using var op = _ops.Track($"HeartbeatMonitor.Poll({env})");
         try
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);
-            if (_states.TryGetValue(env, out var state))
+            DateTime? since;
+            lock (state.Lock) since = state.LastPollUtc;
+
+            // Captured before querying so nothing updated mid-query is missed by the next poll.
+            var pollStartUtc = DateTime.UtcNow;
+
+            // First poll for this env (since == null): full fetch, same as before — everything
+            // within IHeartbeatService's default recent window. Every poll after that only asks
+            // for documents changed since the previous successful poll.
+            var changed = await _heartbeat.GetServiceStatusesAsync(env, since, ct);
+
+            if (_states.TryGetValue(env, out _)) // still subscribed — env wasn't idle-released mid-query
             {
-                state.Services = services;
+                var threshold = TimeSpan.FromSeconds(_settings.IntervalSeconds * 2);
+                var now = DateTime.UtcNow;
+
+                lock (state.Lock)
+                {
+                    foreach (var svc in changed)
+                        state.ServiceMap[Key(svc)] = svc;
+
+                    // Recompute liveness for every cached entry from the current time — a
+                    // service that stopped heartbeating simply stops appearing in future
+                    // incremental fetches, so its cached IsOnline would otherwise never flip.
+                    foreach (var svc in state.ServiceMap.Values)
+                        svc.IsOnline = (now - svc.UpdatedDateTime) <= threshold;
+
+                    state.Services    = state.ServiceMap.Values.ToList();
+                    state.LastPollUtc = pollStartUtc;
+                }
+
                 OnServicesUpdated?.Invoke(env);
-                _log.LogDebug("heartbeat-monitor [{Env}]: {Count} services cached", env, services.Count);
+                _log.LogDebug(
+                    "heartbeat-monitor [{Env}]: {Changed} changed, {Total} cached ({Mode})",
+                    env, changed.Count, state.Services.Count, since is null ? "full" : "incremental");
             }
         }
         catch (OperationCanceledException) { throw; }
