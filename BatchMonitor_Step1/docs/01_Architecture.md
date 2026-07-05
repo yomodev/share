@@ -77,7 +77,7 @@ public enum TabType { Home, Batches, BatchDetail, Timeline }
 |------|---------|
 | `BatchSummary.cs` | List-view item: RunId, BatchName, Type, Status, Start, End |
 | `BatchDetails.cs` | Detail view: adds Metadata dictionary, Duration computed |
-| `PerformanceEvent.cs` | Processing event: ChunkId, Service, Pipeline, Source, Server, ProcessId, Start, Finish, Error, RecordCount |
+| `PerformanceEvent.cs` | Processing event: Name, Service, Pipeline, Source, Server, ProcessId, Start, Finish, Error, RecordCount |
 | `Topology.cs` | Graph model: TopologyNode, PipelineRow, TopologyEdge, PipelineState enum |
 | `EnvironmentInfo.cs` | Environment descriptor with badge colour |
 

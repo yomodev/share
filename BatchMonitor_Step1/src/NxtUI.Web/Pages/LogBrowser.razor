@@ -571,9 +571,17 @@
 
     private async Task OnItemClickAsync(LogFolderNode node)
     {
-        if (!node.HasChildren) return;
-        var isExpanded = _expanded.Contains(node.RelativePath);
-        await OnExpandedChangedAsync(node, !isExpanded);
+        if (node.HasChildren)
+        {
+            var isExpanded = _expanded.Contains(node.RelativePath);
+            await OnExpandedChangedAsync(node, !isExpanded);
+        }
+
+        // Clicking a folder to open it also checks it, so its files show up in the
+        // table without a separate checkbox click. Never unchecks on click — that
+        // stays the checkbox's job, so collapsing a folder doesn't drop its results.
+        if (!_checkedPaths.Contains(node.RelativePath))
+            await SetCheckedAsync(node.RelativePath, true);
     }
 
     private async Task OnExpandedChangedAsync(LogFolderNode node, bool expanded)

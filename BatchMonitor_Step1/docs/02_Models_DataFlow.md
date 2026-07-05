@@ -7,7 +7,7 @@ The core domain object. Represents one chunk of work processed by one service.
 ```csharp
 public class PerformanceEvent
 {
-    public string ChunkId   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
+    public string Name   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
     public string Service   { get; set; }   // Service name (e.g. "Enricher")
     public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
     public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
@@ -19,7 +19,7 @@ public class PerformanceEvent
     public int RecordCount  { get; set; }
 
     // Computed
-    public string CompositeKey => $"{ChunkId}:{Service}:{Pipeline}:{ProcessId}";
+    public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
     public bool IsDone  => Finish.HasValue && Error == null;
     public bool IsError => Error != null;
     public DateTime Timestamp => Finish ?? Start;  // for upsert ordering
@@ -30,15 +30,15 @@ public class PerformanceEvent
 
 `Source` is the class name or pipe processor that handled the chunk. It's the **default Colour By** key in the Timeline tab. Example values: `CsvIngester`, `SchemaValidator`, `FieldMapper`, `LookupEnricher`, `MongoWriter`.
 
-### Key field: `ChunkId`
+### Key field: `Name`
 
-Same `ChunkId` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `ChunkId` across all batches/services.
+Same `Name` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `Name` across all batches/services.
 
 ---
 
 ## CompositeKey and Upsert
 
-Events are upserted by `CompositeKey = "{ChunkId}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
+Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
 - Duplicate pushes from SignalR + polling overlap
 - Updates when a chunk finishes (Start event arrives first, then Finish event)
 
@@ -128,7 +128,7 @@ User opens Timeline (from BatchDetail [⏱] button)
     │
     └─ TimelineBatch.LoadAsync()
           ├─ GetBatchDetailsAsync()  →  BatchName, BatchStart, IsLive
-          ├─ GetBatchEventsAsync()   →  historical events (upsert by ChunkId)
+          ├─ GetBatchEventsAsync()   →  historical events (upsert by Name)
           └─ SignalRConnectionService.SubscribeToBatchAsync() (if IsLive)
                 └─ OnBatchEvent() → UpsertEvent() → DebouncedPushAsync()
 
@@ -137,7 +137,7 @@ DebouncedPushAsync() [300ms debounce]
           ├─ groupBy, colourBy, filter, stackView
           └─ batches[]:
                 ├─ runId, batchName, isLive, batchStartEpochMs
-                └─ events[]: chunkId, source, pipeline, service,
+                └─ events[]: name, source, pipeline, service,
                              processId, server, startMs, finishMs,
                              status, error
     └─ JS: BatchMonitor.Timeline.update(key, payload)
@@ -146,7 +146,7 @@ DebouncedPushAsync() [300ms debounce]
 ### TimelineBatch
 
 One instance per loaded batch in a Timeline tab. Manages:
-- Event store (`Dictionary<string, PerformanceEvent>` keyed by ChunkId)
+- Event store (`Dictionary<string, PerformanceEvent>` keyed by Name)
 - SignalR subscription (live batches only)
 - 3-hour live timeout (per spec)
 - CSV-imported batches use `CreateFromCsv()` — no live subscription

@@ -2,7 +2,7 @@ namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lean performance event from PerformanceTracker fields (see design doc §7.5).
-/// Upserted by the client keyed on <see cref="CompositeKey"/> = (chunkId, service, pipeline, processId).
+/// Upserted by the client keyed on <see cref="CompositeKey"/> = (name, service, pipeline, processId).
 /// </summary>
 public class PerformanceEvent
 {
@@ -10,7 +10,7 @@ public class PerformanceEvent
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..16];
 
     /// <summary>Unique chunk identifier (TypePrefix + IncrementalNumber).</summary>
-    public string ChunkId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
     /// <summary>Service type name (e.g., "DataProcessor", "Transformer").</summary>
     public string Service { get; set; } = string.Empty;
@@ -43,9 +43,9 @@ public class PerformanceEvent
     public int RecordCount { get; set; }
 
     /// <summary>
-    /// Composite key for deduplication/upsert: (chunkId, service, pipeline, processId).
+    /// Composite key for deduplication/upsert: (name, service, pipeline, processId).
     /// </summary>
-    public string CompositeKey => $"{ChunkId}:{Service}:{Pipeline}:{ProcessId}";
+    public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
 
     /// <summary>True if this chunk has completed (successfully or with error).</summary>
     public bool IsDone => Finish.HasValue;

@@ -71,8 +71,8 @@ public class TopologyComputationService
 
         topology.Nodes = nodesByService.Values.OrderBy(n => n.Label, StringComparer.OrdinalIgnoreCase).ToList();
 
-        var allChunkIds = events.Select(e => e.ChunkId).Distinct().ToHashSet();
-        topology.TotalChunks = allChunkIds.Count;
+        var allNames = events.Select(e => e.Name).Distinct().ToHashSet();
+        topology.TotalChunks = allNames.Count;
         topology.TotalDone = events.Count(e => e.IsDone);
         topology.TotalInProgress = events.Count(e => !e.IsDone);
 
@@ -80,20 +80,20 @@ public class TopologyComputationService
         // For each chunk, order the (service, pipeline) hops it visited by
         // start time. Consecutive distinct hops become directed edges.
         var eventsByChunk = events
-            .GroupBy(e => e.ChunkId)
+            .GroupBy(e => e.Name)
             .ToDictionary(g => g.Key, g => g.OrderBy(e => e.Start).ToList());
 
         var edgesByKey = new Dictionary<(string, string, string, string), TopologyEdge>();
 
-        // Track, per (service,pipeline), the set of chunkIds that have a
+        // Track, per (service,pipeline), the set of names that have a
         // *finished* event there — used for the waiting estimate below.
         var doneChunksByPipeline = byServicePipeline.ToDictionary(
             kv => kv.Key,
-            kv => kv.Value.Where(e => e.IsDone).Select(e => e.ChunkId).ToHashSet());
+            kv => kv.Value.Where(e => e.IsDone).Select(e => e.Name).ToHashSet());
 
         var anyEventChunksByPipeline = byServicePipeline.ToDictionary(
             kv => kv.Key,
-            kv => kv.Value.Select(e => e.ChunkId).ToHashSet());
+            kv => kv.Value.Select(e => e.Name).ToHashSet());
 
         foreach (var chunkEvents in eventsByChunk.Values)
         {
@@ -125,7 +125,7 @@ public class TopologyComputationService
         }
 
         // ── Phase 4: waiting estimate per edge ───────────────────────────
-        // waiting ≈ count of chunkIds where source pipeline has finish set
+        // waiting ≈ count of names where source pipeline has finish set
         // but target pipeline has no event yet (§8.2).
         foreach (var edge in edgesByKey.Values)
         {
@@ -153,13 +153,13 @@ public class TopologyComputationService
         // ── Phase 5: overall estimated progress (§8.3) ──────────────────
         // Denominator: max hop count observed across chunks (i.e. number of
         // distinct (service,pipeline) nodes in the longest observed chain)
-        // × total unique chunkIds seen.
+        // × total unique names seen.
         var maxHops = eventsByChunk.Values.Count == 0
             ? 0
             : eventsByChunk.Values.Max(chunkEvents =>
                 chunkEvents.Select(e => (e.Service, e.Pipeline)).Distinct().Count());
 
-        var denominator = (double)maxHops * allChunkIds.Count;
+        var denominator = (double)maxHops * allNames.Count;
         var numerator = (double)events.Count(e => e.IsDone);
 
         topology.EstimatedProgress = denominator > 0

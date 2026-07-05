@@ -17,7 +17,7 @@ const DEFAULT_ALIASES = {
     srv: 'Server',        server: 'Server',
     pid: 'ProcessId',     processid: 'ProcessId',
     src: 'Source',        source: 'Source',
-    chunk: 'ChunkId',     chunkid: 'ChunkId',
+    chunk: 'Name',        chunkid: 'Name',      name: 'Name',
     batch: 'BatchName',   batchname: 'BatchName',
     type: 'Type',
     run: 'RunId',         runid: 'RunId',

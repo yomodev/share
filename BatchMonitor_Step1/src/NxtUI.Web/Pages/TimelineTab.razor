@@ -24,7 +24,7 @@
         ("svc / service",   "service name"),
         ("pipe / pipeline", "pipeline name"),
         ("src / source",    "source identifier"),
-        ("chunk / chunkId", "chunk ID"),
+        ("chunk / chunkid / name", "chunk name"),
         ("srv / server",    "server / host"),
         ("pid / processId", "process ID"),
         ("dur / duration",  "event duration  (hh:mm or hh:mm:ss)"),
@@ -226,7 +226,7 @@
                 batchStartEpochMs = new DateTimeOffset(b.RunStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
                 {
-                    chunkId   = e.ChunkId,
+                    name      = e.Name,
                     source    = e.Source,
                     pipeline  = e.Pipeline,
                     service   = e.Service,
@@ -333,7 +333,7 @@
         int idx(string name) => Array.FindIndex(header, h => h.Equals(name, StringComparison.OrdinalIgnoreCase));
 
         var iRunId    = idx("RunId");
-        var iChunkId  = idx("ChunkId");
+        var iName  = idx("Name");
         var iSource   = idx("Source");
         var iPipeline = idx("Pipeline");
         var iService  = idx("Service");
@@ -343,7 +343,7 @@
         var iFinish   = idx("Finish");
         var iError    = idx("Error");
 
-        if (iRunId < 0 || iChunkId < 0) return; // unrecognised format
+        if (iRunId < 0 || iName < 0) return; // unrecognised format
 
         // Group rows by RunId.
         var byRunId = new Dictionary<string, List<PerformanceEvent>>();
@@ -351,7 +351,7 @@
         foreach (var line in lines.Skip(1))
         {
             var cols = ParseCsvLine(line);
-            if (cols.Length <= Math.Max(iRunId, iChunkId)) continue;
+            if (cols.Length <= Math.Max(iRunId, iName)) continue;
 
             var runId = cols[iRunId];
             if (string.IsNullOrEmpty(runId)) continue;
@@ -370,7 +370,7 @@
 
             evts.Add(new PerformanceEvent
             {
-                ChunkId   = Col(iChunkId),
+                Name      = Col(iName),
                 Source    = Col(iSource),
                 Pipeline  = Col(iPipeline),
                 Service   = Col(iService),

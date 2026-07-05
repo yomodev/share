@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { parse, evaluate } from './filter.js'
 import { parseLog } from './log-viewer-parser.js'
 
-const FIELDS = ['ChunkId', 'Service', 'Pipeline']
+const FIELDS = ['Name', 'Service', 'Pipeline']
 
 // Helper: collect all leaf FieldNodes from an AST tree
 function leaves(node) {
@@ -47,41 +47,41 @@ describe('parse — bare term expansion', () => {
 
 describe('parse — field-scoped terms', () => {
     it('field:term produces a single field node', () => {
-        const node = parse('ChunkId:abc', FIELDS)
+        const node = parse('Name:abc', FIELDS)
         expect(node.type).toBe('field')
-        expect(node.field).toBe('ChunkId')
+        expect(node.field).toBe('Name')
     })
 
     it('field name lookup is case-insensitive', () => {
-        expect(parse('chunkid:abc', FIELDS).field).toBe('ChunkId')
+        expect(parse('chunkid:abc', FIELDS).field).toBe('Name')
     })
 
-    it('alias "chunk" resolves to ChunkId', () => {
-        expect(parse('chunk:0114', FIELDS).field).toBe('ChunkId')
+    it('alias "chunk" resolves to Name', () => {
+        expect(parse('chunk:0114', FIELDS).field).toBe('Name')
     })
 
     it(':= produces Exact matchType', () => {
-        expect(parse('ChunkId:=abc', FIELDS).matchType).toBe('Exact')
+        expect(parse('Name:=abc', FIELDS).matchType).toBe('Exact')
     })
 
     it('wildcard * produces Glob matchType', () => {
-        expect(parse('ChunkId:chk-*', FIELDS).matchType).toBe('Glob')
+        expect(parse('Name:chk-*', FIELDS).matchType).toBe('Glob')
     })
 
     it('null keyword produces IsNull matchType', () => {
-        expect(parse('ChunkId:null', FIELDS).matchType).toBe('IsNull')
+        expect(parse('Name:null', FIELDS).matchType).toBe('IsNull')
     })
 })
 
 describe('parse — quoted strings', () => {
     it("single-quoted string is case-insensitive (caseSensitive=false)", () => {
-        const node = parse("ChunkId:'ABC'", FIELDS)
+        const node = parse("Name:'ABC'", FIELDS)
         expect(node.caseSensitive).toBe(false)
         expect(node.value.value).toBe('ABC')
     })
 
     it('double-quoted string is case-sensitive', () => {
-        const node = parse('ChunkId:"ABC"', FIELDS)
+        const node = parse('Name:"ABC"', FIELDS)
         expect(node.caseSensitive).toBe(true)
     })
 })
@@ -106,12 +106,12 @@ describe('parse — comparison operators', () => {
         ['>=5', 'GreaterThanOrEqual'],
         ['<5',  'LessThan'],
         ['<=5', 'LessThanOrEqual'],
-    ])('ChunkId:%s produces matchType %s', (expr, expected) => {
-        expect(parse(`ChunkId:${expr}`, FIELDS).matchType).toBe(expected)
+    ])('Name:%s produces matchType %s', (expr, expected) => {
+        expect(parse(`Name:${expr}`, FIELDS).matchType).toBe(expected)
     })
 
     it('range 1..10 produces Between matchType with RangeValue', () => {
-        const node = parse('ChunkId:1..10', FIELDS)
+        const node = parse('Name:1..10', FIELDS)
         expect(node.matchType).toBe('Between')
         expect(node.value.type).toBe('range')
     })
@@ -131,59 +131,59 @@ describe('evaluate — null node', () => {
 
 describe('evaluate — Contains', () => {
     it('matches substring case-insensitively', () => {
-        expect(eval_('ChunkId:0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:0114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('does not match absent substring', () => {
-        expect(eval_('ChunkId:9999', { ChunkId: 'chk-0114' })).toBe(false)
+        expect(eval_('Name:9999', { Name: 'chk-0114' })).toBe(false)
     })
 
     it('leading-zero string matches as substring', () => {
-        expect(eval_('0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('0114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('plain number (114) matches as substring in string field', () => {
         // 114 is parsed as NumberValue but Contains still does string match
-        expect(eval_('114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('bare term matches any searchable field', () => {
         expect(eval_('svcA', { Service: 'svcA' })).toBe(true)
         expect(eval_('svcA', { Pipeline: 'svcA-pipeline' })).toBe(true)
-        expect(eval_('svcA', { ChunkId: 'svcA-001' })).toBe(true)
+        expect(eval_('svcA', { Name: 'svcA-001' })).toBe(true)
     })
 })
 
 describe('evaluate — Exact', () => {
     it('requires full value match', () => {
-        expect(eval_('ChunkId:=chk-0114', { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:=chk',      { ChunkId: 'chk-0114' })).toBe(false)
+        expect(eval_('Name:=chk-0114', { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:=chk',      { Name: 'chk-0114' })).toBe(false)
     })
 
     it('is case-insensitive by default', () => {
-        expect(eval_('ChunkId:=CHK-0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:=CHK-0114', { Name: 'chk-0114' })).toBe(true)
     })
 })
 
 describe('evaluate — Glob', () => {
     it('* matches any suffix', () => {
-        expect(eval_('ChunkId:chk-*',   { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:chk-*',   { ChunkId: 'other-0114' })).toBe(false)
+        expect(eval_('Name:chk-*',   { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:chk-*',   { Name: 'other-0114' })).toBe(false)
     })
 
     it('? matches a single character', () => {
-        expect(eval_('ChunkId:chk-011?', { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:chk-011?', { ChunkId: 'chk-01145' })).toBe(false)
+        expect(eval_('Name:chk-011?', { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:chk-011?', { Name: 'chk-01145' })).toBe(false)
     })
 })
 
 describe('evaluate — IsNull', () => {
     it('matches empty string', () => {
-        expect(eval_('ChunkId:null', { ChunkId: '' })).toBe(true)
+        expect(eval_('Name:null', { Name: '' })).toBe(true)
     })
 
     it('does not match non-empty string', () => {
-        expect(eval_('ChunkId:null', { ChunkId: 'abc' })).toBe(false)
+        expect(eval_('Name:null', { Name: 'abc' })).toBe(false)
     })
 })
 

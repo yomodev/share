@@ -48,7 +48,7 @@ function update(key, payload) { const s = _instances.get(key); if (s) ... }
 
 **Critical rule:** The state object `s` must be created BEFORE wiring any D3 event handlers (zoom, mousemove, etc.). All closures capture `s` by reference. Using `let s; ... s = createInstance()` with handlers defined after assignment avoids the temporal dead zone (TDZ) issue with `const`.
 
-**Previous failed approach:** Automated regex-based refactoring of `_state → s` throughout the file. This left `s` referenced as a free variable in D3 callbacks registered on SVG elements (e.g. `.style('fill-opacity', d => s.hoveredChunkId ...)`). Those callbacks fire later, outside any function scope that has `s`, causing `ReferenceError: s is not defined`.
+**Previous failed approach:** Automated regex-based refactoring of `_state → s` throughout the file. This left `s` referenced as a free variable in D3 callbacks registered on SVG elements (e.g. `.style('fill-opacity', d => s.hoveredName ...)`). Those callbacks fire later, outside any function scope that has `s`, causing `ReferenceError: s is not defined`.
 
 ---
 
@@ -165,13 +165,13 @@ for (const e of sortedByStart) {
 
 ## D10. Stack view layout
 
-**Decision:** Stack view shows one row per distinct `chunkId`. Events within a chunk are placed consecutively by duration (not wall-clock position).
+**Decision:** Stack view shows one row per distinct `name`. Events within a chunk are placed consecutively by duration (not wall-clock position).
 
 **Use case:** Compare how long each stage (service) took for each chunk, independent of when it started.
 
 **Implementation:**
 ```javascript
-// Each chunkId → one row with events laid out left-to-right by duration
+// Each name → one row with events laid out left-to-right by duration
 let cursor = 0;
 for (const e of evtsSortedByStart) {
     const dur = e.finishMs - e.startMs;

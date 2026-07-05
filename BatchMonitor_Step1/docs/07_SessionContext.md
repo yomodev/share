@@ -30,9 +30,9 @@ This document captures the development history, current state, and pending work.
 - Multi-instance isolation via `_instances: Map<key, state>`
 - Frozen domain x-axis (viewport never moves from new data)
 - Sub-row greedy interval packing (no cap, no LOD)
-- Stack view (consecutive duration layout by chunkId)
+- Stack view (consecutive duration layout by name)
 - Global heatmap (density lines) + range selector (d3.brushX)
-- ChunkId cross-batch hover highlight
+- Name cross-batch hover highlight
 - CSV export (showSaveFilePicker) + import (InputFile parsing)
 - Vertical scroll / wheel / arrow key behaviour (scroll vs height-adjust)
 - GroupBy, ColourBy, filter, stack toggle
@@ -90,7 +90,7 @@ All changes from all delta patches are applied to the working directory at `/hom
 
 ### Timeline (§04)
 - Lane labels on the left (group key text visible at all times)
-- Ctrl+click on a block copies ChunkId to clipboard (currently copies all fields)
+- Ctrl+click on a block copies Name to clipboard (currently copies all fields)
 - "Zoom to fit" button that fits exactly the data visible on screen
 
 ### Kafka Dashboard (Step 11)

@@ -10,6 +10,7 @@
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<RunsSettings> RunsOpts
+@inject IOptions<UiSettings> UiOpts
 @inject ISnackbar Snackbar
 @implements IDisposable
 
@@ -129,22 +130,25 @@
 
     </div>
 
-    <!-- ── Memory treemap ────────────────────────────────────────────────── -->
-    <div class="bm-section-header" style="margin:0;">
-        <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
-            @if (!_mapReady)
-            {
-                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
-            }
-            else
-            {
-                <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
-            }
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+    @if (UiOpts.Value.ShowMemoryDashboard)
+    {
+        <!-- ── Memory treemap ────────────────────────────────────────────── -->
+        <div class="bm-section-header" style="margin:0;">
+            <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
+                @if (!_mapReady)
+                {
+                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
+                }
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+            </div>
         </div>
-    </div>
-    <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
-                        OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+        <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
+                            OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+    }
 
     <!-- ── Mini batch summary ───────────────────────────────────────────── -->
     <div class="bm-section-header" style="margin:4px 0 0;">

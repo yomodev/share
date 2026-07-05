@@ -5,13 +5,13 @@ namespace NxtUI.Tests.Filtering;
 
 public class FilterEvaluatorTests
 {
-    private static readonly string[] Fields = ["ChunkId", "Service", "Pipeline"];
+    private static readonly string[] Fields = ["Name", "Service", "Pipeline"];
     private static readonly FilterParser Parser = new(Fields);
 
     private static bool Eval(string filter, object obj) =>
         FilterEvaluator.Evaluate(Parser.Parse(filter), obj);
 
-    private record Evt(string ChunkId = "", string Service = "", string Pipeline = "", int Count = 0);
+    private record Evt(string Name = "", string Service = "", string Pipeline = "", int Count = 0);
 
     // ── Null node ──────────────────────────────────────────────────────────
 
@@ -26,26 +26,26 @@ public class FilterEvaluatorTests
     [Fact]
     public void Contains_matches_substring_case_insensitively()
     {
-        Eval("ChunkId:0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
     public void Contains_does_not_match_absent_substring()
     {
-        Eval("ChunkId:9999", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("Name:9999", new Evt(Name: "chk-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Leading_zero_string_matches_as_substring()
     {
-        Eval("0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
     public void Plain_number_matches_as_substring_in_string_field()
     {
         // "114" is parsed as NumberValue(114) but Contains must still do string match
-        Eval("114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class FilterEvaluatorTests
     {
         Eval("svcA", new Evt(Service: "svcA")).Should().BeTrue();
         Eval("svcA", new Evt(Pipeline: "svcA-pipeline")).Should().BeTrue();
-        Eval("svcA", new Evt(ChunkId: "svcA-001")).Should().BeTrue();
+        Eval("svcA", new Evt(Name: "svcA-001")).Should().BeTrue();
     }
 
     // ── Exact ──────────────────────────────────────────────────────────────
@@ -61,14 +61,14 @@ public class FilterEvaluatorTests
     [Fact]
     public void Exact_requires_full_value_match()
     {
-        Eval("ChunkId:=chk-0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:=chk", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("Name:=chk-0114", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:=chk", new Evt(Name: "chk-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Exact_is_case_insensitive_by_default()
     {
-        Eval("ChunkId:=CHK-0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:=CHK-0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     // ── Glob ───────────────────────────────────────────────────────────────
@@ -76,15 +76,15 @@ public class FilterEvaluatorTests
     [Fact]
     public void Glob_star_matches_any_suffix()
     {
-        Eval("ChunkId:chk-*", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:chk-*", new Evt(ChunkId: "other-0114")).Should().BeFalse();
+        Eval("Name:chk-*", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:chk-*", new Evt(Name: "other-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Glob_question_mark_matches_single_char()
     {
-        Eval("ChunkId:chk-011?", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:chk-011?", new Evt(ChunkId: "chk-01145")).Should().BeFalse();
+        Eval("Name:chk-011?", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:chk-011?", new Evt(Name: "chk-01145")).Should().BeFalse();
     }
 
     // ── IsNull ─────────────────────────────────────────────────────────────
@@ -92,13 +92,13 @@ public class FilterEvaluatorTests
     [Fact]
     public void IsNull_matches_empty_string()
     {
-        Eval("ChunkId:null", new Evt(ChunkId: "")).Should().BeTrue();
+        Eval("Name:null", new Evt(Name: "")).Should().BeTrue();
     }
 
     [Fact]
     public void IsNull_does_not_match_non_empty_string()
     {
-        Eval("ChunkId:null", new Evt(ChunkId: "abc")).Should().BeFalse();
+        Eval("Name:null", new Evt(Name: "abc")).Should().BeFalse();
     }
 
     // ── Numeric comparisons ────────────────────────────────────────────────
@@ -189,23 +189,23 @@ public class FilterEvaluatorTests
     [Fact]
     public void Double_quoted_Contains_is_case_sensitive()
     {
-        Eval("ChunkId:\"ABC\"", new Evt(ChunkId: "abc")).Should().BeFalse();
-        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "abc")).Should().BeTrue();
-        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "ABC")).Should().BeFalse();
+        Eval("Name:\"ABC\"", new Evt(Name: "abc")).Should().BeFalse();
+        Eval("Name:\"abc\"", new Evt(Name: "abc")).Should().BeTrue();
+        Eval("Name:\"abc\"", new Evt(Name: "ABC")).Should().BeFalse();
     }
 
     [Fact]
     public void Single_quoted_Contains_is_case_insensitive()
     {
-        Eval("ChunkId:'ABC'", new Evt(ChunkId: "abc")).Should().BeTrue();
-        Eval("ChunkId:'abc'", new Evt(ChunkId: "ABC")).Should().BeTrue();
+        Eval("Name:'ABC'", new Evt(Name: "abc")).Should().BeTrue();
+        Eval("Name:'abc'", new Evt(Name: "ABC")).Should().BeTrue();
     }
 
     [Fact]
     public void Double_quoted_Exact_is_case_sensitive()
     {
-        Eval("ChunkId:=\"CHK-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
-        Eval("ChunkId:=\"chk-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:=\"CHK-0114\"", new Evt(Name: "chk-0114")).Should().BeFalse();
+        Eval("Name:=\"chk-0114\"", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     // ── IsNull on actual null ──────────────────────────────────────────────
@@ -226,7 +226,7 @@ public class FilterEvaluatorTests
     [Fact]
     public void Unknown_field_returns_false()
     {
-        Eval("UnknownField:anything", new Evt(ChunkId: "anything")).Should().BeFalse();
+        Eval("UnknownField:anything", new Evt(Name: "anything")).Should().BeFalse();
     }
 
     // ── DateTime property comparisons ──────────────────────────────────────
@@ -350,14 +350,14 @@ public class FilterEvaluatorTests
     [Fact]
     public void Comparison_operator_on_string_field_throws_at_parse_time()
     {
-        var act = () => Parser.Parse("ChunkId:>abc");
+        var act = () => Parser.Parse("Name:>abc");
         act.Should().Throw<FilterParseException>();
     }
 
     [Fact]
     public void Range_between_strings_throws_at_parse_time()
     {
-        var act = () => Parser.Parse("ChunkId:abc..xyz");
+        var act = () => Parser.Parse("Name:abc..xyz");
         act.Should().Throw<FilterParseException>();
     }
 

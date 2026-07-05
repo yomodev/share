@@ -8,14 +8,14 @@
 import { parse, evaluate } from './filter.js?v=2';
 
 // Field aliases and searchable fields for the timeline event objects (camelCase).
-const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'chunkId', 'server'];
+const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'name', 'server'];
 const TIMELINE_ALIASES = {
     svc: 'service',      service:   'service',
     pipe: 'pipeline',    pipeline:  'pipeline',
     srv: 'server',       server:    'server',
     pid: 'processId',    processid: 'processId',
     src: 'source',       source:    'source',
-    chunk: 'chunkId',    chunkid:   'chunkId',
+    chunk: 'name',    chunkid:   'name',
     dur: 'duration',     duration:  'duration',
     start: 'startUtc',   startutc:  'startUtc',
     finish: 'finishUtc', finishutc: 'finishUtc',
@@ -100,7 +100,7 @@ const TIMELINE_ALIASES = {
         const s = _instances.get(key);
         if (!s) return;
         hideTooltip(s);
-        s.hoveredChunkId  = null;
+        s.hoveredName  = null;
         s.hoveredBatchIdx = -1;
         s.data = payload;
 
@@ -124,13 +124,13 @@ const TIMELINE_ALIASES = {
         s.isStack = isStack;
 
         if (isStack) {
-            // Domain = max(sum of durations per chunkId) — represents the longest
+            // Domain = max(sum of durations per name) — represents the longest
             // accumulated processing time across all chunks in view.
             const chunkDurs = new Map();
             for (const b of (payload.batches || []))
                 for (const e of (b.events || [])) {
                     const dur = Math.max(0, (e.finishMs ?? e.startMs) - e.startMs);
-                    chunkDurs.set(e.chunkId, (chunkDurs.get(e.chunkId) || 0) + dur);
+                    chunkDurs.set(e.name, (chunkDurs.get(e.name) || 0) + dur);
                 }
             const stackMax = chunkDurs.size > 0
                 ? Math.max(1000, ...chunkDurs.values())
@@ -258,7 +258,7 @@ const TIMELINE_ALIASES = {
             showTooltip: true,
             cursorX: null, cursorTimer: null,
             hoveredBatchIdx: -1,
-            hoveredChunkId: null,
+            hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
             selFn: null,
@@ -410,12 +410,12 @@ const TIMELINE_ALIASES = {
             e.finishMs != null && evaluate(filterAst, e));
         const chunks = new Map();
         for (const e of events) {
-            if (!chunks.has(e.chunkId)) chunks.set(e.chunkId, []);
-            chunks.get(e.chunkId).push(e);
+            if (!chunks.has(e.name)) chunks.set(e.name, []);
+            chunks.get(e.name).push(e);
         }
         for (const [, ev] of chunks) ev.sort((a, b) => a.startMs - b.startMs);
         const groups = [];
-        for (const [chunkId, evts] of chunks) {
+        for (const [name, evts] of chunks) {
             let cursor = 0;
             const subrow = [];
             for (const e of evts) {
@@ -425,7 +425,7 @@ const TIMELINE_ALIASES = {
             }
             const SH  = s.subrowHOverride ?? SUBROW_H;
             const rowH = ROW_PAD * 2 + SH + BLOCK_GAP;
-            groups.push({ key: chunkId, events: evts, subrows: [subrow], rowH });
+            groups.push({ key: name, events: evts, subrows: [subrow], rowH });
         }
         return groups;
     }
@@ -581,11 +581,11 @@ const TIMELINE_ALIASES = {
             .attr('height', d => d.h)
             .style('fill',         d => d.colour)
             .style('fill-opacity', d => {
-                if (s.hoveredChunkId == null) return d.e.status === 'inprogress' ? 0.6 : 1;
-                return d.e.chunkId === s.hoveredChunkId ? 1 : 0.12;
+                if (s.hoveredName == null) return d.e.status === 'inprogress' ? 0.6 : 1;
+                return d.e.name === s.hoveredName ? 1 : 0.12;
             })
             .style('stroke',       d => d3.color(d.colour)?.darker(.5) ?? d.colour)
-            .style('stroke-width', d => d.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px')
+            .style('stroke-width', d => d.e.name === s.hoveredName ? '1.5px' : '0.5px')
             .on('mouseenter', (ev, d) => onBlockEnter(s, ev, d))
             .on('mouseleave', (ev, d) => onBlockLeave(s, ev, d))
             .on('click',      (ev, d) => { if (ev.ctrlKey) copyBlockDetails(s, d); });
@@ -775,9 +775,9 @@ const TIMELINE_ALIASES = {
     function renderCursorBot(s, mx, timeMs, bse) {
         s.curBotL.selectAll('*').remove();
 
-        // When popup is hidden and hovering a block, show chunkId above the time.
+        // When popup is hidden and hovering a block, show name above the time.
         const lines = [];
-        if (!s.showTooltip && s.hoveredChunkId) lines.push(s.hoveredChunkId);
+        if (!s.showTooltip && s.hoveredName) lines.push(s.hoveredName);
         const relL = fmtRelHMS(timeMs);
         const absL = bse ? ` (${fmtAbsHMS(bse + timeMs)})` : '';
         lines.push(relL + absL);
@@ -811,16 +811,16 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        s.hoveredChunkId  = d.e.chunkId;
+        s.hoveredName  = d.e.name;
         s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
-            .style('fill-opacity', b => b.e.chunkId === s.hoveredChunkId ? 1 : 0.12)
-            .style('stroke-width', b => b.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px');
+            .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
+            .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
         if (s.showTooltip) showTooltip(s, event, d);
     }
 
     function onBlockLeave(s, event, d) {
-        s.hoveredChunkId   = null;
+        s.hoveredName   = null;
         s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
@@ -846,7 +846,7 @@ const TIMELINE_ALIASES = {
 
         s.tooltip.html(`
             <div class="bm-tl-tt-header">
-                <span class="bm-tl-tt-id">${esc(e.chunkId)}</span>
+                <span class="bm-tl-tt-id">${esc(e.name)}</span>
                 <span class="bm-tl-tt-status ${stClass}">${stLabel}</span>
             </div>
             <div class="bm-tl-tt-sep"></div>
@@ -917,7 +917,7 @@ const TIMELINE_ALIASES = {
         const fAbs     = bse && e.finishMs != null ? fmtAbsMs(bse + e.finishMs) : '';
         const finStr   = fAbs ? `${fRel} (${fAbs})` : fRel;
         const lines    = [
-            `ChunkId:  ${e.chunkId}`,
+            `Name:  ${e.name}`,
             `Status:   ${stLabel}`,
             `Source:   ${e.source}`,
             `Pipeline: ${e.pipeline}`,
@@ -992,14 +992,14 @@ const TIMELINE_ALIASES = {
         const ts    = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const fname = `${firstName}_${ts}.csv`;
 
-        const rows = ['RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,Start,Finish,Error'];
+        const rows = ['RunId,BatchName,Name,Source,Pipeline,Service,PID,Server,Start,Finish,Error'];
         for (const b of (s.data.batches || [])) {
             const bse = b.batchStartEpochMs || 0;
             for (const e of (b.events || [])) {
                 const startIso  = new Date(bse + e.startMs).toISOString();
                 const finishIso = e.finishMs != null ? new Date(bse + e.finishMs).toISOString() : '';
                 rows.push([
-                    b.runId, b.batchName, e.chunkId,
+                    b.runId, b.batchName, e.name,
                     e.source, e.pipeline, e.service,
                     e.processId, e.server,
                     startIso, finishIso,

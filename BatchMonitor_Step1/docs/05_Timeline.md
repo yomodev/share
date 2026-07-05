@@ -117,7 +117,7 @@ SECTION_GAP (6px)
 
 ### Stack mode
 
-One row per distinct `chunkId`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
+One row per distinct `name`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
 ```javascript
 let cursor = 0;
 for (const e of evts) {
@@ -156,7 +156,7 @@ The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, t
 
 ## Filtering
 
-The `Filter…` text box filters events by substring match across: `chunkId`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
+The `Filter…` text box filters events by substring match across: `name`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
 
 ---
 
@@ -188,12 +188,12 @@ Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` 
 
 ---
 
-## Block Highlighting (chunkId)
+## Block Highlighting (name)
 
-Hovering any block highlights all blocks with the same `chunkId` across all batch sections:
+Hovering any block highlights all blocks with the same `name` across all batch sections:
 ```javascript
 s.blockL.selectAll('rect.bm-tl-block')
-    .style('fill-opacity', b => b.e.chunkId === s.hoveredChunkId ? 1 : 0.12);
+    .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12);
 ```
 
 The same chunk ID can appear in multiple batches (if multiple runs processed the same chunk) and in multiple services within a batch (as the chunk travels through the pipeline).
@@ -203,7 +203,7 @@ The same chunk ID can appear in multiple batches (if multiple runs processed the
 ## Tooltip
 
 Shows on block hover:
-- ChunkId + status badge
+- Name + status badge
 - Source, Pipeline, Service, PID, Server
 - Start (relative + absolute)
 - Finish (relative + absolute, or `…` if in-progress)
@@ -221,7 +221,7 @@ Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm` (
 ### Export
 Uses `window.showSaveFilePicker()` (Chrome/Edge save dialog) with blob-download fallback. Filename: `timeline_YYYY-MM-DD-HH-MM-SS.csv`.
 
-Columns: `RunId, BatchName, ChunkId, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
+Columns: `RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
 
 ### Import
 Triggered by hidden `<InputFile>` element clicked programmatically. Parsed by `ImportCsvAsync()` which:

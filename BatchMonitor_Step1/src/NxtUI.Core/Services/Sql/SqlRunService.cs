@@ -194,7 +194,7 @@ public class SqlRunService(
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {
         Id          = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
-        ChunkId     = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
+        Name        = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
         Service     = d.GetValue("Service",   BsonNull.Value).AsString ?? string.Empty,
         Pipeline    = d.GetValue("Pipeline",  BsonNull.Value).AsString ?? string.Empty,
         Server      = d.GetValue("Server",    BsonNull.Value).AsString ?? string.Empty,

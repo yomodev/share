@@ -784,7 +784,7 @@ LENGTH 62698
    at System.Threading.Tasks.Task.Run(Action action)
 2026-06-25 18:45:51.242|INFO|srv-03|2749|94|Token refresh succeeded for user=user-468|InventoryService.Handler.Handle
 FILE docs/01_Architecture.md
-LENGTH 5907
+LENGTH 5904
 # BatchMonitor — Architecture Overview
 
 ## Solution Structure
@@ -864,7 +864,7 @@ public enum TabType { Home, Batches, BatchDetail, Timeline }
 |------|---------|
 | `BatchSummary.cs` | List-view item: RunId, BatchName, Type, Status, Start, End |
 | `BatchDetails.cs` | Detail view: adds Metadata dictionary, Duration computed |
-| `PerformanceEvent.cs` | Processing event: ChunkId, Service, Pipeline, Source, Server, ProcessId, Start, Finish, Error, RecordCount |
+| `PerformanceEvent.cs` | Processing event: Name, Service, Pipeline, Source, Server, ProcessId, Start, Finish, Error, RecordCount |
 | `Topology.cs` | Graph model: TopologyNode, PipelineRow, TopologyEdge, PipelineState enum |
 | `EnvironmentInfo.cs` | Environment descriptor with badge colour |
 
@@ -954,7 +954,7 @@ js/
 5. **Frozen domain** — timeline x-axis never moves when new data arrives
 6. **BatchMonitor.Core split** — testability and future API reuse
 FILE docs/02_Models_DataFlow.md
-LENGTH 7654
+LENGTH 7627
 # BatchMonitor — Models & Data Flow
 
 ## PerformanceEvent
@@ -964,7 +964,7 @@ The core domain object. Represents one chunk of work processed by one service.
 ```csharp
 public class PerformanceEvent
 {
-    public string ChunkId   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
+    public string Name   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
     public string Service   { get; set; }   // Service name (e.g. "Enricher")
     public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
     public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
@@ -976,7 +976,7 @@ public class PerformanceEvent
     public int RecordCount  { get; set; }
 
     // Computed
-    public string CompositeKey => $"{ChunkId}:{Service}:{Pipeline}:{ProcessId}";
+    public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
     public bool IsDone  => Finish.HasValue && Error == null;
     public bool IsError => Error != null;
     public DateTime Timestamp => Finish ?? Start;  // for upsert ordering
@@ -987,15 +987,15 @@ public class PerformanceEvent
 
 `Source` is the class name or pipe processor that handled the chunk. It's the **default Colour By** key in the Timeline tab. Example values: `CsvIngester`, `SchemaValidator`, `FieldMapper`, `LookupEnricher`, `MongoWriter`.
 
-### Key field: `ChunkId`
+### Key field: `Name`
 
-Same `ChunkId` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `ChunkId` across all batches/services.
+Same `Name` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `Name` across all batches/services.
 
 ---
 
 ## CompositeKey and Upsert
 
-Events are upserted by `CompositeKey = "{ChunkId}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
+Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
 - Duplicate pushes from SignalR + polling overlap
 - Updates when a chunk finishes (Start event arrives first, then Finish event)
 
@@ -1085,7 +1085,7 @@ User opens Timeline (from BatchDetail [⏱] button)
     │
     └─ TimelineBatch.LoadAsync()
           ├─ GetBatchDetailsAsync()  →  BatchName, BatchStart, IsLive
-          ├─ GetBatchEventsAsync()   →  historical events (upsert by ChunkId)
+          ├─ GetBatchEventsAsync()   →  historical events (upsert by Name)
           └─ SignalRConnectionService.SubscribeToBatchAsync() (if IsLive)
                 └─ OnBatchEvent() → UpsertEvent() → DebouncedPushAsync()
 
@@ -1094,7 +1094,7 @@ DebouncedPushAsync() [300ms debounce]
           ├─ groupBy, colourBy, filter, stackView
           └─ batches[]:
                 ├─ runId, batchName, isLive, batchStartEpochMs
-                └─ events[]: chunkId, source, pipeline, service,
+                └─ events[]: name, source, pipeline, service,
                              processId, server, startMs, finishMs,
                              status, error
     └─ JS: BatchMonitor.Timeline.update(key, payload)
@@ -1103,7 +1103,7 @@ DebouncedPushAsync() [300ms debounce]
 ### TimelineBatch
 
 One instance per loaded batch in a Timeline tab. Manages:
-- Event store (`Dictionary<string, PerformanceEvent>` keyed by ChunkId)
+- Event store (`Dictionary<string, PerformanceEvent>` keyed by Name)
 - SignalR subscription (live batches only)
 - 3-hour live timeout (per spec)
 - CSV-imported batches use `CreateFromCsv()` — no live subscription
@@ -1155,7 +1155,7 @@ Enricher may also process via `enrich-lookup` (40% chance). Validator retries vi
 
 `SimulateLivePushAsync()` runs as a background Task for all `BatchStatus.Running` batches. Every 2 seconds it generates 1–3 new events and pushes them via `IHubContext<BatchEventsHub>`. Events are also persisted in-memory so HTTP polling also returns them.
 FILE docs/03_Decisions.md
-LENGTH 10770
+LENGTH 10761
 # BatchMonitor — Technical Decisions
 
 ## D1. Blazor Server only (no WASM)
@@ -1206,7 +1206,7 @@ function update(key, payload) { const s = _instances.get(key); if (s) ... }
 
 **Critical rule:** The state object `s` must be created BEFORE wiring any D3 event handlers (zoom, mousemove, etc.). All closures capture `s` by reference. Using `let s; ... s = createInstance()` with handlers defined after assignment avoids the temporal dead zone (TDZ) issue with `const`.
 
-**Previous failed approach:** Automated regex-based refactoring of `_state → s` throughout the file. This left `s` referenced as a free variable in D3 callbacks registered on SVG elements (e.g. `.style('fill-opacity', d => s.hoveredChunkId ...)`). Those callbacks fire later, outside any function scope that has `s`, causing `ReferenceError: s is not defined`.
+**Previous failed approach:** Automated regex-based refactoring of `_state → s` throughout the file. This left `s` referenced as a free variable in D3 callbacks registered on SVG elements (e.g. `.style('fill-opacity', d => s.hoveredName ...)`). Those callbacks fire later, outside any function scope that has `s`, causing `ReferenceError: s is not defined`.
 
 ---
 
@@ -1323,13 +1323,13 @@ for (const e of sortedByStart) {
 
 ## D10. Stack view layout
 
-**Decision:** Stack view shows one row per distinct `chunkId`. Events within a chunk are placed consecutively by duration (not wall-clock position).
+**Decision:** Stack view shows one row per distinct `name`. Events within a chunk are placed consecutively by duration (not wall-clock position).
 
 **Use case:** Compare how long each stage (service) took for each chunk, independent of when it started.
 
 **Implementation:**
 ```javascript
-// Each chunkId → one row with events laid out left-to-right by duration
+// Each name → one row with events laid out left-to-right by duration
 let cursor = 0;
 for (const e of evtsSortedByStart) {
     const dur = e.finishMs - e.startMs;
@@ -1522,7 +1522,7 @@ The clip path rect dimensions match the node width/height and are updated whenev
 
 Node background uses `getComputedStyle(document.documentElement).getPropertyValue('--mud-palette-surface')` at render time. This makes the graph work in both dark and light MudBlazor themes. All other colours use either hardcoded dark-theme values (acceptable for internal tool) or reference `--mud-palette-*` CSS variables via SVG `fill` properties.
 FILE docs/05_Timeline.md
-LENGTH 9787
+LENGTH 9763
 # BatchMonitor — Timeline Tab
 
 ## Overview
@@ -1642,7 +1642,7 @@ SECTION_GAP (6px)
 
 ### Stack mode
 
-One row per distinct `chunkId`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
+One row per distinct `name`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
 ```javascript
 let cursor = 0;
 for (const e of evts) {
@@ -1681,7 +1681,7 @@ The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, t
 
 ## Filtering
 
-The `Filter…` text box filters events by substring match across: `chunkId`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
+The `Filter…` text box filters events by substring match across: `name`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
 
 ---
 
@@ -1713,12 +1713,12 @@ Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` 
 
 ---
 
-## Block Highlighting (chunkId)
+## Block Highlighting (name)
 
-Hovering any block highlights all blocks with the same `chunkId` across all batch sections:
+Hovering any block highlights all blocks with the same `name` across all batch sections:
 ```javascript
 s.blockL.selectAll('rect.bm-tl-block')
-    .style('fill-opacity', b => b.e.chunkId === s.hoveredChunkId ? 1 : 0.12);
+    .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12);
 ```
 
 The same chunk ID can appear in multiple batches (if multiple runs processed the same chunk) and in multiple services within a batch (as the chunk travels through the pipeline).
@@ -1728,7 +1728,7 @@ The same chunk ID can appear in multiple batches (if multiple runs processed the
 ## Tooltip
 
 Shows on block hover:
-- ChunkId + status badge
+- Name + status badge
 - Source, Pipeline, Service, PID, Server
 - Start (relative + absolute)
 - Finish (relative + absolute, or `…` if in-progress)
@@ -1746,7 +1746,7 @@ Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm` (
 ### Export
 Uses `window.showSaveFilePicker()` (Chrome/Edge save dialog) with blob-download fallback. Filename: `timeline_YYYY-MM-DD-HH-MM-SS.csv`.
 
-Columns: `RunId, BatchName, ChunkId, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
+Columns: `RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
 
 ### Import
 Triggered by hidden `<InputFile>` element clicked programmatically. Parsed by `ImportCsvAsync()` which:
@@ -2015,7 +2015,7 @@ Smooth-scrolls the active tab into the visible strip area.
 **`BatchMonitor.getLocalStorage(key)` / `setLocalStorage(key, value)`**
 Wrapped in try/catch for environments where `localStorage` may throw.
 FILE docs/07_SessionContext.md
-LENGTH 7764
+LENGTH 7755
 # BatchMonitor — Session Context & Next Steps
 
 ## Session History Summary
@@ -2048,9 +2048,9 @@ This document captures the development history, current state, and pending work.
 - Multi-instance isolation via `_instances: Map<key, state>`
 - Frozen domain x-axis (viewport never moves from new data)
 - Sub-row greedy interval packing (no cap, no LOD)
-- Stack view (consecutive duration layout by chunkId)
+- Stack view (consecutive duration layout by name)
 - Global heatmap (density lines) + range selector (d3.brushX)
-- ChunkId cross-batch hover highlight
+- Name cross-batch hover highlight
 - CSV export (showSaveFilePicker) + import (InputFile parsing)
 - Vertical scroll / wheel / arrow key behaviour (scroll vs height-adjust)
 - GroupBy, ColourBy, filter, stack toggle
@@ -2108,7 +2108,7 @@ All changes from all delta patches are applied to the working directory at `/hom
 
 ### Timeline (§04)
 - Lane labels on the left (group key text visible at all times)
-- Ctrl+click on a block copies ChunkId to clipboard (currently copies all fields)
+- Ctrl+click on a block copies Name to clipboard (currently copies all fields)
 - "Zoom to fit" button that fits exactly the data visible on screen
 
 ### Kafka Dashboard (Step 11)
@@ -2161,7 +2161,7 @@ Changes were delivered as named delta zips: `BatchMonitor_delta10a.zip` etc. The
 - `MUD0002 RowDoubleClick` — not supported in MudDataGrid v9; use `MouseEventArgs.Detail == 2` in `RowClick`
 - `MUD0002 IsVisible` — use `@bind-Visible` on MudDialog
 FILE docs/08_FilterSyntax.md
-LENGTH 12736
+LENGTH 12730
 # 08 — Filter Syntax
 
 ## Overview
@@ -2438,7 +2438,7 @@ When a term has no field prefix it is matched against a **declared list of searc
 
 ```js
 // timeline
-searchableFields = ['Service', 'Pipeline', 'Source', 'ChunkId', 'Server']
+searchableFields = ['Service', 'Pipeline', 'Source', 'Name', 'Server']
 
 // batch list
 searchableFields = ['BatchName', 'Type', 'RunId']
@@ -2451,7 +2451,7 @@ OR(
   contains(Service,  "Loader"),
   contains(Pipeline, "Loader"),
   contains(Source,   "Loader"),
-  contains(ChunkId,  "Loader"),
+  contains(Name,  "Loader"),
   contains(Server,   "Loader")
 )
 ```
@@ -5677,12 +5677,13 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 3024
+LENGTH 3057
 {
   "AllowedHosts": "*",
 
   "Ui": {
-    "FilterDebounceMs": 500
+    "FilterDebounceMs": 500,
+    "ShowMemoryDashboard": true
   },
 
   "Kafka": {
@@ -6899,7 +6900,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 461
+LENGTH 767
 namespace NxtUI.Configuration;
 
 public class UiSettings
@@ -6912,6 +6913,13 @@ public class UiSettings
     /// query). Individual FilterBox call sites can still override this explicitly.
     /// </summary>
     public int FilterDebounceMs { get; set; } = 500;
+
+    /// <summary>
+    /// Whether the Home page shows the Memory treemap section. Disable if memory metrics
+    /// aren't wired up for an environment/deployment and the section would just be dead
+    /// weight. Default: true.
+    /// </summary>
+    public bool ShowMemoryDashboard { get; set; } = true;
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -7212,7 +7220,7 @@ public static class FilterEvaluator
     }
 }
 FILE src/NxtUI.Core/Filtering/FilterParser.cs
-LENGTH 24338
+LENGTH 24363
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -7256,8 +7264,9 @@ public sealed class FilterParser
             ["processid"] = "ProcessId",
             ["src"] = "Source",
             ["source"] = "Source",
-            ["chunk"] = "ChunkId",
-            ["chunkid"] = "ChunkId",
+            ["chunk"] = "Name",
+            ["chunkid"] = "Name",
+            ["name"] = "Name",
             // RunSummary
             ["run"] = "RunId",
             ["runid"] = "RunId",
@@ -8899,12 +8908,12 @@ public record MongoCollectionDetails
     public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
 }
 FILE src/NxtUI.Core/Models/PerformanceEvent.cs
-LENGTH 2486
+LENGTH 2474
 namespace NxtUI.Core.Models;
 
 /// <summary>
 /// Lean performance event from PerformanceTracker fields (see design doc §7.5).
-/// Upserted by the client keyed on <see cref="CompositeKey"/> = (chunkId, service, pipeline, processId).
+/// Upserted by the client keyed on <see cref="CompositeKey"/> = (name, service, pipeline, processId).
 /// </summary>
 public class PerformanceEvent
 {
@@ -8912,7 +8921,7 @@ public class PerformanceEvent
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..16];
 
     /// <summary>Unique chunk identifier (TypePrefix + IncrementalNumber).</summary>
-    public string ChunkId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
     /// <summary>Service type name (e.g., "DataProcessor", "Transformer").</summary>
     public string Service { get; set; } = string.Empty;
@@ -8945,9 +8954,9 @@ public class PerformanceEvent
     public int RecordCount { get; set; }
 
     /// <summary>
-    /// Composite key for deduplication/upsert: (chunkId, service, pipeline, processId).
+    /// Composite key for deduplication/upsert: (name, service, pipeline, processId).
     /// </summary>
-    public string CompositeKey => $"{ChunkId}:{Service}:{Pipeline}:{ProcessId}";
+    public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
 
     /// <summary>True if this chunk has completed (successfully or with error).</summary>
     public bool IsDone => Finish.HasValue;
@@ -9033,7 +9042,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 6469
+LENGTH 6466
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -9048,7 +9057,7 @@ public class Topology
     public List<TopologyNode> Nodes { get; set; } = [];
     public List<TopologyEdge> Edges { get; set; } = [];
 
-    /// <summary>Total unique chunkIds seen so far.</summary>
+    /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
 
     /// <summary>Total raw events in the store.</summary>
@@ -9775,14 +9784,14 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
     }
 }
 FILE src/NxtUI.Core/Services/PerformanceEventStore.cs
-LENGTH 2210
+LENGTH 2207
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
 
 /// <summary>
 /// In-memory event store that accumulates PerformanceEvents
-/// keyed by (chunkId, service, processId).
+/// keyed by (name, service, processId).
 /// Thread-safe for concurrent polling/updates.
 /// </summary>
 public class PerformanceEventStore
@@ -9872,7 +9881,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 10391
+LENGTH 10361
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9946,8 +9955,8 @@ public class TopologyComputationService
 
         topology.Nodes = nodesByService.Values.OrderBy(n => n.Label, StringComparer.OrdinalIgnoreCase).ToList();
 
-        var allChunkIds = events.Select(e => e.ChunkId).Distinct().ToHashSet();
-        topology.TotalChunks = allChunkIds.Count;
+        var allNames = events.Select(e => e.Name).Distinct().ToHashSet();
+        topology.TotalChunks = allNames.Count;
         topology.TotalDone = events.Count(e => e.IsDone);
         topology.TotalInProgress = events.Count(e => !e.IsDone);
 
@@ -9955,20 +9964,20 @@ public class TopologyComputationService
         // For each chunk, order the (service, pipeline) hops it visited by
         // start time. Consecutive distinct hops become directed edges.
         var eventsByChunk = events
-            .GroupBy(e => e.ChunkId)
+            .GroupBy(e => e.Name)
             .ToDictionary(g => g.Key, g => g.OrderBy(e => e.Start).ToList());
 
         var edgesByKey = new Dictionary<(string, string, string, string), TopologyEdge>();
 
-        // Track, per (service,pipeline), the set of chunkIds that have a
+        // Track, per (service,pipeline), the set of names that have a
         // *finished* event there — used for the waiting estimate below.
         var doneChunksByPipeline = byServicePipeline.ToDictionary(
             kv => kv.Key,
-            kv => kv.Value.Where(e => e.IsDone).Select(e => e.ChunkId).ToHashSet());
+            kv => kv.Value.Where(e => e.IsDone).Select(e => e.Name).ToHashSet());
 
         var anyEventChunksByPipeline = byServicePipeline.ToDictionary(
             kv => kv.Key,
-            kv => kv.Value.Select(e => e.ChunkId).ToHashSet());
+            kv => kv.Value.Select(e => e.Name).ToHashSet());
 
         foreach (var chunkEvents in eventsByChunk.Values)
         {
@@ -10000,7 +10009,7 @@ public class TopologyComputationService
         }
 
         // ── Phase 4: waiting estimate per edge ───────────────────────────
-        // waiting ≈ count of chunkIds where source pipeline has finish set
+        // waiting ≈ count of names where source pipeline has finish set
         // but target pipeline has no event yet (§8.2).
         foreach (var edge in edgesByKey.Values)
         {
@@ -10028,13 +10037,13 @@ public class TopologyComputationService
         // ── Phase 5: overall estimated progress (§8.3) ──────────────────
         // Denominator: max hop count observed across chunks (i.e. number of
         // distinct (service,pipeline) nodes in the longest observed chain)
-        // × total unique chunkIds seen.
+        // × total unique names seen.
         var maxHops = eventsByChunk.Values.Count == 0
             ? 0
             : eventsByChunk.Values.Max(chunkEvents =>
                 chunkEvents.Select(e => (e.Service, e.Pipeline)).Distinct().Count());
 
-        var denominator = (double)maxHops * allChunkIds.Count;
+        var denominator = (double)maxHops * allNames.Count;
         var numerator = (double)events.Count(e => e.IsDone);
 
         topology.EstimatedProgress = denominator > 0
@@ -10109,7 +10118,7 @@ public class TopologyComputationService
     private static string InferTopicName(string pipeline) =>
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
 }
-FILE src/NxtUI.Protos/Protos/MetricsTracker.proto
+FILE src/NxtUI.Protos/Protos/MemStat.proto
 LENGTH 712
 syntax = "proto3";
 option csharp_namespace = "NxtUI.Protos";
@@ -13715,7 +13724,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FilterHelp.razor
-LENGTH 17757
+LENGTH 17756
 @namespace NxtUI.Web.Pages
 <div class="bm-help-page bm-help-page--tab">
 
@@ -13880,7 +13889,7 @@ LENGTH 17757
                 <tr><td><code>svc</code></td><td><code>service</code></td><td>Service name</td></tr>
                 <tr><td><code>pipe</code></td><td><code>pipeline</code></td><td>Pipeline name</td></tr>
                 <tr><td><code>src</code></td><td><code>source</code></td><td>Source identifier</td></tr>
-                <tr><td><code>chunk</code></td><td><code>chunkId</code></td><td>Chunk ID</td></tr>
+                <tr><td><code>chunk</code></td><td><code>name</code></td><td>Chunk name</td></tr>
                 <tr><td><code>srv</code></td><td><code>server</code></td><td>Server / host name</td></tr>
                 <tr><td><code>pid</code></td><td><code>processId</code></td><td>Process ID</td></tr>
                 <tr><td><code>start</code></td><td><code>startUtc</code></td><td>Event start time (UTC)</td></tr>
@@ -13993,7 +14002,7 @@ LENGTH 17757
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16194
+LENGTH 16337
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Configuration
@@ -14006,6 +14015,7 @@ LENGTH 16194
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<RunsSettings> RunsOpts
+@inject IOptions<UiSettings> UiOpts
 @inject ISnackbar Snackbar
 @implements IDisposable
 
@@ -14125,22 +14135,25 @@ LENGTH 16194
 
     </div>
 
-    <!-- ── Memory treemap ────────────────────────────────────────────────── -->
-    <div class="bm-section-header" style="margin:0;">
-        <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
-            @if (!_mapReady)
-            {
-                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
-            }
-            else
-            {
-                <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
-            }
-            <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+    @if (UiOpts.Value.ShowMemoryDashboard)
+    {
+        <!-- ── Memory treemap ────────────────────────────────────────────── -->
+        <div class="bm-section-header" style="margin:0;">
+            <div class="bm-memory-header-left bm-section-title-link" @onclick="OpenServices" title="View all services">
+                @if (!_mapReady)
+                {
+                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-section-spinner" />
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
+                }
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+            </div>
         </div>
-    </div>
-    <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
-                        OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+        <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
+                            OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
+    }
 
     <!-- ── Mini batch summary ───────────────────────────────────────────── -->
     <div class="bm-section-header" style="margin:4px 0 0;">
@@ -15954,7 +15967,7 @@ LENGTH 28156
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 36542
+LENGTH 36933
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -16528,9 +16541,17 @@ LENGTH 36542
 
     private async Task OnItemClickAsync(LogFolderNode node)
     {
-        if (!node.HasChildren) return;
-        var isExpanded = _expanded.Contains(node.RelativePath);
-        await OnExpandedChangedAsync(node, !isExpanded);
+        if (node.HasChildren)
+        {
+            var isExpanded = _expanded.Contains(node.RelativePath);
+            await OnExpandedChangedAsync(node, !isExpanded);
+        }
+
+        // Clicking a folder to open it also checks it, so its files show up in the
+        // table without a separate checkbox click. Never unchecks on click — that
+        // stays the checkbox's job, so collapsing a folder doesn't drop its results.
+        if (!_checkedPaths.Contains(node.RelativePath))
+            await SetCheckedAsync(node.RelativePath, true);
     }
 
     private async Task OnExpandedChangedAsync(LogFolderNode node, bool expanded)
@@ -20244,7 +20265,7 @@ LENGTH 11113
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 31144
+LENGTH 31135
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @inject IRunService RunService
@@ -20271,7 +20292,7 @@ LENGTH 31144
         ("svc / service",   "service name"),
         ("pipe / pipeline", "pipeline name"),
         ("src / source",    "source identifier"),
-        ("chunk / chunkId", "chunk ID"),
+        ("chunk / chunkid / name", "chunk name"),
         ("srv / server",    "server / host"),
         ("pid / processId", "process ID"),
         ("dur / duration",  "event duration  (hh:mm or hh:mm:ss)"),
@@ -20473,7 +20494,7 @@ LENGTH 31144
                 batchStartEpochMs = new DateTimeOffset(b.RunStart).ToUnixTimeMilliseconds(),
                 events    = b.Events.Select(e => new
                 {
-                    chunkId   = e.ChunkId,
+                    name      = e.Name,
                     source    = e.Source,
                     pipeline  = e.Pipeline,
                     service   = e.Service,
@@ -20580,7 +20601,7 @@ LENGTH 31144
         int idx(string name) => Array.FindIndex(header, h => h.Equals(name, StringComparison.OrdinalIgnoreCase));
 
         var iRunId    = idx("RunId");
-        var iChunkId  = idx("ChunkId");
+        var iName  = idx("Name");
         var iSource   = idx("Source");
         var iPipeline = idx("Pipeline");
         var iService  = idx("Service");
@@ -20590,7 +20611,7 @@ LENGTH 31144
         var iFinish   = idx("Finish");
         var iError    = idx("Error");
 
-        if (iRunId < 0 || iChunkId < 0) return; // unrecognised format
+        if (iRunId < 0 || iName < 0) return; // unrecognised format
 
         // Group rows by RunId.
         var byRunId = new Dictionary<string, List<PerformanceEvent>>();
@@ -20598,7 +20619,7 @@ LENGTH 31144
         foreach (var line in lines.Skip(1))
         {
             var cols = ParseCsvLine(line);
-            if (cols.Length <= Math.Max(iRunId, iChunkId)) continue;
+            if (cols.Length <= Math.Max(iRunId, iName)) continue;
 
             var runId = cols[iRunId];
             if (string.IsNullOrEmpty(runId)) continue;
@@ -20617,7 +20638,7 @@ LENGTH 31144
 
             evts.Add(new PerformanceEvent
             {
-                ChunkId   = Col(iChunkId),
+                Name      = Col(iName),
                 Source    = Col(iSource),
                 Pipeline  = Col(iPipeline),
                 Service   = Col(iService),
@@ -22798,7 +22819,7 @@ public class LogViewerService : ILogViewerService
     }
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16850
+LENGTH 16844
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Web.Hubs;
@@ -23067,7 +23088,7 @@ public class MockRunService : IRunService
 
                     events.Add(new PerformanceEvent
                     {
-                        ChunkId = chunkId,
+                        Name = chunkId,
                         Service = svc,
                         Pipeline = pipeline,
                         Source = src,
@@ -23157,7 +23178,7 @@ public class MockRunService : IRunService
 
                 events.Add(new PerformanceEvent
                 {
-                    ChunkId = chunkId,
+                    Name = chunkId,
                     Service = svc,
                     Pipeline = pipeline,
                     Source = src,
@@ -25379,7 +25400,7 @@ FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
-LENGTH 14763
+LENGTH 14631
 using AwesomeAssertions;
 using NxtUI.Core.Filtering;
 
@@ -25387,13 +25408,13 @@ namespace NxtUI.Tests.Filtering;
 
 public class FilterEvaluatorTests
 {
-    private static readonly string[] Fields = ["ChunkId", "Service", "Pipeline"];
+    private static readonly string[] Fields = ["Name", "Service", "Pipeline"];
     private static readonly FilterParser Parser = new(Fields);
 
     private static bool Eval(string filter, object obj) =>
         FilterEvaluator.Evaluate(Parser.Parse(filter), obj);
 
-    private record Evt(string ChunkId = "", string Service = "", string Pipeline = "", int Count = 0);
+    private record Evt(string Name = "", string Service = "", string Pipeline = "", int Count = 0);
 
     // ── Null node ──────────────────────────────────────────────────────────
 
@@ -25408,26 +25429,26 @@ public class FilterEvaluatorTests
     [Fact]
     public void Contains_matches_substring_case_insensitively()
     {
-        Eval("ChunkId:0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
     public void Contains_does_not_match_absent_substring()
     {
-        Eval("ChunkId:9999", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("Name:9999", new Evt(Name: "chk-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Leading_zero_string_matches_as_substring()
     {
-        Eval("0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
     public void Plain_number_matches_as_substring_in_string_field()
     {
         // "114" is parsed as NumberValue(114) but Contains must still do string match
-        Eval("114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     [Fact]
@@ -25435,7 +25456,7 @@ public class FilterEvaluatorTests
     {
         Eval("svcA", new Evt(Service: "svcA")).Should().BeTrue();
         Eval("svcA", new Evt(Pipeline: "svcA-pipeline")).Should().BeTrue();
-        Eval("svcA", new Evt(ChunkId: "svcA-001")).Should().BeTrue();
+        Eval("svcA", new Evt(Name: "svcA-001")).Should().BeTrue();
     }
 
     // ── Exact ──────────────────────────────────────────────────────────────
@@ -25443,14 +25464,14 @@ public class FilterEvaluatorTests
     [Fact]
     public void Exact_requires_full_value_match()
     {
-        Eval("ChunkId:=chk-0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:=chk", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
+        Eval("Name:=chk-0114", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:=chk", new Evt(Name: "chk-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Exact_is_case_insensitive_by_default()
     {
-        Eval("ChunkId:=CHK-0114", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:=CHK-0114", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     // ── Glob ───────────────────────────────────────────────────────────────
@@ -25458,15 +25479,15 @@ public class FilterEvaluatorTests
     [Fact]
     public void Glob_star_matches_any_suffix()
     {
-        Eval("ChunkId:chk-*", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:chk-*", new Evt(ChunkId: "other-0114")).Should().BeFalse();
+        Eval("Name:chk-*", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:chk-*", new Evt(Name: "other-0114")).Should().BeFalse();
     }
 
     [Fact]
     public void Glob_question_mark_matches_single_char()
     {
-        Eval("ChunkId:chk-011?", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
-        Eval("ChunkId:chk-011?", new Evt(ChunkId: "chk-01145")).Should().BeFalse();
+        Eval("Name:chk-011?", new Evt(Name: "chk-0114")).Should().BeTrue();
+        Eval("Name:chk-011?", new Evt(Name: "chk-01145")).Should().BeFalse();
     }
 
     // ── IsNull ─────────────────────────────────────────────────────────────
@@ -25474,13 +25495,13 @@ public class FilterEvaluatorTests
     [Fact]
     public void IsNull_matches_empty_string()
     {
-        Eval("ChunkId:null", new Evt(ChunkId: "")).Should().BeTrue();
+        Eval("Name:null", new Evt(Name: "")).Should().BeTrue();
     }
 
     [Fact]
     public void IsNull_does_not_match_non_empty_string()
     {
-        Eval("ChunkId:null", new Evt(ChunkId: "abc")).Should().BeFalse();
+        Eval("Name:null", new Evt(Name: "abc")).Should().BeFalse();
     }
 
     // ── Numeric comparisons ────────────────────────────────────────────────
@@ -25571,23 +25592,23 @@ public class FilterEvaluatorTests
     [Fact]
     public void Double_quoted_Contains_is_case_sensitive()
     {
-        Eval("ChunkId:\"ABC\"", new Evt(ChunkId: "abc")).Should().BeFalse();
-        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "abc")).Should().BeTrue();
-        Eval("ChunkId:\"abc\"", new Evt(ChunkId: "ABC")).Should().BeFalse();
+        Eval("Name:\"ABC\"", new Evt(Name: "abc")).Should().BeFalse();
+        Eval("Name:\"abc\"", new Evt(Name: "abc")).Should().BeTrue();
+        Eval("Name:\"abc\"", new Evt(Name: "ABC")).Should().BeFalse();
     }
 
     [Fact]
     public void Single_quoted_Contains_is_case_insensitive()
     {
-        Eval("ChunkId:'ABC'", new Evt(ChunkId: "abc")).Should().BeTrue();
-        Eval("ChunkId:'abc'", new Evt(ChunkId: "ABC")).Should().BeTrue();
+        Eval("Name:'ABC'", new Evt(Name: "abc")).Should().BeTrue();
+        Eval("Name:'abc'", new Evt(Name: "ABC")).Should().BeTrue();
     }
 
     [Fact]
     public void Double_quoted_Exact_is_case_sensitive()
     {
-        Eval("ChunkId:=\"CHK-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeFalse();
-        Eval("ChunkId:=\"chk-0114\"", new Evt(ChunkId: "chk-0114")).Should().BeTrue();
+        Eval("Name:=\"CHK-0114\"", new Evt(Name: "chk-0114")).Should().BeFalse();
+        Eval("Name:=\"chk-0114\"", new Evt(Name: "chk-0114")).Should().BeTrue();
     }
 
     // ── IsNull on actual null ──────────────────────────────────────────────
@@ -25608,7 +25629,7 @@ public class FilterEvaluatorTests
     [Fact]
     public void Unknown_field_returns_false()
     {
-        Eval("UnknownField:anything", new Evt(ChunkId: "anything")).Should().BeFalse();
+        Eval("UnknownField:anything", new Evt(Name: "anything")).Should().BeFalse();
     }
 
     // ── DateTime property comparisons ──────────────────────────────────────
@@ -25732,14 +25753,14 @@ public class FilterEvaluatorTests
     [Fact]
     public void Comparison_operator_on_string_field_throws_at_parse_time()
     {
-        var act = () => Parser.Parse("ChunkId:>abc");
+        var act = () => Parser.Parse("Name:>abc");
         act.Should().Throw<FilterParseException>();
     }
 
     [Fact]
     public void Range_between_strings_throws_at_parse_time()
     {
-        var act = () => Parser.Parse("ChunkId:abc..xyz");
+        var act = () => Parser.Parse("Name:abc..xyz");
         act.Should().Throw<FilterParseException>();
     }
 
@@ -26010,7 +26031,7 @@ public class FilterIntegrationTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterParserTests.cs
-LENGTH 19763
+LENGTH 19679
 using AwesomeAssertions;
 using NxtUI.Core.Filtering;
 using MatchType = NxtUI.Core.Filtering.MatchType;
@@ -26019,7 +26040,7 @@ namespace NxtUI.Tests.Filtering;
 
 public class FilterParserTests
 {
-    private static readonly string[] Fields = ["ChunkId", "Service", "Pipeline"];
+    private static readonly string[] Fields = ["Name", "Service", "Pipeline"];
 
     private static readonly FilterParser Parser = new(Fields);
     private static FilterNode? Parse(string input) => Parser.Parse(input);
@@ -26081,9 +26102,9 @@ public class FilterParserTests
     [Fact]
     public void Field_colon_term_produces_single_FieldTermNode()
     {
-        var node = Parse("ChunkId:abc");
+        var node = Parse("Name:abc");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
@@ -26091,21 +26112,21 @@ public class FilterParserTests
     {
         var node = Parse("chunkid:abc");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
-    public void Alias_chunk_resolves_to_ChunkId()
+    public void Alias_chunk_resolves_to_Name()
     {
         var node = Parse("chunk:0114");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
     public void Exact_match_operator_produces_Exact_matchType()
     {
-        var node = Parse("ChunkId:=abc") as FieldTermNode;
+        var node = Parse("Name:=abc") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Exact);
     }
@@ -26113,7 +26134,7 @@ public class FilterParserTests
     [Fact]
     public void Wildcard_produces_Glob_matchType()
     {
-        var node = Parse("ChunkId:chk-*") as FieldTermNode;
+        var node = Parse("Name:chk-*") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Glob);
     }
 
@@ -26151,14 +26172,14 @@ public class FilterParserTests
     [InlineData("<=5", MatchType.LessThanOrEqual)]
     public void Comparison_operators_parsed_correctly(string expr, MatchType expected)
     {
-        var node = Parse($"ChunkId:{expr}") as FieldTermNode;
+        var node = Parse($"Name:{expr}") as FieldTermNode;
         node!.MatchType.Should().Be(expected);
     }
 
     [Fact]
     public void Range_operator_produces_Between_matchType()
     {
-        var node = Parse("ChunkId:1..10") as FieldTermNode;
+        var node = Parse("Name:1..10") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Between);
         node.Value.Should().BeOfType<RangeValue>();
     }
@@ -26168,7 +26189,7 @@ public class FilterParserTests
     [Fact]
     public void Null_keyword_produces_IsNull_matchType()
     {
-        var node = Parse("ChunkId:null") as FieldTermNode;
+        var node = Parse("Name:null") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.IsNull);
     }
 
@@ -26177,7 +26198,7 @@ public class FilterParserTests
     [Fact]
     public void Single_quoted_string_is_case_insensitive()
     {
-        var node = Parse("ChunkId:'ABC'") as FieldTermNode;
+        var node = Parse("Name:'ABC'") as FieldTermNode;
         node!.CaseSensitive.Should().BeFalse();
         node.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be("ABC");
     }
@@ -26185,7 +26206,7 @@ public class FilterParserTests
     [Fact]
     public void Double_quoted_string_is_case_sensitive()
     {
-        var node = Parse("ChunkId:\"ABC\"") as FieldTermNode;
+        var node = Parse("Name:\"ABC\"") as FieldTermNode;
         node!.CaseSensitive.Should().BeTrue();
     }
 
@@ -26302,7 +26323,7 @@ public class FilterParserTests
     [Fact]
     public void Numeric_range_with_decimal_boundaries()
     {
-        var node = Parse("ChunkId:0.5..9.5") as FieldTermNode;
+        var node = Parse("Name:0.5..9.5") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Between);
         var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
@@ -26359,7 +26380,7 @@ public class FilterParserTests
     [Fact]
     public void Empty_double_quoted_string_is_case_sensitive_StringValue()
     {
-        var node = Parse("ChunkId:\"\"") as FieldTermNode;
+        var node = Parse("Name:\"\"") as FieldTermNode;
         node.Should().NotBeNull();
         node!.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be(string.Empty);
         node.CaseSensitive.Should().BeTrue();
@@ -26424,7 +26445,7 @@ public class FilterParserTests
     [InlineData("false", false)]
     public void Bare_true_false_keyword_produces_BoolValue(string literal, bool expected)
     {
-        var node = Parse($"ChunkId:{literal}") as FieldTermNode;
+        var node = Parse($"Name:{literal}") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Exact);
         node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().Be(expected);
@@ -26433,16 +26454,16 @@ public class FilterParserTests
     [Fact]
     public void Explicit_exact_operator_also_produces_BoolValue()
     {
-        var node = Parse("ChunkId:=true") as FieldTermNode;
+        var node = Parse("Name:=true") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Exact);
         node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().BeTrue();
     }
 
     [Theory]
-    [InlineData("ChunkId:>true")]
-    [InlineData("ChunkId:>=true")]
-    [InlineData("ChunkId:<true")]
-    [InlineData("ChunkId:<=false")]
+    [InlineData("Name:>true")]
+    [InlineData("Name:>=true")]
+    [InlineData("Name:<true")]
+    [InlineData("Name:<=false")]
     public void Comparison_operator_on_bool_throws(string input)
     {
         var act = () => Parse(input);
@@ -26452,17 +26473,17 @@ public class FilterParserTests
     [Fact]
     public void Range_on_bool_throws()
     {
-        var act = () => Parse("ChunkId:true..false");
+        var act = () => Parse("Name:true..false");
         act.Should().Throw<FilterParseException>();
     }
 
     // ── Comparison operators only valid on orderable values ─────────────────
 
     [Theory]
-    [InlineData("ChunkId:>abc")]
-    [InlineData("ChunkId:>=abc")]
-    [InlineData("ChunkId:<abc")]
-    [InlineData("ChunkId:<=abc")]
+    [InlineData("Name:>abc")]
+    [InlineData("Name:>=abc")]
+    [InlineData("Name:<abc")]
+    [InlineData("Name:<=abc")]
     public void Comparison_operator_on_plain_string_throws(string input)
     {
         var act = () => Parse(input);
@@ -26472,7 +26493,7 @@ public class FilterParserTests
     [Fact]
     public void Comparison_operator_on_null_throws()
     {
-        var act = () => Parse("ChunkId:>null");
+        var act = () => Parse("Name:>null");
         act.Should().Throw<FilterParseException>();
     }
 
@@ -26500,7 +26521,7 @@ public class FilterParserTests
     [Fact]
     public void Range_between_plain_strings_throws()
     {
-        var act = () => Parse("ChunkId:abc..xyz");
+        var act = () => Parse("Name:abc..xyz");
         act.Should().Throw<FilterParseException>();
     }
 
@@ -31321,7 +31342,7 @@ public class SqlRunService(
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {
         Id          = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
-        ChunkId     = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
+        Name        = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
         Service     = d.GetValue("Service",   BsonNull.Value).AsString ?? string.Empty,
         Pipeline    = d.GetValue("Pipeline",  BsonNull.Value).AsString ?? string.Empty,
         Server      = d.GetValue("Server",    BsonNull.Value).AsString ?? string.Empty,
@@ -37815,7 +37836,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 48129
+LENGTH 48030
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -37826,14 +37847,14 @@ LENGTH 48129
 import { parse, evaluate } from './filter.js?v=2';
 
 // Field aliases and searchable fields for the timeline event objects (camelCase).
-const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'chunkId', 'server'];
+const TIMELINE_SEARCHABLE_FIELDS = ['service', 'pipeline', 'source', 'name', 'server'];
 const TIMELINE_ALIASES = {
     svc: 'service',      service:   'service',
     pipe: 'pipeline',    pipeline:  'pipeline',
     srv: 'server',       server:    'server',
     pid: 'processId',    processid: 'processId',
     src: 'source',       source:    'source',
-    chunk: 'chunkId',    chunkid:   'chunkId',
+    chunk: 'name',    chunkid:   'name',
     dur: 'duration',     duration:  'duration',
     start: 'startUtc',   startutc:  'startUtc',
     finish: 'finishUtc', finishutc: 'finishUtc',
@@ -37918,7 +37939,7 @@ const TIMELINE_ALIASES = {
         const s = _instances.get(key);
         if (!s) return;
         hideTooltip(s);
-        s.hoveredChunkId  = null;
+        s.hoveredName  = null;
         s.hoveredBatchIdx = -1;
         s.data = payload;
 
@@ -37942,13 +37963,13 @@ const TIMELINE_ALIASES = {
         s.isStack = isStack;
 
         if (isStack) {
-            // Domain = max(sum of durations per chunkId) — represents the longest
+            // Domain = max(sum of durations per name) — represents the longest
             // accumulated processing time across all chunks in view.
             const chunkDurs = new Map();
             for (const b of (payload.batches || []))
                 for (const e of (b.events || [])) {
                     const dur = Math.max(0, (e.finishMs ?? e.startMs) - e.startMs);
-                    chunkDurs.set(e.chunkId, (chunkDurs.get(e.chunkId) || 0) + dur);
+                    chunkDurs.set(e.name, (chunkDurs.get(e.name) || 0) + dur);
                 }
             const stackMax = chunkDurs.size > 0
                 ? Math.max(1000, ...chunkDurs.values())
@@ -38076,7 +38097,7 @@ const TIMELINE_ALIASES = {
             showTooltip: true,
             cursorX: null, cursorTimer: null,
             hoveredBatchIdx: -1,
-            hoveredChunkId: null,
+            hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
             selFn: null,
@@ -38228,12 +38249,12 @@ const TIMELINE_ALIASES = {
             e.finishMs != null && evaluate(filterAst, e));
         const chunks = new Map();
         for (const e of events) {
-            if (!chunks.has(e.chunkId)) chunks.set(e.chunkId, []);
-            chunks.get(e.chunkId).push(e);
+            if (!chunks.has(e.name)) chunks.set(e.name, []);
+            chunks.get(e.name).push(e);
         }
         for (const [, ev] of chunks) ev.sort((a, b) => a.startMs - b.startMs);
         const groups = [];
-        for (const [chunkId, evts] of chunks) {
+        for (const [name, evts] of chunks) {
             let cursor = 0;
             const subrow = [];
             for (const e of evts) {
@@ -38243,7 +38264,7 @@ const TIMELINE_ALIASES = {
             }
             const SH  = s.subrowHOverride ?? SUBROW_H;
             const rowH = ROW_PAD * 2 + SH + BLOCK_GAP;
-            groups.push({ key: chunkId, events: evts, subrows: [subrow], rowH });
+            groups.push({ key: name, events: evts, subrows: [subrow], rowH });
         }
         return groups;
     }
@@ -38399,11 +38420,11 @@ const TIMELINE_ALIASES = {
             .attr('height', d => d.h)
             .style('fill',         d => d.colour)
             .style('fill-opacity', d => {
-                if (s.hoveredChunkId == null) return d.e.status === 'inprogress' ? 0.6 : 1;
-                return d.e.chunkId === s.hoveredChunkId ? 1 : 0.12;
+                if (s.hoveredName == null) return d.e.status === 'inprogress' ? 0.6 : 1;
+                return d.e.name === s.hoveredName ? 1 : 0.12;
             })
             .style('stroke',       d => d3.color(d.colour)?.darker(.5) ?? d.colour)
-            .style('stroke-width', d => d.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px')
+            .style('stroke-width', d => d.e.name === s.hoveredName ? '1.5px' : '0.5px')
             .on('mouseenter', (ev, d) => onBlockEnter(s, ev, d))
             .on('mouseleave', (ev, d) => onBlockLeave(s, ev, d))
             .on('click',      (ev, d) => { if (ev.ctrlKey) copyBlockDetails(s, d); });
@@ -38593,9 +38614,9 @@ const TIMELINE_ALIASES = {
     function renderCursorBot(s, mx, timeMs, bse) {
         s.curBotL.selectAll('*').remove();
 
-        // When popup is hidden and hovering a block, show chunkId above the time.
+        // When popup is hidden and hovering a block, show name above the time.
         const lines = [];
-        if (!s.showTooltip && s.hoveredChunkId) lines.push(s.hoveredChunkId);
+        if (!s.showTooltip && s.hoveredName) lines.push(s.hoveredName);
         const relL = fmtRelHMS(timeMs);
         const absL = bse ? ` (${fmtAbsHMS(bse + timeMs)})` : '';
         lines.push(relL + absL);
@@ -38629,16 +38650,16 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        s.hoveredChunkId  = d.e.chunkId;
+        s.hoveredName  = d.e.name;
         s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
-            .style('fill-opacity', b => b.e.chunkId === s.hoveredChunkId ? 1 : 0.12)
-            .style('stroke-width', b => b.e.chunkId === s.hoveredChunkId ? '1.5px' : '0.5px');
+            .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
+            .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
         if (s.showTooltip) showTooltip(s, event, d);
     }
 
     function onBlockLeave(s, event, d) {
-        s.hoveredChunkId   = null;
+        s.hoveredName   = null;
         s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
@@ -38664,7 +38685,7 @@ const TIMELINE_ALIASES = {
 
         s.tooltip.html(`
             <div class="bm-tl-tt-header">
-                <span class="bm-tl-tt-id">${esc(e.chunkId)}</span>
+                <span class="bm-tl-tt-id">${esc(e.name)}</span>
                 <span class="bm-tl-tt-status ${stClass}">${stLabel}</span>
             </div>
             <div class="bm-tl-tt-sep"></div>
@@ -38735,7 +38756,7 @@ const TIMELINE_ALIASES = {
         const fAbs     = bse && e.finishMs != null ? fmtAbsMs(bse + e.finishMs) : '';
         const finStr   = fAbs ? `${fRel} (${fAbs})` : fRel;
         const lines    = [
-            `ChunkId:  ${e.chunkId}`,
+            `Name:  ${e.name}`,
             `Status:   ${stLabel}`,
             `Source:   ${e.source}`,
             `Pipeline: ${e.pipeline}`,
@@ -38810,14 +38831,14 @@ const TIMELINE_ALIASES = {
         const ts    = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const fname = `${firstName}_${ts}.csv`;
 
-        const rows = ['RunId,BatchName,ChunkId,Source,Pipeline,Service,PID,Server,Start,Finish,Error'];
+        const rows = ['RunId,BatchName,Name,Source,Pipeline,Service,PID,Server,Start,Finish,Error'];
         for (const b of (s.data.batches || [])) {
             const bse = b.batchStartEpochMs || 0;
             for (const e of (b.events || [])) {
                 const startIso  = new Date(bse + e.startMs).toISOString();
                 const finishIso = e.finishMs != null ? new Date(bse + e.finishMs).toISOString() : '';
                 rows.push([
-                    b.runId, b.batchName, e.chunkId,
+                    b.runId, b.batchName, e.name,
                     e.source, e.pipeline, e.service,
                     e.processId, e.server,
                     startIso, finishIso,
@@ -38910,7 +38931,7 @@ const TIMELINE_ALIASES = {
 
 export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
 FILE src/NxtUI.Web/wwwroot/js/filter.js
-LENGTH 21258
+LENGTH 21274
 // Batch Monitor — Filter engine (ES module)
 //
 // Exports:
@@ -38930,7 +38951,7 @@ const DEFAULT_ALIASES = {
     srv: 'Server',        server: 'Server',
     pid: 'ProcessId',     processid: 'ProcessId',
     src: 'Source',        source: 'Source',
-    chunk: 'ChunkId',     chunkid: 'ChunkId',
+    chunk: 'Name',        chunkid: 'Name',      name: 'Name',
     batch: 'BatchName',   batchname: 'BatchName',
     type: 'Type',
     run: 'RunId',         runid: 'RunId',
@@ -39434,12 +39455,12 @@ export function serialize(node) {
     return JSON.stringify(node);
 }
 FILE src/NxtUI.Web/wwwroot/js/filter.test.js
-LENGTH 13276
+LENGTH 13159
 import { describe, it, expect } from 'vitest'
 import { parse, evaluate } from './filter.js'
 import { parseLog } from './log-viewer-parser.js'
 
-const FIELDS = ['ChunkId', 'Service', 'Pipeline']
+const FIELDS = ['Name', 'Service', 'Pipeline']
 
 // Helper: collect all leaf FieldNodes from an AST tree
 function leaves(node) {
@@ -39484,41 +39505,41 @@ describe('parse — bare term expansion', () => {
 
 describe('parse — field-scoped terms', () => {
     it('field:term produces a single field node', () => {
-        const node = parse('ChunkId:abc', FIELDS)
+        const node = parse('Name:abc', FIELDS)
         expect(node.type).toBe('field')
-        expect(node.field).toBe('ChunkId')
+        expect(node.field).toBe('Name')
     })
 
     it('field name lookup is case-insensitive', () => {
-        expect(parse('chunkid:abc', FIELDS).field).toBe('ChunkId')
+        expect(parse('chunkid:abc', FIELDS).field).toBe('Name')
     })
 
-    it('alias "chunk" resolves to ChunkId', () => {
-        expect(parse('chunk:0114', FIELDS).field).toBe('ChunkId')
+    it('alias "chunk" resolves to Name', () => {
+        expect(parse('chunk:0114', FIELDS).field).toBe('Name')
     })
 
     it(':= produces Exact matchType', () => {
-        expect(parse('ChunkId:=abc', FIELDS).matchType).toBe('Exact')
+        expect(parse('Name:=abc', FIELDS).matchType).toBe('Exact')
     })
 
     it('wildcard * produces Glob matchType', () => {
-        expect(parse('ChunkId:chk-*', FIELDS).matchType).toBe('Glob')
+        expect(parse('Name:chk-*', FIELDS).matchType).toBe('Glob')
     })
 
     it('null keyword produces IsNull matchType', () => {
-        expect(parse('ChunkId:null', FIELDS).matchType).toBe('IsNull')
+        expect(parse('Name:null', FIELDS).matchType).toBe('IsNull')
     })
 })
 
 describe('parse — quoted strings', () => {
     it("single-quoted string is case-insensitive (caseSensitive=false)", () => {
-        const node = parse("ChunkId:'ABC'", FIELDS)
+        const node = parse("Name:'ABC'", FIELDS)
         expect(node.caseSensitive).toBe(false)
         expect(node.value.value).toBe('ABC')
     })
 
     it('double-quoted string is case-sensitive', () => {
-        const node = parse('ChunkId:"ABC"', FIELDS)
+        const node = parse('Name:"ABC"', FIELDS)
         expect(node.caseSensitive).toBe(true)
     })
 })
@@ -39543,12 +39564,12 @@ describe('parse — comparison operators', () => {
         ['>=5', 'GreaterThanOrEqual'],
         ['<5',  'LessThan'],
         ['<=5', 'LessThanOrEqual'],
-    ])('ChunkId:%s produces matchType %s', (expr, expected) => {
-        expect(parse(`ChunkId:${expr}`, FIELDS).matchType).toBe(expected)
+    ])('Name:%s produces matchType %s', (expr, expected) => {
+        expect(parse(`Name:${expr}`, FIELDS).matchType).toBe(expected)
     })
 
     it('range 1..10 produces Between matchType with RangeValue', () => {
-        const node = parse('ChunkId:1..10', FIELDS)
+        const node = parse('Name:1..10', FIELDS)
         expect(node.matchType).toBe('Between')
         expect(node.value.type).toBe('range')
     })
@@ -39568,59 +39589,59 @@ describe('evaluate — null node', () => {
 
 describe('evaluate — Contains', () => {
     it('matches substring case-insensitively', () => {
-        expect(eval_('ChunkId:0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:0114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('does not match absent substring', () => {
-        expect(eval_('ChunkId:9999', { ChunkId: 'chk-0114' })).toBe(false)
+        expect(eval_('Name:9999', { Name: 'chk-0114' })).toBe(false)
     })
 
     it('leading-zero string matches as substring', () => {
-        expect(eval_('0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('0114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('plain number (114) matches as substring in string field', () => {
         // 114 is parsed as NumberValue but Contains still does string match
-        expect(eval_('114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('114', { Name: 'chk-0114' })).toBe(true)
     })
 
     it('bare term matches any searchable field', () => {
         expect(eval_('svcA', { Service: 'svcA' })).toBe(true)
         expect(eval_('svcA', { Pipeline: 'svcA-pipeline' })).toBe(true)
-        expect(eval_('svcA', { ChunkId: 'svcA-001' })).toBe(true)
+        expect(eval_('svcA', { Name: 'svcA-001' })).toBe(true)
     })
 })
 
 describe('evaluate — Exact', () => {
     it('requires full value match', () => {
-        expect(eval_('ChunkId:=chk-0114', { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:=chk',      { ChunkId: 'chk-0114' })).toBe(false)
+        expect(eval_('Name:=chk-0114', { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:=chk',      { Name: 'chk-0114' })).toBe(false)
     })
 
     it('is case-insensitive by default', () => {
-        expect(eval_('ChunkId:=CHK-0114', { ChunkId: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:=CHK-0114', { Name: 'chk-0114' })).toBe(true)
     })
 })
 
 describe('evaluate — Glob', () => {
     it('* matches any suffix', () => {
-        expect(eval_('ChunkId:chk-*',   { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:chk-*',   { ChunkId: 'other-0114' })).toBe(false)
+        expect(eval_('Name:chk-*',   { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:chk-*',   { Name: 'other-0114' })).toBe(false)
     })
 
     it('? matches a single character', () => {
-        expect(eval_('ChunkId:chk-011?', { ChunkId: 'chk-0114' })).toBe(true)
-        expect(eval_('ChunkId:chk-011?', { ChunkId: 'chk-01145' })).toBe(false)
+        expect(eval_('Name:chk-011?', { Name: 'chk-0114' })).toBe(true)
+        expect(eval_('Name:chk-011?', { Name: 'chk-01145' })).toBe(false)
     })
 })
 
 describe('evaluate — IsNull', () => {
     it('matches empty string', () => {
-        expect(eval_('ChunkId:null', { ChunkId: '' })).toBe(true)
+        expect(eval_('Name:null', { Name: '' })).toBe(true)
     })
 
     it('does not match non-empty string', () => {
-        expect(eval_('ChunkId:null', { ChunkId: 'abc' })).toBe(false)
+        expect(eval_('Name:null', { Name: 'abc' })).toBe(false)
     })
 })
 

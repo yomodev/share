@@ -4,7 +4,7 @@ namespace NxtUI.Core.Services;
 
 /// <summary>
 /// In-memory event store that accumulates PerformanceEvents
-/// keyed by (chunkId, service, processId).
+/// keyed by (name, service, processId).
 /// Thread-safe for concurrent polling/updates.
 /// </summary>
 public class PerformanceEventStore

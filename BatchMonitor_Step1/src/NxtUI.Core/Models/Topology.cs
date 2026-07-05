@@ -12,7 +12,7 @@ public class Topology
     public List<TopologyNode> Nodes { get; set; } = [];
     public List<TopologyEdge> Edges { get; set; } = [];
 
-    /// <summary>Total unique chunkIds seen so far.</summary>
+    /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
 
     /// <summary>Total raw events in the store.</summary>

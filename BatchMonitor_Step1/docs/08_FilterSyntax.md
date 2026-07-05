@@ -274,7 +274,7 @@ When a term has no field prefix it is matched against a **declared list of searc
 
 ```js
 // timeline
-searchableFields = ['Service', 'Pipeline', 'Source', 'ChunkId', 'Server']
+searchableFields = ['Service', 'Pipeline', 'Source', 'Name', 'Server']
 
 // batch list
 searchableFields = ['BatchName', 'Type', 'RunId']
@@ -287,7 +287,7 @@ OR(
   contains(Service,  "Loader"),
   contains(Pipeline, "Loader"),
   contains(Source,   "Loader"),
-  contains(ChunkId,  "Loader"),
+  contains(Name,  "Loader"),
   contains(Server,   "Loader")
 )
 ```

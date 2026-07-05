@@ -266,7 +266,7 @@ public class MockRunService : IRunService
 
                     events.Add(new PerformanceEvent
                     {
-                        ChunkId = chunkId,
+                        Name = chunkId,
                         Service = svc,
                         Pipeline = pipeline,
                         Source = src,
@@ -356,7 +356,7 @@ public class MockRunService : IRunService
 
                 events.Add(new PerformanceEvent
                 {
-                    ChunkId = chunkId,
+                    Name = chunkId,
                     Service = svc,
                     Pipeline = pipeline,
                     Source = src,

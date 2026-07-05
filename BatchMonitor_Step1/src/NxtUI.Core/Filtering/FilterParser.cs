@@ -41,8 +41,9 @@ public sealed class FilterParser
             ["processid"] = "ProcessId",
             ["src"] = "Source",
             ["source"] = "Source",
-            ["chunk"] = "ChunkId",
-            ["chunkid"] = "ChunkId",
+            ["chunk"] = "Name",
+            ["chunkid"] = "Name",
+            ["name"] = "Name",
             // RunSummary
             ["run"] = "RunId",
             ["runid"] = "RunId",

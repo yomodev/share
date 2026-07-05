@@ -6,7 +6,7 @@ namespace NxtUI.Tests.Filtering;
 
 public class FilterParserTests
 {
-    private static readonly string[] Fields = ["ChunkId", "Service", "Pipeline"];
+    private static readonly string[] Fields = ["Name", "Service", "Pipeline"];
 
     private static readonly FilterParser Parser = new(Fields);
     private static FilterNode? Parse(string input) => Parser.Parse(input);
@@ -68,9 +68,9 @@ public class FilterParserTests
     [Fact]
     public void Field_colon_term_produces_single_FieldTermNode()
     {
-        var node = Parse("ChunkId:abc");
+        var node = Parse("Name:abc");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
@@ -78,21 +78,21 @@ public class FilterParserTests
     {
         var node = Parse("chunkid:abc");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
-    public void Alias_chunk_resolves_to_ChunkId()
+    public void Alias_chunk_resolves_to_Name()
     {
         var node = Parse("chunk:0114");
         node.Should().BeOfType<FieldTermNode>()
-            .Which.Field.Should().Be("ChunkId");
+            .Which.Field.Should().Be("Name");
     }
 
     [Fact]
     public void Exact_match_operator_produces_Exact_matchType()
     {
-        var node = Parse("ChunkId:=abc") as FieldTermNode;
+        var node = Parse("Name:=abc") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Exact);
     }
@@ -100,7 +100,7 @@ public class FilterParserTests
     [Fact]
     public void Wildcard_produces_Glob_matchType()
     {
-        var node = Parse("ChunkId:chk-*") as FieldTermNode;
+        var node = Parse("Name:chk-*") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Glob);
     }
 
@@ -138,14 +138,14 @@ public class FilterParserTests
     [InlineData("<=5", MatchType.LessThanOrEqual)]
     public void Comparison_operators_parsed_correctly(string expr, MatchType expected)
     {
-        var node = Parse($"ChunkId:{expr}") as FieldTermNode;
+        var node = Parse($"Name:{expr}") as FieldTermNode;
         node!.MatchType.Should().Be(expected);
     }
 
     [Fact]
     public void Range_operator_produces_Between_matchType()
     {
-        var node = Parse("ChunkId:1..10") as FieldTermNode;
+        var node = Parse("Name:1..10") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Between);
         node.Value.Should().BeOfType<RangeValue>();
     }
@@ -155,7 +155,7 @@ public class FilterParserTests
     [Fact]
     public void Null_keyword_produces_IsNull_matchType()
     {
-        var node = Parse("ChunkId:null") as FieldTermNode;
+        var node = Parse("Name:null") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.IsNull);
     }
 
@@ -164,7 +164,7 @@ public class FilterParserTests
     [Fact]
     public void Single_quoted_string_is_case_insensitive()
     {
-        var node = Parse("ChunkId:'ABC'") as FieldTermNode;
+        var node = Parse("Name:'ABC'") as FieldTermNode;
         node!.CaseSensitive.Should().BeFalse();
         node.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be("ABC");
     }
@@ -172,7 +172,7 @@ public class FilterParserTests
     [Fact]
     public void Double_quoted_string_is_case_sensitive()
     {
-        var node = Parse("ChunkId:\"ABC\"") as FieldTermNode;
+        var node = Parse("Name:\"ABC\"") as FieldTermNode;
         node!.CaseSensitive.Should().BeTrue();
     }
 
@@ -289,7 +289,7 @@ public class FilterParserTests
     [Fact]
     public void Numeric_range_with_decimal_boundaries()
     {
-        var node = Parse("ChunkId:0.5..9.5") as FieldTermNode;
+        var node = Parse("Name:0.5..9.5") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Between);
         var rv = node.Value.Should().BeOfType<RangeValue>().Subject;
@@ -346,7 +346,7 @@ public class FilterParserTests
     [Fact]
     public void Empty_double_quoted_string_is_case_sensitive_StringValue()
     {
-        var node = Parse("ChunkId:\"\"") as FieldTermNode;
+        var node = Parse("Name:\"\"") as FieldTermNode;
         node.Should().NotBeNull();
         node!.Value.Should().BeOfType<StringValue>().Which.Value.Should().Be(string.Empty);
         node.CaseSensitive.Should().BeTrue();
@@ -411,7 +411,7 @@ public class FilterParserTests
     [InlineData("false", false)]
     public void Bare_true_false_keyword_produces_BoolValue(string literal, bool expected)
     {
-        var node = Parse($"ChunkId:{literal}") as FieldTermNode;
+        var node = Parse($"Name:{literal}") as FieldTermNode;
         node.Should().NotBeNull();
         node!.MatchType.Should().Be(MatchType.Exact);
         node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().Be(expected);
@@ -420,16 +420,16 @@ public class FilterParserTests
     [Fact]
     public void Explicit_exact_operator_also_produces_BoolValue()
     {
-        var node = Parse("ChunkId:=true") as FieldTermNode;
+        var node = Parse("Name:=true") as FieldTermNode;
         node!.MatchType.Should().Be(MatchType.Exact);
         node.Value.Should().BeOfType<BoolValue>().Which.Value.Should().BeTrue();
     }
 
     [Theory]
-    [InlineData("ChunkId:>true")]
-    [InlineData("ChunkId:>=true")]
-    [InlineData("ChunkId:<true")]
-    [InlineData("ChunkId:<=false")]
+    [InlineData("Name:>true")]
+    [InlineData("Name:>=true")]
+    [InlineData("Name:<true")]
+    [InlineData("Name:<=false")]
     public void Comparison_operator_on_bool_throws(string input)
     {
         var act = () => Parse(input);
@@ -439,17 +439,17 @@ public class FilterParserTests
     [Fact]
     public void Range_on_bool_throws()
     {
-        var act = () => Parse("ChunkId:true..false");
+        var act = () => Parse("Name:true..false");
         act.Should().Throw<FilterParseException>();
     }
 
     // ── Comparison operators only valid on orderable values ─────────────────
 
     [Theory]
-    [InlineData("ChunkId:>abc")]
-    [InlineData("ChunkId:>=abc")]
-    [InlineData("ChunkId:<abc")]
-    [InlineData("ChunkId:<=abc")]
+    [InlineData("Name:>abc")]
+    [InlineData("Name:>=abc")]
+    [InlineData("Name:<abc")]
+    [InlineData("Name:<=abc")]
     public void Comparison_operator_on_plain_string_throws(string input)
     {
         var act = () => Parse(input);
@@ -459,7 +459,7 @@ public class FilterParserTests
     [Fact]
     public void Comparison_operator_on_null_throws()
     {
-        var act = () => Parse("ChunkId:>null");
+        var act = () => Parse("Name:>null");
         act.Should().Throw<FilterParseException>();
     }
 
@@ -487,7 +487,7 @@ public class FilterParserTests
     [Fact]
     public void Range_between_plain_strings_throws()
     {
-        var act = () => Parse("ChunkId:abc..xyz");
+        var act = () => Parse("Name:abc..xyz");
         act.Should().Throw<FilterParseException>();
     }
 
