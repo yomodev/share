@@ -6843,8 +6843,10 @@ public class RunsSettings
     public int MaxResults { get; set; } = 1000;
 }
 FILE src/NxtUI.Core/Configuration/SqlSettings.cs
-LENGTH 826
-namespace NxtUI.Configuration;
+LENGTH 2739
+using NxtUI.Core.Models;
+
+namespace NxtUI.Core.Configuration;
 
 public class SqlSettings
 {
@@ -6855,17 +6857,56 @@ public class SqlSettings
     public string RunsTable { get; set; } = "BatchRun";
 
     /// <summary>
-    /// Maps each RunStatus name to the values stored in the Status column.
-    /// E.g. single-char codes: { "Running": ["R"], "Completed": ["C", "DONE"], "Failed": ["F"] }
-    /// Defaults assume the column stores the full enum name (Running / Completed / Failed).
+    /// Maps each RunStatus name to the values stored in the Status column. Defaults to the
+    /// real values this app's SQL Server schema uses (CREATED/SUCCESS/FAILED/TERMINATED/
+    /// PURGED) so status conversion works out of the box; override per-environment in
+    /// config/{env}.json only if a given environment's schema uses different strings.
+    /// This is the single source of truth for status conversion in both directions:
+    /// filtering (RunStatus -> DB values, see StatusValuesFor) and parsing query results
+    /// back into a RunStatus (DB value -> RunStatus, see ParseStatus).
     /// </summary>
     public Dictionary<string, string[]> StatusValues { get; set; } =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Running"] = ["Running"],
-            ["Completed"] = ["Completed"],
-            ["Failed"] = ["Failed"],
+            ["Running"] = ["CREATED"],
+            ["Completed"] = ["SUCCESS"],
+            ["Failed"] = ["FAILED"],
+            ["Terminated"] = ["TERMINATED"],
+            ["Purged"] = ["PURGED"],
         };
+
+    // Built once from StatusValues and cached — SqlSettings instances are cached per
+    // environment for the process lifetime (see EnvironmentConfigLoader), so this never
+    // goes stale within a running app.
+    private Dictionary<string, RunStatus>? _reverseLookup;
+
+    /// <summary>Raw DB values configured for a given status. Empty if none are configured.</summary>
+    public IReadOnlyList<string> StatusValuesFor(RunStatus status) =>
+        StatusValues.TryGetValue(status.ToString(), out var values) ? values : [];
+
+    /// <summary>
+    /// Maps a raw DB status string back to a RunStatus via StatusValues (reverse lookup).
+    /// Returns RunStatus.Unknown if the value isn't listed under any status.
+    /// </summary>
+    public RunStatus ParseStatus(string? dbValue)
+    {
+        if (string.IsNullOrWhiteSpace(dbValue)) return RunStatus.Unknown;
+
+        _reverseLookup ??= BuildReverseLookup();
+        return _reverseLookup.TryGetValue(dbValue.Trim(), out var status) ? status : RunStatus.Unknown;
+    }
+
+    private Dictionary<string, RunStatus> BuildReverseLookup()
+    {
+        var map = new Dictionary<string, RunStatus>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (statusName, dbValues) in StatusValues)
+        {
+            if (!Enum.TryParse<RunStatus>(statusName, ignoreCase: true, out var status)) continue;
+            foreach (var v in dbValues)
+                map[v] = status;
+        }
+        return map;
+    }
 }
 FILE src/NxtUI.Core/Configuration/TestLogGeneratorSettings.cs
 LENGTH 1242
@@ -6900,8 +6941,8 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 767
-namespace NxtUI.Configuration;
+LENGTH 772
+namespace NxtUI.Core.Configuration;
 
 public class UiSettings
 {
@@ -8908,7 +8949,7 @@ public record MongoCollectionDetails
     public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
 }
 FILE src/NxtUI.Core/Models/PerformanceEvent.cs
-LENGTH 2474
+LENGTH 2875
 namespace NxtUI.Core.Models;
 
 /// <summary>
@@ -8952,6 +8993,15 @@ public class PerformanceEvent
 
     /// <summary>Records processed in this chunk.</summary>
     public int RecordCount { get; set; }
+
+    /// <summary>Free-form supplementary text from the PerformanceTracker document.</summary>
+    public string Info { get; set; } = string.Empty;
+
+    /// <summary>Optional numeric measurement from the PerformanceTracker document.</summary>
+    public double? Value { get; set; }
+
+    /// <summary>Mongo document's own last-modified timestamp.</summary>
+    public DateTime LastUpdate { get; set; }
 
     /// <summary>
     /// Composite key for deduplication/upsert: (name, service, pipeline, processId).
@@ -9216,11 +9266,10 @@ public class TopologyEdge
     public PipelineState State { get; set; } = PipelineState.NotStarted;
 }
 FILE src/NxtUI.Core/Services/EnvironmentConfigLoader.cs
-LENGTH 2040
+LENGTH 2013
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
 
 namespace NxtUI.Core.Services;
@@ -10654,10 +10703,10 @@ LENGTH 2134
     }
 }
 FILE src/NxtUI.Web/Components/FilterBox.razor
-LENGTH 7023
+LENGTH 7028
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
-@using NxtUI.Configuration
+@using NxtUI.Core.Configuration
 @inject NxtUI.Web.Services.TabService _tabSvc
 @inject IOptions<UiSettings> UiOptions
 @* Reusable debounced filter input with inline help popup.
@@ -11028,7 +11077,7 @@ public partial class KafkaTopicInfoDialog
     };
 }
 FILE src/NxtUI.Web/Components/LogBrowserFileTree.razor
-LENGTH 7069
+LENGTH 6644
 @namespace NxtUI.Web.Components
 @using NxtUI.Web.Models
 
@@ -11067,7 +11116,6 @@ else
         @foreach (var node in RootNodes)
         {
             <MudTreeViewItem @key="@node.RelativePath" Value="@node"
-                             Icon="@(LoadingNodes.Contains(node.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                              Expanded="@Expanded.Contains(node.RelativePath)"
                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
@@ -11078,7 +11126,6 @@ else
                         @foreach (var c1 in ch1)
                         {
                             <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
-                                             Icon="@(LoadingNodes.Contains(c1.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                              Expanded="@Expanded.Contains(c1.RelativePath)"
                                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
@@ -11089,7 +11136,6 @@ else
                                         @foreach (var c2 in ch2)
                                         {
                                             <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
-                                                             Icon="@(LoadingNodes.Contains(c2.RelativePath) ? Icons.Material.Outlined.HourglassEmpty : Icons.Material.Outlined.Folder)"
                                                              Expanded="@Expanded.Contains(c2.RelativePath)"
                                                              ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
                                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
@@ -11100,7 +11146,6 @@ else
                                                         @foreach (var c3 in ch3)
                                                         {
                                                             <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
-                                                                             Icon="@Icons.Material.Outlined.Folder"
                                                                              OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
                                                                 <BodyContent>@RenderRow(c3)</BodyContent>
                                                             </MudTreeViewItem>
@@ -11138,13 +11183,12 @@ else
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
 
-    // Row body: folder name on the left, a selection checkbox on the right — independent
+    // Row body: a selection checkbox on the left, folder name on the right — independent
     // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
     // a folder never toggles its expansion and vice versa.
     private RenderFragment RenderRow(LogFolderNode node) => __builder =>
     {
         <div class="bm-lb-tree-row">
-            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
             <div @onclick:stopPropagation="true">
                 <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
                              ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
@@ -11152,6 +11196,11 @@ else
                              Color="Color.Primary"
                              Class="bm-lb-tree-row-checkbox" />
             </div>
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
+            @if (LoadingNodes.Contains(node.RelativePath))
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-lb-tree-row-spinner" />
+            }
         </div>
     };
 }
@@ -11689,7 +11738,7 @@ else if (Node is WsSplit split)
     public void Dispose() => _selfRef?.Dispose();
 }
 FILE src/NxtUI.Web/config/dev.json
-LENGTH 394
+LENGTH 263
 {
   "Kafka": {
     "BootstrapServers": "localhost:9092"
@@ -11701,12 +11750,7 @@ LENGTH 394
   "Sql": {
     "ConnectionString": "",
     "Schema": "dbo",
-    "RunsTable": "BatchRun",
-    "StatusValues": {
-      "Running":   [ "Running" ],
-      "Completed": [ "Completed" ],
-      "Failed":    [ "Failed" ]
-    }
+    "RunsTable": "BatchRun"
   }
 }
 FILE src/NxtUI.Web/config/prod.json
@@ -14002,10 +14046,10 @@ LENGTH 17756
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16337
+LENGTH 16342
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
-@using NxtUI.Configuration
+@using NxtUI.Core.Configuration
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
 @inject EnvironmentSelectorService EnvService
@@ -22022,7 +22066,7 @@ public sealed class FocusGatedPoller : IDisposable
     public void Dispose() => Stop();
 }
 FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
-LENGTH 6224
+LENGTH 8529
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -22052,8 +22096,18 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         public readonly object Lock = new();
         public int Subscribers;
         public DateTime IdleSince = DateTime.MinValue;
+        // Null means "no successful poll yet" — the next poll does a full fetch. Once set,
+        // subsequent polls only ask Mongo for documents changed since this timestamp.
+        public DateTime? LastPollUtc;
+        // Keyed by (host, service, pid) — accumulates across incremental polls; a service
+        // that stops heartbeating just stops getting new entries, it isn't dropped by an
+        // incremental fetch (which only returns what changed), so IsOnline is recomputed
+        // from the current time on every poll instead of trusted from whenever it was fetched.
+        public readonly Dictionary<string, ServiceStatus> ServiceMap = new(StringComparer.OrdinalIgnoreCase);
         public volatile IReadOnlyList<ServiceStatus> Services = [];
     }
+
+    private static string Key(ServiceStatus s) => $"{s.HostName}|{s.ServiceName}|{s.ProcessId}";
 
     private readonly ConcurrentDictionary<string, EnvState> _states = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
@@ -22140,7 +22194,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
 
     private async Task PollEnvAsync(string env, CancellationToken ct)
     {
-        if (!_states.ContainsKey(env)) return;
+        if (!_states.TryGetValue(env, out var state)) return;
 
         // Prevent concurrent polls for the same env (timer vs. immediate-subscribe race).
         var gate = _gates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
@@ -22148,12 +22202,41 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
         using var op = _ops.Track($"HeartbeatMonitor.Poll({env})");
         try
         {
-            var services = await _heartbeat.GetServiceStatusesAsync(env, ct: ct);
-            if (_states.TryGetValue(env, out var state))
+            DateTime? since;
+            lock (state.Lock) since = state.LastPollUtc;
+
+            // Captured before querying so nothing updated mid-query is missed by the next poll.
+            var pollStartUtc = DateTime.UtcNow;
+
+            // First poll for this env (since == null): full fetch, same as before — everything
+            // within IHeartbeatService's default recent window. Every poll after that only asks
+            // for documents changed since the previous successful poll.
+            var changed = await _heartbeat.GetServiceStatusesAsync(env, since, ct);
+
+            if (_states.TryGetValue(env, out _)) // still subscribed — env wasn't idle-released mid-query
             {
-                state.Services = services;
+                var threshold = TimeSpan.FromSeconds(_settings.IntervalSeconds * 2);
+                var now = DateTime.UtcNow;
+
+                lock (state.Lock)
+                {
+                    foreach (var svc in changed)
+                        state.ServiceMap[Key(svc)] = svc;
+
+                    // Recompute liveness for every cached entry from the current time — a
+                    // service that stopped heartbeating simply stops appearing in future
+                    // incremental fetches, so its cached IsOnline would otherwise never flip.
+                    foreach (var svc in state.ServiceMap.Values)
+                        svc.IsOnline = (now - svc.UpdatedDateTime) <= threshold;
+
+                    state.Services    = state.ServiceMap.Values.ToList();
+                    state.LastPollUtc = pollStartUtc;
+                }
+
                 OnServicesUpdated?.Invoke(env);
-                _log.LogDebug("heartbeat-monitor [{Env}]: {Count} services cached", env, services.Count);
+                _log.LogDebug(
+                    "heartbeat-monitor [{Env}]: {Changed} changed, {Total} cached ({Mode})",
+                    env, changed.Count, state.Services.Count, since is null ? "full" : "incremental");
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -22819,7 +22902,7 @@ public class LogViewerService : ILogViewerService
     }
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16844
+LENGTH 16973
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Web.Hubs;
@@ -23098,6 +23181,7 @@ public class MockRunService : IRunService
                         Finish = isInProg ? null : start.AddSeconds(dur),
                         Error = isError ? "Processing error: schema mismatch" : null,
                         RecordCount = rng.Next(10, 500),
+                        LastUpdate = isInProg ? start : start.AddSeconds(dur),
                     });
                 }
             }
@@ -23188,6 +23272,7 @@ public class MockRunService : IRunService
                     Finish = inProg ? null : start.AddSeconds(rng.Next(1, 20)),
                     Error = isError ? "Live processing error" : null,
                     RecordCount = rng.Next(10, 500),
+                    LastUpdate = DateTime.UtcNow,
                 });
             }
             if (hops.Count == 0) done.Add(chunkId);
@@ -23574,7 +23659,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 23440
+LENGTH 25081
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
 using NxtUI.Core.Configuration;
@@ -23954,10 +24039,22 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         var topic = _kafkaSettings.MetricsTopicName;
         if (string.IsNullOrWhiteSpace(topic)) return;
 
+        // Seek from the oldest currently-known service's start time instead of the topic's
+        // true beginning. OffsetsForTimes resolves the correct starting offset directly on
+        // the broker — it doesn't scan — so this is cheap regardless of retention length,
+        // and stays correct (worst case: replays a bit more than strictly necessary) even
+        // if retention later grows from a few hours to a week. Falls back to Beginning only
+        // when heartbeat data isn't available yet (e.g. this env's very first subscribe).
+        var services = _heartbeatMonitor.GetServices(env);
+        var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
+        var directive = oldestStart.HasValue
+            ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
+            : KafkaSeekDirective.Default;
+
         try
         {
             var first = true;
-            await foreach (var msg in _kafka.TailTopicAsync(env, topic, KafkaSeekDirective.Default, ct, uncapped: true))
+            await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))
             {
                 if (ct.IsCancellationRequested) break;
                 if (!string.Equals(msg.PayloadType, "MetricsTracker", StringComparison.OrdinalIgnoreCase)) continue;
@@ -24079,6 +24176,17 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 UpsertSample(entry, sample);
                 filled++;
             }
+
+            // Hand off our read position to the file poller — without this, PollEnvOnceAsync
+            // doesn't know this file was already read to the end and re-parses it from byte 0
+            // the next time it touches this entry, duplicating a potentially large (tens of
+            // thousands of lines) synchronous parse. This was the actual bug: real-world
+            // metrics files can be big, and doing that parse twice is exactly the kind of
+            // CPU-bound work on the shared thread pool that starves out SignalR's keep-alive
+            // processing and shows up to users as "attempting to reconnect".
+            entry.FilePath     = file;
+            entry.Offset       = result.NewOffset;
+            entry.LastWriteUtc = DateTime.UtcNow;
             entry.DiskBackfilled = true;
         }
 
@@ -29209,7 +29317,7 @@ public interface IMessageRegistry
     IReadOnlyCollection<string> RegisteredTypes { get; }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaConnectionFactory.cs
-LENGTH 2154
+LENGTH 3023
 using System.Collections.Concurrent;
 using Confluent.Kafka;
 using NxtUI.Core.Configuration;
@@ -29232,11 +29340,20 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
         return _cache.GetOrAdd(fingerprint, _ => Build(settings));
     }
 
+    // GetClientConfig returns a cached, shared ClientConfig instance per environment
+    // fingerprint. Confluent.Kafka's Config(Config) copy constructor shares the underlying
+    // properties dictionary rather than deep-copying it — building a ConsumerConfig/
+    // AdminClientConfig straight from the shared instance and then setting properties on
+    // it (GroupId, EnableAutoCommit, ...) mutates that same shared dictionary, permanently
+    // leaking consumer-only properties into every other client built from it afterward
+    // (surfaces as librdkafka warnings like "Configuration property group.id is a consumer
+    // property and will be ignored by this producer instance"). Wrapping in a fresh
+    // Dictionary first forces an independent copy regardless of Config's sharing behavior.
     public AdminClientConfig GetAdminConfig(string envId) =>
-        new(GetClientConfig(envId));
+        new(new Dictionary<string, string>(GetClientConfig(envId)));
 
     public ConsumerConfig BuildConsumerConfig(string envId, string groupId) =>
-        new(GetClientConfig(envId))
+        new(new Dictionary<string, string>(GetClientConfig(envId)))
         {
             GroupId = groupId,
             AutoOffsetReset = AutoOffsetReset.Earliest,
@@ -31145,7 +31262,7 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 10483
+LENGTH 10222
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31241,7 +31358,7 @@ public class SqlRunService(
             if (filter?.Statuses?.Count > 0)
             {
                 var dbValues = filter.Statuses
-                    .SelectMany(s => sqlCfg.StatusValues.TryGetValue(s.ToString(), out var v) ? v : [])
+                    .SelectMany(sqlCfg.StatusValuesFor)
                     .Distinct()
                     .ToList();
 
@@ -31304,7 +31421,7 @@ public class SqlRunService(
             results.Add(new RunSummary
             {
                 RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status = ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
                 Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                 Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
                 Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
@@ -31325,7 +31442,7 @@ public class SqlRunService(
     public async Task<List<PerformanceEvent>> GetRunEventsAsync(
         string env, string runId, DateTime from, CancellationToken ct = default)
     {
-        var db  = mongoFactory.GetDatabase(env);
+        var db = mongoFactory.GetDatabase(env);
         var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
 
         var filter = Builders<BsonDocument>.Filter.And(
@@ -31341,17 +31458,22 @@ public class SqlRunService(
 
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {
-        Id          = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
-        Name        = d.GetValue("ChunkId",   BsonNull.Value).AsString ?? string.Empty,
-        Service     = d.GetValue("Service",   BsonNull.Value).AsString ?? string.Empty,
-        Pipeline    = d.GetValue("Pipeline",  BsonNull.Value).AsString ?? string.Empty,
-        Server      = d.GetValue("Server",    BsonNull.Value).AsString ?? string.Empty,
-        ProcessId   = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
-        Start       = d.GetValue("Start",     BsonNull.Value).ToUniversalTime(),
-        Finish      = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
-        Error       = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
-        Source      = d.GetValue("Source", BsonNull.Value).AsString ?? string.Empty,
+        Id = d.Contains("Id") && !d["Id"].IsBsonNull ? d["Id"].AsString : d["_id"].ToString() ?? string.Empty,
+        Name = d.GetValue("ChunkId", BsonNull.Value).AsString ?? string.Empty,
+        Service = d.GetValue("Service", BsonNull.Value).AsString ?? string.Empty,
+        Pipeline = d.GetValue("Pipeline", BsonNull.Value).AsString ?? string.Empty,
+        Server = d.GetValue("Server", BsonNull.Value).AsString ?? string.Empty,
+        ProcessId = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
+        Start = d.GetValue("Start", BsonNull.Value).ToUniversalTime(),
+        Finish = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
+        Error = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
+        Source = d.GetValue("Source", BsonNull.Value).AsString ?? string.Empty,
         RecordCount = d.Contains("RecordCount") && !d["RecordCount"].IsBsonNull ? d["RecordCount"].ToInt32() : 0,
+        Info = d.GetValue("Info", BsonNull.Value).AsString ?? string.Empty,
+        Value = d.Contains("Value") && !d["Value"].IsBsonNull ? d["Value"].ToDouble() : null,
+        LastUpdate = d.Contains("LastUpdate") && !d["LastUpdate"].IsBsonNull
+            ? d["LastUpdate"].ToUniversalTime()
+            : DateTime.UtcNow,
     };
 
     public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default) =>
@@ -31359,23 +31481,11 @@ public class SqlRunService(
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    // Maps whatever the DB stores → RunStatus. Covers common short codes and full names.
-    private static RunStatus ParseStatus(string? value) =>
-        value?.Trim().ToUpperInvariant() switch
-        {
-            "CREATED" => RunStatus.Running,
-            "SUCCESS" => RunStatus.Completed,
-            "FAILED" => RunStatus.Failed,
-            "TERMINATED" => RunStatus.Terminated,
-            "PURGED" => RunStatus.Purged,
-            _ => RunStatus.Unknown,
-        };
-
     private static string EscapeLike(string value) =>
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 88172
+LENGTH 88377
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -33789,7 +33899,7 @@ tr.bm-row-searching td:first-child {
 .bm-lb-tree { font-size: 11px; user-select: none; min-width: max-content; }
 .bm-lb-tree .mud-treeview-item-label { font-size: 11px; }
 /* tighten vertical spacing between tree nodes */
-.bm-lb-tree .mud-treeview-item-content { min-height: 22px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
+.bm-lb-tree .mud-treeview-item-content { min-height: 18px !important; padding-top: 0 !important; padding-bottom: 0 !important; }
 .bm-lb-tree .mud-treeview-item-arrow  { padding: 0 2px !important; }
 
 .bm-lb-tree-row {
@@ -33799,8 +33909,10 @@ tr.bm-row-searching td:first-child {
     gap: 6px;
 }
 .bm-lb-tree-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 2px !important; }
+.bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 0 !important; }
+.bm-lb-tree-row-checkbox .mud-button-root { width: 18px !important; height: 18px !important; padding: 0 !important; }
 .bm-lb-tree-row-checkbox .mud-icon-root { font-size: 16px !important; }
+.bm-lb-tree-row-spinner { flex-shrink: 0; width: 14px !important; height: 14px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;
@@ -37836,7 +37948,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 48030
+LENGTH 48486
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -38439,20 +38551,29 @@ const TIMELINE_ALIASES = {
                 .attr('cx', lx).attr('cy', cy).attr('r', 5).style('fill', '#3FB950');
         }
         const tx   = sec.batch.isLive ? lx + 14 : lx;
+        const GAP  = 10;
         const MAX  = 28;
         const name = sec.batch.batchName.length > MAX
             ? sec.batch.batchName.slice(0, MAX) + '…'
             : sec.batch.batchName;
-        const bgW  = name.length * 7 + sec.batch.runId.length * 6 + 28;
-        sel.append('rect')
-            .attr('x', tx - 4).attr('y', 2)
-            .attr('width', bgW).attr('height', HEADER_H - 4)
+
+        // Background rect is sized/positioned after measuring actual rendered text
+        // widths (getBBox) rather than estimated char widths, since a proportional
+        // font otherwise lets the runId text overlap the tail of a wide name.
+        const bg = sel.append('rect')
+            .attr('y', 2).attr('height', HEADER_H - 4)
             .attr('rx', 3).style('fill', BG_COLOR).style('opacity', 0.88);
-        sel.append('text').attr('class', 'bm-tl-batch-name')
+        const nameText = sel.append('text').attr('class', 'bm-tl-batch-name')
             .attr('x', tx).attr('y', cy).attr('dy', '0.32em').text(name);
-        sel.append('text').attr('class', 'bm-tl-batch-runid')
-            .attr('x', tx + name.length * 7 + 10).attr('y', cy).attr('dy', '0.32em')
+        const nameW = nameText.node().getBBox().width;
+        const runIdX = tx + nameW + GAP;
+        const runIdText = sel.append('text').attr('class', 'bm-tl-batch-runid')
+            .attr('x', runIdX).attr('y', cy).attr('dy', '0.32em')
             .text(sec.batch.runId);
+        const runIdW = runIdText.node().getBBox().width;
+        bg.attr('x', tx - 4).attr('width', (runIdX - tx) + runIdW + 8);
+        nameText.raise();
+        runIdText.raise();
     }
 
     // ── Tick scale ────────────────────────────────────────────────────────

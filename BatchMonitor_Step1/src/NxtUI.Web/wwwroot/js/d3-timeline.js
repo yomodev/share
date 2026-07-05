@@ -600,20 +600,29 @@ const TIMELINE_ALIASES = {
                 .attr('cx', lx).attr('cy', cy).attr('r', 5).style('fill', '#3FB950');
         }
         const tx   = sec.batch.isLive ? lx + 14 : lx;
+        const GAP  = 10;
         const MAX  = 28;
         const name = sec.batch.batchName.length > MAX
             ? sec.batch.batchName.slice(0, MAX) + '…'
             : sec.batch.batchName;
-        const bgW  = name.length * 7 + sec.batch.runId.length * 6 + 28;
-        sel.append('rect')
-            .attr('x', tx - 4).attr('y', 2)
-            .attr('width', bgW).attr('height', HEADER_H - 4)
+
+        // Background rect is sized/positioned after measuring actual rendered text
+        // widths (getBBox) rather than estimated char widths, since a proportional
+        // font otherwise lets the runId text overlap the tail of a wide name.
+        const bg = sel.append('rect')
+            .attr('y', 2).attr('height', HEADER_H - 4)
             .attr('rx', 3).style('fill', BG_COLOR).style('opacity', 0.88);
-        sel.append('text').attr('class', 'bm-tl-batch-name')
+        const nameText = sel.append('text').attr('class', 'bm-tl-batch-name')
             .attr('x', tx).attr('y', cy).attr('dy', '0.32em').text(name);
-        sel.append('text').attr('class', 'bm-tl-batch-runid')
-            .attr('x', tx + name.length * 7 + 10).attr('y', cy).attr('dy', '0.32em')
+        const nameW = nameText.node().getBBox().width;
+        const runIdX = tx + nameW + GAP;
+        const runIdText = sel.append('text').attr('class', 'bm-tl-batch-runid')
+            .attr('x', runIdX).attr('y', cy).attr('dy', '0.32em')
             .text(sec.batch.runId);
+        const runIdW = runIdText.node().getBBox().width;
+        bg.attr('x', tx - 4).attr('width', (runIdX - tx) + runIdW + 8);
+        nameText.raise();
+        runIdText.raise();
     }
 
     // ── Tick scale ────────────────────────────────────────────────────────
