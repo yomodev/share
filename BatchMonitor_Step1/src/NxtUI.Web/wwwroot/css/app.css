@@ -656,10 +656,12 @@ html, body {
     text-transform: uppercase; letter-spacing: 0.04em;
     font-family: var(--bm-font-mono);
 }
-.bm-status-running   { color: #3FB950; }
-.bm-status-completed { color: #8B949E; }
-.bm-status-failed    { color: #F85149; }
-.bm-status-unknown   { color: #8B949E; }
+.bm-status-running    { color: #3FB950; }
+.bm-status-completed  { color: #8B949E; }
+.bm-status-failed     { color: #F85149; }
+.bm-status-terminated { color: #D29922; }
+.bm-status-purged     { color: #8B949E; }
+.bm-status-unknown    { color: #8B949E; }
 
 /* Footer: count + pagination + rows selector */
 .bm-batch-footer {
@@ -822,15 +824,19 @@ html, body {
     font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
     font-family: var(--bm-font-mono); white-space:nowrap;
 }
-.bm-status-chip-dot.bm-status-running    { background-color:#3FB950; }
-.bm-status-chip-dot.bm-status-completed  { background-color:#8B949E; }
-.bm-status-chip-dot.bm-status-failed     { background-color:#F85149; }
-.bm-status-chip-dot.bm-status-unknown    { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-running     { background-color:#3FB950; }
+.bm-status-chip-dot.bm-status-completed   { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-failed      { background-color:#F85149; }
+.bm-status-chip-dot.bm-status-terminated  { background-color:#D29922; }
+.bm-status-chip-dot.bm-status-purged      { background-color:#8B949E; }
+.bm-status-chip-dot.bm-status-unknown     { background-color:#8B949E; }
 
-.bm-status-chip-label.bm-status-running    { color:#3FB950; }
-.bm-status-chip-label.bm-status-completed  { color:#8B949E; }
-.bm-status-chip-label.bm-status-failed     { color:#F85149; }
-.bm-status-chip-label.bm-status-unknown    { color:#8B949E; }
+.bm-status-chip-label.bm-status-running     { color:#3FB950; }
+.bm-status-chip-label.bm-status-completed   { color:#8B949E; }
+.bm-status-chip-label.bm-status-failed      { color:#F85149; }
+.bm-status-chip-label.bm-status-terminated  { color:#D29922; }
+.bm-status-chip-label.bm-status-purged      { color:#8B949E; }
+.bm-status-chip-label.bm-status-unknown     { color:#8B949E; }
 
 .bm-status-chip-dot.bm-status-running { animation: bm-pulse 2s ease-in-out infinite; }
 

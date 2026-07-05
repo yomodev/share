@@ -13,9 +13,11 @@
 
     private string GetIcon() => Status switch
     {
-        RunStatus.Running   => Icons.Material.Filled.PlayCircle,
-        RunStatus.Completed => Icons.Material.Filled.CheckCircle,
-        RunStatus.Failed    => Icons.Material.Filled.Error,
-        _                     => Icons.Material.Outlined.HelpOutline
+        RunStatus.Running    => Icons.Material.Filled.PlayCircle,
+        RunStatus.Completed  => Icons.Material.Filled.CheckCircle,
+        RunStatus.Failed     => Icons.Material.Filled.Error,
+        RunStatus.Terminated => Icons.Material.Filled.StopCircle,
+        RunStatus.Purged     => Icons.Material.Filled.DeleteSweep,
+        _                    => Icons.Material.Outlined.HelpOutline
     };
 }
