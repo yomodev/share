@@ -3,7 +3,10 @@
 @using NxtUI.Web.Services
 @using NxtUI.Core.Filtering
 @using NxtUI.Core.Services
+@using NxtUI.Core.Configuration
+@using Microsoft.Extensions.Options
 @using System.Text.RegularExpressions
+@inject IOptions<UiSettings> UiOptions
 @inject IHeartbeatMonitor HeartbeatMonitor
 @inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
@@ -109,7 +112,7 @@
                                         @spark.Svg
                                     }
                                     <div class="bm-svc-card-header">
-                                        <span class="bm-svc-card-name" title="@s.ServiceName">@s.ServiceName</span>
+                                        <span class="bm-svc-card-name" title="@s.ServiceName">@StripName(s.ServiceName)</span>
                                     </div>
                                     <div class="bm-svc-card-host">@s.HostName</div>
                                     <div class="bm-svc-card-meta">
@@ -231,6 +234,17 @@
 @code {
     [Parameter] public string Env { get; set; } = string.Empty;
     [Parameter] public TabModel? Tab { get; set; }
+    [Parameter] public bool IsFocused { get; set; }
+
+    // Focus-gating: a background Services tab must not run its own Mongo refresh or
+    // re-render on every heartbeat/metrics tick — that heavy work runs on the shared
+    // Blazor circuit thread and stalls whatever page the user is actually viewing.
+    private bool _previousIsFocused;
+    private bool _initialized;
+
+    // Card-view service-name shortener (display only, cards only — see UiSettings.LabelStripWords).
+    private Func<string, string>? _stripFormatter;
+    private string StripName(string name) => _stripFormatter?.Invoke(name) ?? name;
 
     private int  _page     = 1;
     private int  _pageSize = 25;
@@ -302,6 +316,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _previousIsFocused = IsFocused;
+        _stripFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Env);
+
         DiscoverySvc.OnPathResolved        += OnPathResolved;
         MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
         HeartbeatMonitor.OnServicesUpdated += OnServicesUpdated;
@@ -310,6 +327,18 @@
         _loading = true;
         await InvokeAsync(StateHasChanged);
         await LoadFromMongoAsync();
+        _initialized = true;
+    }
+
+    // Refresh once when the user switches back to this tab (data may be stale because
+    // background ticks were skipped while it wasn't focused).
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        var gained = IsFocused && !_previousIsFocused;
+        _previousIsFocused = IsFocused;
+        if (gained && _initialized)
+            _ = InvokeAsync(LoadFromMongoAsync);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -389,7 +418,10 @@
     // timing signal to refresh the page's own MongoDB query.
     private void OnServicesUpdated(string env)
     {
-        if (env != Env) return;
+        // Skip the Mongo refresh entirely when this tab isn't on screen — it'll refresh
+        // on focus-gain (OnParametersSet). Background refreshes are what froze the UI of
+        // whatever page the user was actually looking at.
+        if (env != Env || !IsFocused) return;
         _ = LoadFromMongoAsync();
     }
 
@@ -405,6 +437,9 @@
 
     private void ScheduleRender()
     {
+        // No re-render work while this tab is in the background (see OnServicesUpdated).
+        if (!IsFocused) return;
+
         // Debounce: collapse a burst of notifications into a single re-render.
         lock (_renderGate)
         {

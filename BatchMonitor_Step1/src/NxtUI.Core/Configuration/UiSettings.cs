@@ -19,12 +19,13 @@ public class UiSettings
     public bool ShowMemoryDashboard { get; set; } = true;
 
     /// <summary>
-    /// Words removed from service-node and pipeline-row labels in the run-detail flow
-    /// graph to save horizontal space (display only — the underlying names used for
-    /// edge/topology matching are untouched). Matching is case-insensitive. The special
-    /// token <c>{EnvID}</c> is replaced with the current environment id before removal.
-    /// After removal, leftover doubled separators are collapsed and leading/trailing
-    /// <c>-</c>/<c>_</c>/spaces are trimmed.
+    /// Words removed from displayed service/pipeline labels to save horizontal space —
+    /// used by the run-detail flow graph (node + pipeline-row labels) and the Services
+    /// page card view (service name). Display only: the underlying names used for
+    /// edge/topology matching and log-path discovery are untouched. Matching is
+    /// case-insensitive. The special token <c>{EnvID}</c> is replaced with the current
+    /// environment id before removal. After removal, leftover doubled separators are
+    /// collapsed and leading/trailing <c>-</c>/<c>_</c>/spaces are trimmed.
     /// </summary>
-    public string[] GraphLabelStripWords { get; set; } = ["Pipeline", "ABC", "{EnvID}"];
+    public string[] LabelStripWords { get; set; } = ["Pipeline", "ABC", "{EnvID}"];
 }

@@ -55,7 +55,7 @@
     {
         _previousIsFocused = IsFocused;
         _topologyService   = new TopologyComputationService();
-        _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.GraphLabelStripWords, Environment);
+        _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
 
         await LoadAsync();
     }

@@ -23,7 +23,7 @@
                 @<RunDetail RunId="@Tab.EntityId" Environment="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Services =>
-                @<ServicesPage Env="@env" Tab="@Tab" />,
+                @<ServicesPage Env="@env" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.Pipelines =>
                 @<PlaceholderPage Title="Pipelines" Icon="@Icons.Material.Outlined.AccountTree" Environment="@env" />,
@@ -47,7 +47,7 @@
                 @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
 
             TabType.MemoryGraph =>
-                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" />,
+                @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
             TabType.LogBrowser =>
                 @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" IsFocused="@Tab.IsActive" Tab="@Tab" />,

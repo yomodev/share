@@ -126,9 +126,22 @@
         catch (JSDisconnectedException) { }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        // Synchronous — releases a .NET object reference, no I/O.
         _dotNetRef?.Dispose();
+
+        // Fire-and-forget: this only tears down client-side log-viewer state (virtualized
+        // rows, listeners) for a container Blazor is removing from the DOM anyway as part
+        // of this same tab/pane-close. Awaiting the JS round trip here is what made closing
+        // a Log Viewer (or a multi-pane Log Workspace, which disposes one of these per pane
+        // sequentially) feel slow.
+        _ = SafeDestroyAsync();
+        return ValueTask.CompletedTask;
+    }
+
+    private async Task SafeDestroyAsync()
+    {
         try { await JS.InvokeVoidAsync("logViewer.destroy", _bodyRef); }
         catch (Exception) { }
     }

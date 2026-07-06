@@ -115,6 +115,7 @@
     [Parameter] public string  Env            { get; set; } = string.Empty;
     [Parameter] public string? NavigationHint { get; set; }
     [Parameter] public TabModel? Tab           { get; set; }
+    [Parameter] public bool     IsFocused      { get; set; }
 
     // ── enums ────────────────────────────────────────────────────────────
     private enum GroupBy { None, Service, Host }
@@ -125,7 +126,10 @@
     private double?   _windowHours = 1.0;   // null = show all; default to last 1 h
     private int       _lastClickedIndex = -1;
     private bool      _splitView = false;
-    private bool      _paused = false;
+    // Starts paused/offline: the chart shows the initial snapshot and doesn't auto-refresh
+    // until the user hits Resume. Prevents a background tab from continuously re-rendering
+    // the D3 chart (and competing for the shared circuit thread) while unattended.
+    private bool      _paused = true;
 
     private IDisposable?         _subscription;
     private DateTime?            _lastUpdated;
@@ -262,7 +266,10 @@
 
     private void OnMetricsUpdated(string env)
     {
-        if (env != Env || _paused) return;
+        // Skip when paused, or when this tab isn't the one on screen — a background
+        // MemoryGraph must not re-render (heavy D3 work on the shared circuit thread)
+        // and stall whatever page the user is actually looking at.
+        if (env != Env || _paused || !IsFocused) return;
 
         lock (_renderGate)
         {
@@ -492,12 +499,27 @@
 
     // ── disposal ─────────────────────────────────────────────────────────
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        // Event unsubscribe + subscription release are synchronous and must happen
+        // immediately — leaving them out would leak a delegate/poll subscription for
+        // the life of the process, unlike the JS cleanup below.
         lock (_renderGate) { _disposed = true; }
         MetricsMonitor.OnMetricsUpdated -= OnMetricsUpdated;
         _subscription?.Dispose();
+
+        // Fire-and-forget: this only tears down client-side D3/RAF state for a chart
+        // container Blazor is about to remove from the DOM anyway as part of this same
+        // tab-close. Awaiting a JS interop round trip here just makes the tab visually
+        // linger until the SignalR round trip completes, for no benefit.
+        _ = SafeDestroyChartAsync();
+        return ValueTask.CompletedTask;
+    }
+
+    private async Task SafeDestroyChartAsync()
+    {
         try { await JS.InvokeVoidAsync("memoryLineChart.destroy", _chartRef); }
         catch (JSDisconnectedException) { }
+        catch (Exception) { /* best-effort cleanup only */ }
     }
 }

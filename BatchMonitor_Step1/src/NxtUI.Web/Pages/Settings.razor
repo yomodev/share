@@ -226,14 +226,21 @@
         InvokeAsync(StateHasChanged);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        // Synchronous — event unsubscribe, no I/O.
         ThemeService.OnChange -= OnThemeExternallyChanged;
         Notifications.OnError -= OnErrorReported;
+
+        // Fire-and-forget: releasing the JS module reference for a page being torn down.
         if (_appModule is not null)
-        {
-            try { await _appModule.DisposeAsync(); }
-            catch (JSDisconnectedException) { }
-        }
+            _ = SafeDisposeModuleAsync(_appModule);
+        return ValueTask.CompletedTask;
+    }
+
+    private static async Task SafeDisposeModuleAsync(IJSObjectReference module)
+    {
+        try { await module.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
     }
 }

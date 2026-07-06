@@ -92,10 +92,19 @@
     private void OpenServices() =>
         TabService.OpenOrFocus(TabModel.CreateServicesDashboard(Env));
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        // Synchronous — releases the subscription and .NET object reference, no I/O.
         _sub?.Dispose();
         _selfRef?.Dispose();
+
+        // Fire-and-forget: client-side D3 cleanup for a container Blazor removes anyway.
+        _ = SafeStopAsync();
+        return ValueTask.CompletedTask;
+    }
+
+    private async Task SafeStopAsync()
+    {
         try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
     }
 }
