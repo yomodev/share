@@ -14,12 +14,13 @@ import { createState, sampleEdge, tick } from './d3-animation.js';
 
 const D3Graph = (() => {
 
-    const NODE_WIDTH    = 234;
-    const HEADER_HEIGHT = 32;
-    const ROW_HEIGHT    = 40;
-    const MIN_ROWS      = 1;
-    const DEBOUNCE_MS   = 500;
-    const T             = 280;   // transition duration ms
+    const NODE_WIDTH     = 234;   // floor width — nodes grow past this to fit their text
+    const MAX_NODE_WIDTH = 460;   // safety cap so one long name can't blow up the whole layout
+    const HEADER_HEIGHT  = 32;
+    const ROW_HEIGHT     = 40;
+    const MIN_ROWS       = 1;
+    const DEBOUNCE_MS    = 500;
+    const T              = 280;   // transition duration ms
 
     // Read page surface colour at runtime so light/dark themes both work.
     function nodeBg() {
@@ -58,6 +59,33 @@ const D3Graph = (() => {
         return (node?.pipelines || []).findIndex(p => p.name === name);
     }
 
+    // Measures rendered text width using a throwaway SVG <text> in defs (never painted,
+    // but real font metrics — unlike guessing from character count). defs content isn't
+    // rendered but is still laid out, so getComputedTextLength() is accurate here.
+    function measureText(handle, text, className) {
+        const t = handle.defs.append('text').attr('class', className).text(text || '');
+        const w = t.node().getComputedTextLength();
+        t.remove();
+        return w;
+    }
+
+    // Node width grows to fit its longest text (header label, or a pipeline row's
+    // name + done/in-progress counts) instead of a fixed width that clips long
+    // service/pipeline names. Floored at NODE_WIDTH, capped at MAX_NODE_WIDTH so one
+    // very long name can't blow out the whole layout.
+    function computeNodeWidth(handle, n) {
+        const HEADER_PAD = 14 + 40 + 16; // left pad + instance badge + right pad
+        let needed = measureText(handle, n.label, 'bm-node-label') + HEADER_PAD;
+
+        for (const p of (n.pipelines || [])) {
+            const nameW   = measureText(handle, p.displayName || p.name, 'bm-row-name');
+            const countsW = measureText(handle, `✓${p.doneCount ?? 0} ⟳${p.inProgressCount ?? 0}`, 'bm-row-counts');
+            needed = Math.max(needed, 10 /*left pad*/ + nameW + 16 /*gap*/ + countsW + 10 /*right pad*/);
+        }
+
+        return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
+    }
+
     // ── Layout ───────────────────────────────────────────────────────────
 
     function chooseDir(containerEl) {
@@ -65,19 +93,26 @@ const D3Graph = (() => {
         return r.width >= r.height ? 'LR' : 'TB';
     }
 
-    function runLayout(topo, containerEl) {
-        const dir = chooseDir(containerEl);
+    function runLayout(handle, topo) {
+        const dir = chooseDir(handle.containerEl);
         const g = new dagre.graphlib.Graph({ multigraph: true });
         g.setGraph({
             rankdir: dir,
-            nodesep: dir === 'LR' ? 60  : 80,
-            ranksep: dir === 'LR' ? 160 : 100,
+            // More breathing room than the old fixed spacing — wider node boxes
+            // (dynamic width) and more separation both reduce edges cutting
+            // through unrelated nodes.
+            nodesep: dir === 'LR' ? 90  : 110,
+            ranksep: dir === 'LR' ? 200 : 130,
             marginx: 48, marginy: 48,
         });
         g.setDefaultEdgeLabel(() => ({}));
 
-        for (const n of topo.nodes)
-            g.setNode(n.id, { width: NODE_WIDTH, height: nh(n), data: n });
+        for (const n of topo.nodes) {
+            // Cached on the node so updateClipPaths (called right after this) uses the
+            // exact same width without re-measuring text a second time.
+            n._layoutWidth = computeNodeWidth(handle, n);
+            g.setNode(n.id, { width: n._layoutWidth, height: nh(n), data: n });
+        }
 
         const ids = new Set(topo.nodes.map(n => n.id));
         for (const e of topo.edges) {
@@ -88,13 +123,23 @@ const D3Graph = (() => {
         return g;
     }
 
-    // ── Edge path: S-curve, horizontal entry AND exit ────────────────────
+    // ── Edge path: horizontal entry/exit, following dagre's own waypoints ────
+    // dagre.layout() already routes multi-rank edges through intermediate points
+    // that account for the nodes sitting between source and target. The previous
+    // version discarded all but the first/last point and drew a single S-curve
+    // between them, which could cut straight through unrelated node boxes on
+    // edges spanning more than one rank. Following every waypoint (still via a
+    // smooth curve, not sharp corners) keeps the routing dagre already computed.
+    const edgeLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
 
     function edgePath(pts) {
         if (!pts || pts.length < 2) return '';
-        const s = pts[0], t = pts[pts.length - 1];
-        const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
-        return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
+        if (pts.length === 2) {
+            const s = pts[0], t = pts[1];
+            const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
+            return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
+        }
+        return edgeLine(pts);
     }
 
     function snapPorts(pts, g, edge) {
@@ -115,7 +160,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl) {
+    function init(containerEl, dotNetRef) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -157,7 +202,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs,
+            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             animState: createState(),
             currentGraph: null, pendingTopology: null,
             layoutTimer: null, rafId: null, lastFrameTime: null,
@@ -195,11 +240,12 @@ const D3Graph = (() => {
         const topo = handle.pendingTopology;
         if (!topo) return;
 
-        // Refresh per-node clipPaths whenever the topology changes.
-        updateClipPaths(handle, topo);
-
-        const g = runLayout(topo, handle.containerEl);
+        // runLayout computes each node's dynamic width (and caches it on the node as
+        // _layoutWidth) — clip paths are refreshed afterward so they reuse that same
+        // width instead of re-measuring text a second time.
+        const g = runLayout(handle, topo);
         handle.currentGraph = g;
+        updateClipPaths(handle, topo);
         renderEdges(handle, g);  // edges first — drawn below nodes
         renderNodes(handle, g);
         if (!handle.userZoomed) fitToView(handle, true);
@@ -220,7 +266,7 @@ const D3Graph = (() => {
 
         // Update dimensions for both enter + update.
         handle.defs.selectAll('clipPath.bm-node-clip').each(function(n) {
-            const h = nh(n), w = NODE_WIDTH;
+            const h = nh(n), w = n._layoutWidth || NODE_WIDTH;
             d3.select(this).select('rect')
                 .attr('x', -w / 2).attr('y', -h / 2)
                 .attr('width', w).attr('height', h);
@@ -426,7 +472,7 @@ const D3Graph = (() => {
                 .attr('x', -hw + 10).attr('y', r._cy - 9)
                 .attr('class', 'bm-row-name');
 
-            row.select('.bm-row-name').text(r.name);
+            row.select('.bm-row-name').text(r.displayName || r.name);
 
             row.select('.bm-row-track')
                 .attr('x', pX).attr('y', r._cy + 2)
@@ -476,14 +522,14 @@ const D3Graph = (() => {
 
         const topicHtml = topic
             ? `<div class="bm-pop-topic">
-                   <span>Topic:&nbsp;<code>${esc(topic)}</code></span>
-                   <button class="bm-pop-kafka" onclick="console.log('Open Kafka stub:','${esc(topic)}')">↗&nbsp;Kafka</button>
+                   <span class="bm-pop-topic-name" title="${esc(topic)}">Topic:&nbsp;<code>${esc(topic)}</code></span>
+                   <button class="bm-pop-kafka">↗&nbsp;Kafka</button>
                </div>`
             : '';
 
         handle.popover.html(`
             <div class="bm-pop-hdr">
-                <span class="bm-pop-title">${esc(pipeline.name)}</span>
+                <span class="bm-pop-title">${esc(pipeline.displayName || pipeline.name)}</span>
                 <span class="bm-pop-badge bm-pop-${esc(sk(pipeline.state))}">${esc(sk(pipeline.state))}</span>
                 <button class="bm-pop-x">×</button>
             </div>
@@ -500,6 +546,9 @@ const D3Graph = (() => {
         .style('pointer-events', 'auto');
 
         handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
+        handle.popover.select('.bm-pop-kafka').on('click', () => {
+            if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenKafkaTopic', topic);
+        });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))
             .on('mouseleave', () => scheduleHidePopover(handle));
@@ -674,8 +723,8 @@ const D3Graph = (() => {
 
 const _handles = new Map();
 
-/** @param {Element} el @param {string} key */
-export function init(el, key)            { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el)); }
+/** @param {Element} el @param {string} key @param {object} dotNetRef */
+export function init(el, key, dotNetRef) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */

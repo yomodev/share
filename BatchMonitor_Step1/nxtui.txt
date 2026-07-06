@@ -6968,7 +6968,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 772
+LENGTH 1383
 namespace NxtUI.Core.Configuration;
 
 public class UiSettings
@@ -6988,6 +6988,16 @@ public class UiSettings
     /// weight. Default: true.
     /// </summary>
     public bool ShowMemoryDashboard { get; set; } = true;
+
+    /// <summary>
+    /// Words removed from service-node and pipeline-row labels in the run-detail flow
+    /// graph to save horizontal space (display only — the underlying names used for
+    /// edge/topology matching are untouched). Matching is case-insensitive. The special
+    /// token <c>{EnvID}</c> is replaced with the current environment id before removal.
+    /// After removal, leftover doubled separators are collapsed and leading/trailing
+    /// <c>-</c>/<c>_</c>/spaces are trimmed.
+    /// </summary>
+    public string[] GraphLabelStripWords { get; set; } = ["Pipeline", "ABC", "{EnvID}"];
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -9155,7 +9165,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 6466
+LENGTH 6828
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -9218,8 +9228,13 @@ public class TopologyNode
 /// </summary>
 public class PipelineRow
 {
-    /// <summary>Pipeline name — unique per service, one input topic.</summary>
+    /// <summary>Pipeline name — unique per service, one input topic. This is the raw name
+    /// used as the edge/topology matching key; use <see cref="DisplayName"/> for rendering.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Shortened, display-only pipeline name (filler words stripped — see
+    /// TopologyLabelFormatter). Defaults to <see cref="Name"/> when no stripping applies.</summary>
+    public string DisplayName { get; set; } = string.Empty;
 
     /// <summary>Input topic name for this pipeline (derived; used for the Kafka tooltip link).</summary>
     public string Topic { get; set; } = string.Empty;
@@ -9593,7 +9608,7 @@ public interface ILogPathDiscoveryService
     void ClearEnv(string env);
 }
 FILE src/NxtUI.Core/Services/ILogViewerService.cs
-LENGTH 626
+LENGTH 793
 namespace NxtUI.Core.Services;
 
 public interface ILogViewerService
@@ -9607,8 +9622,10 @@ public interface ILogViewerService
     /// <summary>
     /// Read only the bytes appended since <paramref name="fromOffset"/>.
     /// Returns empty text (and the unchanged offset) when nothing is new.
+    /// Runs the (blocking) file read on a background thread so a tail poll never
+    /// touches the caller's (UI) thread.
     /// </summary>
-    (string Text, long NewOffset) ReadDelta(string path, long fromOffset);
+    Task<(string Text, long NewOffset)> ReadDeltaAsync(string path, long fromOffset, CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
 LENGTH 2502
@@ -10023,7 +10040,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 10361
+LENGTH 10891
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -10046,8 +10063,17 @@ public class TopologyComputationService
     /// <summary>
     /// Computes topology from the event store snapshot.
     /// </summary>
-    public Topology ComputeTopology(IReadOnlyDictionary<string, PerformanceEvent> eventStore)
+    /// <param name="labelFormatter">
+    /// Optional display-label shortener applied to node labels and pipeline display names
+    /// (see <see cref="TopologyLabelFormatter"/>). Never affects the raw <c>Id</c>/<c>Name</c>
+    /// keys used for edge matching. Null = identity (no shortening).
+    /// </param>
+    public Topology ComputeTopology(
+        IReadOnlyDictionary<string, PerformanceEvent> eventStore,
+        Func<string, string>? labelFormatter = null)
     {
+        var format = labelFormatter ?? (s => s);
+
         if (eventStore == null || eventStore.Count == 0)
         {
             return new Topology { TotalChunks = 0, TotalEvents = 0 };
@@ -10070,11 +10096,11 @@ public class TopologyComputationService
         {
             if (!nodesByService.TryGetValue(service, out var node))
             {
-                node = new TopologyNode { Id = service, Label = service };
+                node = new TopologyNode { Id = service, Label = format(service) };
                 nodesByService[service] = node;
             }
 
-            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime);
+            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime, format);
             node.Pipelines.Add(row);
             pipelineRowsByKey[(service, pipeline)] = row;
         }
@@ -10197,7 +10223,9 @@ public class TopologyComputationService
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private static PipelineRow BuildPipelineRow(string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime)
+    private static PipelineRow BuildPipelineRow(
+        string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime,
+        Func<string, string> format)
     {
         var done = pipelineEvents.Count(e => e.IsDone);
         var inProgress = pipelineEvents.Count(e => !e.IsDone);
@@ -10206,6 +10234,7 @@ public class TopologyComputationService
         var row = new PipelineRow
         {
             Name = pipeline,
+            DisplayName = format(pipeline),
             Topic = InferTopicName(pipeline),
             DoneCount = done,
             InProgressCount = inProgress,
@@ -10259,6 +10288,55 @@ public class TopologyComputationService
     /// </summary>
     private static string InferTopicName(string pipeline) =>
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
+}
+FILE src/NxtUI.Core/Services/TopologyLabelFormatter.cs
+LENGTH 2252
+using System.Text.RegularExpressions;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Shortens service/pipeline labels for display in the run-detail flow graph by removing
+/// configured filler words (see <c>UiSettings.GraphLabelStripWords</c>). This affects the
+/// rendered <c>Label</c>/<c>DisplayName</c> only — never the raw names used as topology and
+/// edge-matching keys.
+/// </summary>
+public static class TopologyLabelFormatter
+{
+    // Collapse a run of 2+ separators (left behind after a word is cut out of the middle
+    // of a name, e.g. "Ccr_AXIS-DEV1_Incr" -> "Ccr__Incr") down to a single separator.
+    private static readonly Regex DoubledSeparators = new(@"[_-]{2,}", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Removes each of <paramref name="words"/> (case-insensitive) from <paramref name="raw"/>,
+    /// substituting the current environment id for the <c>{EnvID}</c> token, then collapses
+    /// doubled separators and trims leading/trailing <c>-</c>/<c>_</c>/spaces. Never returns an
+    /// empty string — if stripping would remove everything, the original is kept.
+    /// </summary>
+    public static string Strip(string? raw, IReadOnlyList<string>? words, string? envId)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw ?? string.Empty;
+        if (words is null || words.Count == 0) return raw;
+
+        var result = raw;
+        foreach (var word in words)
+        {
+            var actual = word == "{EnvID}" ? envId : word;
+            if (string.IsNullOrEmpty(actual)) continue;
+            result = Regex.Replace(result, Regex.Escape(actual), string.Empty, RegexOptions.IgnoreCase);
+        }
+
+        // Collapse "__" / "--" / "-_" runs to the run's first character, then trim edges.
+        result = DoubledSeparators.Replace(result, m => m.Value[0].ToString());
+        result = result.Trim(' ', '-', '_');
+
+        // Guard against a name made entirely of strip-words collapsing to nothing.
+        return result.Length == 0 ? raw : result;
+    }
+
+    /// <summary>Convenience factory: a reusable formatter closed over a word list and env id.</summary>
+    public static Func<string, string> Build(IReadOnlyList<string>? words, string? envId) =>
+        raw => Strip(raw, words, envId);
 }
 FILE src/NxtUI.Protos/Protos/MemStat.proto
 LENGTH 712
@@ -10653,7 +10731,7 @@ LENGTH 8912
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 3122
+LENGTH 3666
 @namespace NxtUI.Web.Components
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -10676,9 +10754,13 @@ LENGTH 3122
     /// </summary>
     [Parameter] public bool IsVisible { get; set; } = true;
 
+    /// <summary>Fired when the user clicks the "Kafka" link in a pipeline row's popover.</summary>
+    [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
+
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
+    private DotNetObjectReference<D3FlowGraph>? _selfRef;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -10686,8 +10768,9 @@ LENGTH 3122
         {
             try
             {
+                _selfRef = DotNetObjectReference.Create(this);
                 _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js");
-                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey());
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
@@ -10698,6 +10781,10 @@ LENGTH 3122
             }
         }
     }
+
+    /// <summary>Invoked from d3-graph.js when the popover's "Kafka" link is clicked.</summary>
+    [JSInvokable]
+    public Task RequestOpenKafkaTopic(string topic) => OnOpenKafkaTopic.InvokeAsync(topic);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -10753,6 +10840,7 @@ LENGTH 3122
             try { await _module.DisposeAsync(); }
             catch (JSDisconnectedException) { }
         }
+        _selfRef?.Dispose();
     }
 }
 FILE src/NxtUI.Web/Components/DiagnosticsMonitor.razor
@@ -14645,7 +14733,7 @@ LENGTH 4212
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 26597
+LENGTH 28198
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -14724,15 +14812,9 @@ LENGTH 26597
                       Striped="true"
                       Class="bm-batch-table">
                 <HeaderContent>
-                    <MudTh Style="width:100%;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.Name">Topic</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="white-space:nowrap;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.PartitionCount">Partitions</MudTableSortLabel>
-                    </MudTh>
-                    <MudTh Style="white-space:nowrap;">
-                        <MudTableSortLabel T="KafkaTopicSummary" SortBy="x => x.MessageCount">Messages</MudTableSortLabel>
-                    </MudTh>
+                    <MudTh Style="width:100%;">@SortHeader("Topic", "Name")</MudTh>
+                    <MudTh Style="white-space:nowrap;">@SortHeader("Partitions", "PartitionCount")</MudTh>
+                    <MudTh Style="white-space:nowrap;">@SortHeader("Messages", "MessageCount")</MudTh>
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -14943,6 +15025,12 @@ LENGTH 26597
     private List<KafkaTopicSummary> _paged          = new();
     private int _page = 1, _pageSize = 25, _totalPages = 1;
 
+    // Client-side sort state for the topic table. Because the whole topic set lives in
+    // memory (_filteredTopics), the sort must be applied to that full set before it's
+    // sliced into the current page — otherwise it would only reorder the visible page.
+    private string _sortColumn     = "Name";
+    private bool   _sortDescending = false;
+
     // Consumers
     private List<KafkaConsumerGroupOverview> _allGroups      = new();
     private List<KafkaConsumerGroupOverview> _filteredGroups = new();
@@ -15104,10 +15192,48 @@ LENGTH 26597
 
     private void RebuildPage()
     {
-        _totalPages = Math.Max(1, (int)Math.Ceiling(_filteredTopics.Count / (double)_pageSize));
+        // Sort the full filtered set first, THEN slice the page out of it.
+        var sorted = SortTopics(_filteredTopics);
+        _totalPages = Math.Max(1, (int)Math.Ceiling(sorted.Count / (double)_pageSize));
         _page       = Math.Clamp(_page, 1, _totalPages);
-        _paged      = _filteredTopics.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        _paged      = sorted.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
     }
+
+    private List<KafkaTopicSummary> SortTopics(List<KafkaTopicSummary> topics)
+    {
+        var sorted = _sortColumn switch
+        {
+            "PartitionCount" => _sortDescending
+                ? topics.OrderByDescending(t => t.PartitionCount)
+                : topics.OrderBy(t => t.PartitionCount),
+            "MessageCount" => _sortDescending
+                ? topics.OrderByDescending(t => t.MessageCount)
+                : topics.OrderBy(t => t.MessageCount),
+            _ => _sortDescending
+                ? topics.OrderByDescending(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                : topics.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase),
+        };
+        return sorted.ToList();
+    }
+
+    private void OnTopicSort(string field)
+    {
+        if (_sortColumn == field) _sortDescending = !_sortDescending;
+        else { _sortColumn = field; _sortDescending = false; }
+        RebuildPage();
+    }
+
+    private RenderFragment SortHeader(string label, string field) => @<MudLink
+        Underline="Underline.Hover" Color="Color.Inherit"
+        OnClick="@(() => OnTopicSort(field))"
+        Style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+        @label
+        @if (_sortColumn == field)
+        {
+            <MudIcon Icon="@(_sortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                     Size="Size.Small" />
+        }
+    </MudLink>;
 
     private void OnPageChanged(int page)   { _page = page;  RebuildPage(); }
     private void OnPageSizeChanged(int sz) { _pageSize = sz; _page = 1; RebuildPage(); }
@@ -16129,7 +16255,7 @@ LENGTH 28156
     }
 }
 FILE src/NxtUI.Web/Pages/LogBrowser.razor
-LENGTH 38567
+LENGTH 39675
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -16268,7 +16394,7 @@ LENGTH 38567
         <div class="bm-lb-resizer" @onmousedown="OnResizerMouseDown"></div>
 
         <!-- right: file table -->
-        <div class="bm-lb-files-panel">
+        <div class="bm-lb-files-panel" @ref="_filesPanelRef">
             @if (_checkedPaths.Count == 0)
             {
                 <div class="bm-lb-empty">
@@ -16583,6 +16709,10 @@ LENGTH 38567
     private bool                     _previousIsFocused;
     private bool                     _searchCapped;
 
+    // Scroll-position preservation for the file table across auto-poll refreshes.
+    private ElementReference _filesPanelRef;
+    private bool             _restoreScroll;
+
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     protected override async Task OnInitializedAsync()
@@ -16590,9 +16720,10 @@ LENGTH 38567
         var interval = TimeSpan.FromSeconds(Math.Max(5, LogSettings.Value.FolderScanIntervalSeconds));
         _poller = new FocusGatedPoller(interval, async ct =>
         {
-            // Skip auto-refresh while a search is running.
+            // Skip auto-refresh while a search is running. Preserve scroll so the
+            // periodic file-list refresh doesn't yank the user back to the top.
             if (_checkedPaths.Count > 0 && !_isSearching && !_isSearchMode)
-                await InvokeAsync(LoadFilesAsync);
+                await InvokeAsync(() => LoadFilesAsync(preserveScroll: true));
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
@@ -16650,6 +16781,16 @@ LENGTH 38567
     private void RestartPollingIfBrowsing()
     {
         _poller?.SetActive(IsFocused && _checkedPaths.Count > 0 && !_searchBarOpen);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_restoreScroll)
+        {
+            _restoreScroll = false;
+            try { await JS.InvokeVoidAsync("bmScrollKeep.restore", _filesPanelRef); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -16790,7 +16931,7 @@ LENGTH 38567
 
     // ── file loading (aggregated across all checked folders) ──────────────
 
-    private async Task LoadFilesAsync()
+    private async Task LoadFilesAsync(bool preserveScroll = false)
     {
         var myGen = ++_loadGeneration;
 
@@ -16819,9 +16960,17 @@ LENGTH 38567
             })));
 
             // Swap in the new list atomically — no intermediate empty-table flash.
-            await InvokeAsync(() =>
+            // preserveScroll (auto-poll only) captures scrollTop right before the swap and
+            // restores it in OnAfterRenderAsync so a background refresh is imperceptible.
+            await InvokeAsync(async () =>
             {
                 if (myGen != _loadGeneration) return; // superseded by a newer selection change
+                if (preserveScroll)
+                {
+                    try { await JS.InvokeVoidAsync("bmScrollKeep.save", _filesPanelRef); }
+                    catch (JSDisconnectedException) { }
+                    _restoreScroll = true;
+                }
                 _files    = [.. pending];
                 _lastScan = DateTime.UtcNow;
                 StateHasChanged();
@@ -16989,7 +17138,7 @@ LENGTH 38567
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 22921
+LENGTH 22944
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17533,7 +17682,7 @@ LENGTH 22921
         if (string.IsNullOrWhiteSpace(Path) || _viewport is null) return;
         try
         {
-            var (text, newOffset) = LogViewerSvc.ReadDelta(Path!, _fileOffset);
+            var (text, newOffset) = await LogViewerSvc.ReadDeltaAsync(Path!, _fileOffset, _cts.Token);
             if (string.IsNullOrEmpty(text)) return;
             _fileOffset = newOffset;
             await _viewport.AppendRawAsync(text);
@@ -17685,11 +17834,12 @@ LENGTH 4161
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 18206
+LENGTH 20972
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @using NxtUI.Core.Logging
+@using NxtUI.Core.Filtering
 @inject IHeartbeatService HeartbeatSvc
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
@@ -17767,17 +17917,32 @@ LENGTH 18206
         <!-- Legend / filter panel (right side) -->
         <div class="bm-mg-legend" @ref="_legendRef">
             <div class="bm-mg-legend-title">@LegendTitle</div>
-            @{ int _li = 0; }
-            @foreach (var item in _legendItems)
-            {
-                int idx = _li++;
-                <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
-                     @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
-                    <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
-                    <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
-                    <span class="bm-mg-legend-value">@FormatMb(item.CurrentMb)</span>
-                </div>
-            }
+            <div class="bm-mg-legend-scroll">
+                @{ int _li = 0; }
+                @foreach (var item in FilteredLegendItems)
+                {
+                    int idx = _li++;
+                    <div class="bm-mg-legend-item @(!item.Visible ? "bm-mg-legend-item-hidden" : "")"
+                         @onclick="@((MouseEventArgs e) => OnLegendItemClick(item, e, idx))">
+                        <span class="bm-mg-legend-dot" style="background:@item.Color"></span>
+                        <span class="bm-mg-legend-label" title="@item.Name">@item.Name</span>
+                        <div class="bm-mg-legend-values">
+                            <span class="bm-mg-legend-value" title="@($"Sum across {item.InstanceCount} instance(s)")">@FormatMb(item.CurrentMb)</span>
+                            @if (item.InstanceCount > 1)
+                            {
+                                <span class="bm-mg-legend-avg" title="Average per instance">avg @FormatMb(item.AverageMb)</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <FilterBox Value="@_legendFilterText"
+                       OnFilterChanged="OnLegendFilterChanged"
+                       ParseError="@_legendFilterError"
+                       Placeholder="Filter…"
+                       Class="bm-mg-legend-filter"
+                       ShowHint="false" />
         </div>
 
     </div>
@@ -17812,14 +17977,43 @@ LENGTH 18206
 
     private sealed class LegendItem
     {
-        public string  Key       { get; init; } = "";
-        public string  Name      { get; init; } = "";
-        public string  Color     { get; init; } = "#888";
-        public bool    Visible   { get; set;  } = true;
-        public double  CurrentMb { get; set;  }
+        public string  Key           { get; init; } = "";
+        public string  Name          { get; init; } = "";
+        public string  Color         { get; init; } = "#888";
+        public bool    Visible       { get; set;  } = true;
+        // Sum of every instance's current memory in this group (e.g. every "OrderService"
+        // instance across all hosts, when grouped by Service) — this is what the chart
+        // line plots too, so the legend value matches what's drawn.
+        public double  CurrentMb     { get; set;  }
+        // CurrentMb / InstanceCount — useful alongside the sum to see whether a group's
+        // total is high because of many small instances or a few large ones.
+        public double  AverageMb     { get; set;  }
+        public int     InstanceCount { get; set;  }
     }
 
     private List<LegendItem>    _legendItems = [];
+
+    // Legend filter (bottom of the right sidebar) — filters which groups are shown in
+    // the list, purely client-side over the already-built legend items.
+    private static readonly FilterParser LegendFilterParser = new(["Name"]);
+    private string      _legendFilterText  = string.Empty;
+    private string?     _legendFilterError;
+    private FilterNode? _legendFilterNode;
+
+    private List<LegendItem> FilteredLegendItems =>
+        _legendFilterNode is null
+            ? _legendItems
+            : _legendItems.Where(i => FilterEvaluator.Evaluate(_legendFilterNode, i)).ToList();
+
+    private void OnLegendFilterChanged(string text)
+    {
+        _legendFilterText  = text;
+        _legendFilterError = null;
+        if (string.IsNullOrWhiteSpace(text)) { _legendFilterNode = null; return; }
+        try   { _legendFilterNode = LegendFilterParser.Parse(text); }
+        catch (FilterParseException ex) { _legendFilterError = ex.Message; _legendFilterNode = null; }
+    }
+
     private List<LineSeriesDto> _lineSeries  = [];
     private ElementReference    _chartRef;
     private ElementReference    _brushRef;
@@ -17959,11 +18153,14 @@ LENGTH 18206
         }
         else if (e.ShiftKey && _lastClickedIndex >= 0)
         {
+            // Range-select operates on the currently filtered/visible list — indices are
+            // positions within it, not the unfiltered _legendItems.
+            var visible = FilteredLegendItems;
             int lo = Math.Min(index, _lastClickedIndex);
             int hi = Math.Max(index, _lastClickedIndex);
             bool target = !item.Visible;
-            for (int i = lo; i <= hi; i++)
-                _legendItems[i].Visible = target;
+            for (int i = lo; i <= hi && i < visible.Count; i++)
+                visible[i].Visible = target;
             _lastClickedIndex = index;
         }
         else
@@ -17993,14 +18190,17 @@ LENGTH 18206
         _legendItems = groups.Select((kv, idx) =>
         {
             var color = Palette[idx % Palette.Length];
+            var count = kv.Value.Count;
             var mb    = kv.Value.Sum(s => GetCurrentMb(s));
             return new LegendItem
             {
-                Key       = kv.Key,
-                Name      = FormatLegendName(kv.Key),
-                Color     = color,
-                CurrentMb = mb,
-                Visible   = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
+                Key           = kv.Key,
+                Name          = FormatLegendName(kv.Key),
+                Color         = color,
+                CurrentMb     = mb,
+                AverageMb     = count > 0 ? mb / count : 0,
+                InstanceCount = count,
+                Visible       = prevVisibility.TryGetValue(kv.Key, out var v) ? v : true
             };
         }).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -18880,15 +19080,18 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 16529
+LENGTH 16750
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
+@using NxtUI.Core.Configuration
+@using Microsoft.Extensions.Options
 @inject IRunService RunService
 @inject TabService TabService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
+@inject IOptions<UiSettings> UiOptions
 @implements IDisposable
 
 @code {
@@ -18906,6 +19109,7 @@ LENGTH 16529
 
     private PerformanceEventService? _eventService;
     private TopologyComputationService? _topologyService;
+    private Func<string, string>? _labelFormatter;
     private CancellationTokenSource? _topologyDebounce;
     private const int TopologyDebounceMs = 400;
 
@@ -18924,8 +19128,9 @@ LENGTH 16529
     private const double SliderSteps = 1000.0;
 
     // ── UI ────────────────────────────────────────────────────────────────
+    // Always starts collapsed — the details strip is opt-in per view, not
+    // remembered across tabs/sessions.
     private bool _detailsExpanded;
-    private string LocalStorageKey => "bm_run_details_strip_expanded";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -18933,13 +19138,7 @@ LENGTH 16529
     {
         _previousIsFocused = IsFocused;
         _topologyService   = new TopologyComputationService();
-
-        try
-        {
-            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", LocalStorageKey);
-            _detailsExpanded = stored == "true";
-        }
-        catch (Exception) { }
+        _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.GraphLabelStripWords, Environment);
 
         await LoadAsync();
     }
@@ -19027,7 +19226,7 @@ LENGTH 16529
                                .ToDictionary(kv => kv.Key, kv => kv.Value)
                     : allEvents;
 
-                _topology   = _topologyService.ComputeTopology(filtered);
+                _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
                 _eventCount = _eventService.EventCount;
 
                 UpdateSliderRange(allEvents.Values);
@@ -19113,12 +19312,7 @@ LENGTH 16529
         _                   => Color.Default
     };
 
-    private async Task ToggleDetailsStrip()
-    {
-        _detailsExpanded = !_detailsExpanded;
-        try { await JS.InvokeVoidAsync("localStorage.setItem", LocalStorageKey, _detailsExpanded.ToString().ToLower()); }
-        catch (Exception) { }
-    }
+    private void ToggleDetailsStrip() => _detailsExpanded = !_detailsExpanded;
 
     private async Task CancelRunAsync()
     {
@@ -19130,6 +19324,12 @@ LENGTH 16529
     {
         if (RunId is null) return;
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
+    }
+
+    private void OpenKafkaTopicFromGraph(string topic)
+    {
+        if (string.IsNullOrWhiteSpace(topic)) return;
+        TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────
@@ -19252,7 +19452,8 @@ LENGTH 16529
     <div class="bm-batch-graph" style="position:relative">
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
-        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
+        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
+                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
@@ -19488,7 +19689,7 @@ LENGTH 6876
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 31385
+LENGTH 32428
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -19552,7 +19753,7 @@ LENGTH 31385
     </div>
 
     <!-- ── Content ───────────────────────────────────────────────────── -->
-    <div class="bm-table-wrap">
+    <div class="bm-table-wrap" @ref="_tableWrapRef">
         @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="bm-loading-bar" />
@@ -19780,6 +19981,12 @@ LENGTH 31385
     private bool _renderScheduled;
     private bool _disposed;
 
+    // Scroll-position preservation across background-poll re-renders (see bmScrollKeep):
+    // a metrics tick refreshes the table content, and without this the fixed-header
+    // scroll container would jump back to the top on every update.
+    private ElementReference _tableWrapRef;
+    private bool             _restoreScroll;
+
     // Held for the lifetime of this tab; disposing it tells the monitor this env
     // has one fewer subscriber (monitoring stops when the last tab for env closes).
     private IDisposable? _metricsSubscription;
@@ -19795,6 +20002,16 @@ LENGTH 31385
         _loading = true;
         await InvokeAsync(StateHasChanged);
         await LoadFromMongoAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_restoreScroll)
+        {
+            _restoreScroll = false;
+            try { await JS.InvokeVoidAsync("bmScrollKeep.restore", _tableWrapRef); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     private async Task LoadFromMongoAsync()
@@ -19896,11 +20113,17 @@ LENGTH 31385
             await Task.Delay(400);
             lock (_renderGate) { _renderScheduled = false; }
             if (!_disposed)
-                await InvokeAsync(() =>
+                await InvokeAsync(async () =>
                 {
+                    // Capture scroll before the refresh so restoring it in OnAfterRenderAsync
+                    // keeps the user exactly where they were (imperceptible background update).
+                    try { await JS.InvokeVoidAsync("bmScrollKeep.save", _tableWrapRef); }
+                    catch (JSDisconnectedException) { }
+
                     // Re-stamp + re-filter so RAM/Peak columns and any ram/peak
                     // filter react to new samples; keep the user's current page.
                     RecomputeFilter(resetPage: false);
+                    _restoreScroll = true;
                     StateHasChanged();
                 });
         }
@@ -20459,7 +20682,7 @@ LENGTH 11113
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 32069
+LENGTH 32949
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -20520,6 +20743,11 @@ LENGTH 32069
     private string      _dialogFilterText       = string.Empty;
     private string?     _dialogFilterParseError = null;
     private FilterNode?  _dialogFilterAst        = null;
+
+    // Server-side sort for the picker — forwarded to SqlRunService as ORDER BY, same as
+    // the Runs page, so a header click sorts the whole result set, not just the page.
+    private string _dialogSortField      = "StartTime";
+    private bool   _dialogSortDescending = true;
 
     private static readonly string[] DialogSearchableFields = ["RunId", "Description"];
     private static readonly FilterParser DialogFilterParser = new(DialogSearchableFields);
@@ -20929,7 +21157,12 @@ LENGTH 32069
         {
             _dialogAll = await RunService.GetRunsAsync(
                 _dialogEnv, DateTime.UtcNow, RunsOptions.Value.MaxResults,
-                filter: new RunFilter { FilterAst = _dialogFilterAst });
+                filter: new RunFilter
+                {
+                    FilterAst      = _dialogFilterAst,
+                    SortField      = _dialogSortField,
+                    SortDescending = _dialogSortDescending,
+                });
             _dialogPage = 1;
             RebuildDialogPage();
         }
@@ -20942,6 +21175,13 @@ LENGTH 32069
     private void OnDialogPageChanged(int page) { _dialogPage = page; RebuildDialogPage(); }
 
     private void OnDialogPageSizeChanged(int size) { _dialogPageSize = size; _dialogPage = 1; RebuildDialogPage(); }
+
+    private async Task OnDialogSort(string field)
+    {
+        if (_dialogSortField == field) _dialogSortDescending = !_dialogSortDescending;
+        else { _dialogSortField = field; _dialogSortDescending = true; }
+        await LoadDialogAsync();
+    }
 
     private async Task OnDialogEnvChanged(string env)
     {
@@ -21229,6 +21469,9 @@ LENGTH 32069
                          TotalPages="@_dialogTotalPages"
                          PageChanged="OnDialogPageChanged"
                          PageSizeChanged="OnDialogPageSizeChanged"
+                         SortField="@_dialogSortField"
+                         SortDescending="@_dialogSortDescending"
+                         OnSort="OnDialogSort"
                          RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
                          OnRowClick="@(r => OnDialogRowClick(r))"
                          OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />
@@ -21258,7 +21501,7 @@ LENGTH 32069
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 22164
+LENGTH 23238
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -21438,6 +21681,29 @@ LENGTH 22164
         window._localFiles = new Map();
 
         window.bmSetWsRef = function (ref) { window._wsRef = ref; };
+
+        // Preserves the scroll position of a scrollable container across a Blazor
+        // re-render (e.g. a background poll refreshing a table), so a periodic update
+        // never yanks the user back to the top. save() is called just before the render
+        // that would reset scroll, restore() right after it commits.
+        window.bmScrollKeep = (function () {
+            var store = new WeakMap();
+            function scroller(root) {
+                if (!root) return null;
+                // MudTable's fixed-header mode scrolls an inner container; fall back to root.
+                return root.querySelector('.mud-table-container') || root;
+            }
+            return {
+                save: function (root) {
+                    var el = scroller(root);
+                    if (el) store.set(root, el.scrollTop);
+                },
+                restore: function (root) {
+                    var el = scroller(root);
+                    if (el && store.has(root)) el.scrollTop = store.get(root);
+                }
+            };
+        })();
 
         window.bmOpenLocalLogFile = function (dotnetRef) {
             var input = document.createElement('input');
@@ -23048,7 +23314,7 @@ public class LogBrowserService : ILogBrowserService
     }
 }
 FILE src/NxtUI.Web/Services/LogViewerService.cs
-LENGTH 911
+LENGTH 1591
 using NxtUI.Core.Logging;
 using NxtUI.Core.Services;
 using System.Text;
@@ -23057,23 +23323,33 @@ namespace NxtUI.Web.Services;
 
 public class LogViewerService : ILogViewerService
 {
-    public async Task<(string Text, long Offset)> ReadAllAsync(string path, CancellationToken ct = default)
+    public Task<(string Text, long Offset)> ReadAllAsync(string path, CancellationToken ct = default)
     {
-        await using var fs = new FileStream(
-            path, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
+        // The whole read runs on a thread-pool thread. Opening a FileStream without
+        // FileOptions.Asynchronous makes ReadToEndAsync fall back to synchronous, thread-
+        // blocking I/O — and these are log files on network shares that can be large and
+        // slow, so we must never let that happen on the Blazor circuit's UI thread.
+        return Task.Run(() =>
+        {
+            using var fs = new FileStream(
+                path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
 
-        using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var text = await sr.ReadToEndAsync(ct);
-        return (text, fs.Position);
+            using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var text = sr.ReadToEnd();
+            return (text, fs.Position);
+        }, ct);
     }
 
-    public (string Text, long NewOffset) ReadDelta(string path, long fromOffset)
-    {
-        var result = IncrementalFileReader.ReadNew(path, fromOffset);
-        if (result.Lines.Count == 0) return ("", result.NewOffset);
-        return (string.Join("\n", result.Lines), result.NewOffset);
-    }
+    public Task<(string Text, long NewOffset)> ReadDeltaAsync(string path, long fromOffset, CancellationToken ct = default) =>
+        // IncrementalFileReader.ReadNew is synchronous file I/O — offload it so the tail
+        // poller never reads (a possibly slow network-share file) on the UI thread.
+        Task.Run(() =>
+        {
+            var result = IncrementalFileReader.ReadNew(path, fromOffset);
+            if (result.Lines.Count == 0) return ("", result.NewOffset);
+            return (string.Join("\n", result.Lines), result.NewOffset);
+        }, ct);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
 LENGTH 16973
@@ -28475,7 +28751,7 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
         b switch { >= 1_073_741_824 => $"{b / 1_073_741_824.0:F1} GB", >= 1_048_576 => $"{b / 1_048_576.0:F1} MB", >= 1024 => $"{b / 1024.0:F1} KB", _ => $"{b} B" };
 }
 FILE tests/NxtUI.Tests/Performance/LogViewerPerfTests.cs
-LENGTH 7496
+LENGTH 7648
 using AwesomeAssertions;
 using NxtUI.Web.Services;
 using System.Diagnostics;
@@ -28560,13 +28836,14 @@ public sealed class LogViewerPerfTests
     // ── ReadDelta ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void ReadDelta_from_zero_returns_full_content()
+    public async Task ReadDelta_from_zero_returns_full_content()
     {
+        var ct = TestContext.Current.CancellationToken;
         var path = Path.GetTempFileName();
         try
         {
-            File.WriteAllText(path, "alpha\nbeta\ngamma\n");
-            var (text, offset) = Viewer.ReadDelta(path, 0);
+            await File.WriteAllTextAsync(path, "alpha\nbeta\ngamma\n", ct);
+            var (text, offset) = await Viewer.ReadDeltaAsync(path, 0, ct);
             text.Should().Contain("alpha").And.Contain("gamma");
             offset.Should().Be(new FileInfo(path).Length);
         }
@@ -28583,7 +28860,7 @@ public sealed class LogViewerPerfTests
             await File.WriteAllTextAsync(path, "line1\nline2\nline3\n", ct);
             var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
-            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+            var (delta, newOffset) = await Viewer.ReadDeltaAsync(path, offset, ct);
             delta.Should().BeEmpty();
             newOffset.Should().Be(offset);
         }
@@ -28601,7 +28878,7 @@ public sealed class LogViewerPerfTests
             var (_, offset) = await Viewer.ReadAllAsync(path, ct);
 
             await File.AppendAllTextAsync(path, "line3\nline4\n", ct);
-            var (delta, newOffset) = Viewer.ReadDelta(path, offset);
+            var (delta, newOffset) = await Viewer.ReadDeltaAsync(path, offset, ct);
 
             delta.Should().Contain("line3").And.Contain("line4");
             delta.Should().NotContain("line1");
@@ -28622,12 +28899,12 @@ public sealed class LogViewerPerfTests
             var (_, off1) = await Viewer.ReadAllAsync(path, ct);
 
             await File.AppendAllTextAsync(path, "batch2-line1\nbatch2-line2\n", ct);
-            var (delta2, off2) = Viewer.ReadDelta(path, off1);
+            var (delta2, off2) = await Viewer.ReadDeltaAsync(path, off1, ct);
             delta2.Should().Contain("batch2-line1").And.Contain("batch2-line2");
             delta2.Should().NotContain("batch1");
 
             await File.AppendAllTextAsync(path, "batch3-line1\n", ct);
-            var (delta3, off3) = Viewer.ReadDelta(path, off2);
+            var (delta3, off3) = await Viewer.ReadDeltaAsync(path, off2, ct);
             delta3.Should().Contain("batch3-line1");
             delta3.Should().NotContain("batch2");
 
@@ -29526,6 +29803,84 @@ public sealed class LogFormatGrammarContractTests
         }
     }
 }
+FILE tests/NxtUI.Tests/Services/TopologyLabelFormatterTests.cs
+LENGTH 2468
+using AwesomeAssertions;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Services;
+
+public class TopologyLabelFormatterTests
+{
+    private static readonly string[] DefaultWords = ["Pipeline", "ABC", "{EnvID}"];
+
+    [Fact]
+    public void Removes_trailing_pipeline_word()
+    {
+        TopologyLabelFormatter.Strip("CbLegacyDiscoveryPipeline", DefaultWords, "AXIS-DEV1")
+            .Should().Be("CbLegacyDiscovery");
+    }
+
+    [Fact]
+    public void Removes_env_id_and_trims_trailing_separator()
+    {
+        TopologyLabelFormatter.Strip("CcrBatchConf_AXIS-DEV1", DefaultWords, "AXIS-DEV1")
+            .Should().Be("CcrBatchConf");
+    }
+
+    [Fact]
+    public void Removes_env_id_from_middle_and_collapses_doubled_separator()
+    {
+        // "AXIS-DEV1" cut out of the middle leaves "CcrBatchConf__Incremental" -> collapse.
+        TopologyLabelFormatter.Strip("CcrBatchConf_AXIS-DEV1_Incremental", DefaultWords, "AXIS-DEV1")
+            .Should().Be("CcrBatchConf_Incremental");
+    }
+
+    [Fact]
+    public void Removes_env_id_and_pipeline_word_together()
+    {
+        TopologyLabelFormatter.Strip("CcrBatchConf_AXIS-DEV1_Incremental_S_PRA_Pipeline", DefaultWords, "AXIS-DEV1")
+            .Should().Be("CcrBatchConf_Incremental_S_PRA");
+    }
+
+    [Fact]
+    public void Matching_is_case_insensitive()
+    {
+        TopologyLabelFormatter.Strip("SomethingPIPELINE", DefaultWords, "DEV1")
+            .Should().Be("Something");
+    }
+
+    [Fact]
+    public void Keeps_original_when_stripping_would_empty_it()
+    {
+        TopologyLabelFormatter.Strip("Pipeline", DefaultWords, "DEV1")
+            .Should().Be("Pipeline");
+    }
+
+    [Fact]
+    public void Null_or_empty_word_list_returns_input_unchanged()
+    {
+        TopologyLabelFormatter.Strip("CcrBatchConf_AXIS-DEV1", null, "AXIS-DEV1")
+            .Should().Be("CcrBatchConf_AXIS-DEV1");
+        TopologyLabelFormatter.Strip("CcrBatchConf_AXIS-DEV1", [], "AXIS-DEV1")
+            .Should().Be("CcrBatchConf_AXIS-DEV1");
+    }
+
+    [Fact]
+    public void Empty_env_id_skips_the_env_token_only()
+    {
+        // {EnvID} resolves to empty -> skipped; other words still applied.
+        TopologyLabelFormatter.Strip("FooPipeline_AXIS-DEV1", DefaultWords, "")
+            .Should().Be("Foo_AXIS-DEV1");
+    }
+
+    [Fact]
+    public void Removes_literal_abc_word()
+    {
+        TopologyLabelFormatter.Strip("ABC_WcrFacilities", DefaultWords, "DEV1")
+            .Should().Be("WcrFacilities");
+    }
+}
 FILE src/MudSelectRepro/wwwroot/js/diag.js
 LENGTH 3397
 // Debugging aid for the MudSelect removeChild repro. Loaded BEFORE blazor.server.js
@@ -29698,7 +30053,8 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 24798
+LENGTH 29835
+using System.Threading.Channels;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
 using Microsoft.Extensions.Logging;
@@ -29721,36 +30077,43 @@ public class KafkaService(
     public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: cluster info", env);
-        using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
-        return Task.FromResult(new KafkaClusterInfo
+        // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
+        // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
+        return Task.Run(() =>
         {
-            ClusterId = meta.OriginatingBrokerId.ToString(),
-            ControllerId = meta.OriginatingBrokerId,
-            Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
-                { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
-        });
+            using var admin = BuildAdmin(env);
+            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+            return new KafkaClusterInfo
+            {
+                ClusterId = meta.OriginatingBrokerId.ToString(),
+                ControllerId = meta.OriginatingBrokerId,
+                Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
+                    { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
+            };
+        }, ct);
     }
 
     public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: listing topics", env);
-        using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
+        return Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+        {
+            using var admin = BuildAdmin(env);
+            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
 
-        IReadOnlyList<KafkaTopicSummary> result = [.. meta.Topics
-            .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
-            .Select(t => new KafkaTopicSummary
-            {
-                Name              = t.Topic,
-                PartitionCount    = t.Partitions.Count,
-                ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-                CleanupPolicy     = "delete",
-                RetentionMs       = 604_800_000,
-            })
-            .OrderBy(t => t.Name)];
-
-        return Task.FromResult(result);
+            return [.. meta.Topics
+                .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
+                .Select(t => new KafkaTopicSummary
+                {
+                    Name              = t.Topic,
+                    PartitionCount    = t.Partitions.Count,
+                    ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+                    CleanupPolicy     = "delete",
+                    RetentionMs       = 604_800_000,
+                })
+                .OrderBy(t => t.Name)];
+        }, ct);
     }
 
     public async Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
@@ -29769,7 +30132,8 @@ public class KafkaService(
         string Str(string k, string d) =>
             cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
 
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+        // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
+        var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
         var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
 
         return new KafkaTopicConfig
@@ -29878,144 +30242,221 @@ public class KafkaService(
     {
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
-        var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
-        var config = factory.BuildConsumerConfig(env, groupId);
+        // Every librdkafka call this method makes — GetMetadata, QueryWatermarkOffsets,
+        // OffsetsForTimes, Seek, Consume, Close — is SYNCHRONOUS and blocking (there is no
+        // async Kafka API). If they ran inline on the caller's thread they would block it;
+        // and in Blazor Server the caller drives this from the circuit's single-threaded
+        // SynchronizationContext, so the entire UI (progress bar, Pause/Stop buttons, even
+        // navigating to another tab) freezes for as long as any of these calls is in flight
+        // — GetMetadata + Seek alone can block for up to ~25s before the first message.
+        //
+        // So the whole blocking pipeline runs on a dedicated thread-pool thread (Task.Run
+        // in ProduceTailAsync) and hands messages to the caller through a bounded channel.
+        // The caller here only ever does cheap, non-blocking channel reads, so the UI thread
+        // stays free to render and respond to input. The bounded channel also applies natural
+        // backpressure: if the UI can't keep up, the producer's WriteAsync simply awaits.
+        var channel = Channel.CreateBounded<KafkaMessage>(
+            new BoundedChannelOptions(1000)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true,
+            });
 
-        using var admin = BuildAdmin(env);
-        Confluent.Kafka.Metadata meta;
+        // Not passing ct to Task.Run: we want the delegate to always start so its own
+        // finally can close/dispose the consumer + admin handles; it observes ct itself.
+        var producer = Task.Run(() =>
+            ProduceTailAsync(channel.Writer, env, topicName, directive, uncapped, ct));
+
         try
         {
-            meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            await foreach (var msg in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+                yield return msg;
         }
-        catch (Exception ex)
+        finally
         {
-            log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
-            throw;
+            // Observe the producer so its broker handles are closed and any fatal error is
+            // surfaced. ProduceTailAsync routes exceptions through the channel (not its own
+            // task result) and swallows cancellation, so this only ever throws if Task.Run
+            // itself was cancelled before starting — which can't happen since we don't pass ct.
+            try { await producer.ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* nothing started; nothing to clean up */ }
         }
-        var topicPartitions = meta.Topics
-            .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
-
-        // Filter to requested partitions
-        var selectedPartitions = topicPartitions
-            .Where(p => directive.Partitions is null || directive.Partitions.Contains(p.PartitionId))
-            .Select(p => new TopicPartition(topicName, p.PartitionId))
-            .ToList();
-
-        if (selectedPartitions.Count == 0) yield break;
-
-        using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
-        consumer.Assign(selectedPartitions);
-
-        // Immediately after Assign(), librdkafka hasn't finished transitioning the
-        // assigned partitions to their internal fetch-active state yet — calling
-        // Seek() too early intermittently throws KafkaException "Local: Erroneous
-        // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
-        // that transition to complete before we seek.
-        try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
-
-        // Seek to correct starting positions
-        await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
-
-        int consumed = 0;
-        // Latest is a total across all selected partitions, not per-partition — SeekAsync still
-        // seeks each partition back by Latest so recent messages are available on every partition,
-        // but consumption stops as soon as the combined total is reached, whichever partitions
-        // it came from first.
-        int cap = directive.Latest.HasValue
-            ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
-            : _global.MaxFetchMessages;
-
-        while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
-        {
-            ConsumeResult<string?, byte[]>? cr;
-            try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex)
-            {
-                log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
-                break;
-            }
-
-            if (cr is null) continue;
-            if (cr.IsPartitionEOF)
-            {
-                // In bounded modes, EOF on all partitions means we're done
-                if (IsBounded(directive)) break;
-                continue;
-            }
-
-            // End-of-range checks
-            if (directive.OffsetTo.HasValue && cr.Offset.Value > directive.OffsetTo.Value) break;
-            if (directive.TimestampTo.HasValue && cr.Message.Timestamp.UtcDateTime > directive.TimestampTo.Value) break;
-
-            var headers = new Dictionary<string, string>();
-            foreach (var h in cr.Message.Headers)
-            {
-                try { headers[h.Key] = System.Text.Encoding.UTF8.GetString(h.GetValueBytes() ?? []); }
-                catch { /* skip non-UTF8 */ }
-            }
-
-            var rawBytes = cr.Message.Value ?? [];
-            var (json, payloadType) = pipeline.Deserialize(topicName, rawBytes);
-
-            yield return new KafkaMessage
-            {
-                Offset = cr.Offset.Value,
-                Partition = cr.Partition.Value,
-                Key = cr.Message.Key,
-                Timestamp = cr.Message.Timestamp.UtcDateTime,
-                Headers = headers,
-                JsonPayload = json,
-                PayloadType = payloadType,
-                RawSizeBytes = rawBytes.Length,
-            };
-
-            consumed++;
-        }
-
-        consumer.Close();
     }
 
-    public async Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
+    // Runs the entire blocking Kafka consume pipeline on a thread-pool thread, writing
+    // decoded messages to <paramref name="writer"/>. Fatal broker errors are completed onto
+    // the channel (so the reader/UI sees them), cancellation is treated as normal completion,
+    // and the consumer/admin handles are always closed in the finally.
+    private async Task ProduceTailAsync(
+        ChannelWriter<KafkaMessage> writer,
+        string env, string topicName, KafkaSeekDirective directive,
+        bool uncapped, CancellationToken ct)
+    {
+        IAdminClient? admin = null;
+        IConsumer<string?, byte[]>? consumer = null;
+        try
+        {
+            var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
+            var config = factory.BuildConsumerConfig(env, groupId);
+
+            admin = BuildAdmin(env);
+            Confluent.Kafka.Metadata meta;
+            try
+            {
+                meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "kafka [{Env}]: could not fetch metadata for '{Topic}' — check broker connectivity/credentials", env, topicName);
+                writer.TryComplete(ex);
+                return;
+            }
+
+            var topicPartitions = meta.Topics
+                .FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
+
+            // Filter to requested partitions
+            var selectedPartitions = topicPartitions
+                .Where(p => directive.Partitions is null || directive.Partitions.Contains(p.PartitionId))
+                .Select(p => new TopicPartition(topicName, p.PartitionId))
+                .ToList();
+
+            if (selectedPartitions.Count == 0) return;
+
+            consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
+            consumer.Assign(selectedPartitions);
+
+            // Immediately after Assign(), librdkafka hasn't finished transitioning the
+            // assigned partitions to their internal fetch-active state yet — calling
+            // Seek() too early intermittently throws KafkaException "Local: Erroneous
+            // state" (ErrorCode.Local_State). A throwaway zero-timeout Consume() forces
+            // that transition to complete before we seek.
+            try { consumer.Consume(TimeSpan.Zero); } catch (ConsumeException) { /* expected: nothing to consume yet */ }
+
+            // Seek to correct starting positions
+            await SeekAsync(consumer, admin, topicName, selectedPartitions, directive, ct);
+
+            int consumed = 0;
+            // Latest is a total across all selected partitions, not per-partition — SeekAsync still
+            // seeks each partition back by Latest so recent messages are available on every partition,
+            // but consumption stops as soon as the combined total is reached, whichever partitions
+            // it came from first.
+            int cap = directive.Latest.HasValue
+                ? Math.Min(directive.Latest.Value, _global.MaxFetchMessages)
+                : _global.MaxFetchMessages;
+
+            while (!ct.IsCancellationRequested && (uncapped || consumed < cap))
+            {
+                ConsumeResult<string?, byte[]>? cr;
+                try { cr = consumer.Consume(TimeSpan.FromMilliseconds(500)); }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    log.LogError(ex, "kafka [{Env}]: consume error on '{Topic}' after {Count} message(s) — stopping this tail", env, topicName, consumed);
+                    break;
+                }
+
+                if (cr is null) continue;
+                if (cr.IsPartitionEOF)
+                {
+                    // In bounded modes, EOF on all partitions means we're done
+                    if (IsBounded(directive)) break;
+                    continue;
+                }
+
+                // End-of-range checks
+                if (directive.OffsetTo.HasValue && cr.Offset.Value > directive.OffsetTo.Value) break;
+                if (directive.TimestampTo.HasValue && cr.Message.Timestamp.UtcDateTime > directive.TimestampTo.Value) break;
+
+                var headers = new Dictionary<string, string>();
+                foreach (var h in cr.Message.Headers)
+                {
+                    try { headers[h.Key] = System.Text.Encoding.UTF8.GetString(h.GetValueBytes() ?? []); }
+                    catch { /* skip non-UTF8 */ }
+                }
+
+                var rawBytes = cr.Message.Value ?? [];
+                var (json, payloadType) = pipeline.Deserialize(topicName, rawBytes);
+
+                await writer.WriteAsync(new KafkaMessage
+                {
+                    Offset = cr.Offset.Value,
+                    Partition = cr.Partition.Value,
+                    Key = cr.Message.Key,
+                    Timestamp = cr.Message.Timestamp.UtcDateTime,
+                    Headers = headers,
+                    JsonPayload = json,
+                    PayloadType = payloadType,
+                    RawSizeBytes = rawBytes.Length,
+                }, ct);
+
+                consumed++;
+            }
+        }
+        catch (OperationCanceledException) { /* normal: paused / navigated away / superseded */ }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "kafka [{Env}]: tail producer for '{Topic}' failed", env, topicName);
+            writer.TryComplete(ex);
+        }
+        finally
+        {
+            if (consumer is not null)
+            {
+                try { consumer.Close(); } catch { /* best-effort close */ }
+                consumer.Dispose();
+            }
+            admin?.Dispose();
+            writer.TryComplete();
+        }
+    }
+
+    public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
         string env, string topicName, CancellationToken ct = default)
     {
         log.LogDebug("kafka [{Env}]: partition stats for '{Topic}'", env, topicName);
 
-        var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
-        var config = factory.BuildConsumerConfig(env, groupId);
-        using var admin = BuildAdmin(env);
-        using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
-
-        var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
-        var parts = meta.Topics.FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
-
-        var result = new List<KafkaPartitionStats>();
-        foreach (var p in parts)
+        // GetMetadata, QueryWatermarkOffsets and FetchTimestampAt (Consume) are all
+        // synchronous blocking librdkafka calls — run the whole thing off the UI thread.
+        return Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
         {
-            var tp = new TopicPartition(topicName, p.PartitionId);
-            var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
+            var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
+            var config = factory.BuildConsumerConfig(env, groupId);
+            using var admin = BuildAdmin(env);
+            using var consumer = new ConsumerBuilder<string?, byte[]>(config).Build();
 
-            DateTime? firstTs = null;
-            DateTime? lastTs = null;
+            var meta = admin.GetMetadata(topicName, TimeSpan.FromSeconds(10));
+            var parts = meta.Topics.FirstOrDefault(t => t.Topic == topicName)?.Partitions ?? [];
 
-            // Fetch first message timestamp
-            if (wm.Low.Value < wm.High.Value)
+            var result = new List<KafkaPartitionStats>();
+            foreach (var p in parts)
             {
-                firstTs = FetchTimestampAt(consumer, tp, wm.Low.Value);
-                lastTs = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
+                var tp = new TopicPartition(topicName, p.PartitionId);
+                var wm = consumer.QueryWatermarkOffsets(tp, TimeSpan.FromSeconds(5));
+
+                DateTime? firstTs = null;
+                DateTime? lastTs = null;
+
+                // Fetch first message timestamp
+                if (wm.Low.Value < wm.High.Value)
+                {
+                    firstTs = FetchTimestampAt(consumer, tp, wm.Low.Value);
+                    lastTs = FetchTimestampAt(consumer, tp, wm.High.Value - 1);
+                }
+
+                result.Add(new KafkaPartitionStats
+                {
+                    Partition = p.PartitionId,
+                    LowWatermark = wm.Low.Value,
+                    HighWatermark = wm.High.Value,
+                    FirstMessageTimestamp = firstTs,
+                    LastMessageTimestamp = lastTs,
+                });
             }
 
-            result.Add(new KafkaPartitionStats
-            {
-                Partition = p.PartitionId,
-                LowWatermark = wm.Low.Value,
-                HighWatermark = wm.High.Value,
-                FirstMessageTimestamp = firstTs,
-                LastMessageTimestamp = lastTs,
-            });
-        }
-
-        return result;
+            return result;
+        }, ct);
     }
 
     public Task<byte[]?> FetchRawBytesAsync(
@@ -30252,7 +30693,8 @@ public class KafkaService(
     private async Task<long> ComputeGroupTotalLagAsync(string env, string groupId, CancellationToken ct)
     {
         using var admin = BuildAdmin(env);
-        var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+        // GetMetadata blocks synchronously — offload it off the UI thread.
+        var meta = await Task.Run(() => admin.GetMetadata(TimeSpan.FromSeconds(10)), ct);
         var topics = meta.Topics.Where(t => !t.Topic.StartsWith("__")).Select(t => t.Topic).ToList();
         long total = 0;
         foreach (var topic in topics)
@@ -31805,7 +32247,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 89819
+LENGTH 90637
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -34335,16 +34777,18 @@ tr.bm-row-searching td:first-child {
 }
 .bm-mg-resize-handle:hover { background: var(--mud-palette-primary); opacity: 0.25; }
 
-/* Legend panel (right side) */
+/* Legend panel (right side). The panel itself no longer scrolls — only
+   .bm-mg-legend-scroll does — so the filter box can stay pinned at the bottom
+   (same pattern as .bm-lb-tree-panel / .bm-lb-tree-filter in the log browser). */
 .bm-mg-legend {
     width: 220px;
     flex-shrink: 0;
-    overflow-y: auto;
+    overflow: hidden;
     border-left: 1px solid var(--mud-palette-divider);
-    padding: 12px 10px;
+    padding: 12px 10px 6px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    min-height: 0;
 }
 
 .bm-mg-legend-title {
@@ -34354,6 +34798,25 @@ tr.bm-row-searching td:first-child {
     letter-spacing: 0.05em;
     color: var(--mud-palette-text-secondary);
     margin-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.bm-mg-legend-scroll {
+    flex: 1 1 0;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-mg-legend-filter {
+    flex-shrink: 0;
+    flex-grow: 0;
+    max-height: 46px;
+    padding: 6px 2px 0;
+    border-top: 1px solid var(--mud-palette-divider);
+    margin-top: 6px;
 }
 
 .bm-mg-legend-item {
@@ -34385,10 +34848,23 @@ tr.bm-row-searching td:first-child {
     white-space: nowrap;
 }
 
-.bm-mg-legend-value {
+.bm-mg-legend-values {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.25;
+}
+
+.bm-mg-legend-value {
     font-size: 11px;
     color: var(--mud-palette-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.bm-mg-legend-avg {
+    font-size: 9.5px;
+    color: var(--mud-palette-text-disabled);
     font-variant-numeric: tabular-nums;
 }
 
@@ -34918,7 +35394,7 @@ tr.bm-row-searching td:first-child {
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 7502
+LENGTH 7758
 /* ================================================================
    D3 FLOW GRAPH  (rev 4)
    ================================================================ */
@@ -35114,9 +35590,18 @@ LENGTH 7502
 }
 
 .bm-pop-topic {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center;
     gap: 6px; padding: 2px 10px 6px;
     font-size: 0.67rem; color: var(--mud-palette-text-secondary);
+}
+/* Truncate to one line instead of wrapping — a long topic name wrapping to two
+   lines pushed the Kafka button off-center/overlapping the text. */
+.bm-pop-topic-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .bm-pop-topic code { font-family: monospace; }
 
@@ -36804,7 +37289,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 28312
+LENGTH 31449
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -36821,12 +37306,13 @@ import { createState, sampleEdge, tick } from './d3-animation.js';
 
 const D3Graph = (() => {
 
-    const NODE_WIDTH    = 234;
-    const HEADER_HEIGHT = 32;
-    const ROW_HEIGHT    = 40;
-    const MIN_ROWS      = 1;
-    const DEBOUNCE_MS   = 500;
-    const T             = 280;   // transition duration ms
+    const NODE_WIDTH     = 234;   // floor width — nodes grow past this to fit their text
+    const MAX_NODE_WIDTH = 460;   // safety cap so one long name can't blow up the whole layout
+    const HEADER_HEIGHT  = 32;
+    const ROW_HEIGHT     = 40;
+    const MIN_ROWS       = 1;
+    const DEBOUNCE_MS    = 500;
+    const T              = 280;   // transition duration ms
 
     // Read page surface colour at runtime so light/dark themes both work.
     function nodeBg() {
@@ -36865,6 +37351,33 @@ const D3Graph = (() => {
         return (node?.pipelines || []).findIndex(p => p.name === name);
     }
 
+    // Measures rendered text width using a throwaway SVG <text> in defs (never painted,
+    // but real font metrics — unlike guessing from character count). defs content isn't
+    // rendered but is still laid out, so getComputedTextLength() is accurate here.
+    function measureText(handle, text, className) {
+        const t = handle.defs.append('text').attr('class', className).text(text || '');
+        const w = t.node().getComputedTextLength();
+        t.remove();
+        return w;
+    }
+
+    // Node width grows to fit its longest text (header label, or a pipeline row's
+    // name + done/in-progress counts) instead of a fixed width that clips long
+    // service/pipeline names. Floored at NODE_WIDTH, capped at MAX_NODE_WIDTH so one
+    // very long name can't blow out the whole layout.
+    function computeNodeWidth(handle, n) {
+        const HEADER_PAD = 14 + 40 + 16; // left pad + instance badge + right pad
+        let needed = measureText(handle, n.label, 'bm-node-label') + HEADER_PAD;
+
+        for (const p of (n.pipelines || [])) {
+            const nameW   = measureText(handle, p.displayName || p.name, 'bm-row-name');
+            const countsW = measureText(handle, `✓${p.doneCount ?? 0} ⟳${p.inProgressCount ?? 0}`, 'bm-row-counts');
+            needed = Math.max(needed, 10 /*left pad*/ + nameW + 16 /*gap*/ + countsW + 10 /*right pad*/);
+        }
+
+        return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
+    }
+
     // ── Layout ───────────────────────────────────────────────────────────
 
     function chooseDir(containerEl) {
@@ -36872,19 +37385,26 @@ const D3Graph = (() => {
         return r.width >= r.height ? 'LR' : 'TB';
     }
 
-    function runLayout(topo, containerEl) {
-        const dir = chooseDir(containerEl);
+    function runLayout(handle, topo) {
+        const dir = chooseDir(handle.containerEl);
         const g = new dagre.graphlib.Graph({ multigraph: true });
         g.setGraph({
             rankdir: dir,
-            nodesep: dir === 'LR' ? 60  : 80,
-            ranksep: dir === 'LR' ? 160 : 100,
+            // More breathing room than the old fixed spacing — wider node boxes
+            // (dynamic width) and more separation both reduce edges cutting
+            // through unrelated nodes.
+            nodesep: dir === 'LR' ? 90  : 110,
+            ranksep: dir === 'LR' ? 200 : 130,
             marginx: 48, marginy: 48,
         });
         g.setDefaultEdgeLabel(() => ({}));
 
-        for (const n of topo.nodes)
-            g.setNode(n.id, { width: NODE_WIDTH, height: nh(n), data: n });
+        for (const n of topo.nodes) {
+            // Cached on the node so updateClipPaths (called right after this) uses the
+            // exact same width without re-measuring text a second time.
+            n._layoutWidth = computeNodeWidth(handle, n);
+            g.setNode(n.id, { width: n._layoutWidth, height: nh(n), data: n });
+        }
 
         const ids = new Set(topo.nodes.map(n => n.id));
         for (const e of topo.edges) {
@@ -36895,13 +37415,23 @@ const D3Graph = (() => {
         return g;
     }
 
-    // ── Edge path: S-curve, horizontal entry AND exit ────────────────────
+    // ── Edge path: horizontal entry/exit, following dagre's own waypoints ────
+    // dagre.layout() already routes multi-rank edges through intermediate points
+    // that account for the nodes sitting between source and target. The previous
+    // version discarded all but the first/last point and drew a single S-curve
+    // between them, which could cut straight through unrelated node boxes on
+    // edges spanning more than one rank. Following every waypoint (still via a
+    // smooth curve, not sharp corners) keeps the routing dagre already computed.
+    const edgeLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
 
     function edgePath(pts) {
         if (!pts || pts.length < 2) return '';
-        const s = pts[0], t = pts[pts.length - 1];
-        const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
-        return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
+        if (pts.length === 2) {
+            const s = pts[0], t = pts[1];
+            const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
+            return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
+        }
+        return edgeLine(pts);
     }
 
     function snapPorts(pts, g, edge) {
@@ -36922,7 +37452,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl) {
+    function init(containerEl, dotNetRef) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -36964,7 +37494,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs,
+            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             animState: createState(),
             currentGraph: null, pendingTopology: null,
             layoutTimer: null, rafId: null, lastFrameTime: null,
@@ -37002,11 +37532,12 @@ const D3Graph = (() => {
         const topo = handle.pendingTopology;
         if (!topo) return;
 
-        // Refresh per-node clipPaths whenever the topology changes.
-        updateClipPaths(handle, topo);
-
-        const g = runLayout(topo, handle.containerEl);
+        // runLayout computes each node's dynamic width (and caches it on the node as
+        // _layoutWidth) — clip paths are refreshed afterward so they reuse that same
+        // width instead of re-measuring text a second time.
+        const g = runLayout(handle, topo);
         handle.currentGraph = g;
+        updateClipPaths(handle, topo);
         renderEdges(handle, g);  // edges first — drawn below nodes
         renderNodes(handle, g);
         if (!handle.userZoomed) fitToView(handle, true);
@@ -37027,7 +37558,7 @@ const D3Graph = (() => {
 
         // Update dimensions for both enter + update.
         handle.defs.selectAll('clipPath.bm-node-clip').each(function(n) {
-            const h = nh(n), w = NODE_WIDTH;
+            const h = nh(n), w = n._layoutWidth || NODE_WIDTH;
             d3.select(this).select('rect')
                 .attr('x', -w / 2).attr('y', -h / 2)
                 .attr('width', w).attr('height', h);
@@ -37233,7 +37764,7 @@ const D3Graph = (() => {
                 .attr('x', -hw + 10).attr('y', r._cy - 9)
                 .attr('class', 'bm-row-name');
 
-            row.select('.bm-row-name').text(r.name);
+            row.select('.bm-row-name').text(r.displayName || r.name);
 
             row.select('.bm-row-track')
                 .attr('x', pX).attr('y', r._cy + 2)
@@ -37283,14 +37814,14 @@ const D3Graph = (() => {
 
         const topicHtml = topic
             ? `<div class="bm-pop-topic">
-                   <span>Topic:&nbsp;<code>${esc(topic)}</code></span>
-                   <button class="bm-pop-kafka" onclick="console.log('Open Kafka stub:','${esc(topic)}')">↗&nbsp;Kafka</button>
+                   <span class="bm-pop-topic-name" title="${esc(topic)}">Topic:&nbsp;<code>${esc(topic)}</code></span>
+                   <button class="bm-pop-kafka">↗&nbsp;Kafka</button>
                </div>`
             : '';
 
         handle.popover.html(`
             <div class="bm-pop-hdr">
-                <span class="bm-pop-title">${esc(pipeline.name)}</span>
+                <span class="bm-pop-title">${esc(pipeline.displayName || pipeline.name)}</span>
                 <span class="bm-pop-badge bm-pop-${esc(sk(pipeline.state))}">${esc(sk(pipeline.state))}</span>
                 <button class="bm-pop-x">×</button>
             </div>
@@ -37307,6 +37838,9 @@ const D3Graph = (() => {
         .style('pointer-events', 'auto');
 
         handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
+        handle.popover.select('.bm-pop-kafka').on('click', () => {
+            if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenKafkaTopic', topic);
+        });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))
             .on('mouseleave', () => scheduleHidePopover(handle));
@@ -37481,8 +38015,8 @@ const D3Graph = (() => {
 
 const _handles = new Map();
 
-/** @param {Element} el @param {string} key */
-export function init(el, key)            { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el)); }
+/** @param {Element} el @param {string} key @param {object} dotNetRef */
+export function init(el, key, dotNetRef) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */

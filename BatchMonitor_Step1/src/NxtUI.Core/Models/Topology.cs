@@ -60,8 +60,13 @@ public class TopologyNode
 /// </summary>
 public class PipelineRow
 {
-    /// <summary>Pipeline name — unique per service, one input topic.</summary>
+    /// <summary>Pipeline name — unique per service, one input topic. This is the raw name
+    /// used as the edge/topology matching key; use <see cref="DisplayName"/> for rendering.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Shortened, display-only pipeline name (filler words stripped — see
+    /// TopologyLabelFormatter). Defaults to <see cref="Name"/> when no stripping applies.</summary>
+    public string DisplayName { get; set; } = string.Empty;
 
     /// <summary>Input topic name for this pipeline (derived; used for the Kafka tooltip link).</summary>
     public string Topic { get; set; } = string.Empty;

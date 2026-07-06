@@ -1,11 +1,14 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
+@using NxtUI.Core.Configuration
+@using Microsoft.Extensions.Options
 @inject IRunService RunService
 @inject TabService TabService
 @inject SignalRConnectionService SignalR
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
+@inject IOptions<UiSettings> UiOptions
 @implements IDisposable
 
 @code {
@@ -23,6 +26,7 @@
 
     private PerformanceEventService? _eventService;
     private TopologyComputationService? _topologyService;
+    private Func<string, string>? _labelFormatter;
     private CancellationTokenSource? _topologyDebounce;
     private const int TopologyDebounceMs = 400;
 
@@ -41,8 +45,9 @@
     private const double SliderSteps = 1000.0;
 
     // ── UI ────────────────────────────────────────────────────────────────
+    // Always starts collapsed — the details strip is opt-in per view, not
+    // remembered across tabs/sessions.
     private bool _detailsExpanded;
-    private string LocalStorageKey => "bm_run_details_strip_expanded";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -50,13 +55,7 @@
     {
         _previousIsFocused = IsFocused;
         _topologyService   = new TopologyComputationService();
-
-        try
-        {
-            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", LocalStorageKey);
-            _detailsExpanded = stored == "true";
-        }
-        catch (Exception) { }
+        _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.GraphLabelStripWords, Environment);
 
         await LoadAsync();
     }
@@ -144,7 +143,7 @@
                                .ToDictionary(kv => kv.Key, kv => kv.Value)
                     : allEvents;
 
-                _topology   = _topologyService.ComputeTopology(filtered);
+                _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
                 _eventCount = _eventService.EventCount;
 
                 UpdateSliderRange(allEvents.Values);
@@ -230,12 +229,7 @@
         _                   => Color.Default
     };
 
-    private async Task ToggleDetailsStrip()
-    {
-        _detailsExpanded = !_detailsExpanded;
-        try { await JS.InvokeVoidAsync("localStorage.setItem", LocalStorageKey, _detailsExpanded.ToString().ToLower()); }
-        catch (Exception) { }
-    }
+    private void ToggleDetailsStrip() => _detailsExpanded = !_detailsExpanded;
 
     private async Task CancelRunAsync()
     {
@@ -247,6 +241,12 @@
     {
         if (RunId is null) return;
         TabService.OpenOrFocus(TabModel.CreateTimeline(RunId, Environment));
+    }
+
+    private void OpenKafkaTopicFromGraph(string topic)
+    {
+        if (string.IsNullOrWhiteSpace(topic)) return;
+        TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────
@@ -369,7 +369,8 @@
     <div class="bm-batch-graph" style="position:relative">
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
-        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)" />
+        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
+                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>

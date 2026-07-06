@@ -20,9 +20,13 @@
     /// </summary>
     [Parameter] public bool IsVisible { get; set; } = true;
 
+    /// <summary>Fired when the user clicks the "Kafka" link in a pipeline row's popover.</summary>
+    [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
+
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
+    private DotNetObjectReference<D3FlowGraph>? _selfRef;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -30,8 +34,9 @@
         {
             try
             {
+                _selfRef = DotNetObjectReference.Create(this);
                 _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js");
-                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey());
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
@@ -42,6 +47,10 @@
             }
         }
     }
+
+    /// <summary>Invoked from d3-graph.js when the popover's "Kafka" link is clicked.</summary>
+    [JSInvokable]
+    public Task RequestOpenKafkaTopic(string topic) => OnOpenKafkaTopic.InvokeAsync(topic);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -97,5 +106,6 @@
             try { await _module.DisposeAsync(); }
             catch (JSDisconnectedException) { }
         }
+        _selfRef?.Dispose();
     }
 }

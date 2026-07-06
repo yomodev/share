@@ -20,8 +20,17 @@ public class TopologyComputationService
     /// <summary>
     /// Computes topology from the event store snapshot.
     /// </summary>
-    public Topology ComputeTopology(IReadOnlyDictionary<string, PerformanceEvent> eventStore)
+    /// <param name="labelFormatter">
+    /// Optional display-label shortener applied to node labels and pipeline display names
+    /// (see <see cref="TopologyLabelFormatter"/>). Never affects the raw <c>Id</c>/<c>Name</c>
+    /// keys used for edge matching. Null = identity (no shortening).
+    /// </param>
+    public Topology ComputeTopology(
+        IReadOnlyDictionary<string, PerformanceEvent> eventStore,
+        Func<string, string>? labelFormatter = null)
     {
+        var format = labelFormatter ?? (s => s);
+
         if (eventStore == null || eventStore.Count == 0)
         {
             return new Topology { TotalChunks = 0, TotalEvents = 0 };
@@ -44,11 +53,11 @@ public class TopologyComputationService
         {
             if (!nodesByService.TryGetValue(service, out var node))
             {
-                node = new TopologyNode { Id = service, Label = service };
+                node = new TopologyNode { Id = service, Label = format(service) };
                 nodesByService[service] = node;
             }
 
-            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime);
+            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime, format);
             node.Pipelines.Add(row);
             pipelineRowsByKey[(service, pipeline)] = row;
         }
@@ -171,7 +180,9 @@ public class TopologyComputationService
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private static PipelineRow BuildPipelineRow(string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime)
+    private static PipelineRow BuildPipelineRow(
+        string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime,
+        Func<string, string> format)
     {
         var done = pipelineEvents.Count(e => e.IsDone);
         var inProgress = pipelineEvents.Count(e => !e.IsDone);
@@ -180,6 +191,7 @@ public class TopologyComputationService
         var row = new PipelineRow
         {
             Name = pipeline,
+            DisplayName = format(pipeline),
             Topic = InferTopicName(pipeline),
             DoneCount = done,
             InProgressCount = inProgress,
