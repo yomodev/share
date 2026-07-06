@@ -17,6 +17,7 @@
                               Min="1" Max="@Count"
                               Immediate="true"
                               AutoFocus="true"
+                              Dense="true"
                               Variant="Variant.Outlined" Margin="Margin.Dense"
                               Class="bm-pagination-jump-input"
                               @onkeydown="OnKeyDown"
@@ -24,8 +25,8 @@
         }
         else
         {
-            <MudTooltip Text="Double-click to jump to a page">
-                <span class="bm-pagination-jump-label" @ondblclick="StartEditing">
+            <MudTooltip Text="Click to jump to a page">
+                <span class="bm-pagination-jump-label" @onclick="StartEditing">
                     page @Selected / @Count
                 </span>
             </MudTooltip>

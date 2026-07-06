@@ -697,7 +697,14 @@ html, body {
     background: rgba(var(--mud-palette-text-primary-rgb), 0.06);
     color: var(--mud-palette-text-primary);
 }
-.bm-pagination-jump-input { width: 90px; flex-shrink: 0; }
+/* MudBlazor's own base rule — .mud-input-control{flex:1 1 auto} — makes this stretch
+   to fill the remaining row width; width:90px alone can't stop that since flex-grow
+   was never overridden. flex:0 0 auto fixes the growth, width caps it to fit a
+   4-digit page number plus the field's spin buttons. */
+.bm-pagination-jump-input.mud-input-control {
+    flex: 0 0 auto !important;
+    width: 76px !important;
+}
 .bm-rows-select     { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 /* Shrink the inner input text of the rows-per-page MudSelect */
 .bm-rows-select .mud-select-input,
