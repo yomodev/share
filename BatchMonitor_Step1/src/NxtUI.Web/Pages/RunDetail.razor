@@ -91,7 +91,14 @@
         {
             _details = await RunService.GetRunDetailsAsync(Environment, RunId ?? string.Empty);
             if (_details is not null && RunId is not null)
+            {
+                // Tab label is "{Type} {RunId}" — Type is only known now that details
+                // have loaded (the tab was opened with just the RunId as a placeholder).
+                if (Tab is not null && !string.IsNullOrWhiteSpace(_details.Type))
+                    TabService.RenameTab(Tab.Id, $"{_details.Type} {_details.RunId}");
+
                 await StartEventServiceAsync();
+            }
         }
         catch { _details = null; }
         finally
