@@ -1,0 +1,14 @@
+{
+  "Kafka": {
+    "BootstrapServers": "localhost:9092"
+  },
+  "Mongo": {
+    "ConnectionString": "mongodb://localhost:27017",
+    "DatabasePrefix": "BatchMonitor"
+  },
+  "Sql": {
+    "ConnectionString": "",
+    "Schema": "dbo",
+    "RunsTable": "BatchRun"
+  }
+}

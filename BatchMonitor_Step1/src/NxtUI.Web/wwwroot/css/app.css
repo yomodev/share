@@ -1323,6 +1323,32 @@ html, body {
     min-width: 80px;
 }
 
+/* Sizes a MudSelect to its content instead of stretching to fill its flex slot.
+   MudBlazor's own CSS has an UNCONDITIONAL rule — .mud-select{display:flex;
+   flex-grow:1;position:relative} — applied regardless of the FullWidth Blazor
+   parameter (FullWidth only affects the inner input's own width, never this
+   outer flex-item sizing). Longhand + compound selector so there's no ambiguity
+   about which declaration wins. */
+.mud-select.bm-select-fit {
+    flex-grow: 0 !important;
+    flex-shrink: 0 !important;
+    flex-basis: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+}
+.bm-select-fit .mud-input,
+.bm-select-fit .mud-select-input { width: auto !important; min-width: 0 !important; }
+.bm-select-fit .mud-input-slot { width: max-content !important; }
+
+/* Timeline's Group/Color selects — built-in top-left label (like Topic Inspector's
+   Mode select) instead of a separate <span>, with the label tinted so it stands
+   out from the plain-text labels used elsewhere. */
+.bm-tl-select-labeled .mud-input-label { color: var(--mud-palette-primary) !important; }
+/* MudBlazor adds 4px extra margin-top (8px vs 4px) to an Outlined+Dense control the
+   moment it has a Label, to reserve room for the floating-label notch — that's the
+   whole size difference vs. the previous no-Label select. Match the no-Label baseline. */
+.bm-tl-select-labeled.mud-input-control-margin-dense.mud-input-outlined-with-label { margin-top: 4px !important; }
+
 .bm-inspector-live-dot {
     font-size: 10px !important;
     animation: bm-live-pulse 1.2s ease-in-out infinite;
@@ -2184,9 +2210,9 @@ html, body {
 
 .bm-svc-group-count {
     font-size: 10px;
-    font-weight: 500;
-    background: var(--mud-palette-action-default-hover);
-    color: var(--mud-palette-text-secondary);
+    font-weight: 700;
+    background: rgba(56,139,253,0.18);
+    color: #388BFD;
     border-radius: 8px;
     padding: 1px 6px;
     letter-spacing: 0;
@@ -2433,22 +2459,22 @@ tr.bm-row-searching td:first-child {
    level) render no arrow button at all, so without an explicit (not just
    min-) height the arrow-having rows were taller than leaf rows. */
 .bm-lb-tree .mud-treeview-item-content {
-    height: 18px !important;
-    min-height: 18px !important;
+    height: 26px !important;
+    min-height: 26px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
     display: flex !important;
     align-items: center !important;
 }
 .bm-lb-tree .mud-treeview-item-arrow {
-    height: 18px !important;
-    width: 18px !important;
+    height: 26px !important;
+    width: 22px !important;
     padding: 0 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
 }
-.bm-lb-tree .mud-treeview-item-arrow .mud-icon-root { font-size: 14px !important; }
+.bm-lb-tree .mud-treeview-item-arrow .mud-icon-root { font-size: 16px !important; }
 
 .bm-lb-tree-row {
     display: flex;
@@ -2458,9 +2484,9 @@ tr.bm-row-searching td:first-child {
 }
 .bm-lb-tree-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bm-lb-tree-row-checkbox { flex-shrink: 0; padding: 0 !important; }
-.bm-lb-tree-row-checkbox .mud-button-root { width: 18px !important; height: 18px !important; padding: 0 !important; }
-.bm-lb-tree-row-checkbox .mud-icon-root { font-size: 16px !important; }
-.bm-lb-tree-row-spinner { flex-shrink: 0; width: 14px !important; height: 14px !important; }
+.bm-lb-tree-row-checkbox .mud-button-root { width: 22px !important; height: 22px !important; padding: 0 !important; }
+.bm-lb-tree-row-checkbox .mud-icon-root { font-size: 18px !important; }
+.bm-lb-tree-row-spinner { flex-shrink: 0; width: 16px !important; height: 16px !important; }
 
 .bm-lb-files-panel {
     flex: 1 1 0;

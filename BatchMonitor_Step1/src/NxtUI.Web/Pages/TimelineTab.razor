@@ -19,6 +19,9 @@
     private readonly List<TimelineRun> _runs = new();
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
+    // Total events across every currently loaded run — shown in the control bar.
+    private int TotalEventCount => _runs.Sum(r => r.Events.Count);
+
     // ── Filter ────────────────────────────────────────────────────────────
     private string _filterText = string.Empty;
 
@@ -594,108 +597,109 @@
 <!-- ── Markup ──────────────────────────────────────────────────────────── -->
 <div class="bm-page-fill bm-timeline">
 
-    <!-- Control bar -->
+    <!-- Control bar — single row, left-to-right order: Add, Group, Color, Reset view,
+         Remove from view, Stack view, Hide popup, Export, Import, Filter (wide, absorbs
+         remaining space), Shortcuts, then the live event counter (reserved fixed width so
+         it never reflows the icons to its left as the number of digits changes). -->
     <div class="bm-tl-controls">
-        <div class="bm-tl-controls-left">
-            <MudTooltip Text="@(_stackView ? "Exit stack view" : "Stack view")">
-                <MudIconButton Icon="@Icons.Material.Outlined.ViewColumn"
-                               Color="@(_stackView ? Color.Primary : Color.Default)"
-                               Size="Size.Small" OnClick="ToggleStackView" />
-            </MudTooltip>
+        <MudButton StartIcon="@Icons.Material.Outlined.Add"
+                   Variant="Variant.Outlined" Size="Size.Small"
+                   OnClick="OpenAddDialog">
+            Add
+        </MudButton>
 
-            <FilterBox Value="@_filterText"
-                       OnFilterChanged="OnFilterChanged"
-                       DebounceMs="250"
-                       Class="bm-tl-filter"
-                       FieldHints="@_timelineFieldHints" />
+        <MudSelect T="GroupByOption" Label="Group" Value="_groupBy" ValueChanged="OnGroupByChanged"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                   Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
+                   PopoverClass="bm-tl-select-popover">
+            <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
+            <MudSelectItem Value="GroupByOption.PidServicePipeline">Service / Pipeline / PID</MudSelectItem>
+            <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
+            <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
+            <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
+        </MudSelect>
 
-            <div class="bm-tl-select-wrap">
-                <span class="bm-toolbar-label">Group</span>
-                <MudSelect T="GroupByOption" Value="_groupBy" ValueChanged="OnGroupByChanged"
-                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                           Disabled="_stackView" Class="bm-tl-select"
-                           PopoverClass="bm-tl-select-popover">
-                    <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
-                    <MudSelectItem Value="GroupByOption.PidServicePipeline">Service / Pipeline / PID</MudSelectItem>
-                    <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
-                    <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
-                    <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
-                </MudSelect>
-            </div>
+        <MudSelect T="ColourByOption" Label="Color" Value="_colourBy" ValueChanged="OnColourByChanged"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                   Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
+                   PopoverClass="bm-tl-select-popover">
+            <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
+            <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
+            <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
+            <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
+        </MudSelect>
 
-            <div class="bm-tl-select-wrap">
-                <span class="bm-toolbar-label">Color</span>
-                <MudSelect T="ColourByOption" Value="_colourBy" ValueChanged="OnColourByChanged"
-                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                           Disabled="_stackView" Class="bm-tl-select"
-                           PopoverClass="bm-tl-select-popover">
-                    <MudSelectItem Value="ColourByOption.Source">Source</MudSelectItem>
-                    <MudSelectItem Value="ColourByOption.Pipeline">Pipeline</MudSelectItem>
-                    <MudSelectItem Value="ColourByOption.Service">Service</MudSelectItem>
-                    <MudSelectItem Value="ColourByOption.Status">Status</MudSelectItem>
-                </MudSelect>
-            </div>
-        </div>
+        <MudTooltip Text="Reset view">
+            <MudIconButton Icon="@Icons.Material.Outlined.ZoomOutMap"
+                           Size="Size.Small" OnClick="ResetView" />
+        </MudTooltip>
 
-        <div class="bm-tl-controls-right">
-            <MudTooltip Text="@(_showTooltip ? "Hide message popup" : "Show message popup")">
-                <MudIconButton Icon="@(_showTooltip ? Icons.Material.Outlined.SpeakerNotes : Icons.Material.Outlined.SpeakerNotesOff)"
-                               Color="@(_showTooltip ? Color.Default : Color.Primary)"
-                               Size="Size.Small" OnClick="ToggleTooltipAsync" />
-            </MudTooltip>
-
-            <MudTooltip Text="Reset view">
-                <MudIconButton Icon="@Icons.Material.Outlined.ZoomOutMap"
-                               Size="Size.Small" OnClick="ResetView" />
-            </MudTooltip>
-
-            <MudTooltip Text="Keyboard shortcuts">
-                <MudIconButton Icon="@Icons.Material.Outlined.Keyboard"
-                               Size="Size.Small" OnClick="@(() => _shortcutsOpen = true)" />
-            </MudTooltip>
-
-            <MudTooltip Text="Export CSV">
-                <MudIconButton Icon="@Icons.Material.Outlined.Save"
-                               Size="Size.Small" OnClick="ExportCsv" />
-            </MudTooltip>
-
-            <MudTooltip Text="Import CSV">
-                <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
-                               Size="Size.Small" OnClick="TriggerImport" />
-            </MudTooltip>
-
-            <span @ref="_importWrapRef" style="display:none">
-                <InputFile OnChange="OnImportFileSelected" accept=".csv" />
-            </span>
-
-            <MudTooltip Text="Remove from view">
-                <span>
-                    <MudMenu Icon="@Icons.Material.Outlined.LayersClear" Size="Size.Small"
-                             Dense="true" Disabled="@(!_runs.Any())"
-                             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                        @foreach (var b in _runs)
-                        {
-                            var runId = b.RunId;
-                            var env   = b.Env;
-                            <MudMenuItem OnClick="@(() => RemoveAsync(runId, env))">
-                                @b.Description <span class="bm-muted">@b.RunId</span>
-                            </MudMenuItem>
-                        }
-                        <MudDivider />
-                        <MudMenuItem OnClick="RemoveAllAsync">
-                            <MudText Color="Color.Error">Remove all</MudText>
+        <MudTooltip Text="Remove from view">
+            <span>
+                <MudMenu Icon="@Icons.Material.Outlined.LayersClear" Size="Size.Small"
+                         Dense="true" Disabled="@(!_runs.Any())"
+                         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                    @foreach (var b in _runs)
+                    {
+                        var runId = b.RunId;
+                        var env   = b.Env;
+                        <MudMenuItem OnClick="@(() => RemoveAsync(runId, env))">
+                            @b.Description <span class="bm-muted">@b.RunId</span>
                         </MudMenuItem>
-                    </MudMenu>
-                </span>
-            </MudTooltip>
+                    }
+                    <MudDivider />
+                    <MudMenuItem OnClick="RemoveAllAsync">
+                        <MudText Color="Color.Error">Remove all</MudText>
+                    </MudMenuItem>
+                </MudMenu>
+            </span>
+        </MudTooltip>
 
-            <MudButton StartIcon="@Icons.Material.Outlined.Add"
-                       Variant="Variant.Outlined" Size="Size.Small"
-                       Class="ml-2"
-                       OnClick="OpenAddDialog">
-                Add
-            </MudButton>
-        </div>
+        <MudTooltip Text="@(_stackView ? "Exit stack view" : "Stack view")">
+            <MudIconButton Icon="@Icons.Material.Outlined.ViewColumn"
+                           Color="@(_stackView ? Color.Primary : Color.Default)"
+                           Size="Size.Small" OnClick="ToggleStackView" />
+        </MudTooltip>
+
+        <MudTooltip Text="@(_showTooltip ? "Hide message popup" : "Show message popup")">
+            <MudIconButton Icon="@(_showTooltip ? Icons.Material.Outlined.SpeakerNotes : Icons.Material.Outlined.SpeakerNotesOff)"
+                           Color="@(_showTooltip ? Color.Default : Color.Primary)"
+                           Size="Size.Small" OnClick="ToggleTooltipAsync" />
+        </MudTooltip>
+
+        <MudTooltip Text="Export CSV">
+            <MudIconButton Icon="@Icons.Material.Outlined.Save"
+                           Size="Size.Small" OnClick="ExportCsv" />
+        </MudTooltip>
+
+        <MudTooltip Text="Import CSV">
+            <MudIconButton Icon="@Icons.Material.Outlined.FolderOpen"
+                           Size="Size.Small" OnClick="TriggerImport" />
+        </MudTooltip>
+
+        <span @ref="_importWrapRef" style="display:none">
+            <InputFile OnChange="OnImportFileSelected" accept=".csv" />
+        </span>
+
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   DebounceMs="250"
+                   Class="bm-tl-filter"
+                   FieldHints="@_timelineFieldHints" />
+
+        <MudTooltip Text="Keyboard shortcuts">
+            <MudIconButton Icon="@Icons.Material.Outlined.Keyboard"
+                           Size="Size.Small" OnClick="@(() => _shortcutsOpen = true)" />
+        </MudTooltip>
+
+        <span class="bm-tl-event-count bm-muted">
+            @TotalEventCount.ToString("N0")&nbsp;events
+            @if (_runs.Any(r => r.IsLive))
+            {
+                <MudIcon Icon="@Icons.Material.Outlined.FiberManualRecord"
+                         Size="Size.Small" Color="Color.Error" Class="bm-inspector-live-dot" />
+            }
+        </span>
     </div>
 
     <!-- D3 canvas — scrollable lane area. No Blazor children inside; child list

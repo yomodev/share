@@ -1,0 +1,16 @@
+{
+  "Kafka": {
+    "BootstrapServers": "kafka-uat2-1:9092",
+    "TlsEnabled": true,
+    "TlsCaPath": "/etc/ssl/certs/kafka-uat-ca.pem",
+    "SaslMechanism": "ScramSha256",
+    "SaslUsername": "nxtui",
+    "SaslPassword": "change-me"
+  },
+  "Mongo": {
+    "ConnectionString": "mongodb://mongo-uat2-1:27017/?replicaSet=rs0",
+    "DatabasePrefix": "BatchMonitor",
+    "Username": "nxtui",
+    "Password": "change-me"
+  }
+}

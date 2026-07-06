@@ -12,21 +12,37 @@
 
 /* ── Control bar ─────────────────────────────────────────────────── */
 
+/* Single flat row of controls, packed left-to-right (not spread apart) — the
+   Filter's own flex:1 (below) is what absorbs remaining space, not gaps between
+   every item. */
 .bm-tl-controls {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     flex-wrap: wrap;
     gap: 8px;
     padding: 6px 12px;
     border-bottom: 1px solid var(--mud-palette-divider);
 }
 
-.bm-tl-controls-left  { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
-.bm-tl-controls-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
-
 .bm-tl-filter { min-width: 160px; flex: 1 1 0; }
+
+/* Live event counter — reserved width sized for up to 5 digits (e.g. "12,345 events")
+   so the count growing during a live fetch never reflows the controls to its left.
+   Number is allowed to wrap onto its own line rather than force the box wider. */
+.bm-tl-event-count {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    width: 92px;
+    font-size: 12px;
+    text-align: right;
+    justify-content: flex-end;
+    white-space: normal;
+    line-height: 1.2;
+}
 
 /* MudSelect wrappers — label left + auto-width select */
 .bm-tl-select-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }

@@ -94,10 +94,10 @@
             }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Folder"
-                            Label="Logs"
+                            Label="Files"
                             IsOpen="@_drawerOpen"
-                            IsActive="@IsTabActive($"dashboard:logs:{EnvService.SelectedId}")"
-                            OnClick="@(() => Open(TabModel.CreateLogsDashboard(EnvService.SelectedId)))" />
+                            IsActive="@IsTabActive($"dashboard:files:{EnvService.SelectedId}")"
+                            OnClick="@(() => Open(TabModel.CreateFilesDashboard(EnvService.SelectedId)))" />
 
         </div>
 

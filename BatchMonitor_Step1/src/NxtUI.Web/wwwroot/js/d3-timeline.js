@@ -1020,7 +1020,16 @@ const TIMELINE_ALIASES = {
                     types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }] });
                 const w = await fh.createWritable();
                 await w.write(content); await w.close(); return;
-            } catch (ex) { if (ex.name === 'AbortError') return; }
+            } catch (ex) {
+                if (ex.name === 'AbortError') return; // user cancelled the picker
+                // Anything else (most commonly NotAllowedError: the "user activation"
+                // from the toolbar click doesn't reliably survive the Blazor Server
+                // interop round trip) falls through to the plain download below —
+                // logged so it's not a silent, unexplained behavior change.
+                console.warn('[Timeline] showSaveFilePicker failed, falling back to direct download:', ex.name, ex.message);
+            }
+        } else {
+            console.info('[Timeline] showSaveFilePicker not supported by this browser — using direct download.');
         }
         const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
         const url  = URL.createObjectURL(blob);

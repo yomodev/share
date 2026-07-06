@@ -1,3 +1,5 @@
+using static MudBlazor.Icons.Material;
+
 namespace NxtUI.Web.Models;
 
 public enum TabType
@@ -9,7 +11,7 @@ public enum TabType
     MongoDB,
     Config,
     Batches,
-    LogBrowser,
+    FileBrowser,
     Settings,
     RunDetail,
     Timeline,
@@ -54,7 +56,7 @@ public class TabModel
     public string? NavigationHint { get; set; }
 
     /// <summary>MudBlazor icon constant string for the tab.</summary>
-    public string Icon { get; set; } = MudBlazor.Icons.Material.Outlined.Dashboard;
+    public string Icon { get; set; } = Outlined.Dashboard;
 
     /// <summary>Optional user-chosen CSS color for the tab icon. Null = default theme color.</summary>
     public string? IconColor { get; set; }
@@ -83,7 +85,7 @@ public class TabModel
         Type = TabType.Runs,
         Label = "Runs",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.ViewList
+        Icon = Outlined.ViewList
     };
 
     public static TabModel CreateServicesDashboard(string env) => new()
@@ -92,7 +94,7 @@ public class TabModel
         Type = TabType.Services,
         Label = "Services",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Dns
+        Icon = Outlined.Dns
     };
 
     public static TabModel CreatePipelinesDashboard(string env) => new()
@@ -101,7 +103,7 @@ public class TabModel
         Type = TabType.Pipelines,
         Label = "Pipelines",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.AccountTree
+        Icon = Outlined.AccountTree
     };
 
     public static TabModel CreateConfigDashboard(string env) => new()
@@ -110,7 +112,7 @@ public class TabModel
         Type = TabType.Config,
         Label = "Config",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Tune
+        Icon = Outlined.Tune
     };
 
     public static TabModel CreateKafkaDashboard(string env) => new()
@@ -119,7 +121,7 @@ public class TabModel
         Type = TabType.Kafka,
         Label = "Kafka",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Stream
+        Icon = Outlined.Stream
     };
 
     public static TabModel CreateMongoDashboard(string env) => new()
@@ -128,7 +130,7 @@ public class TabModel
         Type = TabType.MongoDB,
         Label = "MongoDB",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Storage
+        Icon = Outlined.Storage
     };
 
     public static TabModel CreateMemoryGraph(string env) => new()
@@ -137,7 +139,7 @@ public class TabModel
         Type = TabType.MemoryGraph,
         Label = "Memory",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Memory
+        Icon = Outlined.Memory
     };
 
     public static TabModel CreateBatchesDashboard(string env) => new()
@@ -146,16 +148,16 @@ public class TabModel
         Type = TabType.Batches,
         Label = "Batches",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.ViewList
+        Icon = Outlined.ViewList
     };
 
-    public static TabModel CreateLogsDashboard(string env) => new()
+    public static TabModel CreateFilesDashboard(string env) => new()
     {
-        Id = $"dashboard:logs:{env}",
-        Type = TabType.LogBrowser,
-        Label = "Log Browser",
+        Id = $"dashboard:files:{env}",
+        Type = TabType.FileBrowser,
+        Label = "File Browser",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Folder
+        Icon = Outlined.Folder
     };
 
     public static TabModel CreateEnvironmentDashboard(string env) => new()
@@ -164,7 +166,7 @@ public class TabModel
         Type = TabType.Environment,
         Label = "Environment",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Computer
+        Icon = Outlined.Computer
     };
 
     public static TabModel CreateSettings() => new()
@@ -173,7 +175,7 @@ public class TabModel
         Type = TabType.Settings,
         Label = "Settings",
         Environment = null,
-        Icon = MudBlazor.Icons.Material.Outlined.Settings
+        Icon = Outlined.Settings
     };
 
     public static TabModel CreateRunDetail(string runId, string Name, string env) => new()
@@ -183,7 +185,7 @@ public class TabModel
         Label = Name,
         Environment = env,
         EntityId = runId,
-        Icon = MudBlazor.Icons.Material.Outlined.Hexagon
+        Icon = Outlined.Hexagon
     };
 
     public static TabModel CreateTimeline(string runIds, string env) => new()
@@ -193,7 +195,7 @@ public class TabModel
         Label = "Timeline",
         Environment = env,
         EntityId = runIds,
-        Icon = MudBlazor.Icons.Material.Outlined.Timeline
+        Icon = Outlined.Timeline
     };
 
     public static TabModel CreateKafkaTopicInspector(string topicName, string env) => new()
@@ -203,7 +205,7 @@ public class TabModel
         Label = topicName.Length > 28 ? topicName[..28] + "…" : topicName,
         Environment = env,
         EntityId = topicName,
-        Icon = MudBlazor.Icons.Material.Outlined.Stream
+        Icon = Outlined.Stream
     };
 
     public static TabModel CreateKafkaGroupsDashboard(string env) => new()
@@ -212,7 +214,7 @@ public class TabModel
         Type = TabType.KafkaGroups,
         Label = "Consumers",
         Environment = env,
-        Icon = MudBlazor.Icons.Material.Outlined.Groups
+        Icon = Outlined.Groups
     };
 
     public static TabModel CreateMongoCollectionInspector(string database, string collection, string env) => new()
@@ -222,7 +224,7 @@ public class TabModel
         Label = collection.Length > 24 ? collection[..24] + "…" : collection,
         Environment = env,
         EntityId = $"{database}/{collection}",
-        Icon = MudBlazor.Icons.Material.Outlined.Storage
+        Icon = Outlined.Storage
     };
 
     public static TabModel CreateLogViewer(string path, string env) => new()
@@ -232,7 +234,7 @@ public class TabModel
         Label = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
         Environment = env,
         EntityId = path,
-        Icon = MudBlazor.Icons.Material.Outlined.Article
+        Icon = Outlined.Article
     };
 
     public static TabModel CreateLogWorkspace(string path, string env) => new()
@@ -242,7 +244,7 @@ public class TabModel
         Label = System.IO.Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : "Log",
         Environment = env,
         EntityId = path,
-        Icon = MudBlazor.Icons.Material.Outlined.Article
+        Icon = Outlined.Article
     };
 
     public static TabModel CreateFilterHelp() => new()
@@ -250,7 +252,7 @@ public class TabModel
         Id = "help:filter",
         Type = TabType.FilterHelp,
         Label = "Filter syntax",
-        Icon = MudBlazor.Icons.Material.Outlined.HelpOutline
+        Icon = Outlined.HelpOutline
     };
 
     // ── URL mapping ──────────────────────────────────────────────────────
@@ -268,7 +270,7 @@ public class TabModel
         TabType.Batches => $"/batches/{Environment}",
         TabType.MemoryGraph => $"/memory/{Environment}",
         TabType.Environment => $"/environment/{Environment}",
-        TabType.LogBrowser => $"/logs/{Environment}",
+        TabType.FileBrowser => $"/logs/{Environment}",
         TabType.LogViewer => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.LogWorkspace => $"/workspace/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings => "/settings",
@@ -342,8 +344,8 @@ public class TabModel
             "environment" when parts.Length >= 2
                 => CreateEnvironmentDashboard(parts[1]),
 
-            "logs" when parts.Length >= 2
-                => CreateLogsDashboard(parts[1]),
+            "files" when parts.Length >= 2
+                => CreateFilesDashboard(parts[1]),
 
             "log" when parts.Length >= 3
                 => CreateLogViewer(Uri.UnescapeDataString(parts[2]), parts[1]),

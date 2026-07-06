@@ -12,28 +12,34 @@
 
 <div class="bm-page bm-page-fill bm-inspector">
 
-    <!-- Toolbar row 1: topic + stream controls + filter + count -->
+    <!-- Toolbar row 1: topic name, on its own line -->
     <div class="bm-batch-toolbar">
         <span class="bm-inspector-topic">
             <MudIcon Icon="@Icons.Material.Outlined.MoveToInbox" Size="Size.Small" Class="bm-inspector-topic-icon" />
             @TopicName
         </span>
+    </div>
 
-        <MudTooltip Text="Browse topics">
-            <MudIconButton Icon="@Icons.Material.Outlined.ManageSearch"
-                           Size="Size.Small"
-                           OnClick="@(() => TabService.OpenOrFocus(TabModel.CreateKafkaDashboard(Environment)))" />
-        </MudTooltip>
+    <!-- Toolbar row 2: filter, mode, clear, stats, start, counters -->
+    <div class="bm-batch-toolbar">
+        <FilterBox Value="@_filterText"
+                   OnFilterChanged="OnFilterChanged"
+                   ParseError="@_filterParseError"
+                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
+                   Class="bm-filter-input"
+                   FieldHints="@_fieldHints" />
 
-        <!-- Start / Pause -->
-        <MudTooltip Text="@(_state == StreamState.Running ? "Pause" : "Start")">
-            <MudIconButton Icon="@(_state == StreamState.Running
-                                    ? Icons.Material.Outlined.Pause
-                                    : Icons.Material.Outlined.PlayArrow)"
-                           Size="Size.Small"
-                           Color="@(_state == StreamState.Running ? Color.Warning : Color.Success)"
-                           OnClick="ToggleStream" />
-        </MudTooltip>
+        <!-- Mode select -->
+        <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
+                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
+                   FullWidth="false" Class="bm-select-fit">
+            <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
+            <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
+            <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
+            <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
+            <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
+            <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
+        </MudSelect>
 
         <!-- Clear -->
         <MudTooltip Text="Clear — stop and clear messages (does not restart)">
@@ -50,24 +56,15 @@
                            OnClick="ToggleStats" />
         </MudTooltip>
 
-        <!-- Mode select -->
-        <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
-                   Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
-                   Style="width:max-content;">
-            <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
-            <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
-            <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
-            <MudSelectItem Value="@("fromTimestamp")">From timestamp</MudSelectItem>
-            <MudSelectItem Value="@("offsetRange")">Offset range</MudSelectItem>
-            <MudSelectItem Value="@("tsRange")">Timestamp range</MudSelectItem>
-        </MudSelect>
-
-        <FilterBox Value="@_filterText"
-                   OnFilterChanged="OnFilterChanged"
-                   ParseError="@_filterParseError"
-                   Placeholder="Filter or seek: partition:0 offset:>1000 latest:500 timestamp:>2024-01-15"
-                   Class="bm-filter-input"
-                   FieldHints="@_fieldHints" />
+        <!-- Start / Pause -->
+        <MudTooltip Text="@(_state == StreamState.Running ? "Pause" : "Start")">
+            <MudIconButton Icon="@(_state == StreamState.Running
+                                    ? Icons.Material.Outlined.Pause
+                                    : Icons.Material.Outlined.PlayArrow)"
+                           Size="Size.Small"
+                           Color="@(_state == StreamState.Running ? Color.Warning : Color.Success)"
+                           OnClick="ToggleStream" />
+        </MudTooltip>
 
         <span class="bm-inspector-count bm-muted">
             @if (_filterText.Length > 0)
@@ -179,7 +176,7 @@
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-payload-type @TypeChipClass(context.PayloadType)">@context.PayloadType</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
                         <span class="bm-kafka-mono bm-muted">@context.RawSizeBytes B</span>
                     </MudTd>
                     <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">

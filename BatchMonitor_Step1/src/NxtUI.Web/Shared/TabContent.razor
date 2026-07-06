@@ -49,8 +49,8 @@
             TabType.MemoryGraph =>
                 @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" IsFocused="@Tab.IsActive" />,
 
-            TabType.LogBrowser =>
-                @<LogBrowser Env="@env" NavigationHint="@Tab.NavigationHint" IsFocused="@Tab.IsActive" Tab="@Tab" />,
+            TabType.FileBrowser =>
+                @<FileBrowser Env="@env" NavigationHint="@Tab.NavigationHint" IsFocused="@Tab.IsActive" Tab="@Tab" />,
 
             TabType.LogViewer =>
                 @<LogViewer Path="@Tab.EntityId" Env="@env" FileName="@Tab.Label" IsFocused="@Tab.IsActive" Tab="@Tab" />,

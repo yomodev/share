@@ -10,7 +10,7 @@
 @inject TabService TabService
 @inject IOptions<LogPathSettings> LogSettings
 @inject IJSRuntime JS
-@inject ILogger<LogBrowser> Logger
+@inject ILogger<FileBrowser> Logger
 @inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
@@ -274,7 +274,7 @@
     private ElementReference _bodyRef;
     private ElementReference _treePanelRef;
     private double            _treePanelWidth = 280;
-    private DotNetObjectReference<LogBrowser>? _selfRef;
+    private DotNetObjectReference<FileBrowser>? _selfRef;
 
     [JSInvokable]
     public void SetTreeWidth(double width) =>

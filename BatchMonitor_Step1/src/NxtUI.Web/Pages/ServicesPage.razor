@@ -93,6 +93,10 @@
                                 @if (groupMem > 0)
                                 {
                                     <span class="bm-svc-group-ram">@FormatMb(groupMem) MB</span>
+                                    @if (_groupBy == "HostName")
+                                    {
+                                        <span class="bm-svc-group-ram">avg @FormatMb(AverageMb(group)) MB</span>
+                                    }
                                 }
                             </div>
                         }
@@ -288,8 +292,8 @@
     private List<ServiceStatus> _filtered = new();
     private List<ServiceStatus> _paged    = new();
     private int _totalPages => Math.Max(1, (int)Math.Ceiling((double)_filtered.Count / _pageSize));
-    private string _sortField = "";
-    private bool   _sortDesc;
+    private string _sortField = "mem";
+    private bool   _sortDesc  = true;
 
     // Keys currently awaiting a path search triggered by the copy/open actions
     private readonly HashSet<string> _copyingFor    = new();
@@ -529,7 +533,7 @@
             return;
         }
 
-        var tab = TabModel.CreateLogsDashboard(Env);
+        var tab = TabModel.CreateFilesDashboard(Env);
         tab.NavigationHint = path;
         TabService.OpenOrFocus(tab);
     }
@@ -621,13 +625,32 @@
         await LoadFromMongoAsync();
     }
 
-    private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows) =>
-        _groupBy switch
+    // Cards are always ordered Host -> Service -> PID within (and across, when grouped)
+    // regardless of the current grouping mode, so switching grouping never reshuffles
+    // cards you've already found within a host/service.
+    private static IEnumerable<ServiceStatus> OrderForCards(IEnumerable<ServiceStatus> rows) =>
+        rows.OrderBy(s => s.HostName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.ServiceName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.ProcessId);
+
+    private IEnumerable<IGrouping<string?, ServiceStatus>> GetGroups(List<ServiceStatus> rows)
+    {
+        var ordered = OrderForCards(rows);
+        return _groupBy switch
         {
-            "ServiceName" => rows.GroupBy(s => (string?)s.ServiceName),
-            "HostName"    => rows.GroupBy(s => (string?)s.HostName),
-            _             => rows.GroupBy(_ => (string?)null),
+            "ServiceName" => ordered.GroupBy(s => (string?)s.ServiceName)
+                                     .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase),
+            "HostName"    => ordered.GroupBy(s => (string?)s.HostName)
+                                     .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase),
+            _             => ordered.GroupBy(_ => (string?)null),
         };
+    }
+
+    private static double AverageMb(IGrouping<string?, ServiceStatus> group)
+    {
+        var values = group.Select(s => s.RamMb ?? 0).ToList();
+        return values.Count > 0 ? values.Average() : 0;
+    }
 
     private static string FormatAge(DateTime updatedUtc)
     {
