@@ -722,13 +722,27 @@ html, body {
     display: flex; align-items: center;
     justify-content: space-between; gap: 16px;
 }
-/* ── Soften outlined borders on icon buttons and button groups to match other controls ── */
+/* ── Soften outlined borders on icon buttons and button groups to match other controls ──
+   Plain MudButton Variant="Outlined" (no Color=) was missing from this set — it renders
+   with the library's full-opacity text-primary border (--mud-palette-border-opacity:1),
+   much brighter than the divider-toned border used everywhere else, and its hover state
+   (background-color only, no border change) is easy to miss next to that loud border. */
 .mud-icon-button.mud-icon-button-outlined,
-.mud-button-group-outlined .mud-button-root {
+.mud-button-group-outlined .mud-button-root,
+.mud-button-outlined-default {
     border-color: var(--mud-palette-divider) !important;
 }
-.mud-icon-button.mud-icon-button-outlined:hover {
+.mud-icon-button.mud-icon-button-outlined:hover,
+.mud-button-outlined-default:hover {
     border-color: var(--mud-palette-text-secondary) !important;
+}
+/* Small outlined buttons (padding+border+line-height) render ~30px tall — 6px short of
+   the 36px height every other toolbar control actually renders at (text inputs use
+   box-sizing:content-box, so their 32px height + 2px/2px padding is a real 36px; see
+   the bm-select-fit comment above for the same correction on MudSelect). Global fix,
+   not toolbar-scoped: applies to every Size.Small button in the app for consistency. */
+.mud-button-root.mud-button-outlined-size-small {
+    height: 36px !important;
 }
 .bm-about-grid {
     display: grid;
@@ -1002,7 +1016,8 @@ html, body {
 .bm-svc-toolbar-left .mud-input-root,
 .bm-lb-filter-toolbar .mud-input-root,
 .bm-lb-tree-panel    .mud-input-root,
-.bm-tl-controls      .mud-input-root { font-size: 14px !important; }
+.bm-tl-controls      .mud-input-root,
+.bm-tl-dialog-controls .mud-input-root { font-size: 14px !important; }
 
 /* height only for text inputs — selects are excluded so the global
    .mud-select.mud-input-root rule controls their height/centering */
@@ -1010,7 +1025,8 @@ html, body {
 .bm-svc-toolbar-left .mud-input-root:not(.mud-select),
 .bm-lb-filter-toolbar .mud-input-root:not(.mud-select),
 .bm-lb-tree-panel    .mud-input-root:not(.mud-select),
-.bm-tl-controls      .mud-input-root:not(.mud-select) {
+.bm-tl-controls      .mud-input-root:not(.mud-select),
+.bm-tl-dialog-controls .mud-input-root:not(.mud-select) {
     min-height: 32px !important;
     height: 32px !important;
 }
@@ -1018,7 +1034,8 @@ html, body {
 .bm-svc-toolbar-left .mud-input-slot,
 .bm-lb-filter-toolbar .mud-input-slot,
 .bm-lb-tree-panel    .mud-input-slot,
-.bm-tl-controls      .mud-input-slot {
+.bm-tl-controls      .mud-input-slot,
+.bm-tl-dialog-controls .mud-input-slot {
     min-height: 32px !important;
     height: 32px !important;
     padding-top: 2px !important;
@@ -1028,7 +1045,8 @@ html, body {
 .bm-svc-toolbar-left input,
 .bm-lb-filter-toolbar input,
 .bm-lb-tree-panel    input,
-.bm-tl-controls      input {
+.bm-tl-controls      input,
+.bm-tl-dialog-controls input {
     font-size: 14px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
@@ -1038,11 +1056,13 @@ html, body {
 .bm-lb-filter-toolbar .mud-input-adornment .mud-icon-root,
 .bm-lb-tree-panel    .mud-input-adornment .mud-icon-root,
 .bm-tl-controls      .mud-input-adornment .mud-icon-root,
+.bm-tl-dialog-controls .mud-input-adornment .mud-icon-root,
 .bm-batch-toolbar    .mud-input-adornment .mud-button-root,
 .bm-svc-toolbar-left .mud-input-adornment .mud-button-root,
 .bm-lb-filter-toolbar .mud-input-adornment .mud-button-root,
 .bm-lb-tree-panel    .mud-input-adornment .mud-button-root,
-.bm-tl-controls      .mud-input-adornment .mud-button-root {
+.bm-tl-controls      .mud-input-adornment .mud-button-root,
+.bm-tl-dialog-controls .mud-input-adornment .mud-button-root {
     font-size: 16px !important;
     width: 20px !important;
     height: 20px !important;
@@ -1056,12 +1076,25 @@ html, body {
     flex-shrink: 0;
 }
 
-/* Add Run dialog — environment select sized to content, full list, matching
-   the DB-select style used elsewhere (Dense + external label span). */
-.bm-tl-dialog-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+/* Add Run dialog — a fixed-height flex column: the control bar (Environment + Filter
+   + Refresh) is a normal, non-scrolling flex item that sits ABOVE the table, never an
+   overlay in front of it (position:sticky would layer it over scrolled-past rows —
+   this instead gives the table its own bounded, independently-scrolling area below). */
+.bm-tl-dialog-body {
+    display: flex;
+    flex-direction: column;
+    height: 65vh;
+}
+.bm-tl-dialog-controls { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-bottom: 8px; }
+.bm-tl-dialog-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
 .bm-tl-dialog-env-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.bm-tl-dialog-env,
-.bm-tl-dialog-env .mud-form-control { width: fit-content; min-width: 120px; }
+/* Sizing/height now comes from bm-select-fit (app.css, MudSelect section) — this class
+   only keeps a slightly larger min-width for the env list and popover no-wrap behaviour. */
+.bm-tl-dialog-env.mud-select.bm-select-fit { min-width: 120px !important; }
 .bm-tl-dialog-env-popover { min-width: max-content !important; }
 .bm-tl-dialog-env-popover .mud-list-item {
     white-space: nowrap !important;
@@ -1073,6 +1106,13 @@ html, body {
 }
 
 .bm-tl-dialog-selected td { background: var(--mud-palette-primary-lighten) !important; }
+
+/* Add Run dialog actions row — pagination on the left, Cancel/Load Batch on the right.
+   MudDialogActions is itself a flex row with justify-content:flex-end; margin-right:auto
+   on the pagination wrapper consumes the remaining space so it pins left while the
+   buttons after it still pack to the right edge. */
+.bm-tl-dialog-actions { align-items: center; }
+.bm-tl-dialog-pagination { margin-right: auto; }
 
 /* ── Cheat sheet popover ─────────────────────────────────────────────── */
 
@@ -1324,30 +1364,53 @@ html, body {
 }
 
 /* Sizes a MudSelect to its content instead of stretching to fill its flex slot.
-   MudBlazor's own CSS has an UNCONDITIONAL rule — .mud-select{display:flex;
-   flex-grow:1;position:relative} — applied regardless of the FullWidth Blazor
-   parameter (FullWidth only affects the inner input's own width, never this
-   outer flex-item sizing). Longhand + compound selector so there's no ambiguity
-   about which declaration wins. */
-.mud-select.bm-select-fit {
-    flex-grow: 0 !important;
-    flex-shrink: 0 !important;
-    flex-basis: auto !important;
+   This is THE standard look for every non-pagination MudSelect in toolbars — apply
+   Class="bm-select-fit" to any of them (the Rows-per-page selects under tables are
+   deliberately excluded; they keep a fixed 90px width).
+
+   Height: text inputs in these toolbars (.mud-input-root) use MudBlazor's own
+   box-sizing:content-box, so their declared "height:32px" plus 2px/2px padding
+   (see the "compact text inputs" rules above) renders as an ACTUAL 36px control —
+   that 36px is the real, established toolbar height everywhere in this app, and it's
+   also what MudBlazor's own unconditional ".mud-select.mud-input-root{height:36px}"
+   rule (below) already gives selects by default. An earlier session mistook the 32px
+   *declaration* for the real rendered height and forced selects/buttons down to a
+   literal 32px, 4px short of the filter's actual height — don't repeat that; 36px is
+   correct and requires no override here beyond what's below.
+
+   MudBlazor renders MudSelect as TWO nested divs: an outer <div class="mud-select">
+   (the actual flex child of the toolbar) wrapping an inner <div class="mud-input-control
+   ... mud-select bm-select-fit ...">. Blazor's Class="..." parameter only ever reaches
+   the INNER div — so a rule on ".mud-select.bm-select-fit" alone (kept below for the
+   inner div's own width) never touches the outer wrapper, and the outer wrapper's
+   unconditional library rule — .mud-select{display:flex;flex-grow:1;position:relative}
+   — is what actually stretches the control and leaves empty space after it. :has() lets
+   us reach the outer div by way of the inner one, which is the only unique hook we have. */
+.mud-select:has(> .bm-select-fit) {
+    flex: none !important;
     width: auto !important;
     min-width: 0 !important;
 }
+.mud-select.bm-select-fit {
+    flex: none !important;
+    width: auto !important;
+    min-width: 0 !important;
+}
+/* MudBlazor adds 4px extra margin-top (8px vs 4px) to an Outlined+Dense control the
+   moment it has a Label, to reserve room for the floating-label notch. Only matters
+   for labeled selects (e.g. Timeline's Group/Color) — matches the no-Label baseline.
+   Compound selector — these MudBlazor classes are on the SAME root div as bm-select-fit
+   (confirmed via devtools), not an ancestor/descendant of it. */
+.bm-select-fit.mud-input-control-margin-dense.mud-input-outlined-with-label { margin-top: 4px !important; }
 .bm-select-fit .mud-input,
 .bm-select-fit .mud-select-input { width: auto !important; min-width: 0 !important; }
 .bm-select-fit .mud-input-slot { width: max-content !important; }
 
-/* Timeline's Group/Color selects — built-in top-left label (like Topic Inspector's
-   Mode select) instead of a separate <span>, with the label tinted so it stands
-   out from the plain-text labels used elsewhere. */
+/* Standard look for every labeled toolbar MudSelect app-wide (Timeline Group/Color,
+   Kafka Mode, Mongo DB, Timeline's Add-Run dialog Environment): MudSelect's own
+   built-in top-left Label instead of a separate plain-text <span>, tinted so it
+   stands out. Purely cosmetic — always paired with bm-select-fit for the sizing. */
 .bm-tl-select-labeled .mud-input-label { color: var(--mud-palette-primary) !important; }
-/* MudBlazor adds 4px extra margin-top (8px vs 4px) to an Outlined+Dense control the
-   moment it has a Label, to reserve room for the floating-label notch — that's the
-   whole size difference vs. the previous no-Label select. Match the no-Label baseline. */
-.bm-tl-select-labeled.mud-input-control-margin-dense.mud-input-outlined-with-label { margin-top: 4px !important; }
 
 .bm-inspector-live-dot {
     font-size: 10px !important;
@@ -1548,22 +1611,15 @@ html, body {
    MONGODB
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* DB selector wrapper — "DB" label + auto-width compact select */
+/* DB selector wrapper — label now comes from MudSelect's own Label param (bm-tl-select-labeled) */
 .bm-mongo-db-wrap {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
 }
-.bm-toolbar-label {
-    font-size: 12px;
-    white-space: nowrap;
-    color: var(--mud-palette-text-secondary);
-    flex-shrink: 0;
-}
-/* Auto-width: size to the longest option, not a fixed px value */
-.bm-mongo-db-select,
-.bm-mongo-db-select .mud-form-control { width: fit-content; min-width: 80px; }
+/* Sizing/height comes from bm-select-fit (app.css, MudSelect section) — this class
+   only keeps the popover no-wrap behaviour below. */
 /* Global height + vertical centering for ALL MudSelect controls */
 .mud-select.mud-input-root {
     font-size: 14px !important;

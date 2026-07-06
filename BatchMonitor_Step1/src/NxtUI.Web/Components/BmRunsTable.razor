@@ -97,7 +97,7 @@
     </MudTable>
 </div>
 
-@if (ShowPaginationAndFilter)
+@if (ShowPaginationAndFilter && ShowFooter)
 {
     <div class="bm-batch-footer">
         <MudText Typo="Typo.body2" Class="bm-muted bm-footer-count">
@@ -146,6 +146,12 @@
     // and no header sort links are wired — just the same columns/actions as
     // the full Runs page, with whatever rows the caller already fetched.
     [Parameter] public bool ShowPaginationAndFilter { get; set; } = true;
+
+    // When false, the internal pagination/rows-per-page footer is suppressed while
+    // sorting (ShowPaginationAndFilter) still works — used when the caller wants to
+    // render pagination itself elsewhere (e.g. the Timeline "Add Run" dialog puts it
+    // in the dialog's action bar instead of under the table).
+    [Parameter] public bool ShowFooter { get; set; } = true;
 
     [Parameter] public int TotalCount { get; set; }
     [Parameter] public int Page { get; set; } = 1;

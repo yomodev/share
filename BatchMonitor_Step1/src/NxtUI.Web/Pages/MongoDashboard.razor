@@ -31,10 +31,9 @@
     <!-- Toolbar -->
     <div class="bm-batch-toolbar">
         <div class="bm-mongo-db-wrap">
-            <span class="bm-toolbar-label">DB</span>
-            <MudSelect T="string" Value="_selectedDb" ValueChanged="OnDbChanged"
+            <MudSelect T="string" Label="DB" Value="_selectedDb" ValueChanged="OnDbChanged"
                        Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
-                       Class="bm-mongo-db-select" PopoverClass="bm-mongo-db-popover">
+                       FullWidth="false" Class="bm-mongo-db-select bm-select-fit bm-tl-select-labeled" PopoverClass="bm-mongo-db-popover">
                 @foreach (var name in _databaseNames)
                 {
                     <MudSelectItem Value="@name">@name</MudSelectItem>

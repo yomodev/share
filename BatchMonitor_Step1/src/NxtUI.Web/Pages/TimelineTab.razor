@@ -7,6 +7,7 @@
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
+@inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
 @code {
@@ -58,7 +59,11 @@
     private int _dialogPageSize = 25;
     private int _dialogTotalPages => Math.Max(1, (int)Math.Ceiling((double)_dialogAll.Count / _dialogPageSize));
 
-    private string      _dialogFilterText       = string.Empty;
+    // Default filter: last 10 days — same default/rationale as the Runs page (the query
+    // always runs server-side, so this is the first WHERE clause SQL sees).
+    private const string DefaultDialogFilterText = "start:>=-10d";
+
+    private string      _dialogFilterText       = DefaultDialogFilterText;
     private string?     _dialogFilterParseError = null;
     private FilterNode?  _dialogFilterAst        = null;
 
@@ -458,13 +463,25 @@
 
     private async Task OpenAddDialog()
     {
-        _addDialogOpen          = true;
-        _dialogSelected         = null;
-        _dialogFilterText       = string.Empty;
-        _dialogFilterParseError = null;
-        _dialogFilterAst        = null;
-        _dialogPage             = 1;
+        _addDialogOpen  = true;
+        _dialogSelected = null;
+        _dialogPage     = 1;
+        ParseDialogFilterText(DefaultDialogFilterText);
         await LoadDialogAsync();
+    }
+
+    private void ParseDialogFilterText(string text)
+    {
+        _dialogFilterText       = text;
+        _dialogFilterParseError = null;
+
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = DialogFilterParser.Parse(text, DtSvc.UseUtc); }
+            catch (FilterParseException ex) { _dialogFilterParseError = ex.Message; }
+        }
+        _dialogFilterAst = node;
     }
 
     private async Task LoadDialogAsync()
@@ -510,17 +527,8 @@
 
     private async Task OnDialogFilterChanged(string text)
     {
-        _dialogFilterText       = text;
-        _dialogFilterParseError = null;
-        _dialogSelected         = null;
-
-        FilterNode? node = null;
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            try   { node = DialogFilterParser.Parse(text); }
-            catch (FilterParseException ex) { _dialogFilterParseError = ex.Message; }
-        }
-        _dialogFilterAst = node;
+        _dialogSelected = null;
+        ParseDialogFilterText(text);
 
         if (_dialogFilterParseError is not null) { StateHasChanged(); return; }
         await LoadDialogAsync();
@@ -751,58 +759,75 @@
     </MudDialog>
 
     <!-- Add Run dialog -->
-    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true })">
+    <MudDialog @bind-Visible="_addDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true })"
+               ActionsClass="bm-tl-dialog-actions">
         <TitleContent>
             <MudText Typo="Typo.h6">Add Run</MudText>
         </TitleContent>
         <DialogContent>
-            <div class="bm-tl-dialog-controls">
-                <div class="bm-tl-dialog-env-wrap">
-                    <span class="bm-toolbar-label">Environment</span>
-                    <MudSelect T="string" Value="_dialogEnv"
-                               ValueChanged="OnDialogEnvChanged"
-                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                               Class="bm-tl-dialog-env" PopoverClass="bm-tl-dialog-env-popover">
-                        @foreach (var env in EnvService.Environments)
-                        {
-                            <MudSelectItem Value="@env.Id">@env.Id</MudSelectItem>
-                        }
-                    </MudSelect>
+            <!-- Fixed-height column: the control bar is a normal (non-scrolling) flex
+                 item above the table, not an overlay — it never scrolls and never
+                 sits in front of table content, it just stays above it. Only
+                 bm-tl-dialog-scroll scrolls. -->
+            <div class="bm-tl-dialog-body">
+                <!-- Environment + Filter (pre-filled with the same last-10-days default
+                     as the Runs page) + Refresh, last in the bar. -->
+                <div class="bm-tl-dialog-controls">
+                    <div class="bm-tl-dialog-env-wrap">
+                        <MudSelect T="string" Label="Environment" Value="_dialogEnv"
+                                   ValueChanged="OnDialogEnvChanged"
+                                   Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   FullWidth="false" Class="bm-tl-dialog-env bm-select-fit bm-tl-select-labeled" PopoverClass="bm-tl-dialog-env-popover">
+                            @foreach (var env in EnvService.Environments)
+                            {
+                                <MudSelectItem Value="@env.Id">@env.Id</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+
+                    <FilterBox Value="@_dialogFilterText"
+                               OnFilterChanged="OnDialogFilterChanged"
+                               ParseError="@_dialogFilterParseError"
+                               Placeholder="Filter runs…"
+                               Class="bm-filter-input"
+                               FieldHints="@_dialogFieldHints" />
+
+                    <ToolbarRefresh Loading="@_dialogLoading" OnRefresh="LoadDialogAsync" />
                 </div>
 
-                <FilterBox Value="@_dialogFilterText"
-                           OnFilterChanged="OnDialogFilterChanged"
-                           ParseError="@_dialogFilterParseError"
-                           Placeholder="Filter runs…"
-                           Class="bm-filter-input"
-                           FieldHints="@_dialogFieldHints" />
+                <div class="bm-tl-dialog-scroll">
+                    <BmRunsTable Rows="@_dialogBatches"
+                                 Loading="@_dialogLoading"
+                                 FixedHeader="false"
+                                 ShowActions="false"
+                                 ShowFooter="false"
+                                 TotalCount="@_dialogAll.Count"
+                                 Page="@_dialogPage"
+                                 PageSize="@_dialogPageSize"
+                                 TotalPages="@_dialogTotalPages"
+                                 PageChanged="OnDialogPageChanged"
+                                 PageSizeChanged="OnDialogPageSizeChanged"
+                                 SortField="@_dialogSortField"
+                                 SortDescending="@_dialogSortDescending"
+                                 OnSort="OnDialogSort"
+                                 RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
+                                 OnRowClick="@(r => OnDialogRowClick(r))"
+                                 OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />
+
+                    @if (_dialogSelected is not null && IsAlreadyLoaded(_dialogSelected))
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                            Already loaded: @_dialogSelected.RunId (@_dialogEnv) — loading will refresh/merge events.
+                        </MudAlert>
+                    }
+                </div>
             </div>
-
-            <BmRunsTable Rows="@_dialogBatches"
-                         Loading="@_dialogLoading"
-                         FixedHeader="false"
-                         ShowActions="false"
-                         TotalCount="@_dialogAll.Count"
-                         Page="@_dialogPage"
-                         PageSize="@_dialogPageSize"
-                         TotalPages="@_dialogTotalPages"
-                         PageChanged="OnDialogPageChanged"
-                         PageSizeChanged="OnDialogPageSizeChanged"
-                         SortField="@_dialogSortField"
-                         SortDescending="@_dialogSortDescending"
-                         OnSort="OnDialogSort"
-                         RowClassFunc="@((row, _) => _dialogSelected?.RunId == row.RunId ? "bm-tl-dialog-selected" : "")"
-                         OnRowClick="@(r => OnDialogRowClick(r))"
-                         OnOpenDetail="@(r => OnDialogRowDoubleClick(r))" />
-
-            @if (_dialogSelected is not null && IsAlreadyLoaded(_dialogSelected))
-            {
-                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
-                    Already loaded: @_dialogSelected.RunId (@_dialogEnv) — loading will refresh/merge events.
-                </MudAlert>
-            }
         </DialogContent>
         <DialogActions>
+            <div class="bm-tl-dialog-pagination">
+                <BmPagination Count="@_dialogTotalPages" Selected="@_dialogPage"
+                              SelectedChanged="@(p => OnDialogPageChanged(p))" />
+            </div>
             <MudButton OnClick="@(() => _addDialogOpen = false)">Cancel</MudButton>
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        Disabled="@(_dialogSelected is null)"

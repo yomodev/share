@@ -26,7 +26,7 @@
     border-bottom: 1px solid var(--mud-palette-divider);
 }
 
-.bm-tl-filter { min-width: 160px; flex: 1 1 0; }
+.bm-tl-filter { min-width: 160px; flex: 1 1 0%; } /* same as MudBlazor's flex-1 utility */
 
 /* Live event counter — reserved width sized for up to 5 digits (e.g. "12,345 events")
    so the count growing during a live fetch never reflows the controls to its left.

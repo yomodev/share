@@ -32,7 +32,7 @@
         <!-- Mode select -->
         <MudSelect T="string" Value="_modeKey" ValueChanged="OnModeChanged"
                    Label="Mode" Variant="Variant.Outlined" Dense="true" Margin="Margin.Dense"
-                   FullWidth="false" Class="bm-select-fit">
+                   FullWidth="false" Class="bm-select-fit bm-tl-select-labeled">
             <MudSelectItem Value="@("all")">From beginning</MudSelectItem>
             <MudSelectItem Value="@("latestN")">Latest 500</MudSelectItem>
             <MudSelectItem Value="@("fromOffset")">From offset</MudSelectItem>
