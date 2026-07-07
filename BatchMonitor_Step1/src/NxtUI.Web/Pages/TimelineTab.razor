@@ -124,7 +124,7 @@
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=6");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=9");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
@@ -742,11 +742,14 @@
                     </tr>
                 </thead>
                 <tbody>
+                    <tr><td>Drag on lanes</td><td>Pan horizontally and vertically</td></tr>
                     <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Pan timeline left / right</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Zoom out (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                    <tr><td>Wheel on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+wheel on lanes</td><td>Scroll lanes up / down</td></tr>
                     <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
                     <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+click block</td><td>Copy message details to clipboard</td></tr>

@@ -263,15 +263,38 @@ const TIMELINE_ALIASES = {
             subrowHOverride: null,
             selFn: null,
             isVisible: true,
+            // Last transform.y consumed from D3 zoom's internal state — used to turn
+            // a drag's vertical component into native scroll (see the zoom handler
+            // below). applyZoom always resets the real transform's y to 0, so this
+            // is kept in lockstep there too, otherwise the next drag would see a
+            // large bogus delta against a stale value.
+            lastZoomY: 0,
         };
 
-        // Wire D3 zoom — wheel events are handled separately on the bottom panel;
-        // the lane SVG uses D3 zoom only for programmatic transforms (applyZoom).
+        // Wire D3 zoom — wheel is excluded from D3's own handling here because it's
+        // handled by our own listeners below instead (whMain on the lanes, wh on the
+        // bottom panel), both going through applyZoom for consistent clamping. The
+        // lane SVG's zoom behaviour itself only drives drag-to-pan + programmatic
+        // transforms.
         const zoom = d3.zoom()
             .scaleExtent([1, 5000])
             .filter(event => event.type !== 'wheel' && !event.button)
             .on('zoom', event => {
                 if (!s.frozenDomainMax) return;
+
+                // A drag (or touch pan) carries a vertical component in D3's own
+                // transform even though our xZoom model is horizontal-only — apply
+                // it to the lane list's native scroll instead of discarding it, so
+                // panning works both ways like the run-detail graph. Delta against
+                // the last CONSUMED value, not an absolute position, since D3's
+                // transform.y keeps accumulating across the whole drag gesture.
+                const dy = event.transform.y - s.lastZoomY;
+                if (dy) {
+                    const wrap = s.laneEl.parentElement;
+                    if (wrap) wrap.scrollTop -= dy;
+                    s.lastZoomY = event.transform.y;
+                }
+
                 s.xZoom = clampTransform(s, event.transform);
                 renderLanes(s);
                 renderTicks(s);
@@ -311,6 +334,35 @@ const TIMELINE_ALIASES = {
         bottomEl.addEventListener('wheel', wh, { passive: false });
         s.wheelFn = wh;
 
+        // Wheel directly over the lanes zooms toward the cursor's time position —
+        // same feel as the run-detail graph's free zoom, adapted to this timeline's
+        // 1D horizontal axis. This replaces native wheel-scroll of the lane list
+        // (bm-tl-canvas-wrap's overflow-y:auto) — preventDefault() here stops that
+        // regardless of which ancestor would have scrolled; Ctrl+wheel below restores
+        // vertical scrolling explicitly (also the browser's own ctrl+wheel page-zoom
+        // gesture, which preventDefault() suppresses here in favour of our own
+        // behaviour). ↑/↓ (see handleKey) and dragging the scrollbar thumb remain as
+        // other ways to scroll lanes vertically. clampTransform (via applyZoom)
+        // already caps zoom-out at "the whole [0, globalMax] range fits the
+        // viewport" — no extra capping needed here.
+        const whMain = e => {
+            if (!s.isVisible || !s.frozenDomainMax) return;
+            e.preventDefault();
+
+            if (e.ctrlKey) {
+                const wrap = s.laneEl.parentElement;
+                if (wrap) wrap.scrollTop += e.deltaY;
+                return;
+            }
+
+            const mx     = e.clientX - s.laneEl.getBoundingClientRect().left;
+            const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+            const t      = s.xZoom;
+            applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
+        };
+        laneEl.addEventListener('wheel', whMain, { passive: false });
+        s.wheelMainFn = whMain;
+
         // Resize observer.
         const ro = new ResizeObserver(() => { if (!s.disposed) onResize(s); });
         ro.observe(laneEl.parentElement || laneEl);
@@ -323,6 +375,7 @@ const TIMELINE_ALIASES = {
         s.disposed = true;
         document.removeEventListener('keydown', s.keydownFn);
         s.bottomEl?.removeEventListener('wheel', s.wheelFn);
+        s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
         try { s.laneSvg.remove(); } catch {}
@@ -347,6 +400,10 @@ const TIMELINE_ALIASES = {
     // Apply a zoom transform: clamps first so D3's internal state stays clean,
     // then fires the zoom handler which updates s.xZoom and renders.
     function applyZoom(s, t) {
+        // clampTransform always produces y=0 — keep lastZoomY in lockstep so the
+        // next drag's vertical-scroll delta (see the zoom handler above) is computed
+        // against the real reset baseline, not a stale pre-reset value.
+        s.lastZoomY = 0;
         s.laneSvg.call(s.zoom.transform, clampTransform(s, t));
     }
 
