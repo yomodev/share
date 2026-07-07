@@ -34,6 +34,12 @@
     private Topology? _topology;
     private int _eventCount;
 
+    // Single shared instance instead of "?? new Topology()" inline in the markup —
+    // that allocated a NEW instance every render while _topology was still null
+    // (before the first compute), which defeated D3FlowGraph's reference-equality
+    // change-detection on its Topology parameter during that window.
+    private static readonly Topology EmptyTopology = new();
+
     // ── Replay mode (Step 8) ─────────────────────────────────────────────
     private DateTime? _replayTimestamp;
     private bool IsReplay => _replayTimestamp.HasValue;
@@ -386,7 +392,7 @@
     <div class="bm-batch-graph" style="position:relative">
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
-        <D3FlowGraph Topology="@(_topology ?? new Topology())" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
+        <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph" />
         @if (_loading)
         {

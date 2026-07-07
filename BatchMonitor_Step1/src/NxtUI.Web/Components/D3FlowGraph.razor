@@ -31,6 +31,14 @@
     private bool _previousIsVisible = true;
     private DotNetObjectReference<D3FlowGraph>? _selfRef;
 
+    // RunDetail's mutable Tab parameter means every open tab's OnParametersSetAsync
+    // re-runs whenever ANY tab's loading spinner toggles (TabService.NotifyChanged is
+    // very chatty). Without this guard, every one of those unrelated notifications
+    // re-serialized and re-pushed the whole Topology to JS. RunDetail creates a new
+    // Topology instance only when it actually recomputes, so reference equality is a
+    // correct, free way to detect "did the data actually change."
+    private Topology? _lastPushed;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -84,9 +92,11 @@
     private async Task PushTopologyAsync()
     {
         if (_module is null) return;
+        if (ReferenceEquals(Topology, _lastPushed)) return;
         try
         {
             await _module.InvokeVoidAsync("update", GetHandleKey(), Topology);
+            _lastPushed = Topology;
         }
         catch (Exception ex)
         {

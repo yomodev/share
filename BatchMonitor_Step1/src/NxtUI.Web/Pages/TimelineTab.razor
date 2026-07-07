@@ -97,6 +97,13 @@
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
 
+    // TabService.NotifyChanged fires very often (every BeginLoading/EndLoading on every
+    // open tab), re-running OnParametersSetAsync on every open tab, not just the one
+    // whose loading state actually changed. Without this guard, every one of those
+    // unrelated notifications made a JS interop round trip here even though IsFocused
+    // hadn't actually changed.
+    private bool _previousIsFocused = true;
+
     // Set by control-bar handlers so OnAfterRenderAsync pushes data to JS
     // AFTER Blazor finishes the render.
     private bool _pendingJsPush = false;
@@ -115,8 +122,10 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_tlModule is not null)
-            await _tlModule.InvokeVoidAsync("setVisible", _instanceKey, IsFocused);
+        if (_tlModule is null) return;
+        if (IsFocused == _previousIsFocused) return;
+        _previousIsFocused = IsFocused;
+        await _tlModule.InvokeVoidAsync("setVisible", _instanceKey, IsFocused);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
