@@ -5608,14 +5608,20 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 3114
+LENGTH 3545
 {
   "AllowedHosts": "*",
 
   "Ui": {
     "FilterDebounceMs": 500,
     "ShowMemoryDashboard": true,
-    "LabelStripWords": [ "Pipeline", "ABC", "{EnvID}" ]
+    "LabelStripWords": [ "Pipeline", "ABC", "{EnvID}" ],
+    // "FixedSide" (default, fewer overlapping arrows) or "FixedPos" (arrows land
+    // exactly on their pipeline row, but can overlap more in dense diagrams).
+    "GraphPortConstraints": "FixedSide",
+    // "Orthogonal" (default, H/V segments matching ELK's actual routing) or "Curved"
+    // (smooth spline through the same waypoints). Applies to either port mode above.
+    "GraphEdgeStyle": "Orthogonal"
   },
 
   "Kafka": {
@@ -5669,8 +5675,9 @@ LENGTH 3114
     ],
     "MetricsFileName": "Metrics.log",
     "MetricsIntervalSeconds": 90,
-    "LogsFolder": "C:\\Temp\\logs\\{server}",
-    //"LogsFolder": "\\\\{server}\\Shared\\bau\\logs",
+    "RootFolder": "C:\\Temp\\logs\\{server}",
+    //"RootFolder": "\\\\{server}\\Shared",
+    "StartupFolder": "{today}",
     "FolderScanIntervalSeconds": 30,
     "FolderScanMinIntervalSeconds": 10,
     "IdleReleaseMinutes": 10
@@ -6440,7 +6447,7 @@ public class TopicDeserializerRule
     public List<string> Types { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
-LENGTH 2849
+LENGTH 3444
 namespace NxtUI.Core.Configuration;
 
 public class LogPathSettings
@@ -6471,11 +6478,22 @@ public class LogPathSettings
     public int MetricsIntervalSeconds { get; set; } = 90;
 
     /// <summary>
-    /// UNC path template for the Log Browser base folder per server.
+    /// UNC path template for the Log Browser's top-level "Root" node, per server.
     /// Placeholder: {server} — server hostname.
-    /// Example: "\\{server}\Shared\bau\logs"
+    /// Example: "\\{server}\Shared"
     /// </summary>
-    public string LogsFolder { get; set; } = string.Empty;
+    public string RootFolder { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Path the Log Browser auto-navigates to on startup, RELATIVE to <see cref="RootFolder"/>
+    /// (not a full UNC template — RootFolder already supplies the {server}/UNC prefix).
+    /// Supports the <c>{today}</c> placeholder, substituted with the current UTC date as
+    /// yyyy-MM-dd. Example: "bau\logs\{today}".
+    /// </summary>
+    public string StartupFolder { get; set; } = string.Empty;
+
+    /// <summary>Default filename glob for the Log Browser's file list/search (e.g. "*", "*.log").</summary>
+    public string DefaultFileGlob { get; set; } = "*";
 
     /// <summary>
     /// List of server hostnames to enumerate in the Log Browser tree.
@@ -6676,7 +6694,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 1487
+LENGTH 2818
 namespace NxtUI.Core.Configuration;
 
 public class UiSettings
@@ -6707,6 +6725,28 @@ public class UiSettings
     /// collapsed and leading/trailing <c>-</c>/<c>_</c>/spaces are trimmed.
     /// </summary>
     public string[] LabelStripWords { get; set; } = ["Pipeline", "ABC", "{EnvID}"];
+
+    /// <summary>
+    /// How the run-detail flow graph pins pipeline-row ports for ELK's edge routing.
+    /// <c>FixedSide</c> (default): ports are pinned to a side (e.g. EAST) only — ELK can
+    /// reorder them within that side to minimise edge crossings/overlaps, but an arrow
+    /// no longer lands on the exact pixel row it represents. <c>FixedPos</c>: ports are
+    /// pinned to the exact row they represent — arrows always connect to the right row,
+    /// but ELK can't reorder them, so dense diagrams can show more overlapping edges.
+    /// Any other value falls back to FixedSide.
+    /// </summary>
+    public string GraphPortConstraints { get; set; } = "FixedSide";
+
+    /// <summary>
+    /// How the run-detail flow graph draws edges through ELK's computed waypoints.
+    /// <c>Orthogonal</c> (default): horizontal/vertical segments with softly rounded
+    /// corners, matching the routing ELK actually computed (never passes through a
+    /// node interior). <c>Curved</c>: a smooth spline through the same waypoints —
+    /// looser/organic look, but can visually cut closer to node edges between bends.
+    /// Applies regardless of <see cref="GraphPortConstraints"/>. Any other value
+    /// falls back to Orthogonal.
+    /// </summary>
+    public string GraphEdgeStyle { get; set; } = "Orthogonal";
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -9229,7 +9269,7 @@ public interface IKafkaAdmin
 /// <summary>Combined interface implemented by full Kafka service implementations.</summary>
 public interface IKafkaService : IKafkaMonitor, IKafkaAdmin { }
 FILE src/NxtUI.Core/Services/ILogBrowserService.cs
-LENGTH 1398
+LENGTH 1693
 using NxtUI.Core.Filtering;
 
 namespace NxtUI.Core.Services;
@@ -9247,6 +9287,13 @@ public record LogFileEntry(
 public interface ILogBrowserService
 {
     string? ResolveRoot(string server);
+
+    /// <summary>
+    /// Resolves the configured StartupFolder (relative to the Root node), substituting
+    /// the <c>{today}</c> placeholder with the current UTC date (yyyy-MM-dd). Returns
+    /// null if StartupFolder isn't configured.
+    /// </summary>
+    string? ResolveStartupPath();
 
     Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default);
@@ -10447,9 +10494,12 @@ LENGTH 9308
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 4294
+LENGTH 4788
 @namespace NxtUI.Web.Components
+@using Microsoft.Extensions.Options
+@using NxtUI.Core.Configuration
 @inject IJSRuntime JS
+@inject IOptions<UiSettings> UiOptions
 @implements IAsyncDisposable
 
 <div class="bm-d3-flow-graph">
@@ -10485,8 +10535,12 @@ LENGTH 4294
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=3");
-                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef);
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=7");
+                var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
+                    ? "FIXED_POS" : "FIXED_SIDE";
+                var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
+                    ? "CURVED" : "ORTHOGONAL";
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef, portConstraints, edgeStyle);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
@@ -11010,7 +11064,7 @@ public partial class KafkaTopicInfoDialog
     };
 }
 FILE src/NxtUI.Web/Components/LogBrowserFileTree.razor
-LENGTH 6644
+LENGTH 2928
 @namespace NxtUI.Web.Components
 @using NxtUI.Web.Models
 
@@ -11021,10 +11075,10 @@ LENGTH 6644
         <MudText Typo="Typo.caption" Class="bm-muted">Add servers to App:Environments[].Servers in appsettings.</MudText>
     </div>
 }
-else if (LogsFolderMissing)
+else if (RootFolderMissing)
 {
     <div class="bm-lb-empty">
-        <MudText Typo="Typo.body2" Class="bm-muted">Logs:LogsFolder not configured.</MudText>
+        <MudText Typo="Typo.body2" Class="bm-muted">Logs:RootFolder not configured.</MudText>
     </div>
 }
 else if (InitError is not null)
@@ -11037,64 +11091,18 @@ else if (!Initialized)
 {
     <div class="bm-lb-empty"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
 }
-else if (RootNodes.Count == 0)
-{
-    <div class="bm-lb-empty">
-        <MudText Typo="Typo.body2" Class="bm-muted">No folders found.</MudText>
-    </div>
-}
 else
 {
     <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary" Class="bm-lb-tree">
-        @foreach (var node in RootNodes)
-        {
-            <MudTreeViewItem @key="@node.RelativePath" Value="@node"
-                             Expanded="@Expanded.Contains(node.RelativePath)"
-                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
-                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
-                <BodyContent>@RenderRow(node)</BodyContent>
-                <ChildContent>
-                    @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
-                    {
-                        @foreach (var c1 in ch1)
-                        {
-                            <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
-                                             Expanded="@Expanded.Contains(c1.RelativePath)"
-                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
-                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
-                                <BodyContent>@RenderRow(c1)</BodyContent>
-                                <ChildContent>
-                                    @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
-                                    {
-                                        @foreach (var c2 in ch2)
-                                        {
-                                            <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
-                                                             Expanded="@Expanded.Contains(c2.RelativePath)"
-                                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
-                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
-                                                <BodyContent>@RenderRow(c2)</BodyContent>
-                                                <ChildContent>
-                                                    @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
-                                                    {
-                                                        @foreach (var c3 in ch3)
-                                                        {
-                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
-                                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
-                                                                <BodyContent>@RenderRow(c3)</BodyContent>
-                                                            </MudTreeViewItem>
-                                                        }
-                                                    }
-                                                </ChildContent>
-                                            </MudTreeViewItem>
-                                        }
-                                    }
-                                </ChildContent>
-                            </MudTreeViewItem>
-                        }
-                    }
-                </ChildContent>
-            </MudTreeViewItem>
-        }
+        <LogBrowserTreeNode Node="@RootNode"
+                            Children="@RootNodes"
+                            ChildCache="@ChildCache"
+                            Expanded="@Expanded"
+                            LoadingNodes="@LoadingNodes"
+                            CheckedPaths="@CheckedPaths"
+                            OnExpandedChanged="@OnExpandedChanged"
+                            OnItemClick="@OnItemClick"
+                            OnCheckChanged="@OnCheckChanged" />
     </MudTreeView>
 }
 
@@ -11106,7 +11114,7 @@ else
     [Parameter] public HashSet<string>     LoadingNodes   { get; set; } = new();
     [Parameter] public HashSet<string>     CheckedPaths   { get; set; } = new();
     [Parameter] public bool                Initialized    { get; set; }
-    [Parameter] public bool                LogsFolderMissing { get; set; }
+    [Parameter] public bool                RootFolderMissing { get; set; }
     [Parameter] public string?             InitError      { get; set; }
 
     [Parameter] public EventCallback<(LogFolderNode, bool)>   OnExpandedChanged  { get; set; }
@@ -11116,21 +11124,78 @@ else
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
 
+    // Synthetic top-level node representing the configured RootFolder. Its children
+    // are RootNodes (the caller's already-loaded merged top-level folder list across
+    // all servers) rather than a ChildCache[""] entry — see LogBrowserTreeNode's
+    // Children parameter.
+    private static readonly LogFolderNode RootNode = new("Root", "", true);
+}
+FILE src/NxtUI.Web/Components/LogBrowserTreeNode.razor
+LENGTH 3664
+@namespace NxtUI.Web.Components
+@using NxtUI.Web.Models
+
+@* Recursive tree node — renders itself for each child, so tree depth is unlimited
+   (the previous implementation hand-duplicated 4 nesting levels of markup, which
+   silently capped browsable depth at 4; there was no MudBlazor limitation forcing
+   that, just how the component happened to be written). *@
+
+<MudTreeViewItem @key="@Node.RelativePath" T="LogFolderNode" Value="@Node"
+                 Expanded="@Expanded.Contains(Node.RelativePath)"
+                 ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((Node, exp)))"
+                 OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(Node))">
+    <BodyContent>@RenderRow()</BodyContent>
+    <ChildContent>
+        @foreach (var child in ChildrenOf(Node))
+        {
+            <LogBrowserTreeNode Node="@child"
+                                ChildCache="@ChildCache"
+                                Expanded="@Expanded"
+                                LoadingNodes="@LoadingNodes"
+                                CheckedPaths="@CheckedPaths"
+                                OnExpandedChanged="@OnExpandedChanged"
+                                OnItemClick="@OnItemClick"
+                                OnCheckChanged="@OnCheckChanged" />
+        }
+    </ChildContent>
+</MudTreeViewItem>
+
+@code {
+    [Parameter, EditorRequired] public LogFolderNode Node { get; set; } = null!;
+
+    // Pre-supplied children for THIS node, bypassing ChildCache lookup — used only
+    // for the synthetic "Root" node, whose children are the caller's already-loaded
+    // top-level folder list rather than an entry keyed in ChildCache. Every other
+    // (real) node looks its children up from ChildCache as normal.
+    [Parameter] public IReadOnlyList<LogFolderNode>? Children { get; set; }
+
+    [Parameter] public Dictionary<string, IReadOnlyList<LogFolderNode>> ChildCache { get; set; } = new();
+    [Parameter] public HashSet<string> Expanded     { get; set; } = new();
+    [Parameter] public HashSet<string> LoadingNodes { get; set; } = new();
+    [Parameter] public HashSet<string> CheckedPaths { get; set; } = new();
+
+    [Parameter] public EventCallback<(LogFolderNode, bool)> OnExpandedChanged { get; set; }
+    [Parameter] public EventCallback<LogFolderNode>         OnItemClick       { get; set; }
+    [Parameter] public EventCallback<(LogFolderNode, bool)> OnCheckChanged    { get; set; }
+
+    private IReadOnlyList<LogFolderNode> ChildrenOf(LogFolderNode node) =>
+        Children ?? (ChildCache.TryGetValue(node.RelativePath, out var ch) ? ch : []);
+
     // Row body: a selection checkbox on the left, folder name on the right — independent
     // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
     // a folder never toggles its expansion and vice versa.
-    private RenderFragment RenderRow(LogFolderNode node) => __builder =>
+    private RenderFragment RenderRow() => __builder =>
     {
         <div class="bm-lb-tree-row">
             <div @onclick:stopPropagation="true">
-                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
-                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
+                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(Node.RelativePath)"
+                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((Node, v)))"
                              Size="Size.Small"
                              Color="Color.Primary"
                              Class="bm-lb-tree-row-checkbox" />
             </div>
-            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
-            @if (LoadingNodes.Contains(node.RelativePath))
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@Node.Name</MudText>
+            @if (LoadingNodes.Contains(Node.RelativePath))
             {
                 <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-lb-tree-row-spinner" />
             }
@@ -13768,7 +13833,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FileBrowser.razor
-LENGTH 39682
+LENGTH 41701
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -13888,7 +13953,7 @@ LENGTH 39682
                                     LoadingNodes="@_loadingNodes"
                                     CheckedPaths="@_checkedPaths"
                                     Initialized="@_initialized"
-                                    LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
+                                    RootFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.RootFolder))"
                                     InitError="@_initError"
                                     OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
                                     OnItemClick="@OnItemClickAsync"
@@ -14107,10 +14172,13 @@ LENGTH 39682
     }
 
     /// <summary>
-    /// Eagerly loads every folder down to the depth LogBrowserFileTree can actually
-    /// render (4 levels: root + 3), so the tree filter has something to search inside
-    /// unexpanded branches. Runs once per session (or since the last full Refresh) —
-    /// real infra may have many folders, so this isn't repeated on every keystroke.
+    /// Eagerly loads folders 3 levels deep so the tree filter has something to search
+    /// inside branches the user hasn't manually expanded yet. This 3-level cap is a
+    /// deliberate eager-prefetch bound for the filter only — it does not limit how deep
+    /// a user can manually expand/navigate (LogBrowserTreeNode fetches on demand at
+    /// unlimited depth; this just controls how far ahead the filter searches without
+    /// the user having opened anything). Runs once per session (or since the last full
+    /// Refresh) — real infra may have many folders, so this isn't repeated on every keystroke.
     /// </summary>
     private async Task EnsureTreeLoadedAsync()
     {
@@ -14208,8 +14276,9 @@ LENGTH 39682
         await Task.CompletedTask;
     }
 
-    // search
-    private string    _fileGlob           = "*.log";
+    // search — placeholder until OnInitializedAsync sets it from LogSettings.DefaultFileGlob
+    // (injected properties aren't available yet at field-initializer time).
+    private string    _fileGlob           = "*";
     private string    _contentFilterStr   = "";
     private FilterNode? _contentFilterNode;
     private string?   _contentFilterError;
@@ -14240,7 +14309,8 @@ LENGTH 39682
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
-        _servers = EnvironmentService.GetServers(Env).ToList();
+        _servers  = EnvironmentService.GetServers(Env).ToList();
+        _fileGlob = DefaultFileGlob;
 
         try
         {
@@ -14255,12 +14325,45 @@ LENGTH 39682
         // No auto-start here — polling only begins once the user actually selects a
         // folder or toggles the search bar (see RestartPollingIfBrowsing).
 
-        // Auto-navigate to today's date folder if one exists at the root.
-        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-        var todayNode = _rootNodes.FirstOrDefault(n =>
-            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-        if (todayNode is not null)
-            await OnExpandedChangedAsync(todayNode, true);
+        // Root is always expanded by default so the top-level folder list is visible
+        // immediately, same as before "Root" existed as an explicit node.
+        _expanded.Add("");
+        await NavigateToStartupFolderAsync();
+    }
+
+    /// <summary>
+    /// Expands the tree down to the configured StartupFolder (relative to Root,
+    /// {today} substituted — see ILogBrowserService.ResolveStartupPath), one segment
+    /// at a time, stopping silently at the first segment that doesn't exist. Does not
+    /// check/select the folder — matches the old hardcoded "auto-expand today's date
+    /// folder" behaviour this replaces (expand only, not select).
+    /// </summary>
+    private async Task NavigateToStartupFolderAsync()
+    {
+        var startup = BrowserSvc.ResolveStartupPath();
+        if (string.IsNullOrWhiteSpace(startup)) return;
+
+        var segments = startup.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var current = "";
+
+        foreach (var seg in segments)
+        {
+            IReadOnlyList<LogFolderNode>? siblings = current == ""
+                ? _rootNodes
+                : _childCache.TryGetValue(current, out var cached) ? cached : null;
+
+            if (siblings is null)
+            {
+                siblings = await BrowserSvc.GetSubfoldersAsync(_servers, current, _cts.Token);
+                _childCache[current] = siblings;
+            }
+
+            var match = siblings.FirstOrDefault(n => n.Name.Equals(seg, StringComparison.OrdinalIgnoreCase));
+            if (match is null) break; // segment doesn't exist — stop drilling, keep what resolved so far
+
+            current = string.IsNullOrEmpty(current) ? seg : current + "\\" + seg;
+            _expanded.Add(current);
+        }
     }
 
     // Synchronous and separate from OnParametersSetAsync below — this must not
@@ -14318,7 +14421,10 @@ LENGTH 39682
 
     // ── filter inputs ─────────────────────────────────────────────────────
 
-    private void OnGlobChanged(string v) => _fileGlob = string.IsNullOrWhiteSpace(v) ? "*.log" : v;
+    private string DefaultFileGlob =>
+        string.IsNullOrWhiteSpace(LogSettings.Value.DefaultFileGlob) ? "*" : LogSettings.Value.DefaultFileGlob;
+
+    private void OnGlobChanged(string v) => _fileGlob = string.IsNullOrWhiteSpace(v) ? DefaultFileGlob : v;
 
     private void OnContentFilterChanged(string v)
     {
@@ -20585,7 +20691,7 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 34721
+LENGTH 35034
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -20712,7 +20818,7 @@ LENGTH 34721
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=6");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=10");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
@@ -21330,11 +21436,14 @@ LENGTH 34721
                     </tr>
                 </thead>
                 <tbody>
+                    <tr><td>Drag on lanes</td><td>Pan horizontally and vertically</td></tr>
                     <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Pan timeline left / right</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Zoom out (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                    <tr><td>Wheel on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+wheel on lanes</td><td>Scroll lanes up / down</td></tr>
                     <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
                     <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+click block</td><td>Copy message details to clipboard</td></tr>
@@ -21457,7 +21566,7 @@ LENGTH 23503
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=49" rel="stylesheet" />
+    <link href="css/app.css?v=51" rel="stylesheet" />
     <link href="css/d3-graph.css?v=3" rel="stylesheet" />
     <link href="css/d3-timeline.css?v=1" rel="stylesheet" />
     <link href="css/log-viewer.css?v=1" rel="stylesheet" />
@@ -22823,7 +22932,7 @@ public sealed class InfraHealthCache(
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 16873
+LENGTH 17151
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
@@ -22870,8 +22979,15 @@ public class LogBrowserService : ILogBrowserService
 
     public string? ResolveRoot(string server)
     {
-        if (string.IsNullOrWhiteSpace(_settings.LogsFolder)) return null;
-        return _settings.LogsFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(_settings.RootFolder)) return null;
+        return _settings.RootFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public string? ResolveStartupPath()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.StartupFolder)) return null;
+        return _settings.StartupFolder.Replace(
+            "{today}", DateTime.UtcNow.ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
@@ -24047,7 +24163,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 27763
+LENGTH 29857
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
@@ -24432,9 +24548,16 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         // true beginning. OffsetsForTimes resolves the correct starting offset directly on
         // the broker — it doesn't scan — so this is cheap regardless of retention length,
         // and stays correct (worst case: replays a bit more than strictly necessary) even
-        // if retention later grows from a few hours to a week. Falls back to Beginning only
-        // when heartbeat data isn't available yet (e.g. this env's very first subscribe).
-        var services = _heartbeatMonitor.GetServices(env);
+        // if retention later grows from a few hours to a week.
+        //
+        // The heartbeat cache is warmed by the SAME Subscribe() call that kicked off this
+        // consumer (see Subscribe() above), via a fire-and-forget Mongo poll — so on an env's
+        // very first subscribe, GetServices(env) can easily still be null here purely because
+        // that poll hasn't returned yet, not because there's really no heartbeat data. Wait
+        // briefly for it instead of immediately falling back to Default (effectively "from
+        // latest"), which would silently miss messages published between subscribe and the
+        // heartbeat poll actually completing.
+        var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
         var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
         var directive = oldestStart.HasValue
             ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
@@ -24493,6 +24616,42 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 "polling until re-subscribed (check broker connectivity/credentials for this environment)",
                 env, topic);
         }
+    }
+
+    // How long to wait for HeartbeatMonitor's warm-up poll before giving up and treating
+    // this env as genuinely having no heartbeat data yet.
+    private static readonly TimeSpan HeartbeatWaitTimeout = TimeSpan.FromSeconds(10);
+
+    private async Task<IReadOnlyList<ServiceStatus>?> WaitForHeartbeatAsync(string env, CancellationToken ct)
+    {
+        var services = _heartbeatMonitor.GetServices(env);
+        if (services is not null) return services;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnUpdated(string updatedEnv)
+        {
+            if (string.Equals(updatedEnv, env, StringComparison.OrdinalIgnoreCase)) tcs.TrySetResult();
+        }
+
+        _heartbeatMonitor.OnServicesUpdated += OnUpdated;
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(HeartbeatWaitTimeout);
+            try { await tcs.Task.WaitAsync(timeoutCts.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _log.LogDebug(
+                    "metrics [{Env}]: no heartbeat data after waiting {Timeout}s at Kafka consumer startup — " +
+                    "seeking from Default instead of oldest-service-start", env, HeartbeatWaitTimeout.TotalSeconds);
+            }
+        }
+        finally
+        {
+            _heartbeatMonitor.OnServicesUpdated -= OnUpdated;
+        }
+
+        return _heartbeatMonitor.GetServices(env);
     }
 
     private async Task HandleMetricsMessageAsync(string env, KafkaMessage msg, CancellationToken ct)
@@ -25059,7 +25218,7 @@ namespace NxtUI.Web.Services;
 /// <summary>
 /// Test-only background service that:
 ///   1. Writes Metrics.log files under ServiceTemplates paths (for the monitoring pipeline).
-///   2. Writes realistic App.log files under LogsFolder paths (for the log browser).
+///   2. Writes realistic App.log files under RootFolder paths (for the log browser).
 ///
 /// Both sets use today's date so the log browser always shows a folder for the current day.
 /// Gated by TestLogGenerator:Enabled — keep it off in production.
@@ -25261,8 +25420,8 @@ public sealed class TestLogGenerator : BackgroundService
                 _metricsTargets.Add(mt);
                 metricsGenerated++;
 
-                // ── 2. App logs under LogsFolder path (today + past days) ───
-                var logsRoot = _paths.LogsFolder;
+                // ── 2. App logs under RootFolder path (today + past days) ───
+                var logsRoot = _paths.RootFolder;
                 if (!string.IsNullOrWhiteSpace(logsRoot))
                 {
                     var serverRoot = logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase);
@@ -29576,7 +29735,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
 
     private LogBrowserService CreateService(string[] formats)
     {
-        var settings = new LogPathSettings { LogsFolder = _root };
+        var settings = new LogPathSettings { RootFolder = _root };
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(formats.Select((f, i) =>
                 new KeyValuePair<string, string?>($"Logs:Formats:{i}", f)))
@@ -32111,7 +32270,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 96511
+LENGTH 97729
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -32954,17 +33113,27 @@ html, body {
 }
 .bm-detail-topbar.loading { opacity: 0.6; }
 
-.bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
+/* No wrap — everything (labels, counts, progress bar) stays on one line. The
+   progress bar is pushed to the far right via margin-left:auto (below); without
+   wrap disabled it would drop to a second line once the other items' combined
+   width exceeded the available space. */
+.bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:nowrap; }
 .bm-detail-topbar-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
 
-/* No ellipsis/clamp — the top bar has room for the full description (per design). */
-.bm-detail-batch-name { font-weight:700; white-space:nowrap; }
+/* Only the description shrinks/ellipsizes when space is tight — every other label
+   (status, type, runid, counts, progress) has flex-shrink:0 so it's never the one
+   that gives way. Most of the time there's room to show the description in full;
+   it only clips under real width pressure. */
+.bm-detail-batch-name {
+    font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    min-width:40px; flex:1 1 auto;
+}
 .bm-detail-type {
     font-size:0.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
-    padding:1px 7px; border-radius:4px; white-space:nowrap;
+    padding:1px 7px; border-radius:4px; white-space:nowrap; flex-shrink:0;
     background:rgba(255,255,255,0.08); color:var(--mud-palette-text-secondary);
 }
-.bm-detail-runid { font-size:0.78rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }
+.bm-detail-runid { font-size:0.78rem; color:var(--mud-palette-text-secondary); white-space:nowrap; flex-shrink:0; }
 
 /* Status chip: coloured dot + label, green pulse when Running (§3, §8.1) */
 .bm-status-chip-dot {
@@ -32973,7 +33142,7 @@ html, body {
 }
 .bm-status-chip-label {
     font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
-    font-family: var(--bm-font-mono); white-space:nowrap;
+    font-family: var(--bm-font-mono); white-space:nowrap; flex-shrink:0;
 }
 .bm-status-chip-dot.bm-status-running     { background-color:#3FB950; }
 .bm-status-chip-dot.bm-status-completed   { background-color:#58A6FF; }
@@ -32993,16 +33162,19 @@ html, body {
 
 /* Done / in-progress counts: ✓ N  ⟳ N */
 .bm-detail-count {
-    display:inline-flex; align-items:center; gap:4px;
+    display:inline-flex; align-items:center; gap:4px; flex-shrink:0;
     font-family: var(--bm-font-mono); font-size:0.8rem; white-space:nowrap;
 }
 .bm-detail-count-done .mud-icon-root { color:#3FB950; }
 .bm-detail-count-inprogress .mud-icon-root { color:#388BFD; }
 
-/* Inline progress bar + "~N% estimated" label */
+/* Inline progress bar + "~N% estimated" label. margin-left:auto pins it to the
+   far right of bm-detail-topbar-left (i.e. flush against the action icons),
+   same row as the other labels — every other item here has flex-shrink:0, so
+   only the description (bm-detail-batch-name) ellipsizes to make room. */
 .bm-detail-progress {
-    display:flex; align-items:center; gap:8px;
-    min-width: 140px; max-width: 220px; flex: 0 1 180px;
+    display:flex; align-items:center; gap:8px; margin-left:auto;
+    min-width: 140px; max-width: 220px; flex: 0 0 180px;
 }
 .bm-detail-progress-bar { flex:1; border-radius:4px; }
 .bm-detail-progress-label { font-size:0.75rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }
@@ -34675,7 +34847,11 @@ tr.bm-row-searching td:first-child {
 .bm-lb-files-panel {
     flex: 1 1 0;
     min-width: 0;
-    overflow: auto;
+    /* hidden, not auto: MudTable's FixedHeader (Height="100%") needs to own the
+       scrolling itself via its own internal container — if this outer panel also
+       scrolls, the whole table (including its sticky header) scrolls inside it
+       instead, and the header no longer stays pinned. */
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     position: relative;
@@ -37265,7 +37441,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 36728
+LENGTH 41393
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -37362,17 +37538,33 @@ const D3Graph = (() => {
         return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
     }
 
-    // ── Layout (ELK: layered + orthogonal routing + fixed per-pipeline ports) ──
+    // ── Layout (ELK: layered + orthogonal routing) ─────────────────────────────
     //
-    // Left-to-right always: the run-detail flow is a horizontal pipeline chain, and
-    // fixing the direction keeps the port model simple (source rows export EAST,
-    // target rows import WEST). ELK routes edges orthogonally in the channels
-    // *between* blocks — they never cross a node interior — and minimises crossings.
+    // Direction adapts to the container's aspect ratio (wide container → flow left-
+    // to-right/EAST-WEST ports; tall/narrow container → flow top-to-bottom/SOUTH-
+    // NORTH ports) — same idea as the old dagre-based chooseDir(), which this ELK
+    // port carried forward but had temporarily hardcoded to 'RIGHT' only. ELK routes
+    // edges orthogonally in the channels *between* blocks — they never cross a node
+    // interior.
+    //
+    // Port constraint mode is configurable (UiSettings.GraphPortConstraints, passed
+    // in via init()'s portConstraints arg — see handle.portConstraints):
+    //   FIXED_SIDE (default): ports are pinned to a side only — ELK can reorder them
+    //     within that side to minimise crossings, but an arrow no longer lands on the
+    //     exact pixel row it represents; see edgeTooltip/edgeLabel to tell them apart.
+    //   FIXED_POS: ports are pinned to the exact row they represent — arrows always
+    //     connect to the right row, but ELK can't reorder them, so dense diagrams can
+    //     show more overlapping edges.
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
-    // Port Y measured from the node's top edge (ELK's per-node origin), aligned to
-    // the centre of the owning pipeline row. Falls back to node centre if unknown.
+    function chooseDir(containerEl) {
+        const r = containerEl.getBoundingClientRect();
+        return r.width >= r.height ? 'RIGHT' : 'DOWN';
+    }
+
+    // Port position along the node's EAST/WEST edge, aligned to the centre of the
+    // owning pipeline row (used when flow direction is RIGHT, FIXED_POS only).
     function portYFromTop(node, pipeline) {
         const i = pipelineIdx(node, pipeline);
         return i >= 0
@@ -37380,11 +37572,27 @@ const D3Graph = (() => {
             : nh(node) / 2;
     }
 
+    // Port position along the node's SOUTH/NORTH edge (used when flow direction is
+    // DOWN, FIXED_POS only) — rows stack vertically inside the node regardless of
+    // graph direction, so there's no natural per-row position on a horizontal edge;
+    // spread evenly instead.
+    function portXEvenSpread(node, pipeline, width) {
+        const rows = node.pipelines || [];
+        const i = pipelineIdx(node, pipeline);
+        const n = Math.max(rows.length, 1);
+        return i >= 0 ? (i + 1) * width / (n + 1) : width / 2;
+    }
+
     async function runLayout(handle, topo) {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        // Which pipeline rows need an output (EAST) / input (WEST) port.
+        const dir       = chooseDir(handle.containerEl);
+        const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
+        const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
+        const fixedPos  = handle.portConstraints === 'FIXED_POS';
+
+        // Which pipeline rows need an output/input port.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
         const inPorts  = new Map();
         const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
@@ -37399,15 +37607,23 @@ const D3Graph = (() => {
             // Cached on the node so updateClipPaths reuses the width without re-measuring.
             n._layoutWidth = computeNodeWidth(handle, n);
             const w = n._layoutWidth, h = nh(n);
+
             const ports = [];
-            for (const pipe of (outPorts.get(n.id) || []))
-                ports.push({ id: portId(n.id, 'out', pipe), x: w, y: portYFromTop(n, pipe),
-                             layoutOptions: { 'elk.port.side': 'EAST' } });
-            for (const pipe of (inPorts.get(n.id) || []))
-                ports.push({ id: portId(n.id, 'in', pipe), x: 0, y: portYFromTop(n, pipe),
-                             layoutOptions: { 'elk.port.side': 'WEST' } });
+            for (const pipe of (outPorts.get(n.id) || [])) {
+                const pos = fixedPos
+                    ? (dir === 'RIGHT' ? { x: w, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: h })
+                    : {};
+                ports.push({ id: portId(n.id, 'out', pipe), ...pos, layoutOptions: { 'elk.port.side': outSide } });
+            }
+            for (const pipe of (inPorts.get(n.id) || [])) {
+                const pos = fixedPos
+                    ? (dir === 'RIGHT' ? { x: 0, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: 0 })
+                    : {};
+                ports.push({ id: portId(n.id, 'in', pipe), ...pos, layoutOptions: { 'elk.port.side': inSide } });
+            }
+
             return { id: n.id, width: w, height: h, ports,
-                     layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
+                     layoutOptions: { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' } };
         });
 
         const elkEdges = edges.map((e, i) => ({
@@ -37417,17 +37633,28 @@ const D3Graph = (() => {
         }));
         const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
 
+        // Nudges ELK's own compaction toward filling the container's actual shape
+        // instead of defaulting to a fixed internal ratio — helps address layouts
+        // that were sprawling wide/short regardless of the panel's real proportions.
+        const cw = handle.containerEl.clientWidth  || 1;
+        const ch = handle.containerEl.clientHeight || 1;
+
         const graph = {
             id: 'root',
             layoutOptions: {
                 'elk.algorithm': 'layered',
-                'elk.direction': 'RIGHT',
+                'elk.direction': dir,
                 'elk.edgeRouting': 'ORTHOGONAL',
-                'elk.layered.spacing.nodeNodeBetweenLayers': '90',
-                'elk.spacing.nodeNode': '44',
-                'elk.spacing.edgeNode': '26',
-                'elk.spacing.edgeEdge': '16',
-                'elk.layered.spacing.edgeNodeBetweenLayers': '26',
+                'elk.aspectRatio': String(cw / ch),
+                'elk.layered.spacing.nodeNodeBetweenLayers': '110',
+                'elk.spacing.nodeNode': '56',
+                // These two were the tightest settings relative to how many parallel
+                // edges can share a channel between two fixed-position ports — bumped
+                // up first (least invasive: doesn't change where any arrow connects)
+                // before trading away exact per-row port alignment for FIXED_SIDE.
+                'elk.spacing.edgeNode': '34',
+                'elk.spacing.edgeEdge': '28',
+                'elk.layered.spacing.edgeNodeBetweenLayers': '34',
                 'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
             },
@@ -37480,6 +37707,23 @@ const D3Graph = (() => {
         return d + ` L ${last.x} ${last.y}`;
     }
 
+    // Smooth spline through the same ELK waypoints (start/bends/end) instead of
+    // straight orthogonal segments — looser, organic look; the alternative to
+    // roundedOrthPath, picked by UiSettings.GraphEdgeStyle via handle.edgeStyle.
+    // Applies regardless of port-constraint mode (FIXED_SIDE or FIXED_POS) — this is
+    // purely how the path between ELK's computed points is drawn, not how those
+    // points/ports were chosen.
+    const curveLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
+
+    function curvedPath(pts) {
+        if (!pts || pts.length < 2) return '';
+        return curveLine(pts);
+    }
+
+    function edgePath(handle, pts) {
+        return handle.edgeStyle === 'CURVED' ? curvedPath(pts) : roundedOrthPath(pts);
+    }
+
     // A point a short distance back from the arrowhead (last point), offset above
     // the line, so the label reads clearly next to the arrow it belongs to.
     function edgeLabelPos(pts) {
@@ -37494,7 +37738,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl, dotNetRef) {
+    function init(containerEl, dotNetRef, portConstraints, edgeStyle) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -37537,6 +37781,8 @@ const D3Graph = (() => {
 
         const handle = {
             containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
+            portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
+            edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             animState: createState(),
             elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
@@ -37983,7 +38229,7 @@ const D3Graph = (() => {
             const w   = edgeW(d.data);
             const path = d3.select(this).select('.bm-edge-path');
             // Set stroke as attribute so context-stroke on the marker resolves.
-            path.attr('d', roundedOrthPath(d.pts))
+            path.attr('d', edgePath(handle, d.pts))
                 .attr('stroke', col)
                 .attr('stroke-width', w);
 
@@ -38047,12 +38293,25 @@ const D3Graph = (() => {
 
     // ── Fit / visible / dispose ────────────────────────────────────────────
 
-    function fitToView(handle, animate) {
+    function fitToView(handle, animate, retriesLeft = 6) {
         const g  = handle.currentGraph;
         if (!g) return;
+        const cw0 = handle.containerEl.clientWidth;
+        const ch0 = handle.containerEl.clientHeight;
+
+        // The container can still be mid-layout (e.g. tab/flex sizing not settled yet)
+        // the moment ELK's async layout resolves, especially on first load — measuring
+        // it then produces a bogus (often tiny) transform that's never corrected
+        // afterward, which reads as "the graph opens zoomed into a small corner of
+        // itself". Retry a few frames instead of committing to a size that isn't real.
+        if ((cw0 < 40 || ch0 < 40) && retriesLeft > 0) {
+            requestAnimationFrame(() => fitToView(handle, animate, retriesLeft - 1));
+            return;
+        }
+
         const gi = { width: g.width, height: g.height };
-        const cw = handle.containerEl.clientWidth  || 1;
-        const ch = handle.containerEl.clientHeight || 1;
+        const cw = cw0 || 1;
+        const ch = ch0 || 1;
         const pad = 52;
         const scale = Math.max(0.12, Math.min(3,
             Math.min((cw - pad * 2) / (gi.width  || 1),
@@ -38090,8 +38349,8 @@ const D3Graph = (() => {
 
 const _handles = new Map();
 
-/** @param {Element} el @param {string} key @param {object} dotNetRef */
-export function init(el, key, dotNetRef) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef)); }
+/** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [portConstraints] "FIXED_SIDE" (default) or "FIXED_POS" @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
+export function init(el, key, dotNetRef, portConstraints, edgeStyle) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */
@@ -38913,7 +39172,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 49006
+LENGTH 54353
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -39179,15 +39438,38 @@ const TIMELINE_ALIASES = {
             subrowHOverride: null,
             selFn: null,
             isVisible: true,
+            // Last transform.y consumed from D3 zoom's internal state — used to turn
+            // a drag's vertical component into native scroll (see the zoom handler
+            // below). applyZoom always resets the real transform's y to 0, so this
+            // is kept in lockstep there too, otherwise the next drag would see a
+            // large bogus delta against a stale value.
+            lastZoomY: 0,
         };
 
-        // Wire D3 zoom — wheel events are handled separately on the bottom panel;
-        // the lane SVG uses D3 zoom only for programmatic transforms (applyZoom).
+        // Wire D3 zoom — wheel is excluded from D3's own handling here because it's
+        // handled by our own listeners below instead (whMain on the lanes, wh on the
+        // bottom panel), both going through applyZoom for consistent clamping. The
+        // lane SVG's zoom behaviour itself only drives drag-to-pan + programmatic
+        // transforms.
         const zoom = d3.zoom()
             .scaleExtent([1, 5000])
             .filter(event => event.type !== 'wheel' && !event.button)
             .on('zoom', event => {
                 if (!s.frozenDomainMax) return;
+
+                // A drag (or touch pan) carries a vertical component in D3's own
+                // transform even though our xZoom model is horizontal-only — apply
+                // it to the lane list's native scroll instead of discarding it, so
+                // panning works both ways like the run-detail graph. Delta against
+                // the last CONSUMED value, not an absolute position, since D3's
+                // transform.y keeps accumulating across the whole drag gesture.
+                const dy = event.transform.y - s.lastZoomY;
+                if (dy) {
+                    const wrap = s.laneEl.parentElement;
+                    if (wrap) wrap.scrollTop -= dy;
+                    s.lastZoomY = event.transform.y;
+                }
+
                 s.xZoom = clampTransform(s, event.transform);
                 renderLanes(s);
                 renderTicks(s);
@@ -39227,6 +39509,35 @@ const TIMELINE_ALIASES = {
         bottomEl.addEventListener('wheel', wh, { passive: false });
         s.wheelFn = wh;
 
+        // Wheel directly over the lanes zooms toward the cursor's time position —
+        // same feel as the run-detail graph's free zoom, adapted to this timeline's
+        // 1D horizontal axis. This replaces native wheel-scroll of the lane list
+        // (bm-tl-canvas-wrap's overflow-y:auto) — preventDefault() here stops that
+        // regardless of which ancestor would have scrolled; Ctrl+wheel below restores
+        // vertical scrolling explicitly (also the browser's own ctrl+wheel page-zoom
+        // gesture, which preventDefault() suppresses here in favour of our own
+        // behaviour). ↑/↓ (see handleKey) and dragging the scrollbar thumb remain as
+        // other ways to scroll lanes vertically. clampTransform (via applyZoom)
+        // already caps zoom-out at "the whole [0, globalMax] range fits the
+        // viewport" — no extra capping needed here.
+        const whMain = e => {
+            if (!s.isVisible || !s.frozenDomainMax) return;
+            e.preventDefault();
+
+            if (e.ctrlKey) {
+                const wrap = s.laneEl.parentElement;
+                if (wrap) wrap.scrollTop += e.deltaY;
+                return;
+            }
+
+            const mx     = e.clientX - s.laneEl.getBoundingClientRect().left;
+            const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+            const t      = s.xZoom;
+            applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
+        };
+        laneEl.addEventListener('wheel', whMain, { passive: false });
+        s.wheelMainFn = whMain;
+
         // Resize observer.
         const ro = new ResizeObserver(() => { if (!s.disposed) onResize(s); });
         ro.observe(laneEl.parentElement || laneEl);
@@ -39239,6 +39550,7 @@ const TIMELINE_ALIASES = {
         s.disposed = true;
         document.removeEventListener('keydown', s.keydownFn);
         s.bottomEl?.removeEventListener('wheel', s.wheelFn);
+        s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
         try { s.laneSvg.remove(); } catch {}
@@ -39263,6 +39575,10 @@ const TIMELINE_ALIASES = {
     // Apply a zoom transform: clamps first so D3's internal state stays clean,
     // then fires the zoom handler which updates s.xZoom and renders.
     function applyZoom(s, t) {
+        // clampTransform always produces y=0 — keep lastZoomY in lockstep so the
+        // next drag's vertical-scroll delta (see the zoom handler above) is computed
+        // against the real reset baseline, not a stale pre-reset value.
+        s.lastZoomY = 0;
         s.laneSvg.call(s.zoom.transform, clampTransform(s, t));
     }
 
@@ -39318,6 +39634,13 @@ const TIMELINE_ALIASES = {
             const rowH = ROW_PAD * 2 + subrows.length * (SH + BLOCK_GAP);
             groups.push({ key, events, subrows, rowH });
         }
+        // All events in a group share the same field values (that's what defines the
+        // group), so events[0] is representative — sort hierarchically instead of
+        // leaving the Map's insertion order, so e.g. every row for the same service
+        // clusters together regardless of which order distinct combinations first
+        // appeared in the raw event stream.
+        groups.sort((a, b) =>
+            compareGroupTuples(groupSortTuple(a.events[0], groupBy), groupSortTuple(b.events[0], groupBy)));
         return groups;
     }
 
@@ -39985,6 +40308,37 @@ const TIMELINE_ALIASES = {
             case 'Pid':      return `${e.server}:${e.processId}`;
             default:         return `${e.service} / ${e.pipeline}`;
         }
+    }
+
+    // Ordered field values for hierarchical group sorting — same fields as groupKey,
+    // kept separate (not derived from the composite string) so comparisons happen
+    // field-by-field. Order matches each dropdown option's own label (e.g. "Service /
+    // Pipeline / PID"), so rows for the same service always end up clustered together
+    // instead of scattered by whichever order distinct group keys were first seen in
+    // the raw event stream (a Map preserves insertion order, not any sorted order).
+    function groupSortTuple(e, g) {
+        switch (g) {
+            case 'ServicePipeline':    return [e.service, e.pipeline];
+            case 'PidServicePipeline': return [e.service, e.pipeline, e.server, e.processId];
+            case 'Service':  return [e.service];
+            case 'Pipeline': return [e.pipeline];
+            case 'Pid':      return [e.server, e.processId];
+            default:         return [e.service, e.pipeline];
+        }
+    }
+
+    // Numeric-aware so a PID/port-like field sorts 2 < 10, not "10" < "2".
+    function compareGroupTuples(a, b) {
+        const len = Math.max(a.length, b.length);
+        for (let i = 0; i < len; i++) {
+            const av = a[i], bv = b[i];
+            if (av === bv) continue;
+            if (av == null) return -1;
+            if (bv == null) return 1;
+            const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+            if (cmp !== 0) return cmp;
+        }
+        return 0;
     }
     function colourKey(e, c) {
         switch (c) {

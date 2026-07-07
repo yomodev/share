@@ -459,6 +459,13 @@ const TIMELINE_ALIASES = {
             const rowH = ROW_PAD * 2 + subrows.length * (SH + BLOCK_GAP);
             groups.push({ key, events, subrows, rowH });
         }
+        // All events in a group share the same field values (that's what defines the
+        // group), so events[0] is representative — sort hierarchically instead of
+        // leaving the Map's insertion order, so e.g. every row for the same service
+        // clusters together regardless of which order distinct combinations first
+        // appeared in the raw event stream.
+        groups.sort((a, b) =>
+            compareGroupTuples(groupSortTuple(a.events[0], groupBy), groupSortTuple(b.events[0], groupBy)));
         return groups;
     }
 
@@ -1126,6 +1133,37 @@ const TIMELINE_ALIASES = {
             case 'Pid':      return `${e.server}:${e.processId}`;
             default:         return `${e.service} / ${e.pipeline}`;
         }
+    }
+
+    // Ordered field values for hierarchical group sorting — same fields as groupKey,
+    // kept separate (not derived from the composite string) so comparisons happen
+    // field-by-field. Order matches each dropdown option's own label (e.g. "Service /
+    // Pipeline / PID"), so rows for the same service always end up clustered together
+    // instead of scattered by whichever order distinct group keys were first seen in
+    // the raw event stream (a Map preserves insertion order, not any sorted order).
+    function groupSortTuple(e, g) {
+        switch (g) {
+            case 'ServicePipeline':    return [e.service, e.pipeline];
+            case 'PidServicePipeline': return [e.service, e.pipeline, e.server, e.processId];
+            case 'Service':  return [e.service];
+            case 'Pipeline': return [e.pipeline];
+            case 'Pid':      return [e.server, e.processId];
+            default:         return [e.service, e.pipeline];
+        }
+    }
+
+    // Numeric-aware so a PID/port-like field sorts 2 < 10, not "10" < "2".
+    function compareGroupTuples(a, b) {
+        const len = Math.max(a.length, b.length);
+        for (let i = 0; i < len; i++) {
+            const av = a[i], bv = b[i];
+            if (av === bv) continue;
+            if (av == null) return -1;
+            if (bv == null) return 1;
+            const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+            if (cmp !== 0) return cmp;
+        }
+        return 0;
     }
     function colourKey(e, c) {
         switch (c) {
