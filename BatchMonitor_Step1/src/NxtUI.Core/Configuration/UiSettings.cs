@@ -50,4 +50,15 @@ public class UiSettings
     /// falls back to Orthogonal.
     /// </summary>
     public string GraphEdgeStyle { get; set; } = "Orthogonal";
+
+    /// <summary>
+    /// How many seconds since a pipeline's last finished chunk it still counts as
+    /// "recently active" (bright green/blue header and row color in the run-detail
+    /// flow graph) rather than "quiet" (dim green/gray). Measured against the run's
+    /// latest known event timestamp, not wall-clock time — so this applies the same
+    /// way whether watching a run live or scrubbing through it in Replay. Lower it to
+    /// make the graph highlight only the very latest hop; raise it if replay's
+    /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
+    /// </summary>
+    public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
 }

@@ -102,6 +102,36 @@
                 <div class="bm-inspector-detail-body">
                     <div @ref="_jsonRef"></div>
                 </div>
+
+                <!-- JSONPath query bar — evaluated against this document's JSON,
+                     result rendered into the same tree view above via bmJsonViewer. -->
+                <div class="bm-jsonpath-bar">
+                    <MudTextField T="string" @bind-Value="_jsonPathQuery" Immediate="true"
+                                  Placeholder="JSONPath — e.g. $.items[?(&#64;.price &gt; 10)]"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.ManageSearch"
+                                  @onkeydown="OnJsonPathKeyDown"
+                                  Class="bm-jsonpath-input" />
+                    <MudTooltip Text="Run query">
+                        <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
+                                       OnClick="RunJsonPathQueryAsync" />
+                    </MudTooltip>
+                    @if (!string.IsNullOrEmpty(_jsonPathQuery))
+                    {
+                        <MudTooltip Text="Clear — show full document again">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Clear" Size="Size.Small"
+                                           OnClick="ClearJsonPathQueryAsync" />
+                        </MudTooltip>
+                    }
+                </div>
+                @if (_jsonPathError is not null)
+                {
+                    <div class="bm-jsonpath-error">@_jsonPathError</div>
+                }
+                else if (_jsonPathMatchCount is not null)
+                {
+                    <div class="bm-jsonpath-count bm-muted">@_jsonPathMatchCount match@(_jsonPathMatchCount == 1 ? "" : "es")</div>
+                }
             </div>
         }
     </div>
@@ -242,9 +272,66 @@
     {
         _selected  = ReferenceEquals(_selected, args.Item) ? null : args.Item;
         _jsonDirty = _selected is not null;
+        // A stale query result from a previously selected document shouldn't linger
+        // once the selection changes — reset the bar, OnAfterRenderAsync re-renders
+        // the newly selected document's full JSON via _jsonDirty above.
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
     }
 
     private void OnRowSelected(MongoDocument? doc) { } // handled by OnRowClick
+
+    // ── JSONPath query bar ───────────────────────────────────────────────────────
+
+    private string  _jsonPathQuery      = string.Empty;
+    private string? _jsonPathError;
+    private int?    _jsonPathMatchCount;
+
+    private async Task OnJsonPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunJsonPathQueryAsync();
+        else if (e.Key == "Escape") await ClearJsonPathQueryAsync();
+    }
+
+    private async Task RunJsonPathQueryAsync()
+    {
+        if (_selected is null) return;
+
+        if (string.IsNullOrWhiteSpace(_jsonPathQuery))
+        {
+            await ClearJsonPathQueryAsync();
+            return;
+        }
+
+        var result = JsonPathQueryService.Evaluate(_selected.Json, _jsonPathQuery);
+        if (!result.Success)
+        {
+            _jsonPathError      = result.Error;
+            _jsonPathMatchCount = null;
+            StateHasChanged();
+            return;
+        }
+
+        _jsonPathError      = null;
+        _jsonPathMatchCount = result.MatchCount;
+        try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, result.ResultJson); }
+        catch (JSDisconnectedException) { }
+        StateHasChanged();
+    }
+
+    private async Task ClearJsonPathQueryAsync()
+    {
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
+        if (_selected is not null)
+        {
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
+            catch (JSDisconnectedException) { }
+        }
+        StateHasChanged();
+    }
 
     private async Task OnResizerMouseDown(MouseEventArgs e)
     {

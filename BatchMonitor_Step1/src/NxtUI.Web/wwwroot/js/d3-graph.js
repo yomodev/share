@@ -17,7 +17,7 @@ const D3Graph = (() => {
     const NODE_WIDTH     = 234;   // floor width — nodes grow past this to fit their text
     const MAX_NODE_WIDTH = 460;   // safety cap so one long name can't blow up the whole layout
     const HEADER_HEIGHT  = 32;
-    const ROW_HEIGHT     = 40;
+    const ROW_HEIGHT     = 46;   // was 40 — the name/counts text sat too close to the row's top divider
     const MIN_ROWS       = 1;
     const DEBOUNCE_MS    = 500;
     const T              = 280;   // transition duration ms
@@ -33,17 +33,41 @@ const D3Graph = (() => {
             .getPropertyValue('--mud-palette-divider').trim() || 'rgba(139,148,158,0.2)';
     }
 
+    // Two-hue palette: green = fully drained (nothing left in flight), blue = still
+    // has work in flight. Each hue has a bright and a dim shade — bright means "the
+    // state that earned this colour happened recently" (PipelineState.Active),
+    // dim means "true, but it's been quiet for a while" (Completed / InProgress).
+    // "Active" alone doesn't say which hue applies — DetermineState (see
+    // TopologyComputationService) assigns Active purely by recency, so the caller
+    // must also check whether the row/node/edge still has work in flight.
     const STATE_COLOR = {
-        errored:    '#F85149',
-        active:     '#3FB950',
-        inprogress: '#388BFD',
-        idle:       '#8B949E',
-        completed:  '#8B949E',
-        notstarted: 'rgba(139,148,158,0.22)',
+        errored:     '#F85149',
+        activeGreen: '#3FB950',
+        activeBlue:  '#388BFD',
+        completed:   'rgba(63,185,80,0.55)',
+        inprogress:  'rgba(56,139,253,0.55)',
+        idle:        '#8B949E',
+        notstarted:  'rgba(139,148,158,0.22)',
     };
 
     function sk(s) { return String(s || 'notstarted').toLowerCase(); }
-    function sc(s) { return STATE_COLOR[sk(s)] || STATE_COLOR.notstarted; }
+
+    // stillWorking: true if the thing this state belongs to still has work in
+    // flight (only matters when state is 'active' — every other state already
+    // implies one hue unambiguously).
+    function stateColor(s, stillWorking) {
+        const st = sk(s);
+        if (st === 'active') return stillWorking ? STATE_COLOR.activeBlue : STATE_COLOR.activeGreen;
+        return STATE_COLOR[st] || STATE_COLOR.notstarted;
+    }
+
+    // CSS class suffix — same disambiguation as stateColor(), for styles that
+    // can't be set as inline SVG attributes (e.g. the header's stroke + glow).
+    function stateClass(s, stillWorking) {
+        const st = sk(s);
+        if (st !== 'active') return st;
+        return stillWorking ? 'active-blue' : 'active-green';
+    }
 
     // Counts are shown as "done / total" so the fraction visually matches the
     // progress bar. Row total = done + in-progress (all chunks seen on the row);
@@ -289,7 +313,10 @@ const D3Graph = (() => {
         const dx = end.x - prev.x, dy = end.y - prev.y;
         const len = Math.hypot(dx, dy) || 1;
         const back = Math.min(len * 0.5, 40);
-        return { x: end.x - (dx / len) * back, y: end.y - (dy / len) * back - 7 };
+        // Extra fixed nudge (left/up) on top of the directional back-offset — the label's
+        // bigger font (see .bm-edge-label) made it sit too close to the arrow/edge line,
+        // especially once its bounding box grows for multi-digit counts.
+        return { x: end.x - (dx / len) * back - 6, y: end.y - (dy / len) * back - 11 };
     }
 
     // ── init ─────────────────────────────────────────────────────────────
@@ -331,7 +358,17 @@ const D3Graph = (() => {
 
         const zoom = d3.zoom()
             .scaleExtent([0.12, 3])
-            .on('zoom', ev => { root.attr('transform', ev.transform); handle.userZoomed = true; });
+            // ev.sourceEvent is the originating DOM event (wheel/mousedown/dblclick/touch)
+            // for a real user gesture, and null for a programmatic .call(zoom.transform, ...)
+            // — which is exactly how fitToView applies its computed transform. Without this
+            // check, the very first auto-fit (right after the initial topology loads) marked
+            // the graph as user-zoomed and permanently blocked every later auto-fit in
+            // commitLayout, leaving the view stuck at whatever scale matched that first,
+            // possibly-incomplete topology as more data streamed in.
+            .on('zoom', ev => {
+                root.attr('transform', ev.transform);
+                if (ev.sourceEvent) handle.userZoomed = true;
+            });
         svg.call(zoom);
         svg.on('click', () => hidePopover(handle));
 
@@ -490,8 +527,11 @@ const D3Graph = (() => {
         sel.each(function(d) {
             const el  = d3.select(this);
             const hw  = d.width / 2, hh = d.height / 2;
-            const st  = sk(d.data.headerState);
-            const col = sc(d.data.headerState);
+            // A node's own "still working" is true if ANY of its pipeline rows still
+            // has something in flight, regardless of which row is the recently-active one.
+            const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
+            const st  = stateClass(d.data.headerState, stillWorking);
+            const col = stateColor(d.data.headerState, stillWorking);
 
             // Clip the pipeline-rows group to the card shape so long row names /
             // counts can never spill outside the rounded rectangle. (Previously the
@@ -550,7 +590,8 @@ const D3Graph = (() => {
             el.select('.bm-node-pulse')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .classed('bm-pulse-active', st === 'active');
+                .attr('fill', col)
+                .classed('bm-pulse-active', st === 'active-green' || st === 'active-blue');
 
             renderRows(el, d, handle, bg);
         });
@@ -611,7 +652,7 @@ const D3Graph = (() => {
         merged.each(function(r) {
             const row  = d3.select(this);
             const top  = r._cy - ROW_HEIGHT / 2;
-            const col  = sc(r.state);
+            const col  = stateColor(r.state, (r.inProgressCount ?? 0) > 0);
 
             row.select('.bm-row-hit')
                 .attr('x', -hw).attr('y', top)
@@ -624,8 +665,10 @@ const D3Graph = (() => {
 
             // Name (top-left) and counts (top-right) share the upper line; the
             // progress bar spans the full width beneath them (matches the mock).
-            const textY = top + 16;
-            const barY  = top + 27;
+            // textY was top+16 — with the row's top divider right at `top`, that left
+            // the text sitting almost flush against it; +20 gives it real breathing room.
+            const textY = top + 20;
+            const barY  = top + 32;
 
             row.select('.bm-row-name')
                 .attr('x', -hw + PAD).attr('y', textY)
@@ -666,38 +709,34 @@ const D3Graph = (() => {
 
         const instances = pipeline.instances || [];
         const topic     = pipeline.topic || '';
-        const progress  = Math.round((pipeline.progress ?? 0) * 100);
 
         const instHtml = instances.length > 0
-            ? instances.map(i =>
-                `<div class="bm-pop-inst">
+            ? instances.map(i => {
+                const done = i.doneCount ?? 0, total = done + (i.inProgressCount ?? 0);
+                // Pad the digits (not the "PID " prefix) to a fixed width with non-breaking
+                // spaces, so the "PID " label is always the same length and the server
+                // column after it still lines up regardless of the PID's digit count.
+                const pid = String(i.processId ?? '').padStart(5, ' ');
+                return `<div class="bm-pop-inst">
+                    <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
                     <span class="bm-pop-srv">${esc(i.server)}</span>
-                    <span class="bm-pop-pid">PID&nbsp;${esc(i.processId)}</span>
-                    <span class="bm-pop-cnt">✓${i.doneCount ?? 0}&nbsp;⟳${i.inProgressCount ?? 0}</span>
-                </div>`).join('')
+                    <span class="bm-pop-cnt">${done} / ${total}</span>
+                </div>`;
+            }).join('')
             : '<div class="bm-pop-empty">No instances seen yet</div>';
 
         const topicHtml = topic
             ? `<div class="bm-pop-topic">
-                   <span class="bm-pop-topic-name" title="${esc(topic)}">Topic:&nbsp;<code>${esc(topic)}</code></span>
-                   <button class="bm-pop-kafka">↗&nbsp;Kafka</button>
+                   <button class="bm-pop-kafka" title="${esc(topic)}">↗&nbsp;Browse topic</button>
                </div>`
             : '';
 
         handle.popover.html(`
             <div class="bm-pop-hdr">
-                <span class="bm-pop-title">${esc(pipeline.displayName || pipeline.name)}</span>
-                <span class="bm-pop-badge bm-pop-${esc(sk(pipeline.state))}">${esc(sk(pipeline.state))}</span>
                 <button class="bm-pop-x">×</button>
             </div>
-            <div class="bm-pop-prog-row">
-                <div class="bm-pop-track"><div class="bm-pop-fill" style="width:${progress}%;background:${sc(pipeline.state)}"></div></div>
-                <span class="bm-pop-pct">${progress}%</span>
-            </div>
-            ${topicHtml}
-            <div class="bm-pop-sep"></div>
-            <div class="bm-pop-inst-hdr">Instances (${instances.length})</div>
             ${instHtml}
+            ${topicHtml}
         `)
         .style('opacity', 1)
         .style('pointer-events', 'auto');
@@ -781,7 +820,7 @@ const D3Graph = (() => {
         const merged = enter.merge(sel);
 
         merged.each(function(d) {
-            const col = sc(d.data?.state);
+            const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data);
             const path = d3.select(this).select('.bm-edge-path');
             // Set stroke as attribute so context-stroke on the marker resolves.
@@ -799,6 +838,17 @@ const D3Graph = (() => {
                 .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
         });
+    }
+
+    // An edge's colour should match its SOURCE pipeline row's own colour — not a
+    // separately-derived notion of "still working" — so a completed (green) row
+    // never feeds a blue arrow. waitingEstimate (chunks handed off but not yet
+    // seen at the target) is about the target's backlog, not the source's own
+    // state, so it isn't the right signal here.
+    function edgeStillWorking(handle, e) {
+        const srcNode = handle.currentGraph?.nodes?.get(e?.source);
+        const row = srcNode?.data?.pipelines?.find(p => p.name === e?.sourcePipeline);
+        return (row?.inProgressCount ?? 0) > 0;
     }
 
     function edgeW(e) {
@@ -827,7 +877,7 @@ const D3Graph = (() => {
         handle.eLayer.selectAll('g.bm-edge').each(function(d) {
             const s = sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
             const r = tick(s, dt);
-            const col = sc(d.data?.state);
+            const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data) + r.thicknessBoost;
 
             d3.select(this).select('.bm-edge-path')

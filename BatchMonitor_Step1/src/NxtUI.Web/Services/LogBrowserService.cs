@@ -1,7 +1,9 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
 using NxtUI.Core.Services;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -14,6 +16,7 @@ public class LogBrowserService : ILogBrowserService
 {
     private readonly LogPathSettings _settings;
     private readonly IReadOnlyList<CompiledLogFormat> _formats;
+    private readonly ILogger<LogBrowserService> _log;
 
     // Detects the start of a new log entry: line begins with a timestamp.
     private static readonly Regex TimestampPrefix =
@@ -29,9 +32,10 @@ public class LogBrowserService : ILogBrowserService
         string Message,
         string? Caller);
 
-    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config)
+    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config, ILogger<LogBrowserService> log)
     {
         _settings = settings.Value;
+        _log = log;
 
         // Same "Logs:Formats" templates the interactive LogViewer uses (see log-viewer-parser.js
         // compileFormat) — search must parse files the same way the viewer displays them, so a
@@ -106,6 +110,11 @@ public class LogBrowserService : ILogBrowserService
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var serverList = servers.ToList();
+        var sw = Stopwatch.StartNew();
+        var matchCount = 0;
+        _log.LogDebug("disk-search: started across {Count} server(s), glob='{Glob}', path='{Path}'",
+            serverList.Count, fileGlob, rootRelPath);
+
         // Bounded (not unbounded): if the reader (Blazor UI, one StateHasChanged round trip
         // per batch) falls behind a fast recursive scan across many servers, WriteAsync below
         // simply awaits until there's room instead of buffering every match unboundedly in memory.
@@ -118,14 +127,38 @@ public class LogBrowserService : ILogBrowserService
                 await channel.Writer.WriteAsync(entry, ct);
         }, ct)).ToArray();
 
-        _ = Task.WhenAll(producers).ContinueWith(
+        var producersTask = Task.WhenAll(producers);
+        _ = producersTask.ContinueWith(
             _ => channel.Writer.TryComplete(),
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.Default);
 
-        await foreach (var entry in channel.Reader.ReadAllAsync(ct))
-            yield return entry;
+        try
+        {
+            await foreach (var entry in channel.Reader.ReadAllAsync(ct))
+            {
+                matchCount++;
+                yield return entry;
+            }
+            // Observe producer exceptions so a per-server failure is logged instead of silently
+            // truncating the result set (WhenAll already completed by the time the channel drains).
+            try { await producersTask; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogError(ex, "disk-search: failed after {Ms}ms, {Count} match(es) so far", sw.ElapsedMilliseconds, matchCount);
+                throw;
+            }
+        }
+        finally
+        {
+            if (sw.Elapsed >= OperationLog.SlowThreshold)
+                _log.LogWarning("disk-search: completed in {Ms}ms (slow), {Count} match(es) across {Servers} server(s)",
+                    sw.ElapsedMilliseconds, matchCount, serverList.Count);
+            else
+                _log.LogDebug("disk-search: completed in {Ms}ms, {Count} match(es) across {Servers} server(s)",
+                    sw.ElapsedMilliseconds, matchCount, serverList.Count);
+        }
     }
 
     // ── private: folder / file helpers ───────────────────────────────────

@@ -142,30 +142,33 @@ public class SqlRunService(
             "sql [{Env}]: ast={Ast} -> sql={Sql} params={@Params}",
             env, filter?.FilterAst, sql, allParams.Select(p => $"{p.ParameterName}={p.Value}"));
 
-        await using var conn = new SqlConnection(sqlCfg.ConnectionString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.AddRange(allParams.ToArray());
-
-        var results = new List<RunSummary>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-        while (await reader.ReadAsync(ct))
+        return await OperationLog.RunAsync(log, $"sql [{env}]: GetRuns", async () =>
         {
-            results.Add(new RunSummary
-            {
-                RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
-                Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                End = reader.IsDBNull(5) ? null
-                              : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
-            });
-        }
+            await using var conn = new SqlConnection(sqlCfg.ConnectionString);
+            await conn.OpenAsync(ct);
 
-        return results;
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddRange(allParams.ToArray());
+
+            var results = new List<RunSummary>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+            while (await reader.ReadAsync(ct))
+            {
+                results.Add(new RunSummary
+                {
+                    RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                    Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                    Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                    Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                    Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
+                    End = reader.IsDBNull(5) ? null
+                                  : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
+                });
+            }
+
+            return results;
+        });
     }
 
     public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default) =>
@@ -174,22 +177,23 @@ public class SqlRunService(
     public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException("Run details not available from this SQL service.");
 
-    public async Task<List<PerformanceEvent>> GetRunEventsAsync(
-        string env, string runId, DateTime from, CancellationToken ct = default)
-    {
-        var db = mongoFactory.GetDatabase(env);
-        var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
+    public Task<List<PerformanceEvent>> GetRunEventsAsync(
+        string env, string runId, DateTime from, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"sql [{env}]: GetRunEvents '{runId}'", async () =>
+        {
+            var db = mongoFactory.GetDatabase(env);
+            var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
 
-        var filter = Builders<BsonDocument>.Filter.And(
-            Builders<BsonDocument>.Filter.Eq("RunId", runId),
-            Builders<BsonDocument>.Filter.Gte("Start", from.ToUniversalTime()));
+            var filter = Builders<BsonDocument>.Filter.And(
+                Builders<BsonDocument>.Filter.Eq("RunId", runId),
+                Builders<BsonDocument>.Filter.Gte("Start", from.ToUniversalTime()));
 
-        var docs = await col.Find(filter)
-            .Sort(Builders<BsonDocument>.Sort.Ascending("Start"))
-            .ToListAsync(ct);
+            var docs = await col.Find(filter)
+                .Sort(Builders<BsonDocument>.Sort.Ascending("Start"))
+                .ToListAsync(ct);
 
-        return docs.Select(MapToPerformanceEvent).ToList();
-    }
+            return docs.Select(MapToPerformanceEvent).ToList();
+        });
 
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {

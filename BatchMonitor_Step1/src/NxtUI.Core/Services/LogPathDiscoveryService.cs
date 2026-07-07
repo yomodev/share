@@ -73,15 +73,29 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
 
     private async Task<string?> RunSearchAsync(ServiceStatus svc, string env, string key)
     {
-        var result = await Task.Run(() => SearchSync(svc, env));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string? result;
+        try
+        {
+            result = await Task.Run(() => SearchSync(svc, env));
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "discovery [{Env}]: search failed for {Svc}@{Host} pid={Pid} after {Ms}ms",
+                env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
+            throw;
+        }
+
         if (result is not null)
         {
-            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} -> {Path} in {Ms}ms",
+                env, svc.ServiceName, svc.HostName, result, sw.ElapsedMilliseconds);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid} after {Ms}ms",
+                env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
         }
         return result;
     }

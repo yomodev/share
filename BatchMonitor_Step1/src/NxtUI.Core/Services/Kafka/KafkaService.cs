@@ -18,85 +18,82 @@ public class KafkaService(
 
     // ── IKafkaMonitor ────────────────────────────────────────────────────────
 
-    public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: cluster info", env);
-        // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
-        // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
-        return Task.Run(() =>
-        {
-            using var admin = BuildAdmin(env);
-            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
-            return new KafkaClusterInfo
+    public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: cluster info", () =>
+            // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
+            // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
+            Task.Run(() =>
             {
-                ClusterId = meta.OriginatingBrokerId.ToString(),
-                ControllerId = meta.OriginatingBrokerId,
-                Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
-                    { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
-            };
-        }, ct);
-    }
+                using var admin = BuildAdmin(env);
+                var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+                return new KafkaClusterInfo
+                {
+                    ClusterId = meta.OriginatingBrokerId.ToString(),
+                    ControllerId = meta.OriginatingBrokerId,
+                    Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
+                        { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
+                };
+            }, ct));
 
-    public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: listing topics", env);
-        // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
-        return Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+    public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: listing topics", () =>
+            // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
+            Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+            {
+                using var admin = BuildAdmin(env);
+                var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+
+                return [.. meta.Topics
+                    .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
+                    .Select(t => new KafkaTopicSummary
+                    {
+                        Name              = t.Topic,
+                        PartitionCount    = t.Partitions.Count,
+                        ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+                        CleanupPolicy     = "delete",
+                        RetentionMs       = 604_800_000,
+                    })
+                    .OrderBy(t => t.Name)];
+            }, ct));
+
+    public Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: config for '{topicName}'", async () =>
         {
             using var admin = BuildAdmin(env);
-            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
 
-            return [.. meta.Topics
-                .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
-                .Select(t => new KafkaTopicSummary
-                {
-                    Name              = t.Topic,
-                    PartitionCount    = t.Partitions.Count,
-                    ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-                    CleanupPolicy     = "delete",
-                    RetentionMs       = 604_800_000,
-                })
-                .OrderBy(t => t.Name)];
-        }, ct);
-    }
+            var results = await admin.DescribeConfigsAsync(
+                [new ConfigResource { Type = ResourceType.Topic, Name = topicName }]);
 
-    public async Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: config for '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
+            var cfg = results.First();
+            long Lng(string k, long d) =>
+                cfg.Entries.TryGetValue(k, out var e) && long.TryParse(e.Value, out var v) ? v : d;
+            int Int(string k, int d) =>
+                cfg.Entries.TryGetValue(k, out var e) && int.TryParse(e.Value, out var v) ? v : d;
+            string Str(string k, string d) =>
+                cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
 
-        var results = await admin.DescribeConfigsAsync(
-            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }]);
+            // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
+            var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
+            var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
 
-        var cfg = results.First();
-        long Lng(string k, long d) =>
-            cfg.Entries.TryGetValue(k, out var e) && long.TryParse(e.Value, out var v) ? v : d;
-        int Int(string k, int d) =>
-            cfg.Entries.TryGetValue(k, out var e) && int.TryParse(e.Value, out var v) ? v : d;
-        string Str(string k, string d) =>
-            cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
+            return new KafkaTopicConfig
+            {
+                RetentionMs = Lng("retention.ms", 604_800_000),
+                CleanupPolicy = Str("cleanup.policy", "delete"),
+                MaxMessageBytes = Lng("max.message.bytes", 1_048_576),
+                MinInSyncReplicas = Int("min.insync.replicas", 1),
+                CompressionType = Str("compression.type", "producer"),
+                PartitionCount = topicMeta?.Partitions.Count ?? 0,
+                ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+            };
+        });
 
-        // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
-        var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
-        var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
-
-        return new KafkaTopicConfig
-        {
-            RetentionMs = Lng("retention.ms", 604_800_000),
-            CleanupPolicy = Str("cleanup.policy", "delete"),
-            MaxMessageBytes = Lng("max.message.bytes", 1_048_576),
-            MinInSyncReplicas = Int("min.insync.replicas", 1),
-            CompressionType = Str("compression.type", "producer"),
-            PartitionCount = topicMeta?.Partitions.Count ?? 0,
-            ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-        };
-    }
-
-    public async Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+    public Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
         string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
     {
         var withPartitions = topics.Where(t => t.PartitionCount > 0).ToList();
-        if (withPartitions.Count == 0) return new Dictionary<string, KafkaTopicEnrichment>();
+        if (withPartitions.Count == 0)
+            return Task.FromResult<IReadOnlyDictionary<string, KafkaTopicEnrichment>>(new Dictionary<string, KafkaTopicEnrichment>());
 
         // Partitions are numbered contiguously from 0, so the list can be built from
         // the partition count everyone already has — no metadata round trip needed.
@@ -105,79 +102,81 @@ public class KafkaService(
             for (var p = 0; p < t.PartitionCount; p++)
                 partitions.Add(new TopicPartition(t.Name, new Partition(p)));
 
-        log.LogDebug("kafka [{Env}]: enriching {TopicCount} topics ({PartitionCount} partitions) — 3 round trips total",
-            env, withPartitions.Count, partitions.Count);
-
-        using var admin = BuildAdmin(env);
-        var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
-
-        // One batched DescribeConfigs call for every topic's cleanup.policy (result list
-        // is index-aligned with the request list — DescribeConfigsResult carries no
-        // topic name of its own), and one batched ListOffsets call each for the earliest
-        // and latest offset of every partition — 3 broker round trips total, regardless
-        // of topic/partition count, instead of up to 2 per topic.
-        var configsTask = admin.DescribeConfigsAsync(
-            withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
-        var earliestTask = admin.ListOffsetsAsync(
-            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
-            timeout);
-        var latestTask = admin.ListOffsetsAsync(
-            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
-            timeout);
-
-        await Task.WhenAll(configsTask, earliestTask, latestTask);
-
-        var configs = configsTask.Result;
-        var earliest = earliestTask.Result.ResultInfos.ToDictionary(
-            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
-        var latest = latestTask.Result.ResultInfos.ToDictionary(
-            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
-
-        var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
-        for (var i = 0; i < withPartitions.Count; i++)
-        {
-            var t = withPartitions[i];
-            var cfg = i < configs.Count ? configs[i] : null;
-            var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
-                ? e.Value : "delete";
-
-            long messageCount = 0;
-            for (var p = 0; p < t.PartitionCount; p++)
+        return OperationLog.RunAsync(log,
+            $"kafka [{env}]: enriching {withPartitions.Count} topics ({partitions.Count} partitions)",
+            async () =>
             {
-                var tp = new TopicPartition(t.Name, new Partition(p));
-                if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
-                    messageCount += Math.Max(0, hi - lo);
-            }
+                using var admin = BuildAdmin(env);
+                var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
 
-            result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
-        }
+                // One batched DescribeConfigs call for every topic's cleanup.policy (result list
+                // is index-aligned with the request list — DescribeConfigsResult carries no
+                // topic name of its own), and one batched ListOffsets call each for the earliest
+                // and latest offset of every partition — 3 broker round trips total, regardless
+                // of topic/partition count, instead of up to 2 per topic.
+                var configsTask = admin.DescribeConfigsAsync(
+                    withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
+                var earliestTask = admin.ListOffsetsAsync(
+                    partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
+                    timeout);
+                var latestTask = admin.ListOffsetsAsync(
+                    partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
+                    timeout);
 
-        return result;
+                await Task.WhenAll(configsTask, earliestTask, latestTask);
+
+                var configs = configsTask.Result;
+                var earliest = earliestTask.Result.ResultInfos.ToDictionary(
+                    r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+                var latest = latestTask.Result.ResultInfos.ToDictionary(
+                    r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+
+                var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
+                for (var i = 0; i < withPartitions.Count; i++)
+                {
+                    var t = withPartitions[i];
+                    var cfg = i < configs.Count ? configs[i] : null;
+                    var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
+                        ? e.Value : "delete";
+
+                    long messageCount = 0;
+                    for (var p = 0; p < t.PartitionCount; p++)
+                    {
+                        var tp = new TopicPartition(t.Name, new Partition(p));
+                        if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
+                            messageCount += Math.Max(0, hi - lo);
+                    }
+
+                    result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
+                }
+
+                return (IReadOnlyDictionary<string, KafkaTopicEnrichment>)result;
+            });
     }
 
-    public async Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
-        string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: consumer groups for '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
-
-        var listing = await admin.ListConsumerGroupsAsync();
-        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
-        if (groupIds.Count == 0) return [];
-
-        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result = new List<KafkaTopicConsumerGroup>();
-
-        foreach (var desc in described.ConsumerGroupDescriptions)
+    public Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
+        string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: consumer groups for '{topicName}'", async () =>
         {
-            if (!desc.Members.Any(m => m.Assignment.TopicPartitions.Any(tp => tp.Topic == topicName)))
-                continue;
-            var lag = await ComputeGroupLagForTopicAsync(env, desc.GroupId, topicName, ct);
-            result.Add(new KafkaTopicConsumerGroup
-            { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
-        }
-        return result;
-    }
+            using var admin = BuildAdmin(env);
+
+            var listing = await admin.ListConsumerGroupsAsync();
+            var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+            if (groupIds.Count == 0) return (IReadOnlyList<KafkaTopicConsumerGroup>)[];
+
+            var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+            var result = new List<KafkaTopicConsumerGroup>();
+
+            foreach (var desc in described.ConsumerGroupDescriptions)
+            {
+                if (!desc.Members.Any(m => m.Assignment.TopicPartitions.Any(tp => tp.Topic == topicName)))
+                    continue;
+                var lag = await ComputeGroupLagForTopicAsync(env, desc.GroupId, topicName, ct);
+                result.Add(new KafkaTopicConsumerGroup
+                { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
+            }
+            return (IReadOnlyList<KafkaTopicConsumerGroup>)result;
+        });
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
@@ -239,6 +238,9 @@ public class KafkaService(
     {
         IAdminClient? admin = null;
         IConsumer<string?, byte[]>? consumer = null;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var consumedTotal = 0;
+        log.LogDebug("kafka [{Env}]: tail started for '{Topic}'", env, topicName);
         try
         {
             var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
@@ -337,15 +339,19 @@ public class KafkaService(
 
                 consumed++;
             }
+            consumedTotal = consumed;
         }
         catch (OperationCanceledException) { /* normal: paused / navigated away / superseded */ }
         catch (Exception ex)
         {
-            log.LogError(ex, "kafka [{Env}]: tail producer for '{Topic}' failed", env, topicName);
+            log.LogError(ex, "kafka [{Env}]: tail for '{Topic}' failed after {Ms}ms and {Count} message(s)",
+                env, topicName, sw.ElapsedMilliseconds, consumedTotal);
             writer.TryComplete(ex);
         }
         finally
         {
+            log.LogDebug("kafka [{Env}]: tail for '{Topic}' ended after {Ms}ms, {Count} message(s)",
+                env, topicName, sw.ElapsedMilliseconds, consumedTotal);
             if (consumer is not null)
             {
                 try { consumer.Close(); } catch { /* best-effort close */ }
@@ -357,13 +363,11 @@ public class KafkaService(
     }
 
     public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
-        string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: partition stats for '{Topic}'", env, topicName);
-
+        string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: partition stats for '{topicName}'", () =>
         // GetMetadata, QueryWatermarkOffsets and FetchTimestampAt (Consume) are all
         // synchronous blocking librdkafka calls — run the whole thing off the UI thread.
-        return Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
+        Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
         {
             var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
             var config = factory.BuildConsumerConfig(env, groupId);
@@ -400,8 +404,7 @@ public class KafkaService(
             }
 
             return result;
-        }, ct);
-    }
+        }, ct));
 
     public Task<byte[]?> FetchRawBytesAsync(
         string env, string topicName, int partition, long offset, CancellationToken ct = default)
@@ -435,85 +438,85 @@ public class KafkaService(
         }, ct);
     }
 
-    public async Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(
-        string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: all consumer groups", env);
-        using var admin = BuildAdmin(env);
-        var listing = await admin.ListConsumerGroupsAsync();
-        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
-        if (groupIds.Count == 0) return [];
-
-        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result = new List<KafkaConsumerGroupOverview>();
-
-        foreach (var desc in described.ConsumerGroupDescriptions)
+    public Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(
+        string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: all consumer groups", async () =>
         {
-            var topics = desc.Members
-                .SelectMany(m => m.Assignment.TopicPartitions.Select(tp => tp.Topic))
-                .Distinct().OrderBy(t => t).ToList();
-            var lag = await ComputeGroupTotalLagAsync(env, desc.GroupId, ct);
-            result.Add(new KafkaConsumerGroupOverview
+            using var admin = BuildAdmin(env);
+            var listing = await admin.ListConsumerGroupsAsync();
+            var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+            if (groupIds.Count == 0) return (IReadOnlyList<KafkaConsumerGroupOverview>)[];
+
+            var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+            var result = new List<KafkaConsumerGroupOverview>();
+
+            foreach (var desc in described.ConsumerGroupDescriptions)
             {
-                GroupId = desc.GroupId,
-                State = desc.State.ToString(),
-                TopicCount = topics.Count,
-                TotalLag = lag,
-                Topics = topics
-            });
-        }
-        return [.. result.OrderBy(g => g.GroupId)];
-    }
+                var topics = desc.Members
+                    .SelectMany(m => m.Assignment.TopicPartitions.Select(tp => tp.Topic))
+                    .Distinct().OrderBy(t => t).ToList();
+                var lag = await ComputeGroupTotalLagAsync(env, desc.GroupId, ct);
+                result.Add(new KafkaConsumerGroupOverview
+                {
+                    GroupId = desc.GroupId,
+                    State = desc.State.ToString(),
+                    TopicCount = topics.Count,
+                    TotalLag = lag,
+                    Topics = topics
+                });
+            }
+            return (IReadOnlyList<KafkaConsumerGroupOverview>)[.. result.OrderBy(g => g.GroupId)];
+        });
 
-    public async Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(
-        string env, string groupId, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: lag for group '{Group}'", env, groupId);
-        using var admin = BuildAdmin(env);
-        var described = await admin.DescribeConsumerGroupsAsync([groupId]);
-        var desc = described.ConsumerGroupDescriptions.First();
-
-        var topicPartitions = desc.Members
-            .SelectMany(m => m.Assignment.TopicPartitions)
-            .GroupBy(tp => tp.Topic)
-            .Select(g => (Topic: g.Key, PartitionCount: g.Count()))
-            .ToList();
-
-        var result = new List<KafkaGroupTopicLag>();
-        foreach (var (topic, partCount) in topicPartitions)
+    public Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(
+        string env, string groupId, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: lag for group '{groupId}'", async () =>
         {
-            var lag = await ComputeGroupLagForTopicAsync(env, groupId, topic, ct);
-            result.Add(new KafkaGroupTopicLag { TopicName = topic, Partitions = partCount, Lag = lag });
-        }
-        return [.. result.OrderBy(x => x.TopicName)];
-    }
+            using var admin = BuildAdmin(env);
+            var described = await admin.DescribeConsumerGroupsAsync([groupId]);
+            var desc = described.ConsumerGroupDescriptions.First();
+
+            var topicPartitions = desc.Members
+                .SelectMany(m => m.Assignment.TopicPartitions)
+                .GroupBy(tp => tp.Topic)
+                .Select(g => (Topic: g.Key, PartitionCount: g.Count()))
+                .ToList();
+
+            var result = new List<KafkaGroupTopicLag>();
+            foreach (var (topic, partCount) in topicPartitions)
+            {
+                var lag = await ComputeGroupLagForTopicAsync(env, groupId, topic, ct);
+                result.Add(new KafkaGroupTopicLag { TopicName = topic, Partitions = partCount, Lag = lag });
+            }
+            return (IReadOnlyList<KafkaGroupTopicLag>)[.. result.OrderBy(x => x.TopicName)];
+        });
 
     // ── IKafkaAdmin ──────────────────────────────────────────────────────────
 
-    public async Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: deleting topic '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
-        await admin.DeleteTopicsAsync([topicName]);
-    }
-
-    public async Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: retention '{Topic}' → {Ms}ms", env, topicName, retentionMs);
-        using var admin = BuildAdmin(env);
-        await admin.AlterConfigsAsync(new Dictionary<ConfigResource, List<ConfigEntry>>
+    public Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: deleting topic '{topicName}'", async () =>
         {
-            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }] =
-                [new ConfigEntry { Name = "retention.ms", Value = retentionMs.ToString() }]
+            using var admin = BuildAdmin(env);
+            await admin.DeleteTopicsAsync([topicName]);
         });
-    }
 
-    public async Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: deleting group '{Group}'", env, groupId);
-        using var admin = BuildAdmin(env);
-        await admin.DeleteGroupsAsync([groupId]);
-    }
+    public Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: retention '{topicName}' -> {retentionMs}ms", async () =>
+        {
+            using var admin = BuildAdmin(env);
+            await admin.AlterConfigsAsync(new Dictionary<ConfigResource, List<ConfigEntry>>
+            {
+                [new ConfigResource { Type = ResourceType.Topic, Name = topicName }] =
+                    [new ConfigEntry { Name = "retention.ms", Value = retentionMs.ToString() }]
+            });
+        });
+
+    public Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: deleting group '{groupId}'", async () =>
+        {
+            using var admin = BuildAdmin(env);
+            await admin.DeleteGroupsAsync([groupId]);
+        });
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -631,7 +634,11 @@ public class KafkaService(
                 }
                 return lag;
             }
-            catch { return 0L; }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "kafka [{Env}]: lag computation failed for group '{Group}' topic '{Topic}' — reporting 0", env, groupId, topicName);
+                return 0L;
+            }
         }, ct);
 
     private async Task<long> ComputeGroupTotalLagAsync(string env, string groupId, CancellationToken ct)

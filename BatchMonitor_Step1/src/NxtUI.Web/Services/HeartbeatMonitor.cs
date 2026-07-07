@@ -146,7 +146,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
 
             if (_states.TryGetValue(env, out _)) // still subscribed — env wasn't idle-released mid-query
             {
-                var threshold = TimeSpan.FromSeconds(_settings.IntervalSeconds * 2);
+                var threshold = _settings.OfflineThreshold;
                 var now = DateTime.UtcNow;
 
                 lock (state.Lock)

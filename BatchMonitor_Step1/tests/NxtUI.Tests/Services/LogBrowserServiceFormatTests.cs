@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
@@ -23,7 +24,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
             .AddInMemoryCollection(formats.Select((f, i) =>
                 new KeyValuePair<string, string?>($"Logs:Formats:{i}", f)))
             .Build();
-        return new LogBrowserService(Options.Create(settings), config);
+        return new LogBrowserService(Options.Create(settings), config, NullLogger<LogBrowserService>.Instance);
     }
 
     private string WriteLogFile(string relativeDir, string fileName, string content)

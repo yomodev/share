@@ -60,7 +60,8 @@
     protected override async Task OnInitializedAsync()
     {
         _previousIsFocused = IsFocused;
-        _topologyService   = new TopologyComputationService();
+        _topologyService   = new TopologyComputationService(
+            TimeSpan.FromSeconds(UiOptions.Value.TopologyRecentActivityWindowSeconds));
         _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
 
         await LoadAsync();
@@ -287,6 +288,15 @@
                 @EffectiveStatus
             </span>
 
+            @if (_topology is not null)
+            {
+                <div class="bm-detail-progress">
+                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor"
+                                       Size="Size.Small" Class="bm-detail-progress-bar" />
+                    <span class="bm-detail-progress-label">~@(ProgressPercent)%</span>
+                </div>
+            }
+
             @if (_details is not null && !string.IsNullOrWhiteSpace(_details.Type))
             {
                 <span class="bm-detail-type">@_details.Type</span>
@@ -317,11 +327,6 @@
                     <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" />
                     @InProgressCount.ToString("N0")
                 </span>
-                <div class="bm-detail-progress">
-                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor"
-                                       Size="Size.Small" Class="bm-detail-progress-bar" />
-                    <span class="bm-detail-progress-label">~@(ProgressPercent)%</span>
-                </div>
             }
         </div>
 

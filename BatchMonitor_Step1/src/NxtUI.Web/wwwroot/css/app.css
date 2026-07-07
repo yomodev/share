@@ -895,12 +895,11 @@ html, body {
 .bm-detail-count-done .mud-icon-root { color:#3FB950; }
 .bm-detail-count-inprogress .mud-icon-root { color:#388BFD; }
 
-/* Inline progress bar + "~N% estimated" label. margin-left:auto pins it to the
-   far right of bm-detail-topbar-left (i.e. flush against the action icons),
-   same row as the other labels — every other item here has flex-shrink:0, so
-   only the description (bm-detail-batch-name) ellipsizes to make room. */
+/* Inline progress bar + "~N% estimated" label — sits right after the status chip.
+   flex-shrink:0 like every other item on this row; only the description
+   (bm-detail-batch-name) ellipsizes to make room under space pressure. */
 .bm-detail-progress {
-    display:flex; align-items:center; gap:8px; margin-left:auto;
+    display:flex; align-items:center; gap:8px;
     min-width: 140px; max-width: 220px; flex: 0 0 180px;
 }
 .bm-detail-progress-bar { flex:1; border-radius:4px; }
@@ -1518,6 +1517,27 @@ html, body {
     flex: 1;
     overflow-y: auto;
     padding: 10px 16px 16px;
+}
+
+/* JSONPath query bar — pinned to the foot of the detail sidebar (Kafka message /
+   Mongo document inspectors), below the scrolling JSON tree. */
+.bm-jsonpath-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-top: 1px solid var(--mud-palette-divider);
+}
+.bm-jsonpath-input { flex: 1; }
+.bm-jsonpath-error {
+    padding: 0 12px 6px;
+    font-size: 11px;
+    color: var(--mud-palette-error);
+}
+.bm-jsonpath-count {
+    padding: 0 12px 6px;
+    font-size: 11px;
 }
 
 .bm-inspector-section-label {

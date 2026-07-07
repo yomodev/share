@@ -324,11 +324,19 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             lock (entry.Sync) offset = entry.Offset;
 
             await _ioGate.WaitAsync(ct);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             IncrementalFileReader.Result result;
             try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
             catch (Exception ex) when (ex is not OperationCanceledException)
-            { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+            {
+                _log.LogWarning(ex, "metrics: read failed {File} after {Ms}ms", file, sw.ElapsedMilliseconds);
+                return;
+            }
             finally { _ioGate.Release(); }
+
+            if (sw.Elapsed >= OperationLog.SlowThreshold)
+                _log.LogWarning("metrics: read+parse {File} completed in {Ms}ms (slow), {Count} line(s)",
+                    file, sw.ElapsedMilliseconds, result.Lines.Count);
 
             if (result.Lines.Count == 0)
             {
@@ -588,11 +596,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         var file = Path.Combine(folder, _paths.MetricsFileName);
 
         await _ioGate.WaitAsync(ct);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         IncrementalFileReader.Result result;
         try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, 0), ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogWarning(ex, "metrics [{Env}]: backfill read failed {File}", env, file);
+            _log.LogWarning(ex, "metrics [{Env}]: backfill read failed {File} after {Ms}ms", env, file, sw.ElapsedMilliseconds);
             lock (entry.Sync) entry.DiskBackfilled = true; // don't retry forever on a broken file
             return;
         }
@@ -623,8 +632,8 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         }
 
         _log.LogInformation(
-            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
-            env, filled, svc.ServiceName, svc.HostName, processStartUtc, kafkaEarliestUtc);
+            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk in {Ms}ms, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
+            env, filled, svc.ServiceName, svc.HostName, sw.ElapsedMilliseconds, processStartUtc, kafkaEarliestUtc);
     }
 
     /// <summary>Inserts/replaces by timestamp, keeps History sorted ascending, caps at MaxHistory.</summary>

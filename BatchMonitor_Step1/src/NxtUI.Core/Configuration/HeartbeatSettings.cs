@@ -9,10 +9,18 @@ public class HeartbeatSettings
 
     /// <summary>
     /// Expected interval (in seconds) at which services write heartbeats.
-    /// A service is considered offline if its last UpdatedDateTime is older than
-    /// IntervalSeconds * 2.
     /// </summary>
     public int IntervalSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Seconds since a service's last heartbeat after which it's considered offline.
+    /// 0 (the default) falls back to IntervalSeconds * 2.
+    /// </summary>
+    public int OfflineThresholdSeconds { get; set; } = 0;
+
+    /// <summary>Resolved offline threshold, applying the IntervalSeconds * 2 fallback.</summary>
+    public TimeSpan OfflineThreshold =>
+        TimeSpan.FromSeconds(OfflineThresholdSeconds > 0 ? OfflineThresholdSeconds : IntervalSeconds * 2);
 
     /// <summary>
     /// Only services with a heartbeat within this many minutes are fetched from MongoDB.

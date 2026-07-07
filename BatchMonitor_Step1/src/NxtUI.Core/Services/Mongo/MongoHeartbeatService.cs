@@ -32,7 +32,7 @@ public class MongoHeartbeatService(
             .ToListAsync(ct);
         sw.Stop();
 
-        var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
+        var threshold = _heartbeat.OfflineThreshold;
         var now = DateTime.UtcNow;
 
         log.LogDebug("heartbeat [{Env}]: {Count} services returned in {Ms}ms", env, docs.Count, sw.ElapsedMilliseconds);

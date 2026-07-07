@@ -41,12 +41,16 @@
     filter: brightness(1.35);
 }
 
-.bm-hdr-errored    { stroke: #F85149; filter: drop-shadow(0 0 6px rgba(248,81,73,0.4)); }
-.bm-hdr-active     { stroke: #3FB950; filter: drop-shadow(0 0 6px rgba(63,185,80,0.35)); }
-.bm-hdr-inprogress { stroke: #388BFD; }
-.bm-hdr-idle       { stroke: var(--mud-palette-divider); }
-.bm-hdr-completed  { stroke: var(--mud-palette-divider); }
-.bm-hdr-notstarted { stroke: var(--mud-palette-divider); opacity: 0.55; }
+/* Green = fully drained (nothing left in flight), blue = still has work in
+   flight; bright = that happened/is happening recently, dim = true but quiet
+   for a while. See stateColor()/stateClass() in d3-graph.js. */
+.bm-hdr-errored      { stroke: #F85149; filter: drop-shadow(0 0 6px rgba(248,81,73,0.4)); }
+.bm-hdr-active-green { stroke: #3FB950; filter: drop-shadow(0 0 6px rgba(63,185,80,0.35)); }
+.bm-hdr-active-blue  { stroke: #388BFD; filter: drop-shadow(0 0 6px rgba(56,139,253,0.35)); }
+.bm-hdr-completed    { stroke: rgba(63,185,80,0.55); }
+.bm-hdr-inprogress   { stroke: rgba(56,139,253,0.55); }
+.bm-hdr-idle         { stroke: var(--mud-palette-divider); }
+.bm-hdr-notstarted   { stroke: var(--mud-palette-divider); opacity: 0.55; }
 
 .bm-node-accent { pointer-events: none; }
 
@@ -92,7 +96,7 @@
 .bm-row-fill  { transition: width 350ms ease; }
 
 .bm-row-counts {
-    font-size: 0.62rem;
+    font-size: 0.72rem;
     font-family: var(--bm-font-mono, monospace);
     fill: var(--mud-palette-text-secondary);
     pointer-events: none;
@@ -108,7 +112,8 @@
 }
 
 .bm-edge-label {
-    font-size: 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
     font-family: var(--bm-font-mono, monospace);
     fill: var(--mud-palette-text-secondary);
     /* Halo so label is readable on both dark and light themes. */
@@ -139,33 +144,9 @@
 .bm-pop-hdr {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--mud-palette-divider);
+    justify-content: flex-end;
+    padding: 4px 6px 0;
 }
-.bm-pop-title {
-    font-weight: 700;
-    font-size: 0.78rem;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bm-pop-badge {
-    font-size: 0.57rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 1px 5px;
-    border-radius: 4px;
-    flex-shrink: 0;
-}
-.bm-pop-active     { background:rgba(63,185,80,0.18);  color:#3FB950; }
-.bm-pop-inprogress { background:rgba(56,139,253,0.18); color:#388BFD; }
-.bm-pop-errored    { background:rgba(248,81,73,0.18);  color:#F85149; }
-.bm-pop-completed  { background:rgba(139,148,158,0.14); color:var(--mud-palette-text-secondary); }
-.bm-pop-idle       { background:rgba(139,148,158,0.10); color:var(--mud-palette-text-secondary); }
-.bm-pop-notstarted { background:rgba(139,148,158,0.08); color:var(--mud-palette-text-secondary); }
 
 .bm-pop-x {
     background: none; border: none;
@@ -176,69 +157,34 @@
 }
 .bm-pop-x:hover { opacity: 1; color: #F85149; }
 
-.bm-pop-prog-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-}
-.bm-pop-track {
-    flex: 1; height: 4px;
-    background: var(--mud-palette-divider);
-    border-radius: 2px; overflow: hidden;
-}
-.bm-pop-fill { height: 100%; border-radius: 2px; transition: width 350ms ease; }
-.bm-pop-pct {
-    font-size: 0.65rem; font-family: monospace;
-    color: var(--mud-palette-text-secondary);
-    flex-shrink: 0; width: 32px; text-align: right;
-}
-
 .bm-pop-topic {
-    display: flex; align-items: center;
-    gap: 6px; padding: 2px 10px 6px;
-    font-size: 0.67rem; color: var(--mud-palette-text-secondary);
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--mud-palette-divider);
 }
-/* Truncate to one line instead of wrapping — a long topic name wrapping to two
-   lines pushed the Kafka button off-center/overlapping the text. */
-.bm-pop-topic-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bm-pop-topic code { font-family: monospace; }
 
 .bm-pop-kafka {
+    width: 100%;
     background: none;
     border: 1px solid rgba(56,139,253,0.4);
     border-radius: 4px; color: #388BFD; cursor: pointer;
-    font-size: 0.62rem; padding: 1px 6px; flex-shrink: 0;
+    font-size: 0.72rem; padding: 5px 8px;
     transition: background 110ms;
 }
 .bm-pop-kafka:hover { background: rgba(56,139,253,0.12); }
 
-.bm-pop-sep {
-    height: 1px;
-    background: var(--mud-palette-divider);
-}
-
-.bm-pop-inst-hdr {
-    padding: 5px 10px 3px;
-    font-size: 0.63rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--mud-palette-text-secondary);
-}
-
 .bm-pop-inst {
-    display: flex; align-items: center; gap: 5px;
-    padding: 3px 10px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 10px;
     border-top: 1px solid var(--mud-palette-divider);
-    font-size: 0.67rem;
+    font-size: 0.72rem;
 }
 .bm-pop-inst:first-of-type { border-top: none; }
 .bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bm-pop-pid { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
-.bm-pop-cnt { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
+/* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
+   left-aligned — PID is the leftmost column, so the server column after it
+   lines up regardless of whether a given PID is 2 digits or 5. */
+.bm-pop-pid { width: 9ch; flex: 0 0 9ch; text-align: left; color: var(--mud-palette-text-secondary); font-family: monospace; font-size: 0.72rem; }
+.bm-pop-cnt { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.72rem; }
 
 .bm-pop-empty {
     padding: 6px 10px 8px;
