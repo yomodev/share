@@ -28,4 +28,26 @@ public class UiSettings
     /// collapsed and leading/trailing <c>-</c>/<c>_</c>/spaces are trimmed.
     /// </summary>
     public string[] LabelStripWords { get; set; } = ["Pipeline", "ABC", "{EnvID}"];
+
+    /// <summary>
+    /// How the run-detail flow graph pins pipeline-row ports for ELK's edge routing.
+    /// <c>FixedSide</c> (default): ports are pinned to a side (e.g. EAST) only — ELK can
+    /// reorder them within that side to minimise edge crossings/overlaps, but an arrow
+    /// no longer lands on the exact pixel row it represents. <c>FixedPos</c>: ports are
+    /// pinned to the exact row they represent — arrows always connect to the right row,
+    /// but ELK can't reorder them, so dense diagrams can show more overlapping edges.
+    /// Any other value falls back to FixedSide.
+    /// </summary>
+    public string GraphPortConstraints { get; set; } = "FixedSide";
+
+    /// <summary>
+    /// How the run-detail flow graph draws edges through ELK's computed waypoints.
+    /// <c>Orthogonal</c> (default): horizontal/vertical segments with softly rounded
+    /// corners, matching the routing ELK actually computed (never passes through a
+    /// node interior). <c>Curved</c>: a smooth spline through the same waypoints —
+    /// looser/organic look, but can visually cut closer to node edges between bends.
+    /// Applies regardless of <see cref="GraphPortConstraints"/>. Any other value
+    /// falls back to Orthogonal.
+    /// </summary>
+    public string GraphEdgeStyle { get; set; } = "Orthogonal";
 }

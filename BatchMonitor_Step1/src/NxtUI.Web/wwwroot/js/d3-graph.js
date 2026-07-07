@@ -94,14 +94,23 @@ const D3Graph = (() => {
         return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
     }
 
-    // ── Layout (ELK: layered + orthogonal routing + fixed per-pipeline ports) ──
+    // ── Layout (ELK: layered + orthogonal routing) ─────────────────────────────
     //
     // Direction adapts to the container's aspect ratio (wide container → flow left-
     // to-right/EAST-WEST ports; tall/narrow container → flow top-to-bottom/SOUTH-
     // NORTH ports) — same idea as the old dagre-based chooseDir(), which this ELK
     // port carried forward but had temporarily hardcoded to 'RIGHT' only. ELK routes
     // edges orthogonally in the channels *between* blocks — they never cross a node
-    // interior — and minimises crossings.
+    // interior.
+    //
+    // Port constraint mode is configurable (UiSettings.GraphPortConstraints, passed
+    // in via init()'s portConstraints arg — see handle.portConstraints):
+    //   FIXED_SIDE (default): ports are pinned to a side only — ELK can reorder them
+    //     within that side to minimise crossings, but an arrow no longer lands on the
+    //     exact pixel row it represents; see edgeTooltip/edgeLabel to tell them apart.
+    //   FIXED_POS: ports are pinned to the exact row they represent — arrows always
+    //     connect to the right row, but ELK can't reorder them, so dense diagrams can
+    //     show more overlapping edges.
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
@@ -111,8 +120,7 @@ const D3Graph = (() => {
     }
 
     // Port position along the node's EAST/WEST edge, aligned to the centre of the
-    // owning pipeline row (used when flow direction is RIGHT). Falls back to node
-    // centre if unknown.
+    // owning pipeline row (used when flow direction is RIGHT, FIXED_POS only).
     function portYFromTop(node, pipeline) {
         const i = pipelineIdx(node, pipeline);
         return i >= 0
@@ -121,8 +129,9 @@ const D3Graph = (() => {
     }
 
     // Port position along the node's SOUTH/NORTH edge (used when flow direction is
-    // DOWN) — rows stack vertically inside the node regardless of graph direction, so
-    // there's no natural per-row position on a horizontal edge; spread evenly instead.
+    // DOWN, FIXED_POS only) — rows stack vertically inside the node regardless of
+    // graph direction, so there's no natural per-row position on a horizontal edge;
+    // spread evenly instead.
     function portXEvenSpread(node, pipeline, width) {
         const rows = node.pipelines || [];
         const i = pipelineIdx(node, pipeline);
@@ -134,9 +143,10 @@ const D3Graph = (() => {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        const dir      = chooseDir(handle.containerEl);
-        const outSide  = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
-        const inSide   = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
+        const dir       = chooseDir(handle.containerEl);
+        const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
+        const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
+        const fixedPos  = handle.portConstraints === 'FIXED_POS';
 
         // Which pipeline rows need an output/input port.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
@@ -153,21 +163,23 @@ const D3Graph = (() => {
             // Cached on the node so updateClipPaths reuses the width without re-measuring.
             n._layoutWidth = computeNodeWidth(handle, n);
             const w = n._layoutWidth, h = nh(n);
+
             const ports = [];
             for (const pipe of (outPorts.get(n.id) || [])) {
-                const pos = dir === 'RIGHT' ? { x: w, y: portYFromTop(n, pipe) }
-                                             : { x: portXEvenSpread(n, pipe, w), y: h };
-                ports.push({ id: portId(n.id, 'out', pipe), ...pos,
-                             layoutOptions: { 'elk.port.side': outSide } });
+                const pos = fixedPos
+                    ? (dir === 'RIGHT' ? { x: w, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: h })
+                    : {};
+                ports.push({ id: portId(n.id, 'out', pipe), ...pos, layoutOptions: { 'elk.port.side': outSide } });
             }
             for (const pipe of (inPorts.get(n.id) || [])) {
-                const pos = dir === 'RIGHT' ? { x: 0, y: portYFromTop(n, pipe) }
-                                             : { x: portXEvenSpread(n, pipe, w), y: 0 };
-                ports.push({ id: portId(n.id, 'in', pipe), ...pos,
-                             layoutOptions: { 'elk.port.side': inSide } });
+                const pos = fixedPos
+                    ? (dir === 'RIGHT' ? { x: 0, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: 0 })
+                    : {};
+                ports.push({ id: portId(n.id, 'in', pipe), ...pos, layoutOptions: { 'elk.port.side': inSide } });
             }
+
             return { id: n.id, width: w, height: h, ports,
-                     layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
+                     layoutOptions: { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' } };
         });
 
         const elkEdges = edges.map((e, i) => ({
@@ -251,6 +263,23 @@ const D3Graph = (() => {
         return d + ` L ${last.x} ${last.y}`;
     }
 
+    // Smooth spline through the same ELK waypoints (start/bends/end) instead of
+    // straight orthogonal segments — looser, organic look; the alternative to
+    // roundedOrthPath, picked by UiSettings.GraphEdgeStyle via handle.edgeStyle.
+    // Applies regardless of port-constraint mode (FIXED_SIDE or FIXED_POS) — this is
+    // purely how the path between ELK's computed points is drawn, not how those
+    // points/ports were chosen.
+    const curveLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
+
+    function curvedPath(pts) {
+        if (!pts || pts.length < 2) return '';
+        return curveLine(pts);
+    }
+
+    function edgePath(handle, pts) {
+        return handle.edgeStyle === 'CURVED' ? curvedPath(pts) : roundedOrthPath(pts);
+    }
+
     // A point a short distance back from the arrowhead (last point), offset above
     // the line, so the label reads clearly next to the arrow it belongs to.
     function edgeLabelPos(pts) {
@@ -265,7 +294,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl, dotNetRef) {
+    function init(containerEl, dotNetRef, portConstraints, edgeStyle) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -308,6 +337,8 @@ const D3Graph = (() => {
 
         const handle = {
             containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
+            portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
+            edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             animState: createState(),
             elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
@@ -754,7 +785,7 @@ const D3Graph = (() => {
             const w   = edgeW(d.data);
             const path = d3.select(this).select('.bm-edge-path');
             // Set stroke as attribute so context-stroke on the marker resolves.
-            path.attr('d', roundedOrthPath(d.pts))
+            path.attr('d', edgePath(handle, d.pts))
                 .attr('stroke', col)
                 .attr('stroke-width', w);
 
@@ -874,8 +905,8 @@ const D3Graph = (() => {
 
 const _handles = new Map();
 
-/** @param {Element} el @param {string} key @param {object} dotNetRef */
-export function init(el, key, dotNetRef) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef)); }
+/** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [portConstraints] "FIXED_SIDE" (default) or "FIXED_POS" @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
+export function init(el, key, dotNetRef, portConstraints, edgeStyle) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */

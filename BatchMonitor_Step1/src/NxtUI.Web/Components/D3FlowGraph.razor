@@ -1,5 +1,8 @@
 @namespace NxtUI.Web.Components
+@using Microsoft.Extensions.Options
+@using NxtUI.Core.Configuration
 @inject IJSRuntime JS
+@inject IOptions<UiSettings> UiOptions
 @implements IAsyncDisposable
 
 <div class="bm-d3-flow-graph">
@@ -35,8 +38,12 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=4");
-                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef);
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=7");
+                var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
+                    ? "FIXED_POS" : "FIXED_SIDE";
+                var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
+                    ? "CURVED" : "ORTHOGONAL";
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef, portConstraints, edgeStyle);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();
