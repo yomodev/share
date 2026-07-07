@@ -2561,7 +2561,11 @@ tr.bm-row-searching td:first-child {
 .bm-lb-files-panel {
     flex: 1 1 0;
     min-width: 0;
-    overflow: auto;
+    /* hidden, not auto: MudTable's FixedHeader (Height="100%") needs to own the
+       scrolling itself via its own internal container — if this outer panel also
+       scrolls, the whole table (including its sticky header) scrolls inside it
+       instead, and the header no longer stays pinned. */
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     position: relative;

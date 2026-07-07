@@ -117,7 +117,7 @@
                                     LoadingNodes="@_loadingNodes"
                                     CheckedPaths="@_checkedPaths"
                                     Initialized="@_initialized"
-                                    LogsFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.LogsFolder))"
+                                    RootFolderMissing="@(string.IsNullOrEmpty(LogSettings.Value.RootFolder))"
                                     InitError="@_initError"
                                     OnExpandedChanged="@(args => OnExpandedChangedAsync(args.Item1, args.Item2))"
                                     OnItemClick="@OnItemClickAsync"
@@ -336,10 +336,13 @@
     }
 
     /// <summary>
-    /// Eagerly loads every folder down to the depth LogBrowserFileTree can actually
-    /// render (4 levels: root + 3), so the tree filter has something to search inside
-    /// unexpanded branches. Runs once per session (or since the last full Refresh) —
-    /// real infra may have many folders, so this isn't repeated on every keystroke.
+    /// Eagerly loads folders 3 levels deep so the tree filter has something to search
+    /// inside branches the user hasn't manually expanded yet. This 3-level cap is a
+    /// deliberate eager-prefetch bound for the filter only — it does not limit how deep
+    /// a user can manually expand/navigate (LogBrowserTreeNode fetches on demand at
+    /// unlimited depth; this just controls how far ahead the filter searches without
+    /// the user having opened anything). Runs once per session (or since the last full
+    /// Refresh) — real infra may have many folders, so this isn't repeated on every keystroke.
     /// </summary>
     private async Task EnsureTreeLoadedAsync()
     {
@@ -437,8 +440,9 @@
         await Task.CompletedTask;
     }
 
-    // search
-    private string    _fileGlob           = "*.log";
+    // search — placeholder until OnInitializedAsync sets it from LogSettings.DefaultFileGlob
+    // (injected properties aren't available yet at field-initializer time).
+    private string    _fileGlob           = "*";
     private string    _contentFilterStr   = "";
     private FilterNode? _contentFilterNode;
     private string?   _contentFilterError;
@@ -469,7 +473,8 @@
         }, ex => Logger.LogWarning(ex, "Log browser auto-refresh failed"));
 
         using var loadingScope = TabLoadingScope.Begin(Tab, TabService);
-        _servers = EnvironmentService.GetServers(Env).ToList();
+        _servers  = EnvironmentService.GetServers(Env).ToList();
+        _fileGlob = DefaultFileGlob;
 
         try
         {
@@ -484,12 +489,45 @@
         // No auto-start here — polling only begins once the user actually selects a
         // folder or toggles the search bar (see RestartPollingIfBrowsing).
 
-        // Auto-navigate to today's date folder if one exists at the root.
-        var todayName = DateTime.Today.ToString("yyyy-MM-dd");
-        var todayNode = _rootNodes.FirstOrDefault(n =>
-            n.Name.Equals(todayName, StringComparison.OrdinalIgnoreCase));
-        if (todayNode is not null)
-            await OnExpandedChangedAsync(todayNode, true);
+        // Root is always expanded by default so the top-level folder list is visible
+        // immediately, same as before "Root" existed as an explicit node.
+        _expanded.Add("");
+        await NavigateToStartupFolderAsync();
+    }
+
+    /// <summary>
+    /// Expands the tree down to the configured StartupFolder (relative to Root,
+    /// {today} substituted — see ILogBrowserService.ResolveStartupPath), one segment
+    /// at a time, stopping silently at the first segment that doesn't exist. Does not
+    /// check/select the folder — matches the old hardcoded "auto-expand today's date
+    /// folder" behaviour this replaces (expand only, not select).
+    /// </summary>
+    private async Task NavigateToStartupFolderAsync()
+    {
+        var startup = BrowserSvc.ResolveStartupPath();
+        if (string.IsNullOrWhiteSpace(startup)) return;
+
+        var segments = startup.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var current = "";
+
+        foreach (var seg in segments)
+        {
+            IReadOnlyList<LogFolderNode>? siblings = current == ""
+                ? _rootNodes
+                : _childCache.TryGetValue(current, out var cached) ? cached : null;
+
+            if (siblings is null)
+            {
+                siblings = await BrowserSvc.GetSubfoldersAsync(_servers, current, _cts.Token);
+                _childCache[current] = siblings;
+            }
+
+            var match = siblings.FirstOrDefault(n => n.Name.Equals(seg, StringComparison.OrdinalIgnoreCase));
+            if (match is null) break; // segment doesn't exist — stop drilling, keep what resolved so far
+
+            current = string.IsNullOrEmpty(current) ? seg : current + "\\" + seg;
+            _expanded.Add(current);
+        }
     }
 
     // Synchronous and separate from OnParametersSetAsync below — this must not
@@ -547,7 +585,10 @@
 
     // ── filter inputs ─────────────────────────────────────────────────────
 
-    private void OnGlobChanged(string v) => _fileGlob = string.IsNullOrWhiteSpace(v) ? "*.log" : v;
+    private string DefaultFileGlob =>
+        string.IsNullOrWhiteSpace(LogSettings.Value.DefaultFileGlob) ? "*" : LogSettings.Value.DefaultFileGlob;
+
+    private void OnGlobChanged(string v) => _fileGlob = string.IsNullOrWhiteSpace(v) ? DefaultFileGlob : v;
 
     private void OnContentFilterChanged(string v)
     {

@@ -44,8 +44,15 @@ public class LogBrowserService : ILogBrowserService
 
     public string? ResolveRoot(string server)
     {
-        if (string.IsNullOrWhiteSpace(_settings.LogsFolder)) return null;
-        return _settings.LogsFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(_settings.RootFolder)) return null;
+        return _settings.RootFolder.Replace("{server}", server, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public string? ResolveStartupPath()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.StartupFolder)) return null;
+        return _settings.StartupFolder.Replace(
+            "{today}", DateTime.UtcNow.ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(

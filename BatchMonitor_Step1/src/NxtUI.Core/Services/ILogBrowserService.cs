@@ -16,6 +16,13 @@ public interface ILogBrowserService
 {
     string? ResolveRoot(string server);
 
+    /// <summary>
+    /// Resolves the configured StartupFolder (relative to the Root node), substituting
+    /// the <c>{today}</c> placeholder with the current UTC date (yyyy-MM-dd). Returns
+    /// null if StartupFolder isn't configured.
+    /// </summary>
+    string? ResolveStartupPath();
+
     Task<IReadOnlyList<LogFolderNode>> GetSubfoldersAsync(
         IEnumerable<string> servers, string relativePath, CancellationToken ct = default);
 

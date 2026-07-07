@@ -28,11 +28,22 @@ public class LogPathSettings
     public int MetricsIntervalSeconds { get; set; } = 90;
 
     /// <summary>
-    /// UNC path template for the Log Browser base folder per server.
+    /// UNC path template for the Log Browser's top-level "Root" node, per server.
     /// Placeholder: {server} — server hostname.
-    /// Example: "\\{server}\Shared\bau\logs"
+    /// Example: "\\{server}\Shared"
     /// </summary>
-    public string LogsFolder { get; set; } = string.Empty;
+    public string RootFolder { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Path the Log Browser auto-navigates to on startup, RELATIVE to <see cref="RootFolder"/>
+    /// (not a full UNC template — RootFolder already supplies the {server}/UNC prefix).
+    /// Supports the <c>{today}</c> placeholder, substituted with the current UTC date as
+    /// yyyy-MM-dd. Example: "bau\logs\{today}".
+    /// </summary>
+    public string StartupFolder { get; set; } = string.Empty;
+
+    /// <summary>Default filename glob for the Log Browser's file list/search (e.g. "*", "*.log").</summary>
+    public string DefaultFileGlob { get; set; } = "*";
 
     /// <summary>
     /// List of server hostnames to enumerate in the Log Browser tree.

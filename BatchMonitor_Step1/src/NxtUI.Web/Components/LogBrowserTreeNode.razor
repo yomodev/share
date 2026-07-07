@@ -1,0 +1,70 @@
+@namespace NxtUI.Web.Components
+@using NxtUI.Web.Models
+
+@* Recursive tree node — renders itself for each child, so tree depth is unlimited
+   (the previous implementation hand-duplicated 4 nesting levels of markup, which
+   silently capped browsable depth at 4; there was no MudBlazor limitation forcing
+   that, just how the component happened to be written). *@
+
+<MudTreeViewItem @key="@Node.RelativePath" T="LogFolderNode" Value="@Node"
+                 Expanded="@Expanded.Contains(Node.RelativePath)"
+                 ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((Node, exp)))"
+                 OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(Node))">
+    <BodyContent>@RenderRow()</BodyContent>
+    <ChildContent>
+        @foreach (var child in ChildrenOf(Node))
+        {
+            <LogBrowserTreeNode Node="@child"
+                                ChildCache="@ChildCache"
+                                Expanded="@Expanded"
+                                LoadingNodes="@LoadingNodes"
+                                CheckedPaths="@CheckedPaths"
+                                OnExpandedChanged="@OnExpandedChanged"
+                                OnItemClick="@OnItemClick"
+                                OnCheckChanged="@OnCheckChanged" />
+        }
+    </ChildContent>
+</MudTreeViewItem>
+
+@code {
+    [Parameter, EditorRequired] public LogFolderNode Node { get; set; } = null!;
+
+    // Pre-supplied children for THIS node, bypassing ChildCache lookup — used only
+    // for the synthetic "Root" node, whose children are the caller's already-loaded
+    // top-level folder list rather than an entry keyed in ChildCache. Every other
+    // (real) node looks its children up from ChildCache as normal.
+    [Parameter] public IReadOnlyList<LogFolderNode>? Children { get; set; }
+
+    [Parameter] public Dictionary<string, IReadOnlyList<LogFolderNode>> ChildCache { get; set; } = new();
+    [Parameter] public HashSet<string> Expanded     { get; set; } = new();
+    [Parameter] public HashSet<string> LoadingNodes { get; set; } = new();
+    [Parameter] public HashSet<string> CheckedPaths { get; set; } = new();
+
+    [Parameter] public EventCallback<(LogFolderNode, bool)> OnExpandedChanged { get; set; }
+    [Parameter] public EventCallback<LogFolderNode>         OnItemClick       { get; set; }
+    [Parameter] public EventCallback<(LogFolderNode, bool)> OnCheckChanged    { get; set; }
+
+    private IReadOnlyList<LogFolderNode> ChildrenOf(LogFolderNode node) =>
+        Children ?? (ChildCache.TryGetValue(node.RelativePath, out var ch) ? ch : []);
+
+    // Row body: a selection checkbox on the left, folder name on the right — independent
+    // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
+    // a folder never toggles its expansion and vice versa.
+    private RenderFragment RenderRow() => __builder =>
+    {
+        <div class="bm-lb-tree-row">
+            <div @onclick:stopPropagation="true">
+                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(Node.RelativePath)"
+                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((Node, v)))"
+                             Size="Size.Small"
+                             Color="Color.Primary"
+                             Class="bm-lb-tree-row-checkbox" />
+            </div>
+            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@Node.Name</MudText>
+            @if (LoadingNodes.Contains(Node.RelativePath))
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-lb-tree-row-spinner" />
+            }
+        </div>
+    };
+}

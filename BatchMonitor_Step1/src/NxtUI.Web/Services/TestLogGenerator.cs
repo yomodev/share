@@ -10,7 +10,7 @@ namespace NxtUI.Web.Services;
 /// <summary>
 /// Test-only background service that:
 ///   1. Writes Metrics.log files under ServiceTemplates paths (for the monitoring pipeline).
-///   2. Writes realistic App.log files under LogsFolder paths (for the log browser).
+///   2. Writes realistic App.log files under RootFolder paths (for the log browser).
 ///
 /// Both sets use today's date so the log browser always shows a folder for the current day.
 /// Gated by TestLogGenerator:Enabled — keep it off in production.
@@ -212,8 +212,8 @@ public sealed class TestLogGenerator : BackgroundService
                 _metricsTargets.Add(mt);
                 metricsGenerated++;
 
-                // ── 2. App logs under LogsFolder path (today + past days) ───
-                var logsRoot = _paths.LogsFolder;
+                // ── 2. App logs under RootFolder path (today + past days) ───
+                var logsRoot = _paths.RootFolder;
                 if (!string.IsNullOrWhiteSpace(logsRoot))
                 {
                     var serverRoot = logsRoot.Replace("{server}", svc.HostName, StringComparison.OrdinalIgnoreCase);

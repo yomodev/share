@@ -8,10 +8,10 @@
         <MudText Typo="Typo.caption" Class="bm-muted">Add servers to App:Environments[].Servers in appsettings.</MudText>
     </div>
 }
-else if (LogsFolderMissing)
+else if (RootFolderMissing)
 {
     <div class="bm-lb-empty">
-        <MudText Typo="Typo.body2" Class="bm-muted">Logs:LogsFolder not configured.</MudText>
+        <MudText Typo="Typo.body2" Class="bm-muted">Logs:RootFolder not configured.</MudText>
     </div>
 }
 else if (InitError is not null)
@@ -24,64 +24,18 @@ else if (!Initialized)
 {
     <div class="bm-lb-empty"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
 }
-else if (RootNodes.Count == 0)
-{
-    <div class="bm-lb-empty">
-        <MudText Typo="Typo.body2" Class="bm-muted">No folders found.</MudText>
-    </div>
-}
 else
 {
     <MudTreeView T="LogFolderNode" Dense="true" Hover="true" Color="Color.Primary" Class="bm-lb-tree">
-        @foreach (var node in RootNodes)
-        {
-            <MudTreeViewItem @key="@node.RelativePath" Value="@node"
-                             Expanded="@Expanded.Contains(node.RelativePath)"
-                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((node, exp)))"
-                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(node))">
-                <BodyContent>@RenderRow(node)</BodyContent>
-                <ChildContent>
-                    @if (ChildCache.TryGetValue(node.RelativePath, out var ch1))
-                    {
-                        @foreach (var c1 in ch1)
-                        {
-                            <MudTreeViewItem @key="@c1.RelativePath" Value="@c1"
-                                             Expanded="@Expanded.Contains(c1.RelativePath)"
-                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c1, exp)))"
-                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c1))">
-                                <BodyContent>@RenderRow(c1)</BodyContent>
-                                <ChildContent>
-                                    @if (ChildCache.TryGetValue(c1.RelativePath, out var ch2))
-                                    {
-                                        @foreach (var c2 in ch2)
-                                        {
-                                            <MudTreeViewItem @key="@c2.RelativePath" Value="@c2"
-                                                             Expanded="@Expanded.Contains(c2.RelativePath)"
-                                                             ExpandedChanged="@((bool exp) => OnExpandedChanged.InvokeAsync((c2, exp)))"
-                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c2))">
-                                                <BodyContent>@RenderRow(c2)</BodyContent>
-                                                <ChildContent>
-                                                    @if (ChildCache.TryGetValue(c2.RelativePath, out var ch3))
-                                                    {
-                                                        @foreach (var c3 in ch3)
-                                                        {
-                                                            <MudTreeViewItem @key="@c3.RelativePath" Value="@c3"
-                                                                             OnClick="@((MouseEventArgs _) => OnItemClick.InvokeAsync(c3))">
-                                                                <BodyContent>@RenderRow(c3)</BodyContent>
-                                                            </MudTreeViewItem>
-                                                        }
-                                                    }
-                                                </ChildContent>
-                                            </MudTreeViewItem>
-                                        }
-                                    }
-                                </ChildContent>
-                            </MudTreeViewItem>
-                        }
-                    }
-                </ChildContent>
-            </MudTreeViewItem>
-        }
+        <LogBrowserTreeNode Node="@RootNode"
+                            Children="@RootNodes"
+                            ChildCache="@ChildCache"
+                            Expanded="@Expanded"
+                            LoadingNodes="@LoadingNodes"
+                            CheckedPaths="@CheckedPaths"
+                            OnExpandedChanged="@OnExpandedChanged"
+                            OnItemClick="@OnItemClick"
+                            OnCheckChanged="@OnCheckChanged" />
     </MudTreeView>
 }
 
@@ -93,7 +47,7 @@ else
     [Parameter] public HashSet<string>     LoadingNodes   { get; set; } = new();
     [Parameter] public HashSet<string>     CheckedPaths   { get; set; } = new();
     [Parameter] public bool                Initialized    { get; set; }
-    [Parameter] public bool                LogsFolderMissing { get; set; }
+    [Parameter] public bool                RootFolderMissing { get; set; }
     [Parameter] public string?             InitError      { get; set; }
 
     [Parameter] public EventCallback<(LogFolderNode, bool)>   OnExpandedChanged  { get; set; }
@@ -103,24 +57,9 @@ else
     // Expose the server count for the parent's empty-state check
     private List<string> _servers => Servers;
 
-    // Row body: a selection checkbox on the left, folder name on the right — independent
-    // of the expand/collapse arrow (MudTreeViewItem's own Icon/expand chevron), so checking
-    // a folder never toggles its expansion and vice versa.
-    private RenderFragment RenderRow(LogFolderNode node) => __builder =>
-    {
-        <div class="bm-lb-tree-row">
-            <div @onclick:stopPropagation="true">
-                <MudCheckBox T="bool" Value="@CheckedPaths.Contains(node.RelativePath)"
-                             ValueChanged="@((bool v) => OnCheckChanged.InvokeAsync((node, v)))"
-                             Size="Size.Small"
-                             Color="Color.Primary"
-                             Class="bm-lb-tree-row-checkbox" />
-            </div>
-            <MudText Typo="Typo.body2" Class="bm-lb-tree-row-text">@node.Name</MudText>
-            @if (LoadingNodes.Contains(node.RelativePath))
-            {
-                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-lb-tree-row-spinner" />
-            }
-        </div>
-    };
+    // Synthetic top-level node representing the configured RootFolder. Its children
+    // are RootNodes (the caller's already-loaded merged top-level folder list across
+    // all servers) rather than a ChildCache[""] entry — see LogBrowserTreeNode's
+    // Children parameter.
+    private static readonly LogFolderNode RootNode = new("Root", "", true);
 }
