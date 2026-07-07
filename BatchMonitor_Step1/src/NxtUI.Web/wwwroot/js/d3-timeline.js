@@ -1127,7 +1127,7 @@ const TIMELINE_ALIASES = {
     function groupKey(e, g) {
         switch (g) {
             case 'ServicePipeline':    return `${e.service} / ${e.pipeline}`;
-            case 'PidServicePipeline': return `${e.service} / ${e.pipeline} / ${e.server}:${e.processId}`;
+            case 'ServicePidPipeline': return `${e.service} / ${e.server}:${e.processId} / ${e.pipeline}`;
             case 'Service':  return e.service;
             case 'Pipeline': return e.pipeline;
             case 'Pid':      return `${e.server}:${e.processId}`;
@@ -1144,7 +1144,7 @@ const TIMELINE_ALIASES = {
     function groupSortTuple(e, g) {
         switch (g) {
             case 'ServicePipeline':    return [e.service, e.pipeline];
-            case 'PidServicePipeline': return [e.service, e.pipeline, e.server, e.processId];
+            case 'ServicePidPipeline': return [e.service, e.server, e.processId, e.pipeline];
             case 'Service':  return [e.service];
             case 'Pipeline': return [e.pipeline];
             case 'Pid':      return [e.server, e.processId];

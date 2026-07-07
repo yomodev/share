@@ -587,7 +587,7 @@
     public enum GroupByOption
     {
         ServicePipeline,
-        PidServicePipeline,
+        ServicePidPipeline,
         Service,
         Pipeline,
         Pid,
@@ -621,7 +621,7 @@
                    Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
                    PopoverClass="bm-tl-select-popover">
             <MudSelectItem Value="GroupByOption.ServicePipeline">Service / Pipeline</MudSelectItem>
-            <MudSelectItem Value="GroupByOption.PidServicePipeline">Service / Pipeline / PID</MudSelectItem>
+			<MudSelectItem Value="GroupByOption.ServicePidPipeline">Service / PID / Pipeline</MudSelectItem>
             <MudSelectItem Value="GroupByOption.Service">Service</MudSelectItem>
             <MudSelectItem Value="GroupByOption.Pipeline">Pipeline</MudSelectItem>
             <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
