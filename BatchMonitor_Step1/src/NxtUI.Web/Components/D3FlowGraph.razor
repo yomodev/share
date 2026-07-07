@@ -35,7 +35,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=3");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=4");
                 await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);

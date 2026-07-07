@@ -840,17 +840,27 @@ html, body {
 }
 .bm-detail-topbar.loading { opacity: 0.6; }
 
-.bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
+/* No wrap — everything (labels, counts, progress bar) stays on one line. The
+   progress bar is pushed to the far right via margin-left:auto (below); without
+   wrap disabled it would drop to a second line once the other items' combined
+   width exceeded the available space. */
+.bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:nowrap; }
 .bm-detail-topbar-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
 
-/* No ellipsis/clamp — the top bar has room for the full description (per design). */
-.bm-detail-batch-name { font-weight:700; white-space:nowrap; }
+/* Only the description shrinks/ellipsizes when space is tight — every other label
+   (status, type, runid, counts, progress) has flex-shrink:0 so it's never the one
+   that gives way. Most of the time there's room to show the description in full;
+   it only clips under real width pressure. */
+.bm-detail-batch-name {
+    font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    min-width:40px; flex:1 1 auto;
+}
 .bm-detail-type {
     font-size:0.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
-    padding:1px 7px; border-radius:4px; white-space:nowrap;
+    padding:1px 7px; border-radius:4px; white-space:nowrap; flex-shrink:0;
     background:rgba(255,255,255,0.08); color:var(--mud-palette-text-secondary);
 }
-.bm-detail-runid { font-size:0.78rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }
+.bm-detail-runid { font-size:0.78rem; color:var(--mud-palette-text-secondary); white-space:nowrap; flex-shrink:0; }
 
 /* Status chip: coloured dot + label, green pulse when Running (§3, §8.1) */
 .bm-status-chip-dot {
@@ -859,7 +869,7 @@ html, body {
 }
 .bm-status-chip-label {
     font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
-    font-family: var(--bm-font-mono); white-space:nowrap;
+    font-family: var(--bm-font-mono); white-space:nowrap; flex-shrink:0;
 }
 .bm-status-chip-dot.bm-status-running     { background-color:#3FB950; }
 .bm-status-chip-dot.bm-status-completed   { background-color:#58A6FF; }
@@ -879,16 +889,19 @@ html, body {
 
 /* Done / in-progress counts: ✓ N  ⟳ N */
 .bm-detail-count {
-    display:inline-flex; align-items:center; gap:4px;
+    display:inline-flex; align-items:center; gap:4px; flex-shrink:0;
     font-family: var(--bm-font-mono); font-size:0.8rem; white-space:nowrap;
 }
 .bm-detail-count-done .mud-icon-root { color:#3FB950; }
 .bm-detail-count-inprogress .mud-icon-root { color:#388BFD; }
 
-/* Inline progress bar + "~N% estimated" label */
+/* Inline progress bar + "~N% estimated" label. margin-left:auto pins it to the
+   far right of bm-detail-topbar-left (i.e. flush against the action icons),
+   same row as the other labels — every other item here has flex-shrink:0, so
+   only the description (bm-detail-batch-name) ellipsizes to make room. */
 .bm-detail-progress {
-    display:flex; align-items:center; gap:8px;
-    min-width: 140px; max-width: 220px; flex: 0 1 180px;
+    display:flex; align-items:center; gap:8px; margin-left:auto;
+    min-width: 140px; max-width: 220px; flex: 0 0 180px;
 }
 .bm-detail-progress-bar { flex:1; border-radius:4px; }
 .bm-detail-progress-label { font-size:0.75rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }

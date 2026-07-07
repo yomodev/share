@@ -96,15 +96,23 @@ const D3Graph = (() => {
 
     // ── Layout (ELK: layered + orthogonal routing + fixed per-pipeline ports) ──
     //
-    // Left-to-right always: the run-detail flow is a horizontal pipeline chain, and
-    // fixing the direction keeps the port model simple (source rows export EAST,
-    // target rows import WEST). ELK routes edges orthogonally in the channels
-    // *between* blocks — they never cross a node interior — and minimises crossings.
+    // Direction adapts to the container's aspect ratio (wide container → flow left-
+    // to-right/EAST-WEST ports; tall/narrow container → flow top-to-bottom/SOUTH-
+    // NORTH ports) — same idea as the old dagre-based chooseDir(), which this ELK
+    // port carried forward but had temporarily hardcoded to 'RIGHT' only. ELK routes
+    // edges orthogonally in the channels *between* blocks — they never cross a node
+    // interior — and minimises crossings.
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
-    // Port Y measured from the node's top edge (ELK's per-node origin), aligned to
-    // the centre of the owning pipeline row. Falls back to node centre if unknown.
+    function chooseDir(containerEl) {
+        const r = containerEl.getBoundingClientRect();
+        return r.width >= r.height ? 'RIGHT' : 'DOWN';
+    }
+
+    // Port position along the node's EAST/WEST edge, aligned to the centre of the
+    // owning pipeline row (used when flow direction is RIGHT). Falls back to node
+    // centre if unknown.
     function portYFromTop(node, pipeline) {
         const i = pipelineIdx(node, pipeline);
         return i >= 0
@@ -112,11 +120,25 @@ const D3Graph = (() => {
             : nh(node) / 2;
     }
 
+    // Port position along the node's SOUTH/NORTH edge (used when flow direction is
+    // DOWN) — rows stack vertically inside the node regardless of graph direction, so
+    // there's no natural per-row position on a horizontal edge; spread evenly instead.
+    function portXEvenSpread(node, pipeline, width) {
+        const rows = node.pipelines || [];
+        const i = pipelineIdx(node, pipeline);
+        const n = Math.max(rows.length, 1);
+        return i >= 0 ? (i + 1) * width / (n + 1) : width / 2;
+    }
+
     async function runLayout(handle, topo) {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        // Which pipeline rows need an output (EAST) / input (WEST) port.
+        const dir      = chooseDir(handle.containerEl);
+        const outSide  = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
+        const inSide   = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
+
+        // Which pipeline rows need an output/input port.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
         const inPorts  = new Map();
         const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
@@ -132,12 +154,18 @@ const D3Graph = (() => {
             n._layoutWidth = computeNodeWidth(handle, n);
             const w = n._layoutWidth, h = nh(n);
             const ports = [];
-            for (const pipe of (outPorts.get(n.id) || []))
-                ports.push({ id: portId(n.id, 'out', pipe), x: w, y: portYFromTop(n, pipe),
-                             layoutOptions: { 'elk.port.side': 'EAST' } });
-            for (const pipe of (inPorts.get(n.id) || []))
-                ports.push({ id: portId(n.id, 'in', pipe), x: 0, y: portYFromTop(n, pipe),
-                             layoutOptions: { 'elk.port.side': 'WEST' } });
+            for (const pipe of (outPorts.get(n.id) || [])) {
+                const pos = dir === 'RIGHT' ? { x: w, y: portYFromTop(n, pipe) }
+                                             : { x: portXEvenSpread(n, pipe, w), y: h };
+                ports.push({ id: portId(n.id, 'out', pipe), ...pos,
+                             layoutOptions: { 'elk.port.side': outSide } });
+            }
+            for (const pipe of (inPorts.get(n.id) || [])) {
+                const pos = dir === 'RIGHT' ? { x: 0, y: portYFromTop(n, pipe) }
+                                             : { x: portXEvenSpread(n, pipe, w), y: 0 };
+                ports.push({ id: portId(n.id, 'in', pipe), ...pos,
+                             layoutOptions: { 'elk.port.side': inSide } });
+            }
             return { id: n.id, width: w, height: h, ports,
                      layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
         });
@@ -149,17 +177,28 @@ const D3Graph = (() => {
         }));
         const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
 
+        // Nudges ELK's own compaction toward filling the container's actual shape
+        // instead of defaulting to a fixed internal ratio — helps address layouts
+        // that were sprawling wide/short regardless of the panel's real proportions.
+        const cw = handle.containerEl.clientWidth  || 1;
+        const ch = handle.containerEl.clientHeight || 1;
+
         const graph = {
             id: 'root',
             layoutOptions: {
                 'elk.algorithm': 'layered',
-                'elk.direction': 'RIGHT',
+                'elk.direction': dir,
                 'elk.edgeRouting': 'ORTHOGONAL',
-                'elk.layered.spacing.nodeNodeBetweenLayers': '90',
-                'elk.spacing.nodeNode': '44',
-                'elk.spacing.edgeNode': '26',
-                'elk.spacing.edgeEdge': '16',
-                'elk.layered.spacing.edgeNodeBetweenLayers': '26',
+                'elk.aspectRatio': String(cw / ch),
+                'elk.layered.spacing.nodeNodeBetweenLayers': '110',
+                'elk.spacing.nodeNode': '56',
+                // These two were the tightest settings relative to how many parallel
+                // edges can share a channel between two fixed-position ports — bumped
+                // up first (least invasive: doesn't change where any arrow connects)
+                // before trading away exact per-row port alignment for FIXED_SIDE.
+                'elk.spacing.edgeNode': '34',
+                'elk.spacing.edgeEdge': '28',
+                'elk.layered.spacing.edgeNodeBetweenLayers': '34',
                 'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
             },
@@ -779,12 +818,25 @@ const D3Graph = (() => {
 
     // ── Fit / visible / dispose ────────────────────────────────────────────
 
-    function fitToView(handle, animate) {
+    function fitToView(handle, animate, retriesLeft = 6) {
         const g  = handle.currentGraph;
         if (!g) return;
+        const cw0 = handle.containerEl.clientWidth;
+        const ch0 = handle.containerEl.clientHeight;
+
+        // The container can still be mid-layout (e.g. tab/flex sizing not settled yet)
+        // the moment ELK's async layout resolves, especially on first load — measuring
+        // it then produces a bogus (often tiny) transform that's never corrected
+        // afterward, which reads as "the graph opens zoomed into a small corner of
+        // itself". Retry a few frames instead of committing to a size that isn't real.
+        if ((cw0 < 40 || ch0 < 40) && retriesLeft > 0) {
+            requestAnimationFrame(() => fitToView(handle, animate, retriesLeft - 1));
+            return;
+        }
+
         const gi = { width: g.width, height: g.height };
-        const cw = handle.containerEl.clientWidth  || 1;
-        const ch = handle.containerEl.clientHeight || 1;
+        const cw = cw0 || 1;
+        const ch = ch0 || 1;
         const pad = 52;
         const scale = Math.max(0.12, Math.min(3,
             Math.min((cw - pad * 2) / (gi.width  || 1),

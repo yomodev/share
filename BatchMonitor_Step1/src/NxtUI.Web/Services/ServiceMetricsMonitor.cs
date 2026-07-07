@@ -382,9 +382,16 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         // true beginning. OffsetsForTimes resolves the correct starting offset directly on
         // the broker — it doesn't scan — so this is cheap regardless of retention length,
         // and stays correct (worst case: replays a bit more than strictly necessary) even
-        // if retention later grows from a few hours to a week. Falls back to Beginning only
-        // when heartbeat data isn't available yet (e.g. this env's very first subscribe).
-        var services = _heartbeatMonitor.GetServices(env);
+        // if retention later grows from a few hours to a week.
+        //
+        // The heartbeat cache is warmed by the SAME Subscribe() call that kicked off this
+        // consumer (see Subscribe() above), via a fire-and-forget Mongo poll — so on an env's
+        // very first subscribe, GetServices(env) can easily still be null here purely because
+        // that poll hasn't returned yet, not because there's really no heartbeat data. Wait
+        // briefly for it instead of immediately falling back to Default (effectively "from
+        // latest"), which would silently miss messages published between subscribe and the
+        // heartbeat poll actually completing.
+        var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
         var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
         var directive = oldestStart.HasValue
             ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
@@ -443,6 +450,42 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 "polling until re-subscribed (check broker connectivity/credentials for this environment)",
                 env, topic);
         }
+    }
+
+    // How long to wait for HeartbeatMonitor's warm-up poll before giving up and treating
+    // this env as genuinely having no heartbeat data yet.
+    private static readonly TimeSpan HeartbeatWaitTimeout = TimeSpan.FromSeconds(10);
+
+    private async Task<IReadOnlyList<ServiceStatus>?> WaitForHeartbeatAsync(string env, CancellationToken ct)
+    {
+        var services = _heartbeatMonitor.GetServices(env);
+        if (services is not null) return services;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnUpdated(string updatedEnv)
+        {
+            if (string.Equals(updatedEnv, env, StringComparison.OrdinalIgnoreCase)) tcs.TrySetResult();
+        }
+
+        _heartbeatMonitor.OnServicesUpdated += OnUpdated;
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(HeartbeatWaitTimeout);
+            try { await tcs.Task.WaitAsync(timeoutCts.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _log.LogDebug(
+                    "metrics [{Env}]: no heartbeat data after waiting {Timeout}s at Kafka consumer startup — " +
+                    "seeking from Default instead of oldest-service-start", env, HeartbeatWaitTimeout.TotalSeconds);
+            }
+        }
+        finally
+        {
+            _heartbeatMonitor.OnServicesUpdated -= OnUpdated;
+        }
+
+        return _heartbeatMonitor.GetServices(env);
     }
 
     private async Task HandleMetricsMessageAsync(string env, KafkaMessage msg, CancellationToken ct)
