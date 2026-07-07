@@ -21,7 +21,9 @@
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
     // Total events across every currently loaded run — shown in the control bar.
-    private int TotalEventCount => _runs.Sum(r => r.Events.Count);
+    // TimelineRun.EventCount avoids the OrderBy/ToList sort-and-copy that reading
+    // .Events.Count would otherwise trigger on every render (see TimelineRun.cs).
+    private int TotalEventCount => _runs.Sum(r => r.EventCount);
 
     // ── Filter ────────────────────────────────────────────────────────────
     private string _filterText = string.Empty;

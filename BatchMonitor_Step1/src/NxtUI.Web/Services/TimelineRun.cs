@@ -23,6 +23,14 @@ public class TimelineRun(
     private readonly Dictionary<string, PerformanceEvent> _events = new();
     private readonly object _lock = new();
 
+    // Cached sorted snapshot — Events was previously an OrderBy().ToList() on every
+    // access (a full O(n log n) sort + copy), and TimelineTab's control bar reads
+    // .Events.Count on every render just to show the total, making that sort/copy run
+    // per render for the whole app, not just per data update. Invalidated only when
+    // the store actually changes (UpsertLocked), so repeated reads between updates —
+    // including the render-time .Count access — are O(1).
+    private List<PerformanceEvent>? _sortedCache;
+
     private IDisposable? _signalRSub;
     private CancellationTokenSource? _timeoutCts;
 
@@ -31,8 +39,19 @@ public class TimelineRun(
 
     public IReadOnlyList<PerformanceEvent> Events
     {
-        get { lock (_lock) { return _events.Values.OrderBy(e => e.Start).ToList(); } }
+        get
+        {
+            lock (_lock)
+            {
+                _sortedCache ??= _events.Values.OrderBy(e => e.Start).ToList();
+                return _sortedCache;
+            }
+        }
     }
+
+    /// <summary>Cheap count for display (e.g. the control-bar total) — avoids the
+    /// sort/copy that reading .Events.Count would otherwise trigger on every render.</summary>
+    public int EventCount { get { lock (_lock) return _events.Count; } }
 
     // ── Load ──────────────────────────────────────────────────────────────
 
@@ -162,7 +181,10 @@ public class TimelineRun(
     private void UpsertLocked(PerformanceEvent e)
     {
         if (!_events.TryGetValue(e.Id, out var existing) || e.Timestamp > existing.Timestamp)
+        {
             _events[e.Id] = e;
+            _sortedCache = null;
+        }
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────
