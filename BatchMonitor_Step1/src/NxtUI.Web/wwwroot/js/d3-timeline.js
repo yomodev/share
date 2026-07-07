@@ -261,6 +261,10 @@ const TIMELINE_ALIASES = {
             hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
+            // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
+            // this) — same key still always gets the same colour for a given seed, only
+            // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
+            paletteSeed: 0,
             selFn: null,
             isVisible: true,
             // Last transform.y consumed from D3 zoom's internal state — used to turn
@@ -624,7 +628,7 @@ const TIMELINE_ALIASES = {
                         e, ck,
                         x,
                         w: Math.max(1, w),
-                        colour: colourForKey(ck, colourBy),
+                        colour: colourForKey(ck, colourBy, s.paletteSeed),
                         bse:    sec.batch.batchStartEpochMs || 0,
                         stableKey: `${sec.batch.runId}:${e.id}`,
                         y: sy,
@@ -1025,6 +1029,17 @@ const TIMELINE_ALIASES = {
                 computeLayout(s);
                 updateLaneSvgHeight(s);
                 renderAll(s);
+            } else if (e.key === 'r' || e.key === 'R') {
+                // Reshuffle which PALETTE slot each key lands on — same key still always
+                // gets the same colour for the new seed (colourForKey stays deterministic
+                // per key+seed), only the seed itself is random. Doesn't touch Status mode's
+                // fixed semantic colours.
+                e.preventDefault();
+                let next;
+                do { next = Math.floor(Math.random() * PALETTE.length); }
+                while (next === s.paletteSeed && PALETTE.length > 1);
+                s.paletteSeed = next;
+                renderAll(s);
             }
             return;
         }
@@ -1173,8 +1188,8 @@ const TIMELINE_ALIASES = {
             default:         return e.source;
         }
     }
-    function colourForKey(key, c) {
-        return c === 'Status' ? (STATUS_COLOR[key] || '#8B949E') : PALETTE[hashStr(key) % PALETTE.length];
+    function colourForKey(key, c, seed) {
+        return c === 'Status' ? (STATUS_COLOR[key] || '#8B949E') : PALETTE[(hashStr(key) + (seed || 0)) % PALETTE.length];
     }
     function hashStr(s) {
         let h = 0;

@@ -135,7 +135,7 @@
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=10");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=11");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
@@ -627,7 +627,7 @@
             Add
         </MudButton>
 
-        <MudSelect T="GroupByOption" Label="Group" Value="_groupBy" ValueChanged="OnGroupByChanged"
+        <MudSelect T="GroupByOption" Label="Group by" Value="_groupBy" ValueChanged="OnGroupByChanged"
                    Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                    Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
                    PopoverClass="bm-tl-select-popover">
@@ -638,7 +638,7 @@
             <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
         </MudSelect>
 
-        <MudSelect T="ColourByOption" Label="Color" Value="_colourBy" ValueChanged="OnColourByChanged"
+        <MudSelect T="ColourByOption" Label="Color by" Value="_colourBy" ValueChanged="OnColourByChanged"
                    Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                    Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
                    PopoverClass="bm-tl-select-popover">
@@ -759,6 +759,7 @@
                     <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Randomize block colors</td></tr>
                     <tr><td>Wheel on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+wheel on lanes</td><td>Scroll lanes up / down</td></tr>
                     <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
