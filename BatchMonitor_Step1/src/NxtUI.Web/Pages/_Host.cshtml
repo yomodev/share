@@ -21,8 +21,8 @@
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=48" rel="stylesheet" />
-    <link href="css/d3-graph.css?v=1" rel="stylesheet" />
+    <link href="css/app.css?v=49" rel="stylesheet" />
+    <link href="css/d3-graph.css?v=3" rel="stylesheet" />
     <link href="css/d3-timeline.css?v=1" rel="stylesheet" />
     <link href="css/log-viewer.css?v=1" rel="stylesheet" />
 </head>
@@ -128,8 +128,11 @@
     <!-- D3 v7 library -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
 
-    <!-- Dagre (layout engine only — no bundled D3, no rendering) for hierarchical DAG layout -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+    <!-- ELK (layered layout with true orthogonal edge routing + fixed ports) for the
+         run-detail flow graph. Replaces dagre: routes edges in channels between blocks
+         (never through them), minimises crossings, and connects to per-pipeline ports.
+         elk.bundled.js inlines the web-worker, so it's a single global `ELK` constructor. -->
+    <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
 
     <!-- Memory charts -->
     <script src="js/d3-memory-sunburst.js?v=2"></script>

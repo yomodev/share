@@ -243,8 +243,10 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     /// the same representation you'd see running the equivalent query in mongosh.</summary>
     private static string RenderFilter(FilterDefinition<BsonDocument> filter) =>
         filter.Render(
-            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
-            BsonSerializer.SerializerRegistry).ToString();
+            new RenderArgs<BsonDocument>(
+                BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                BsonSerializer.SerializerRegistry))
+        .ToString();
 
     public async Task<MongoCollectionDetails> GetCollectionDetailsAsync(
         string env, string database, string collection, CancellationToken ct = default)

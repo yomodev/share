@@ -843,7 +843,14 @@ html, body {
 .bm-detail-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
 .bm-detail-topbar-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
 
-.bm-detail-batch-name { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 240px; }
+/* No ellipsis/clamp — the top bar has room for the full description (per design). */
+.bm-detail-batch-name { font-weight:700; white-space:nowrap; }
+.bm-detail-type {
+    font-size:0.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
+    padding:1px 7px; border-radius:4px; white-space:nowrap;
+    background:rgba(255,255,255,0.08); color:var(--mud-palette-text-secondary);
+}
+.bm-detail-runid { font-size:0.78rem; color:var(--mud-palette-text-secondary); white-space:nowrap; }
 
 /* Status chip: coloured dot + label, green pulse when Running (§3, §8.1) */
 .bm-status-chip-dot {

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Services;
 using System.Diagnostics;
 

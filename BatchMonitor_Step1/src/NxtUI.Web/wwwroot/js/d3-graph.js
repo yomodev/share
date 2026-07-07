@@ -45,6 +45,14 @@ const D3Graph = (() => {
     function sk(s) { return String(s || 'notstarted').toLowerCase(); }
     function sc(s) { return STATE_COLOR[sk(s)] || STATE_COLOR.notstarted; }
 
+    // Counts are shown as "done / total" so the fraction visually matches the
+    // progress bar. Row total = done + in-progress (all chunks seen on the row);
+    // edge total = done + waiting (handed off + still in flight to the target).
+    function rowCountsText(p) {
+        const d = p.doneCount ?? 0, ip = p.inProgressCount ?? 0;
+        return `${d} / ${d + ip}`;
+    }
+
     // ── Geometry ─────────────────────────────────────────────────────────
 
     function nh(node) {
@@ -74,88 +82,146 @@ const D3Graph = (() => {
     // service/pipeline names. Floored at NODE_WIDTH, capped at MAX_NODE_WIDTH so one
     // very long name can't blow out the whole layout.
     function computeNodeWidth(handle, n) {
-        const HEADER_PAD = 14 + 40 + 16; // left pad + instance badge + right pad
+        const HEADER_PAD = 14 + 46 + 16; // left pad + instance badge pill + right pad
         let needed = measureText(handle, n.label, 'bm-node-label') + HEADER_PAD;
 
         for (const p of (n.pipelines || [])) {
             const nameW   = measureText(handle, p.displayName || p.name, 'bm-row-name');
-            const countsW = measureText(handle, `✓${p.doneCount ?? 0} ⟳${p.inProgressCount ?? 0}`, 'bm-row-counts');
+            const countsW = measureText(handle, rowCountsText(p), 'bm-row-counts');
             needed = Math.max(needed, 10 /*left pad*/ + nameW + 16 /*gap*/ + countsW + 10 /*right pad*/);
         }
 
         return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
     }
 
-    // ── Layout ───────────────────────────────────────────────────────────
+    // ── Layout (ELK: layered + orthogonal routing + fixed per-pipeline ports) ──
+    //
+    // Left-to-right always: the run-detail flow is a horizontal pipeline chain, and
+    // fixing the direction keeps the port model simple (source rows export EAST,
+    // target rows import WEST). ELK routes edges orthogonally in the channels
+    // *between* blocks — they never cross a node interior — and minimises crossings.
 
-    function chooseDir(containerEl) {
-        const r = containerEl.getBoundingClientRect();
-        return r.width >= r.height ? 'LR' : 'TB';
+    function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
+
+    // Port Y measured from the node's top edge (ELK's per-node origin), aligned to
+    // the centre of the owning pipeline row. Falls back to node centre if unknown.
+    function portYFromTop(node, pipeline) {
+        const i = pipelineIdx(node, pipeline);
+        return i >= 0
+            ? HEADER_HEIGHT + i * ROW_HEIGHT + ROW_HEIGHT / 2
+            : nh(node) / 2;
     }
 
-    function runLayout(handle, topo) {
-        const dir = chooseDir(handle.containerEl);
-        const g = new dagre.graphlib.Graph({ multigraph: true });
-        g.setGraph({
-            rankdir: dir,
-            // More breathing room than the old fixed spacing — wider node boxes
-            // (dynamic width) and more separation both reduce edges cutting
-            // through unrelated nodes.
-            nodesep: dir === 'LR' ? 90  : 110,
-            ranksep: dir === 'LR' ? 200 : 130,
-            marginx: 48, marginy: 48,
-        });
-        g.setDefaultEdgeLabel(() => ({}));
+    async function runLayout(handle, topo) {
+        const ids  = new Set(topo.nodes.map(n => n.id));
+        const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        for (const n of topo.nodes) {
-            // Cached on the node so updateClipPaths (called right after this) uses the
-            // exact same width without re-measuring text a second time.
+        // Which pipeline rows need an output (EAST) / input (WEST) port.
+        const outPorts = new Map(); // nodeId -> Set(pipeline)
+        const inPorts  = new Map();
+        const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
+        for (const e of edges) {
+            addPort(outPorts, e.source, e.sourcePipeline);
+            addPort(inPorts,  e.target, e.targetPipeline);
+        }
+
+        const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
+
+        const children = topo.nodes.map(n => {
+            // Cached on the node so updateClipPaths reuses the width without re-measuring.
             n._layoutWidth = computeNodeWidth(handle, n);
-            g.setNode(n.id, { width: n._layoutWidth, height: nh(n), data: n });
+            const w = n._layoutWidth, h = nh(n);
+            const ports = [];
+            for (const pipe of (outPorts.get(n.id) || []))
+                ports.push({ id: portId(n.id, 'out', pipe), x: w, y: portYFromTop(n, pipe),
+                             layoutOptions: { 'elk.port.side': 'EAST' } });
+            for (const pipe of (inPorts.get(n.id) || []))
+                ports.push({ id: portId(n.id, 'in', pipe), x: 0, y: portYFromTop(n, pipe),
+                             layoutOptions: { 'elk.port.side': 'WEST' } });
+            return { id: n.id, width: w, height: h, ports,
+                     layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
+        });
+
+        const elkEdges = edges.map((e, i) => ({
+            id: `e${i}`,
+            sources: [portId(e.source, 'out', e.sourcePipeline)],
+            targets: [portId(e.target, 'in',  e.targetPipeline)],
+        }));
+        const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
+
+        const graph = {
+            id: 'root',
+            layoutOptions: {
+                'elk.algorithm': 'layered',
+                'elk.direction': 'RIGHT',
+                'elk.edgeRouting': 'ORTHOGONAL',
+                'elk.layered.spacing.nodeNodeBetweenLayers': '90',
+                'elk.spacing.nodeNode': '44',
+                'elk.spacing.edgeNode': '26',
+                'elk.spacing.edgeEdge': '16',
+                'elk.layered.spacing.edgeNodeBetweenLayers': '26',
+                'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+                'elk.padding': '[top=48,left=48,bottom=48,right=48]',
+            },
+            children,
+            edges: elkEdges,
+        };
+
+        const res = await handle.elk.layout(graph);
+
+        // Normalise into our render structure. ELK coords have a top-left origin;
+        // we store node CENTRE (renderNodes translates to centre, draws from -w/2)
+        // and keep edge points in ELK-absolute space (which equals our render space).
+        const nodes = new Map();
+        for (const c of (res.children || [])) {
+            nodes.set(c.id, {
+                x: c.x + c.width / 2, y: c.y + c.height / 2,
+                width: c.width, height: c.height,
+                data: nodeById.get(c.id),
+            });
         }
 
-        const ids = new Set(topo.nodes.map(n => n.id));
-        for (const e of topo.edges) {
-            if (!ids.has(e.source) || !ids.has(e.target)) continue;
-            g.setEdge(e.source, e.target, { data: e }, `${e.sourcePipeline}::${e.targetPipeline}`);
-        }
-        dagre.layout(g);
-        return g;
+        const outEdges = (res.edges || []).map(re => {
+            const s = re.sections?.[0];
+            const pts = s ? [s.startPoint, ...(s.bendPoints || []), s.endPoint] : [];
+            return { id: re.id, pts, data: edgeDataById.get(re.id) };
+        });
+
+        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0 };
     }
 
-    // ── Edge path: horizontal entry/exit, following dagre's own waypoints ────
-    // dagre.layout() already routes multi-rank edges through intermediate points
-    // that account for the nodes sitting between source and target. The previous
-    // version discarded all but the first/last point and drew a single S-curve
-    // between them, which could cut straight through unrelated node boxes on
-    // edges spanning more than one rank. Following every waypoint (still via a
-    // smooth curve, not sharp corners) keeps the routing dagre already computed.
-    const edgeLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
-
-    function edgePath(pts) {
+    // Orthogonal polyline with rounded corners: line to a point `r` before each
+    // bend, then a quadratic through the bend to `r` after it. Works for the axis-
+    // aligned segments ELK emits (and degrades gracefully for any diagonal).
+    function roundedOrthPath(pts, r = 9) {
         if (!pts || pts.length < 2) return '';
-        if (pts.length === 2) {
-            const s = pts[0], t = pts[1];
-            const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
-            return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
+        if (pts.length === 2)
+            return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
+
+        let d = `M ${pts[0].x} ${pts[0].y}`;
+        for (let i = 1; i < pts.length - 1; i++) {
+            const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+            const d1 = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
+            const d2 = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+            const rr = Math.min(r, d1 / 2, d2 / 2);
+            const a = { x: p1.x - (p1.x - p0.x) / d1 * rr, y: p1.y - (p1.y - p0.y) / d1 * rr };
+            const b = { x: p1.x + (p2.x - p1.x) / d2 * rr, y: p1.y + (p2.y - p1.y) / d2 * rr };
+            d += ` L ${a.x} ${a.y} Q ${p1.x} ${p1.y} ${b.x} ${b.y}`;
         }
-        return edgeLine(pts);
+        const last = pts[pts.length - 1];
+        return d + ` L ${last.x} ${last.y}`;
     }
 
-    function snapPorts(pts, g, edge) {
-        if (!pts || pts.length < 2) return pts;
-        const sp = [...pts.map(p => ({ ...p }))];
-        const sn = g.node(edge.source), tn = g.node(edge.target);
-        if (sn) {
-            const ri = pipelineIdx(sn.data, edge.sourcePipeline);
-            sp[0] = { x: sn.x + sn.width / 2, y: sn.y + (ri >= 0 ? rowCY(sn.data, ri) : 0) };
-        }
-        if (tn) {
-            const ri = pipelineIdx(tn.data, edge.targetPipeline);
-            const last = sp.length - 1;
-            sp[last] = { x: tn.x - tn.width / 2, y: tn.y + (ri >= 0 ? rowCY(tn.data, ri) : 0) };
-        }
-        return sp;
+    // A point a short distance back from the arrowhead (last point), offset above
+    // the line, so the label reads clearly next to the arrow it belongs to.
+    function edgeLabelPos(pts) {
+        if (!pts || pts.length < 2) return { x: 0, y: 0 };
+        const end  = pts[pts.length - 1];
+        const prev = pts[pts.length - 2];
+        const dx = end.x - prev.x, dy = end.y - prev.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const back = Math.min(len * 0.5, 40);
+        return { x: end.x - (dx / len) * back, y: end.y - (dy / len) * back - 7 };
     }
 
     // ── init ─────────────────────────────────────────────────────────────
@@ -204,11 +270,13 @@ const D3Graph = (() => {
         const handle = {
             containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             animState: createState(),
+            elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
-            layoutTimer: null, rafId: null, lastFrameTime: null,
+            layoutTimer: null, layoutSeq: 0, rafId: null, lastFrameTime: null,
             userZoomed: false, isVisible: true, disposed: false,
             popoverNodeId: null, popoverPipeline: null, popoverHideTimer: null,
         };
+        if (!handle.elk) console.error('[D3Graph] ELK not loaded — flow graph cannot lay out.');
 
         const frame = now => {
             if (handle.disposed) return;
@@ -235,19 +303,29 @@ const D3Graph = (() => {
         handle.layoutTimer = setTimeout(() => commitLayout(handle), DEBOUNCE_MS);
     }
 
-    function commitLayout(handle) {
-        if (handle.disposed) return;
+    async function commitLayout(handle) {
+        if (handle.disposed || !handle.elk) return;
         const topo = handle.pendingTopology;
         if (!topo) return;
 
-        // runLayout computes each node's dynamic width (and caches it on the node as
-        // _layoutWidth) — clip paths are refreshed afterward so they reuse that same
-        // width instead of re-measuring text a second time.
-        const g = runLayout(handle, topo);
+        // ELK layout is async (runs in a worker). Guard against an older layout
+        // resolving after a newer one — only the latest sequence wins.
+        const seq = ++handle.layoutSeq;
+        let g;
+        try {
+            // runLayout also caches each node's dynamic width as _layoutWidth — clip
+            // paths reuse that below without re-measuring text a second time.
+            g = await runLayout(handle, topo);
+        } catch (err) {
+            console.error('[D3Graph] ELK layout failed', err);
+            return;
+        }
+        if (handle.disposed || seq !== handle.layoutSeq) return;
+
         handle.currentGraph = g;
         updateClipPaths(handle, topo);
-        renderEdges(handle, g);  // edges first — drawn below nodes
-        renderNodes(handle, g);
+        renderEdges(handle);  // edges first — drawn below nodes
+        renderNodes(handle);
         if (!handle.userZoomed) fitToView(handle, true);
     }
 
@@ -275,8 +353,8 @@ const D3Graph = (() => {
 
     // ── Nodes ─────────────────────────────────────────────────────────────
 
-    function renderNodes(handle, g) {
-        const data = g.nodes().map(id => ({ id, ...g.node(id) }));
+    function renderNodes(handle) {
+        const data = [...handle.currentGraph.nodes].map(([id, n]) => ({ id, ...n }));
 
         const sel = handle.nLayer.selectAll('g.bm-node').data(data, d => d.id);
 
@@ -311,11 +389,8 @@ const D3Graph = (() => {
         enter.append('rect').attr('class', 'bm-node-rect').attr('rx', 10)
             .attr('fill', 'none');
 
-        // Clip group — all row content clipped to card shape.
-        enter.append('g').attr('class', 'bm-node-clip-group');
-
-        // Header accent bar (left edge strip — inside clip group in updateNode).
-        enter.append('rect').attr('class', 'bm-node-accent').attr('width', 4).attr('rx', 2);
+        // Header tint band (sized/positioned in updateNode).
+        enter.append('rect').attr('class', 'bm-node-accent');
 
         // Service label.
         enter.append('text').attr('class', 'bm-node-label').attr('dy', '0.32em');
@@ -323,9 +398,10 @@ const D3Graph = (() => {
         // Header divider.
         enter.append('line').attr('class', 'bm-node-hdr-div');
 
-        // Instance badge.
+        // Instance badge — rounded-rect pill (not a circle: circles clip 2-digit
+        // counts too tightly to read).
         const badge = enter.append('g').attr('class', 'bm-node-badge');
-        badge.append('circle').attr('r', 11);
+        badge.append('rect').attr('class', 'bm-node-badge-bg');
         badge.append('text').attr('class', 'bm-node-badge-text')
             .attr('text-anchor', 'middle').attr('dy', '0.32em');
 
@@ -347,8 +423,10 @@ const D3Graph = (() => {
             const st  = sk(d.data.headerState);
             const col = sc(d.data.headerState);
 
-            // Clip group reference.
-            el.select('.bm-node-clip-group')
+            // Clip the pipeline-rows group to the card shape so long row names /
+            // counts can never spill outside the rounded rectangle. (Previously the
+            // clip-path was on an empty sibling group and the rows were unclipped.)
+            el.select('.bm-node-rows')
                 .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-bg')
@@ -361,11 +439,17 @@ const D3Graph = (() => {
                 .attr('width', d.width).attr('height', d.height)
                 .attr('class', `bm-node-rect bm-hdr-${st}`);
 
-            // Accent bar — placed *after* bg so it's on top, but inside clip.
+            // Header tint — full-width band behind the title, same hue as the border
+            // but semi-transparent (fill-opacity, not a separate alpha color) so it
+            // reads as "this header belongs to that border colour" rather than a
+            // solid block. clip-path (the same rounded-card clip as the rows below)
+            // keeps its corners from poking out past the card's rounded top corners —
+            // previously this was an unclipped 4px-wide bar with square corners.
             el.select('.bm-node-accent')
                 .attr('x', -hw).attr('y', -hh)
-                .attr('height', HEADER_HEIGHT)
-                .attr('fill', col);
+                .attr('width', d.width).attr('height', HEADER_HEIGHT)
+                .attr('fill', col).attr('fill-opacity', 0.14)
+                .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-label')
                 .attr('x', -hw + 14).attr('y', -hh + HEADER_HEIGHT / 2)
@@ -376,13 +460,22 @@ const D3Graph = (() => {
                 .attr('y1', -hh + HEADER_HEIGHT).attr('y2', -hh + HEADER_HEIGHT)
                 .attr('stroke', div);
 
+            // Instance-count pill — rounded rect sized to its text (not a fixed-radius
+            // circle, which clips 2-digit counts too tightly to read).
             const ic = d.data.instanceCount ?? 0;
             el.select('.bm-node-badge').style('display', ic > 0 ? null : 'none');
-            el.select('.bm-node-badge circle')
-                .attr('cx', hw - 34).attr('cy', -hh + HEADER_HEIGHT / 2);
+            const badgeText = `×${ic}`;
+            const bh = 20;
+            const bw = Math.max(30, measureText(handle, badgeText, 'bm-node-badge-text') + 16);
+            const bx = hw - 10 - bw; // 10px pad from the card's right edge
+            const by = -hh + HEADER_HEIGHT / 2 - bh / 2;
+            el.select('.bm-node-badge-bg')
+                .attr('x', bx).attr('y', by)
+                .attr('width', bw).attr('height', bh)
+                .attr('rx', bh / 2);
             el.select('.bm-node-badge-text')
-                .attr('x', hw - 34).attr('y', -hh + HEADER_HEIGHT / 2)
-                .text(`×${ic}`);
+                .attr('x', bx + bw / 2).attr('y', -hh + HEADER_HEIGHT / 2)
+                .text(badgeText);
 
             el.select('.bm-node-pulse')
                 .attr('x', -hw).attr('y', -hh)
@@ -415,9 +508,6 @@ const D3Graph = (() => {
 
         // Hit area — full row width.
         enter.append('rect').attr('class', 'bm-row-hit').attr('fill', 'transparent');
-        // Left state-colour bar (3 px wide, inset 1px from card edge so it
-        // doesn't touch the border rect).
-        enter.append('rect').attr('class', 'bm-row-bar').attr('width', 3);
         // Top divider line.
         enter.append('line').attr('class', 'bm-row-div');
         // Name text.
@@ -442,8 +532,9 @@ const D3Graph = (() => {
         merged.transition().duration(T).style('opacity', 1);
 
         const hw = nd.width / 2;
-        const pX = -hw + 10;
-        const pW = nd.width - 10 - 68;   // track width; right gap for counts
+        const PAD = 10;
+        const pX = -hw + PAD;
+        const pW = nd.width - PAD * 2;   // full-width progress bar (both sides padded)
         const pH = 3;
         const div = dividerColor();
 
@@ -461,33 +552,29 @@ const D3Graph = (() => {
                 .attr('y1', top).attr('y2', top)
                 .attr('stroke', div).attr('stroke-width', 0.5);
 
-            // Bar inset 1px from left edge; clip-path on parent handles overflow.
-            row.select('.bm-row-bar')
-                .attr('x', -hw + 1)
-                .attr('y', top + 6)
-                .attr('height', ROW_HEIGHT - 12)
-                .attr('fill', col);
+            // Name (top-left) and counts (top-right) share the upper line; the
+            // progress bar spans the full width beneath them (matches the mock).
+            const textY = top + 16;
+            const barY  = top + 27;
 
             row.select('.bm-row-name')
-                .attr('x', -hw + 10).attr('y', r._cy - 9)
-                .attr('class', 'bm-row-name');
+                .attr('x', -hw + PAD).attr('y', textY)
+                .text(r.displayName || r.name);
 
-            row.select('.bm-row-name').text(r.displayName || r.name);
+            row.select('.bm-row-counts')
+                .attr('x', hw - PAD).attr('y', textY)
+                .attr('text-anchor', 'end')
+                .text(rowCountsText(r));
 
             row.select('.bm-row-track')
-                .attr('x', pX).attr('y', r._cy + 2)
+                .attr('x', pX).attr('y', barY)
                 .attr('width', pW).attr('height', pH);
 
             row.select('.bm-row-fill')
-                .attr('x', pX).attr('y', r._cy + 2).attr('height', pH)
+                .attr('x', pX).attr('y', barY).attr('height', pH)
                 .attr('fill', col)
                 .transition().duration(T)
                 .attr('width', pW * Math.max(0, Math.min(1, r.progress ?? 0)));
-
-            row.select('.bm-row-counts')
-                .attr('x', hw - 6).attr('y', r._cy - 9)
-                .attr('text-anchor', 'end')
-                .text(`✓${r.doneCount ?? 0} ⟳${r.inProgressCount ?? 0}`);
         });
     }
 
@@ -559,7 +646,7 @@ const D3Graph = (() => {
     function positionPopover(handle, nd) {
         const g = handle.currentGraph;
         if (!g) return;
-        const n = g.node(nd.id);
+        const n = g.nodes.get(nd.id);
         if (!n) return;
 
         const t   = d3.zoomTransform(handle.svg.node());
@@ -598,18 +685,18 @@ const D3Graph = (() => {
 
     // ── Edges ─────────────────────────────────────────────────────────────
 
-    function renderEdges(handle, g) {
-        const data = g.edges().map(e => {
-            const ed  = g.edge(e);
-            const pts = snapPorts(ed.points, g, ed.data);
-            return { id: `${e.v}::${e.name}::${e.w}`, pts, data: ed.data };
-        });
+    function renderEdges(handle) {
+        const data = handle.currentGraph.edges;
 
         const sel = handle.eLayer.selectAll('g.bm-edge').data(data, d => d.id);
 
         sel.exit().transition().duration(T).style('opacity', 0).remove();
 
         const enter = sel.enter().append('g').attr('class', 'bm-edge').style('opacity', 0);
+
+        // Native tooltip on the whole edge (path + label) — hovering either shows
+        // what the two numbers mean and which target pipeline the edge feeds.
+        enter.append('title');
 
         // stroke must be set as SVG attribute (not CSS) for context-stroke to
         // work on the arrowhead marker.
@@ -628,13 +715,18 @@ const D3Graph = (() => {
             const w   = edgeW(d.data);
             const path = d3.select(this).select('.bm-edge-path');
             // Set stroke as attribute so context-stroke on the marker resolves.
-            path.attr('d', edgePath(d.pts))
+            path.attr('d', roundedOrthPath(d.pts))
                 .attr('stroke', col)
                 .attr('stroke-width', w);
 
-            const mid = d.pts[Math.floor(d.pts.length / 2)] || { x:0, y:0 };
+            d3.select(this).select('title').text(edgeTooltip(d.data));
+
+            // Place the label near the arrowhead (target end) rather than the
+            // geometric middle — a multi-bend path's middle can sit far from the
+            // arrow, making it ambiguous which edge the number belongs to.
+            const lp = edgeLabelPos(d.pts);
             d3.select(this).select('.bm-edge-label')
-                .attr('x', mid.x).attr('y', mid.y - 8)
+                .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
         });
     }
@@ -647,7 +739,14 @@ const D3Graph = (() => {
     function edgeLabel(e) {
         if (!e) return '';
         const d = e.doneCount ?? 0, w = e.waitingEstimate ?? 0;
-        return w > 0 ? `✓${d} ~${w}` : `✓${d}`;
+        return `${d} / ${d + w}`;   // handed off / total (handed off + in flight)
+    }
+
+    function edgeTooltip(e) {
+        if (!e) return '';
+        const d = e.doneCount ?? 0, w = e.waitingEstimate ?? 0;
+        const target = e.targetPipeline || e.target || '';
+        return `${d} processed, ${w} in flight` + (target ? ` → ${target}` : '');
     }
 
     // ── Animation frame ────────────────────────────────────────────────────
@@ -683,7 +782,7 @@ const D3Graph = (() => {
     function fitToView(handle, animate) {
         const g  = handle.currentGraph;
         if (!g) return;
-        const gi = g.graph();
+        const gi = { width: g.width, height: g.height };
         const cw = handle.containerEl.clientWidth  || 1;
         const ch = handle.containerEl.clientHeight || 1;
         const pad = 52;

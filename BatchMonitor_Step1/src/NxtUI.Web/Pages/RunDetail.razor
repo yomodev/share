@@ -281,7 +281,17 @@
                 @EffectiveStatus
             </span>
 
+            @if (_details is not null && !string.IsNullOrWhiteSpace(_details.Type))
+            {
+                <span class="bm-detail-type">@_details.Type</span>
+            }
+
             <span class="bm-detail-batch-name">@(_details?.Description ?? "Loading…")</span>
+
+            @if (_details is not null)
+            {
+                <span class="bm-detail-runid bm-monospace">@_details.RunId</span>
+            }
 
             @if (IsReplay)
             {

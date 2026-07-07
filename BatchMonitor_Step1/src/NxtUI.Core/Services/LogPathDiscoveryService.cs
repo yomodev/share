@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
 using NxtUI.Core.Models;
 using System.Collections.Concurrent;

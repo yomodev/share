@@ -1,4 +1,4 @@
-namespace NxtUI.Configuration;
+namespace NxtUI.Core.Configuration;
 
 public class LogPathSettings
 {
@@ -15,7 +15,7 @@ public class LogPathSettings
     /// A segment may contain * which is expanded via Directory.GetDirectories.
     /// First template whose path resolves wins.
     /// </summary>
-    public List<string> ServiceTemplates { get; set; } = new();
+    public List<string> ServiceTemplates { get; set; } = [];
 
     /// <summary>
     /// Fixed name of the file inside the resolved folder that contains the
@@ -38,7 +38,7 @@ public class LogPathSettings
     /// List of server hostnames to enumerate in the Log Browser tree.
     /// If empty, the browser falls back to hosts seen in live heartbeats.
     /// </summary>
-    public List<string> Servers { get; set; } = new();
+    public List<string> Servers { get; set; } = [];
 
     /// <summary>How often (seconds) the Log Browser polls the selected folder and its parent.</summary>
     public int FolderScanIntervalSeconds { get; set; } = 30;

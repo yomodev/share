@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Options;
-using NxtUI.Configuration;
+using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
 using NxtUI.Core.Services;
 using System.Globalization;

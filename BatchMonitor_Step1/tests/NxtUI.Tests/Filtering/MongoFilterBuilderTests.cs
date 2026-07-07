@@ -1,6 +1,7 @@
 using AwesomeAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
 using NxtUI.Core.Filtering;
 
 namespace NxtUI.Tests.Filtering;
@@ -14,8 +15,10 @@ public class MongoFilterBuilderTests
         var node = Parser.Parse(filterText);
         var filter = MongoFilterBuilder.Build(node);
         return filter.Render(
-            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
-            BsonSerializer.SerializerRegistry).ToString();
+            new RenderArgs<BsonDocument>(
+                BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                BsonSerializer.SerializerRegistry))
+            .ToString();
     }
 
     // ── Exact equality on Number/Date/Bool — the "matches everything" bug ──
@@ -81,8 +84,10 @@ public class MongoFilterBuilderTests
         var node = parser.Parse("Name:svc IsOnline:true");
         var filter = MongoFilterBuilder.Build(node);
         var rendered = filter.Render(
-            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
-            BsonSerializer.SerializerRegistry).ToString();
+            new RenderArgs<BsonDocument>(
+                BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                BsonSerializer.SerializerRegistry))
+            .ToString();
         rendered.Should().Contain("IsOnline");
         rendered.Should().Contain("true");
     }
@@ -96,8 +101,10 @@ public class MongoFilterBuilderTests
     {
         var filter = MongoFilterBuilder.BuildCollectionNameFilter(search);
         return filter.Render(
-            BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
-            BsonSerializer.SerializerRegistry).ToString();
+            new RenderArgs<BsonDocument>(
+                BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                BsonSerializer.SerializerRegistry))
+            .ToString();
     }
 
     [Fact]

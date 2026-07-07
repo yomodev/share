@@ -62,10 +62,10 @@
     pointer-events: none;
 }
 
-/* Instance badge */
-.bm-node-badge circle { fill: #388BFD; opacity: 0.9; }
+/* Instance badge — rounded-rect pill, sized to its text in JS (d3-graph.js) */
+.bm-node-badge-bg { fill: #388BFD; opacity: 0.9; }
 .bm-node-badge-text {
-    font-size: 0.6rem;
+    font-size: 0.72rem;
     font-weight: 700;
     fill: #fff;
     pointer-events: none;
@@ -79,8 +79,6 @@
 .bm-row { cursor: pointer; }
 .bm-row:hover .bm-row-hit  { fill: rgba(88,166,255,0.07) !important; }
 .bm-row:hover .bm-row-name { fill: var(--mud-palette-primary); }
-
-.bm-row-bar { pointer-events: none; }
 
 .bm-row-name {
     font-size: 0.72rem;
@@ -117,7 +115,9 @@
     paint-order: stroke;
     stroke: var(--mud-palette-surface, #1e1e2e);
     stroke-width: 4px;
-    pointer-events: none;
+    /* Auto (not none) so hovering the number surfaces the edge's <title> tooltip. */
+    pointer-events: auto;
+    cursor: default;
 }
 
 /* ── Popover ─────────────────────────────────────────────────────── */
