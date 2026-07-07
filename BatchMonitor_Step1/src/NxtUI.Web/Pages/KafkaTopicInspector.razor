@@ -148,6 +148,7 @@
                       Elevation="0"
                       Striped="true"
                       FixedHeader="true"
+                      Virtualize="true"
                       Height="100%"
                       SelectedItem="_selected"
                       SelectedItemChanged="OnRowSelected"
@@ -252,6 +253,25 @@
     [Parameter] public string TopicName   { get; set; } = string.Empty;
     [Parameter] public string Environment { get; set; } = string.Empty;
     [Parameter] public TabModel? Tab      { get; set; }
+    [Parameter] public bool IsFocused     { get; set; } = true;
+
+    // While unfocused, the streaming loop below still consumes into _messages (no data
+    // loss) but skips the per-message filter re-apply + render — a hidden tab was
+    // re-filtering and re-rendering up to 3,000 rows every 150ms for no one to see.
+    // Catch up once when focus returns.
+    private bool _previousIsFocused = true;
+
+    protected override void OnParametersSet()
+    {
+        if (IsFocused == _previousIsFocused) return;
+        var gained = IsFocused && !_previousIsFocused;
+        _previousIsFocused = IsFocused;
+        if (!gained) return;
+
+        var (_, remaining) = ExtractDirective(_filterText);
+        ApplyClientFilter(remaining);
+        StateHasChanged();
+    }
 
     private enum StreamState { Idle, Running, Paused }
 
@@ -337,6 +357,11 @@
                 _messages.Insert(0, msg);
                 if (_messages.Count > MaxBufferedMessages)
                     _messages.RemoveRange(MaxBufferedMessages, _messages.Count - MaxBufferedMessages);
+
+                // Skip the filter re-apply + render entirely while unfocused — data keeps
+                // accumulating above regardless; OnParametersSet catches up once when the
+                // tab regains focus.
+                if (!IsFocused) continue;
 
                 var now = DateTime.UtcNow;
                 if ((now - lastRender).TotalMilliseconds < StreamRenderIntervalMs) continue;
