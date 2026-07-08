@@ -82,13 +82,14 @@
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => OpenInspector(context.Name)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <MudTd @ondblclick="dbl">
                         <span>@context.PartitionCount</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <MudTd @ondblclick="dbl">
                         @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
                         else { <span class="bm-muted">—</span> }
                     </MudTd>
@@ -175,17 +176,18 @@
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => OnGroupSelected(context)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd @ondblclick="dbl">
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                                  Color="@StateColor(context.State)">@context.State</MudChip>
                     </MudTd>
-                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd Style="text-align:right;" @ondblclick="dbl">
                         @context.TopicCount
                     </MudTd>
-                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd Style="text-align:right;" @ondblclick="dbl">
                         @if (context.TotalLag > 0)
                         {
                             <span class="bm-kafka-lag-warn">

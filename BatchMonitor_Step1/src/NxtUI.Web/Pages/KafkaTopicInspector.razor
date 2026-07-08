@@ -165,25 +165,26 @@
                     <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => DownloadMessageAsync(context)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono">@context.Offset</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono">@context.Partition</span>
                     </MudTd>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-payload-type @TypeChipClass(context.PayloadType)">@context.PayloadType</span>
                     </MudTd>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-muted">@context.RawSizeBytes B</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
                     </MudTd>
                 </RowTemplate>

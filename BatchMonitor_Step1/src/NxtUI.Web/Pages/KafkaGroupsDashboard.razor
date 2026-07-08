@@ -59,17 +59,18 @@
                 </MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                @{ var dbl = EventCallback.Factory.Create(this, () => OnRowSelected(context)); }
+                <MudTd @ondblclick="dbl">
                     <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd @ondblclick="dbl">
                     <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                              Color="@StateColor(context.State)">@context.State</MudChip>
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @context.TopicCount
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.TotalLag > 0)
                     {
                         <span class="bm-kafka-lag-warn">

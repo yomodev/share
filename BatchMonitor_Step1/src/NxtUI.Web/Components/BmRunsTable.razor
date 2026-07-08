@@ -32,37 +32,33 @@
             }
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="padding-left:12px;"
-                   @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            @{
+                var clk = EventCallback.Factory.Create(this, () => OnRowClick.InvokeAsync(context));
+                var dbl = EventCallback.Factory.Create(this, () => OnOpenDetail.InvokeAsync(context));
+            }
+            <MudTd Style="padding-left:12px;" @onclick="clk" @ondblclick="dbl">
                 <StatusIcon Status="@context.Status" />
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2">@context.Description</MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
                     @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                 </MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace">
                     @FormatDuration(context.Duration)
                 </MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
                     @context.Status
                 </span>

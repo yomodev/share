@@ -162,21 +162,22 @@
                     @{
                         var rowKey  = ServiceKey(context);
                         var rowPath = DiscoverySvc.GetCachedPath(context, Env);
+                        var dbl     = EventCallback.Factory.Create(this, () => OpenLogViewerAsync(context));
                     }
-                    <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd Style="padding-left:12px;" @ondblclick="dbl">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                  Size="Size.Small"
                                  Color="@(context.IsOnline ? Color.Success : Color.Error)" />
                     </MudTd>
-                    <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
-                    <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
-                    <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
-                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
-                    <MudTd DataLabel="Mem (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="Service" @ondblclick="dbl"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
+                    <MudTd DataLabel="Host" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
+                    <MudTd DataLabel="PID" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="dbl"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="Mem (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="dbl">
                         <MudText Typo="Typo.body2" Class="bm-monospace" Style="@MemColorStyle(context.RamMb)">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
-                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="dbl">
                         <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
                     </MudTd>
                     <MudTd Style="text-align:center;">

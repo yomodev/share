@@ -171,19 +171,20 @@
                             <MudTh></MudTh>
                         </HeaderContent>
                         <RowTemplate>
-                            <MudTd DataLabel="Host" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))">
+                            @{ var dbl = EventCallback.Factory.Create(this, () => OpenInViewer(context)); }
+                            <MudTd DataLabel="Host" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
+                            <MudTd DataLabel="File" @ondblclick="dbl">
                                 <MudTooltip Text="@context.FullPath">
                                     <MudText Typo="Typo.body2">@context.FileName</MudText>
                                 </MudTooltip>
                             </MudTd>
-                            <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Created" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Created" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Last Updated" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Last Updated" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@DtSvc.Format(context.LastModifiedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd>

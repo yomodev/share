@@ -118,7 +118,7 @@ public class MongoFilterBuilderTests
     public void Plain_bare_term_is_a_case_insensitive_contains_on_name()
     {
         RenderCollectionFilter("ccr").Should()
-            .Be("{ \"name\" : /ccr/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"ccr\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -139,14 +139,14 @@ public class MongoFilterBuilderTests
         // Previously "wcr*" was raw regex — '*' quantifies the preceding char, not a
         // "starts with" wildcard — so this only coincidentally looked like it worked.
         RenderCollectionFilter("wcr*").Should()
-            .Be("{ \"name\" : /^wcr.*$/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"^wcr.*$\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
     public void Trailing_glob_star_anchors_to_ends_with()
     {
         RenderCollectionFilter("*str").Should()
-            .Be("{ \"name\" : /^.*str$/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"^.*str$\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class MongoFilterBuilderTests
         // (any-char / quantifier), so e.g. searching "log.events" would also match
         // "logXevents". The shared grammar escapes literal characters via Regex.Escape.
         RenderCollectionFilter("log.events").Should()
-            .Be("{ \"name\" : /log\\.events/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"log\\\\.events\", \"options\" : \"i\" } } }");
     }
 
     [Theory]
@@ -164,7 +164,8 @@ public class MongoFilterBuilderTests
     [InlineData("collection:ccr")]
     public void Field_prefixed_aliases_resolve_to_the_name_field(string search)
     {
-        RenderCollectionFilter(search).Should().Be("{ \"name\" : /ccr/i }");
+        RenderCollectionFilter(search).Should()
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"ccr\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -173,6 +174,6 @@ public class MongoFilterBuilderTests
         // An unbalanced paren is a parse error in the shared grammar — the search box
         // must never just throw or silently return nothing for odd input.
         RenderCollectionFilter("(ccr").Should()
-            .Be("{ \"name\" : /\\(ccr/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"\\\\(ccr\", \"options\" : \"i\" } } }");
     }
 }

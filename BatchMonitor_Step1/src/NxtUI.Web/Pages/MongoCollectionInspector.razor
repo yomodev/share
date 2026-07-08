@@ -56,10 +56,11 @@
                     <MudTh Style="width:100%;">Preview</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => SaveDocumentAsync(context)); }
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                     </MudTd>
-                    <MudTd Style="width:100%; max-width:0;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="width:100%; max-width:0;" @ondblclick="dbl">
                         <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                     </MudTd>
                 </RowTemplate>

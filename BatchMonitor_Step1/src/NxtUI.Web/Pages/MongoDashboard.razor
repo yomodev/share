@@ -75,10 +75,11 @@
                 <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                @{ var dbl = EventCallback.Factory.Create(this, () => OpenInspector(context.Name)); }
+                <MudTd @ondblclick="dbl">
                     <span class="bm-kafka-topic-name">@context.Name</span>
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.StatsLoaded)
                     {
                         <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
@@ -88,7 +89,7 @@
                         <span class="bm-muted">—</span>
                     }
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.StatsLoaded)
                     {
                         <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
@@ -98,7 +99,7 @@
                         <span class="bm-muted">—</span>
                     }
                 </MudTd>
-                <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:center;" @ondblclick="dbl">
                     @if (context.StatsLoaded) { @context.IndexCount }
                     else { <span class="bm-muted">—</span> }
                 </MudTd>
