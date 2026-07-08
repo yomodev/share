@@ -449,11 +449,23 @@ const TIMELINE_ALIASES = {
 
     function buildGroups(s, batch, groupBy, filterAst) {
         const map = new Map();
+        const sortIdxByKey = new Map();
+        // Hierarchical first-seen order — see firstSeenTuple(). Reset per call so
+        // ordering reflects the currently-filtered event set (hiding an event can
+        // change who's "first"), not some stale cross-render state.
+        const orderMaps = [];
+
         for (const e of (batch.events || [])) {
             if (e.finishMs == null) continue;
             if (!evaluate(filterAst, e)) continue;
             const key = groupKey(e, groupBy);
-            if (!map.has(key)) map.set(key, []);
+            if (!map.has(key)) {
+                map.set(key, []);
+                // Assigned once, the moment this group's first event is seen — never
+                // recomputed afterward, so a group's position stays fixed for the rest
+                // of this render even as more of its own events stream in.
+                sortIdxByKey.set(key, firstSeenTuple(orderMaps, groupSortTuple(e, groupBy)));
+            }
             map.get(key).push(e);
         }
         const groups = [];
@@ -461,16 +473,36 @@ const TIMELINE_ALIASES = {
             const subrows = packSubrows(events);
             const SH = s.subrowHOverride ?? SUBROW_H;
             const rowH = ROW_PAD * 2 + subrows.length * (SH + BLOCK_GAP);
-            groups.push({ key, events, subrows, rowH });
+            groups.push({ key, events, subrows, rowH, _sortIdx: sortIdxByKey.get(key) });
         }
-        // All events in a group share the same field values (that's what defines the
-        // group), so events[0] is representative — sort hierarchically instead of
-        // leaving the Map's insertion order, so e.g. every row for the same service
-        // clusters together regardless of which order distinct combinations first
-        // appeared in the raw event stream.
-        groups.sort((a, b) =>
-            compareGroupTuples(groupSortTuple(a.events[0], groupBy), groupSortTuple(b.events[0], groupBy)));
+        // Order by first occurrence, hierarchically: a group's position is decided the
+        // moment its first event arrives — mirroring how the data is actually produced
+        // (a service is "created" when its first message arrives, and asks its
+        // pipelines to render in the order THEY were created under it). For composite
+        // groupings (e.g. Service / Pipeline) a child level's order is scoped to its
+        // parent's value, not global and not alphabetical — see firstSeenTuple().
+        groups.sort((a, b) => compareGroupTuples(a._sortIdx, b._sortIdx));
         return groups;
+    }
+
+    // Assigns each level of `tuple` a first-seen index scoped to its parent's value.
+    // orderMaps[d] maps "parentScope thisLevelValue" -> the index that scoped
+    // value got the first time it was seen (Map.size at insertion time = next free
+    // index). Called once per distinct group key (see buildGroups), so e.g. under
+    // Service/Pipeline, a service's pipelines are numbered 0,1,2... in the order they
+    // first appeared specifically under THAT service, independent of any other
+    // service's pipelines.
+    function firstSeenTuple(orderMaps, tuple) {
+        let scope = '';
+        const idx = [];
+        for (let d = 0; d < tuple.length; d++) {
+            if (!orderMaps[d]) orderMaps[d] = new Map();
+            const scopeKey = scope + ' ' + tuple[d];
+            if (!orderMaps[d].has(scopeKey)) orderMaps[d].set(scopeKey, orderMaps[d].size);
+            idx.push(orderMaps[d].get(scopeKey));
+            scope = scopeKey;
+        }
+        return idx;
     }
 
     function buildStackGroups(s, batch, filterAst) {

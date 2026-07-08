@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 6965
+LENGTH 7031
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -86,6 +86,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
 		docs\09_Features.md = docs\09_Features.md
 		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
+		docs\11_ResponsivenessAudit.md = docs\11_ResponsivenessAudit.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
@@ -2823,263 +2824,6 @@ each page picking whichever pattern was closest to hand when it was
 written.
 
 
-FILE docs/11_ResponsivenessAudit.md
-LENGTH 15630
-# Responsiveness Audit — NxtUI (Blazor Server)
-
-Scope: the three projects under `src/` (`NxtUI.Core`, `NxtUI.Protos`, `NxtUI.Web`), reviewed
-for UI responsiveness: render bottlenecks, freeze/stall sources, JS-interop payload costs,
-and background-work hygiene. Findings are ordered by expected user-facing impact, each with
-concrete remediation steps.
-
-**Overall verdict:** the architecture is fundamentally sound and clearly written by someone
-who has already fought (and fixed) the classic Blazor Server problems — file I/O is
-consistently pushed off the circuit thread (`Task.Run` in `LogViewerService`,
-`LogBrowserService`, `ServiceMetricsMonitor`), polling is focus-gated (`FocusGatedPoller`,
-`IsFocused` params, `ShouldRender` overrides), renders are throttled/coalesced in several
-places, and heavy visuals (graph, timeline, log viewer, treemap) are delegated to JS/D3
-instead of Blazor DOM diffing. The issues below are the remaining hot spots, most of them
-concentrated in three places: the render cascade caused by mutable `TabModel` parameters,
-whole-dataset JS-interop pushes in the Timeline, and the unvirtualized Kafka message table.
-
----
-
-## 1. HIGH — `TabModel` parameter cascade re-runs every open tab on every notify
-
-**Where:** `MainLayout.razor` (`TabService.OnChange += ...` → `StateHasChanged`),
-`TabContent.razor`, every page taking `[Parameter] TabModel? Tab`.
-
-**Problem.** `TabService.NotifyChanged()` is called extremely often — every
-`Tab?.BeginLoading()` / `EndLoading()` pair on every page fires it (twice), and every tab
-focus change fires it. Each notify → `MainLayout.StateHasChanged()` → re-render of the
-`@foreach (var tab in TabService.Tabs)` loop. Because `Tab` is a **mutable class type**,
-Blazor cannot prove the parameter is unchanged, so it **cannot skip** re-rendering
-`TabContent` — and `TabContent` re-sets parameters on every open page component. Result:
-`OnParametersSet(Async)` runs on *every open tab's page* every time *any* tab starts or
-finishes loading.
-
-Two concrete amplifiers:
-
-- `RunDetail` (when focused) re-renders → `D3FlowGraph.OnParametersSetAsync` →
-  `PushTopologyAsync()` **unconditionally** re-serializes the whole `Topology` to JS.
-  A background tab's spinner toggling causes topology JSON pushes on the focused tab.
-- `TimelineTab.OnParametersSetAsync` makes a `setVisible` JS interop round trip per notify.
-
-**Remediation steps:**
-
-1. In `D3FlowGraph.OnParametersSetAsync`, push topology only when it actually changed:
-   keep `private Topology? _lastPushed;` and skip `PushTopologyAsync()` when
-   `ReferenceEquals(Topology, _lastPushed)`. (RunDetail creates a new `Topology` instance
-   per recompute, so reference equality is a correct and free change-detector.)
-2. Same pattern in `TimelineTab.OnParametersSetAsync`: only call `setVisible` when
-   `IsFocused` actually changed (track `_previousIsFocused` like RunDetail/ServicesPage
-   already do).
-3. Audit `NotifyChanged()` call volume: `TabLoadingScope`/`BeginLoading` could set a dirty
-   flag and coalesce notifies through a ~50 ms debounce inside `TabService` instead of
-   firing synchronously per call.
-4. Longer-term (optional, bigger win): split the "tab strip changed" event (TabBar needs
-   it) from the "loading spinner changed" event (only TabBar needs that too!) — the content
-   panes in `MainLayout` only need re-render on open/close/focus changes, not on spinner
-   ticks. Two events on `TabService` (`OnStripChanged`, `OnLayoutChanged`) subscribed
-   separately by TabBar vs MainLayout would eliminate most content-pane cascades outright.
-
-## 2. HIGH — Timeline pushes the entire event set over JS interop on every update
-
-**Where:** `TimelineTab.razor` `BuildPayload()` / `PushDataAsync()`; `TimelineRun.cs`.
-
-**Problem.** Every debounced update (300 ms while events stream in) rebuilds and
-JSON-serializes **all events of all loaded runs** through
-`_tlModule.InvokeVoidAsync("update", ...)`. With the ~7.5k events seen in a normal run this
-is already a multi-megabyte serialize + SignalR send every 300 ms on the circuit; with
-multiple runs loaded it grows linearly and *never shrinks*. This is the most likely cause of
-sluggishness while a Timeline tab is open on a live run.
-
-**Aggravator (bug-level):** `TotalEventCount => _runs.Sum(r => r.Events.Count)` is evaluated
-in the control-bar markup **on every render**, and `TimelineRun.Events` is
-`lock { _events.Values.OrderBy(e => e.Start).ToList(); }` — a full **O(n log n) sort + list
-copy of every event of every run, just to read `.Count`**, on the circuit thread, per render.
-
-**Remediation steps:**
-
-1. Immediate one-liner: add `public int EventCount { get { lock (_lock) return _events.Count; } }`
-   to `TimelineRun` and use it in `TotalEventCount`. Removes the per-render sort/copy.
-2. Cache the sorted list in `TimelineRun`: invalidate on upsert (`_sortedDirty = true`),
-   re-sort lazily once per generation instead of per access. `BuildPayload` also calls
-   `.Events` per run per push.
-3. Incremental JS pushes: keep a `_lastPushedCount` (or per-run event generation counter)
-   and add a JS `appendEvents(key, newEvents)` entry point; only fall back to the full
-   `update` when events were *replaced* (filter/group changes, run removed). The D3 side
-   already recomputes layout from its own retained data, so it only needs deltas.
-4. If (3) is too invasive short-term: raise `RenderDebounceMs` from 300 ms to ~1000 ms for
-   pushes where `TotalEventCount > 20k`; live-follow smoothness matters less than not
-   saturating the circuit.
-
-## 3. HIGH — Kafka Topic Inspector renders up to 3,000 real table rows, even when hidden
-
-**Where:** `KafkaTopicInspector.razor` (`MaxBufferedMessages = 3_000`, `MudTable` over
-`_filtered`, streaming loop with 150 ms render throttle).
-
-**Problem.** Three compounding costs:
-
-- **No virtualization**: 3,000 `MudTable` rows × 7 cells, each cell carrying its own
-  `@ondblclick` handler → ~21k event handlers and enormous render trees. Every throttled
-  `StateHasChanged` during streaming re-diffs this. This is the single largest DOM/diff
-  load in the app.
-- **No focus gating**: the page doesn't receive `IsFocused` (see `TabContent.razor`), so a
-  hidden inspector tab keeps consuming, filtering, and re-rendering its 3k-row table every
-  150 ms for as long as the stream runs.
-- `_messages.Insert(0, msg)` is O(n) per message on a 3k list, and `ApplyClientFilter`
-  re-filters the whole buffer per throttle tick (minor next to the render cost, but free to
-  fix in passing).
-
-**Remediation steps:**
-
-1. Switch the message list to `<MudTable ... Virtualize="true">` (MudTable supports it for
-   fixed-height tables, which this already is: `FixedHeader="true" Height="100%"`), or
-   replace the table body with a `<Virtualize>` block. This alone cuts rendered rows from
-   3,000 to ~30.
-2. Move the seven per-cell `@ondblclick` handlers to a single `@ondblclick` on the row
-   (`RowTemplate`'s cells all do the same thing) — one handler per row instead of seven.
-3. Pass `IsFocused="@Tab.IsActive"` from `TabContent` and gate the render throttle: while
-   unfocused, keep consuming into `_messages` but skip `ApplyClientFilter` +
-   `StateHasChanged` entirely; run both once when focus returns (same pattern
-   RunDetail/ServicesPage use).
-4. Replace `Insert(0, ...)` with appending and rendering in reverse order (or a deque), so
-   buffer maintenance is O(1).
-
-## 4. MEDIUM — Log viewer transfers whole files as a single interop payload
-
-**Where:** `LogViewerService.ReadAllAsync` → `LogViewer.RenderViewerAsync` →
-`_viewport.RenderAsync(_rawContent!, ...)`.
-
-**Problem.** The entire file is read into one C# string and crosses JS interop in a single
-call. The read itself is correctly off-thread, and client-side rendering is virtualized
-(`LogViewport`), but a large network-share log (hundreds of MB) means: a giant LOH string,
-a second full-size serialization buffer, and one enormous SignalR frame that stalls the
-circuit's send pipe (all other UI updates queue behind it). This is a realistic freeze/OOM
-vector — the one place the "don't block the circuit" discipline still has a gap.
-
-**Remediation steps:**
-
-1. Chunk the transfer: send the text in ~1–4 MB segments via repeated
-   `viewport.AppendChunkAsync(...)` calls, letting other circuit messages interleave. The
-   JS parser already supports incremental input (tail mode uses `ReadDeltaAsync` +
-   append), so the plumbing exists — initial load can reuse the same append path.
-2. Add a size guard: above a configurable threshold (e.g. `Logs:MaxFullLoadMb`, default
-   50 MB), load only the tail N MB with a "load more" affordance, instead of the whole file.
-3. Optional stretch: serve file content over a plain HTTP endpoint (like `/api/treemap`
-   already does for the treemap, bypassing SignalR) and have the JS viewport `fetch()` it —
-   zero circuit involvement for the bulk bytes.
-
-## 5. MEDIUM — Per-circuit SignalR loopback connection for run events
-
-**Where:** `SignalRConnectionService` (`nav.ToAbsoluteUri("/hubs/run-events")`),
-`MockRunService` → `IHubContext<RunEventsHub>`.
-
-**Problem.** Each Blazor circuit opens a *client-style* `HubConnection` back to its own
-server process. Every run event is: serialized by `IHubContext` → sent through the HTTP/
-websocket stack → received by the same process → deserialized → dispatched. That's double
-serialization and a loopback network hop per event per circuit, plus one extra websocket
-per user session to babysit (reconnect logic, etc.). Events are also delivered
-**one message per event** with no batching, so a burst of N events = N loopback messages =
-N handler invocations (each of which triggers the RunDetail debounce machinery).
-
-**Remediation steps:**
-
-1. Replace the loopback with an in-process event bus: a singleton
-   `RunEventBroker` with `Subscribe(env, runId, handler)` and `Publish(...)`;
-   `MockRunService`/real backends publish to it directly, and `SignalRConnectionService`
-   becomes a thin adapter (or disappears). Keep the hub only if *external* processes need
-   to publish run events over the network.
-2. Batch delivery: whether via broker or hub, deliver `IReadOnlyList<PerformanceEvent>`
-   per tick (e.g. accumulate 100 ms) instead of single events. Consumers
-   (`PerformanceEventService.OnSignalREvent`, `TimelineRun.OnRunEvent`) already upsert
-   idempotently, so batching is transparent — and it collapses N debounce-reset cycles
-   into one.
-
-## 6. MEDIUM — RunDetail topology recompute: full snapshot + full recompute per debounce
-
-**Where:** `RunDetail.DebouncedTopologyCompute`, `PerformanceEventStore.Snapshot`,
-`TopologyComputationService.ComputeTopology`.
-
-**Problem.** Every 400 ms debounce window: full dictionary copy (`Snapshot`), then
-`ComputeTopology` does ~10 LINQ passes over all events (multiple `GroupBy`/`ToDictionary`/
-`Count` scans). It runs on the thread pool (good — the UI won't freeze), but on long runs
-(100k+ events) each recompute is significant CPU + allocation, repeating every 400 ms for
-as long as events stream. `PerformanceEventStore.LastEventTimestamp` also does a full
-`MaxBy` scan per poll.
-
-Also, `DebouncedTopologyCompute` allocates a new `CancellationTokenSource` + `Task.Delay`
-continuation **per incoming event** (SignalR push calls it per event).
-
-**Remediation steps:**
-
-1. Cheap wins first: cache `LastEventTimestamp` in the store (update on upsert);
-   single-pass the four `Count()`/`Max()` scans in `ComputeTopology` phase 1/2 where trivial.
-2. Make the debounce allocation-free: instead of cancel+new CTS per event, keep one
-   periodic "recompute if dirty" loop per RunDetail (e.g. `PeriodicTimer(400ms)` checking a
-   `volatile bool _dirty` set by the event callback). Same latency, zero per-event churn.
-   (With batching from finding 5, this matters less.)
-3. Only if profiling still shows pain on very large runs: incremental topology — maintain
-   per-(service,pipeline) counters updated per upsert instead of recomputing from scratch.
-   Substantial rework; defer until real backends show real volumes.
-
-## 7. LOW-MEDIUM — File browser tree-filter eager load is fully serial
-
-**Where:** `FileBrowser.EnsureTreeLoadedAsync`.
-
-**Problem.** Typing the first character in the tree filter triggers loading **3 levels of
-every folder**, one `GetSubfoldersAsync` at a time (`foreach` + `await` per node). Each call
-is a network-share directory listing; a root with 30 folders × 20 children means hundreds of
-sequential round trips — the filter can appear dead for minutes on slow shares (the UI
-doesn't freeze, but the feature does).
-
-**Remediation steps:**
-
-1. Parallelize per level with a bounded degree (e.g. `Parallel.ForEachAsync` /
-   `Task.WhenAll` batched ~8 at a time — mirror `LogBrowserService`'s `_ioGate` discipline).
-2. Filter what's loaded immediately and refine as more levels arrive (progressive results),
-   instead of waiting for the full prefetch before the filter reflects anything.
-3. Consider capping per-folder child expansion during prefetch (e.g. skip folders with
-   hundreds of children, marking them "filter can't see inside").
-
-## 8. LOW — Assorted smaller items
-
-- **`KafkaTopicInspector` payload preview per row:** `TruncateValue(context.JsonPayload)`
-  runs per row per render; with virtualization (finding 3) this becomes irrelevant —
-  otherwise memoize.
-- **`Home` health strip:** fine as-is (event-driven, visibility-gated). No action.
-- **`ServicesPage`/`MemoryGraph`/`LogViewer`/`FileBrowser`:** correctly focus-gated;
-  keep the pattern for new pages — and add `IsFocused` to the pages that *don't* have it
-  yet but hold live data: `KafkaTopicInspector` (finding 3) is the one that matters.
-- **`MudTable` non-virtualized elsewhere:** Runs/dialog tables are paged (≤200 rows) —
-  acceptable. The 5,000-cap search results table in FileBrowser (`MaxSearchResults`) can
-  reach 5k rows; consider `Virtualize="true"` there too if large searches are common.
-- **`Topology` classes as JS-interop DTOs:** serialization uses reflection-based
-  `System.Text.Json` per push. If profiling shows serialization cost, a
-  `JsonSerializerContext` (source-generated) for `Topology`/`TimelineTab` payloads is a
-  drop-in win.
-- **Diagnostics**: `ServerDiagnosticsMonitor` + `DiagnosticsMonitor` (client long-task/FPS
-  reporting) already exist and are exactly the right tooling to verify these fixes — use
-  the `client-diag | long-task blocked=...ms` log lines as the before/after metric.
-
----
-
-## Suggested execution order
-
-| Step | Finding | Effort | User-visible payoff |
-|------|---------|--------|---------------------|
-| 1 | #2 quick wins (EventCount, cached sort) | ~1 h | Timeline tab stops taxing every render |
-| 2 | #1 steps 1–2 (change-gated topology/setVisible push) | ~1 h | Focused tab stops re-pushing on unrelated spinners |
-| 3 | #3 (virtualize Kafka table + focus gate) | ~½ day | Biggest DOM/diff load removed |
-| 4 | #5 step 2 (event batching) then #6 step 2 (dirty-flag debounce) | ~½ day | Live runs scale to high event rates |
-| 5 | #2 step 3 (incremental timeline pushes) | 1–2 days | Timeline scales past ~50k events |
-| 6 | #4 (chunked log transfer + size guard) | 1 day | Huge logs stop being a freeze/OOM risk |
-| 7 | #1 step 4 (split TabService events), #5 step 1 (in-proc bus) | 1–2 days | Structural cleanup, lower baseline load |
-| 8 | #7 (parallel tree prefetch) | ~½ day | Tree filter usable on slow shares |
-
-Steps 1–3 are low-risk and independently shippable; measure with the existing diagnostics
-monitor between each.
 FILE docs/old/01_Shell_Theme_Tabs.md
 LENGTH 6829
 # Batch Monitor — Shell, Theme, and Tab System
@@ -5865,7 +5609,7 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 3573
+LENGTH 3901
 {
   "AllowedHosts": "*",
 
@@ -5875,10 +5619,14 @@ LENGTH 3573
     "LabelStripWords": [ "Pipeline", "ABC", "{EnvID}" ],
     // "FixedSide" (default, fewer overlapping arrows) or "FixedPos" (arrows land
     // exactly on their pipeline row, but can overlap more in dense diagrams).
-    "GraphPortConstraints": "FixedSide",
+    "GraphPortConstraints": "FixedPos",
     // "Orthogonal" (default, H/V segments matching ELK's actual routing) or "Curved"
     // (smooth spline through the same waypoints). Applies to either port mode above.
-    "GraphEdgeStyle": "Orthogonal"
+    "GraphEdgeStyle": "Orthogonal",
+    // Seconds since a pipeline's last finished chunk it still shows as "recently
+    // active" (bright header/row color) in the run-detail flow graph. Raise this if
+    // Replay's timestamp-truncated snapshots make too many pipelines look gray.
+    "TopologyRecentActivityWindowSeconds": 15
   },
 
   "Kafka": {
@@ -5916,6 +5664,7 @@ LENGTH 3573
   "Heartbeats": {
     "CollectionName": "Heartbeats",
     "IntervalSeconds": 15,
+    "OfflineThresholdSeconds": 0,
     "RecentWindowMinutes": 30,
     "IdleReleaseMinutes": 10
   },
@@ -6002,7 +5751,7 @@ LENGTH 3573
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 6605
+LENGTH 8576
 <?xml version="1.0" encoding="utf-8" ?>
 <nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -6084,6 +5833,33 @@ LENGTH 6605
             concurrentWrites="false"
             keepFileOpen="true"
             layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
+
+    <!-- SQL (SqlRunService's run-list/run-events queries: start/duration/error via
+         OperationLog): plain-text rolling file, one per day, kept 14 days. -->
+    <target xsi:type="File" name="sql-file"
+            fileName="${basedir}/logs/sql.log"
+            archiveFileName="${basedir}/logs/sql.{#}.log"
+            archiveEvery="Day"
+            archiveNumbering="Date"
+            archiveDateFormat="yyyy-MM-dd"
+            maxArchiveFiles="14"
+            concurrentWrites="false"
+            keepFileOpen="true"
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
+
+    <!-- Disk/file search and discovery (LogBrowserService's recursive file search,
+         LogPathDiscoveryService's on-disk folder discovery): plain-text rolling file,
+         one per day, kept 14 days. Check this file first for slow file-server searches. -->
+    <target xsi:type="File" name="disk-file"
+            fileName="${basedir}/logs/disk-search.log"
+            archiveFileName="${basedir}/logs/disk-search.{#}.log"
+            archiveEvery="Day"
+            archiveNumbering="Date"
+            archiveDateFormat="yyyy-MM-dd"
+            maxArchiveFiles="14"
+            concurrentWrites="false"
+            keepFileOpen="true"
+            layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff} [${level:uppercase=true}] ${logger:shortName=true} ${message} ${exception:format=tostring}" />
   </targets>
 
   <rules>
@@ -6101,6 +5877,13 @@ LENGTH 6605
     <!-- kafka (topic browsing/admin + metrics consumer) → console + file -->
     <logger name="NxtUI.Core.Services.Kafka.*"          minlevel="Debug" writeTo="console,kafka-file" final="true" />
     <logger name="NxtUI.Web.Services.ServiceMetricsMonitor" minlevel="Debug" writeTo="console,kafka-file" final="true" />
+
+    <!-- sql (run list / run events queries) → console + file -->
+    <logger name="NxtUI.Core.Services.Sql.*" minlevel="Debug" writeTo="console,sql-file" final="true" />
+
+    <!-- disk/file search and discovery → console + file -->
+    <logger name="NxtUI.Web.Services.LogBrowserService"          minlevel="Debug" writeTo="console,disk-file" final="true" />
+    <logger name="NxtUI.Core.Services.LogPathDiscoveryService"   minlevel="Debug" writeTo="console,disk-file" final="true" />
 
     <!-- app code at Debug and above → console + per-class file -->
     <logger name="NxtUI.*" minlevel="Debug" writeTo="console,file" />
@@ -6417,38 +6200,90 @@ LENGTH 642
 @using NxtUI.Web.Services
 @using NxtUI.Shared
 FILE tests/NxtUI.Tests/JsonPathTests.cs
-LENGTH 750
-using System.Linq;
-using System.Text.Json.Nodes;
+LENGTH 2647
 using AwesomeAssertions;
-using Json.Path;
+using NxtUI.Core.Services;
 
 namespace NxtUI.Tests;
 
-public class JsonPathTests
+/// <summary>
+/// Covers JsonPathQueryService — the shared JsonPath.Net query bar behind the Kafka
+/// message and Mongo document inspectors' detail-panel "run a JSONPath" feature.
+/// </summary>
+public class JsonPathQueryServiceTests
 {
+    private const string StoreJson = @"{
+        ""store"": {
+            ""book"": [
+                { ""title"": ""A"", ""price"": 8.95 },
+                { ""title"": ""B"", ""price"": 12.99 }
+            ]
+        }
+    }";
+
     [Fact]
-    public void JsonPath_can_query_system_text_json()
+    public void Evaluate_filter_expression_returns_only_matching_values()
     {
-        var json = @"{
-            ""store"": {
-                ""book"": [
-                    { ""title"": ""A"", ""price"": 8.95 },
-                    { ""title"": ""B"", ""price"": 12.99 }
-                ]
-            }
-        }";
+        var result = JsonPathQueryService.Evaluate(StoreJson, "$.store.book[?(@.price < 10)].title");
 
-        var node = JsonNode.Parse(json);
-        var path = JsonPath.Parse("$.store.book[?(@.price < 10)].title");
-
-        /*var matches = path.Evaluate(node)
-            .Select(n => n!.ToJsonString().Trim('"'))
-            .ToArray();
-
-        matches.Should().Equal(new[] { "A" });*/
+        result.Success.Should().BeTrue();
+        result.MatchCount.Should().Be(1);
+        result.ResultJson.Should().Be("[\"A\"]");
     }
-}FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
+
+    [Fact]
+    public void Evaluate_wildcard_returns_every_match_as_a_json_array()
+    {
+        var result = JsonPathQueryService.Evaluate(StoreJson, "$.store.book[*].title");
+
+        result.Success.Should().BeTrue();
+        result.MatchCount.Should().Be(2);
+        result.ResultJson.Should().Be("[\"A\",\"B\"]");
+    }
+
+    [Fact]
+    public void Evaluate_valid_path_with_no_matches_is_success_with_empty_array()
+    {
+        // A syntactically valid path that selects nothing is not an error — it's
+        // meaningfully different from a bad expression, and the UI should render an
+        // empty result rather than an error message.
+        var result = JsonPathQueryService.Evaluate(StoreJson, "$.store.book[?(@.price > 1000)]");
+
+        result.Success.Should().BeTrue();
+        result.Error.Should().BeNull();
+        result.MatchCount.Should().Be(0);
+        result.ResultJson.Should().Be("[]");
+    }
+
+    [Fact]
+    public void Evaluate_invalid_jsonpath_syntax_fails_with_an_error()
+    {
+        var result = JsonPathQueryService.Evaluate(StoreJson, "$.store.book[");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty();
+        result.ResultJson.Should().BeNull();
+    }
+
+    [Fact]
+    public void Evaluate_invalid_json_document_fails_with_an_error()
+    {
+        var result = JsonPathQueryService.Evaluate("{ not valid json", "$.foo");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public void Evaluate_blank_path_fails_without_touching_the_document()
+    {
+        var result = JsonPathQueryService.Evaluate(StoreJson, "   ");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty();
+    }
+}
+FILE tests/NxtUI.Tests/NxtUI.Tests.csproj
 LENGTH 1922
 <Project Sdk="Microsoft.NET.Sdk">
 
@@ -6589,7 +6424,7 @@ public class EnvironmentDefinition
     public List<string> Servers { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/HeartbeatSettings.cs
-LENGTH 993
+LENGTH 1369
 namespace NxtUI.Configuration;
 
 public class HeartbeatSettings
@@ -6601,10 +6436,18 @@ public class HeartbeatSettings
 
     /// <summary>
     /// Expected interval (in seconds) at which services write heartbeats.
-    /// A service is considered offline if its last UpdatedDateTime is older than
-    /// IntervalSeconds * 2.
     /// </summary>
     public int IntervalSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Seconds since a service's last heartbeat after which it's considered offline.
+    /// 0 (the default) falls back to IntervalSeconds * 2.
+    /// </summary>
+    public int OfflineThresholdSeconds { get; set; } = 0;
+
+    /// <summary>Resolved offline threshold, applying the IntervalSeconds * 2 fallback.</summary>
+    public TimeSpan OfflineThreshold =>
+        TimeSpan.FromSeconds(OfflineThresholdSeconds > 0 ? OfflineThresholdSeconds : IntervalSeconds * 2);
 
     /// <summary>
     /// Only services with a heartbeat within this many minutes are fetched from MongoDB.
@@ -6951,7 +6794,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 2818
+LENGTH 3522
 namespace NxtUI.Core.Configuration;
 
 public class UiSettings
@@ -7004,6 +6847,17 @@ public class UiSettings
     /// falls back to Orthogonal.
     /// </summary>
     public string GraphEdgeStyle { get; set; } = "Orthogonal";
+
+    /// <summary>
+    /// How many seconds since a pipeline's last finished chunk it still counts as
+    /// "recently active" (bright green/blue header and row color in the run-detail
+    /// flow graph) rather than "quiet" (dim green/gray). Measured against the run's
+    /// latest known event timestamp, not wall-clock time — so this applies the same
+    /// way whether watching a run live or scrubbing through it in Replay. Lower it to
+    /// make the graph highlight only the very latest hop; raise it if replay's
+    /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
+    /// </summary>
+    public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -9803,8 +9657,89 @@ public interface IServiceMetricsMonitor
     /// <summary>Fires (with the env) after a poll that produced new samples.</summary>
     event Action<string>? OnMetricsUpdated;
 }
+FILE src/NxtUI.Core/Services/JsonPathQueryService.cs
+LENGTH 2855
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Path;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Result of evaluating a JSONPath (RFC 9535) expression against a JSON document via
+/// JsonPath.Net. On success, ResultJson is a JSON array of every matched value (even for
+/// a single match) so callers always get one shape to render — matches an empty array,
+/// not an error, when the path is syntactically valid but selects nothing.
+/// </summary>
+public sealed record JsonPathQueryResult(bool Success, string? ResultJson, string? Error, int MatchCount)
+{
+    public static JsonPathQueryResult Ok(string resultJson, int matchCount) => new(true, resultJson, null, matchCount);
+    public static JsonPathQueryResult Fail(string error) => new(false, null, error, 0);
+}
+
+/// <summary>
+/// Runs a JSONPath query against a raw JSON string — shared by the Kafka message
+/// inspector and the Mongo document inspector's detail-panel query bar.
+/// </summary>
+public static class JsonPathQueryService
+{
+    private static readonly JsonSerializerOptions SerializeOptions = new() { WriteIndented = false };
+
+    public static JsonPathQueryResult Evaluate(string? json, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return JsonPathQueryResult.Fail("Enter a JSONPath expression, e.g. $.store.book[*].title");
+
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json ?? "null");
+        }
+        catch (JsonException ex)
+        {
+            return JsonPathQueryResult.Fail($"Invalid JSON: {ex.Message}");
+        }
+
+        if (root is null)
+            return JsonPathQueryResult.Fail("Document is empty.");
+
+        JsonPath parsed;
+        try
+        {
+            parsed = JsonPath.Parse(path);
+        }
+        catch (PathParseException ex)
+        {
+            return JsonPathQueryResult.Fail($"Invalid JSONPath: {ex.Message}");
+        }
+
+        PathResult result;
+        try
+        {
+            result = parsed.Evaluate(root);
+        }
+        catch (Exception ex)
+        {
+            // JsonPath.Net can throw at evaluation time too (e.g. a function called
+            // with the wrong argument types) — not just at parse time.
+            return JsonPathQueryResult.Fail($"Query failed: {ex.Message}");
+        }
+
+        var matches = result.Matches;
+        if (matches is null || matches.Count == 0)
+            return JsonPathQueryResult.Ok("[]", 0);
+
+        // Matched nodes are still attached to `root` — JsonNode instances can only have
+        // one parent, so they must be cloned before going into a new JsonArray.
+        var array = new JsonArray();
+        foreach (var match in matches)
+            array.Add(match.Value?.DeepClone());
+
+        return JsonPathQueryResult.Ok(array.ToJsonString(SerializeOptions), matches.Count);
+    }
+}
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 5694
+LENGTH 6176
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
@@ -9880,15 +9815,29 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
 
     private async Task<string?> RunSearchAsync(ServiceStatus svc, string env, string key)
     {
-        var result = await Task.Run(() => SearchSync(svc, env));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string? result;
+        try
+        {
+            result = await Task.Run(() => SearchSync(svc, env));
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "discovery [{Env}]: search failed for {Svc}@{Host} pid={Pid} after {Ms}ms",
+                env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
+            throw;
+        }
+
         if (result is not null)
         {
-            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} → {Path}", env, svc.ServiceName, svc.HostName, result);
+            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} -> {Path} in {Ms}ms",
+                env, svc.ServiceName, svc.HostName, result, sw.ElapsedMilliseconds);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid} after {Ms}ms",
+                env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
         }
         return result;
     }
@@ -9953,6 +9902,59 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
             if (result is not null) return result;
         }
         return null;
+    }
+}
+FILE src/NxtUI.Core/Services/OperationLog.cs
+LENGTH 1962
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Uniform start/duration/error logging for I/O-bound operations (Kafka, SQL, disk
+/// search, parsing, ...) so long-running or failing operations are easy to find by
+/// grepping logs for "failed after" or "completed in" across every domain, instead of
+/// each service inventing its own ad-hoc timing.
+/// </summary>
+public static class OperationLog
+{
+    /// <summary>Completions at or above this take LogWarning instead of LogDebug, so
+    /// slow operations stand out from routine ones without raising the whole category's
+    /// log level.</summary>
+    public static readonly TimeSpan SlowThreshold = TimeSpan.FromSeconds(3);
+
+    public static async Task<T> RunAsync<T>(ILogger log, string action, Func<Task<T>> operation)
+    {
+        log.LogDebug("{Action}: started", action);
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var result = await operation();
+            LogCompleted(log, action, sw.Elapsed);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            log.LogDebug("{Action}: cancelled after {Ms}ms", action, sw.ElapsedMilliseconds);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "{Action}: failed after {Ms}ms", action, sw.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    public static Task RunAsync(ILogger log, string action, Func<Task> operation) =>
+        RunAsync(log, action, async () => { await operation(); return true; });
+
+    private static void LogCompleted(ILogger log, string action, TimeSpan elapsed)
+    {
+        if (elapsed >= SlowThreshold)
+            log.LogWarning("{Action}: completed in {Ms}ms (slow)", action, (long)elapsed.TotalMilliseconds);
+        else
+            log.LogDebug("{Action}: completed in {Ms}ms", action, (long)elapsed.TotalMilliseconds);
     }
 }
 FILE src/NxtUI.Core/Services/PerformanceEventStore.cs
@@ -10053,7 +10055,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 10891
+LENGTH 11603
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -10063,15 +10065,16 @@ namespace NxtUI.Core.Services;
 /// Infers service nodes with pipeline rows, and pipeline-to-pipeline edges,
 /// per design doc §8.2.
 /// </summary>
-public class TopologyComputationService
+public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
 {
     /// <summary>
     /// Recent-activity window used to decide whether a pipeline is "Active"
     /// (priority 2) vs merely "InProgress" (priority 3). A pipeline counts
     /// as Active if it has had a finish event within this window of the
-    /// latest known event time.
+    /// latest known event time. Configurable via UiSettings.TopologyRecentActivityWindowSeconds
+    /// — callers should pass that value in; defaults to 15s if omitted (e.g. in tests).
     /// </summary>
-    private static readonly TimeSpan RecentActivityWindow = TimeSpan.FromSeconds(15);
+    private readonly TimeSpan _recentActivityWindow = recentActivityWindow ?? TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Computes topology from the event store snapshot.
@@ -10113,7 +10116,7 @@ public class TopologyComputationService
                 nodesByService[service] = node;
             }
 
-            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime, format);
+            var row = BuildPipelineRow(pipeline, pipelineEvents, latestEventTime, format, _recentActivityWindow);
             node.Pipelines.Add(row);
             pipelineRowsByKey[(service, pipeline)] = row;
         }
@@ -10238,7 +10241,7 @@ public class TopologyComputationService
 
     private static PipelineRow BuildPipelineRow(
         string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime,
-        Func<string, string> format)
+        Func<string, string> format, TimeSpan recentActivityWindow)
     {
         var done = pipelineEvents.Count(e => e.IsDone);
         var inProgress = pipelineEvents.Count(e => !e.IsDone);
@@ -10258,14 +10261,18 @@ public class TopologyComputationService
         // Recent throughput: fraction of "done" events that finished within
         // the recent-activity window of the latest known event time.
         var recentDone = pipelineEvents.Count(e =>
-            e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= RecentActivityWindow);
+            e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= recentActivityWindow);
         row.RecentThroughputScore = done > 0
             ? Math.Clamp((double)recentDone / Math.Max(done, 1), 0.0, 1.0)
             : 0.0;
 
         row.State = DetermineState(row, recentDone);
 
-        // Per-instance breakdown, sorted by server then PID per §8.2.
+        // Per-instance breakdown, sorted by server then PID per §8.2. ProcessId is a
+        // display string (see PerformanceEvent.ProcessId), but it represents an
+        // integer — sorting it with StringComparer put PID "10" before "2". Same bug
+        // class as the Timeline's group sort; fix is the same idea: parse numerically
+        // for ordering, falling back to the raw string only if it's ever non-numeric.
         row.Instances = pipelineEvents
             .GroupBy(e => (e.Server, e.ProcessId))
             .Select(g => new InstanceStats(
@@ -10274,6 +10281,7 @@ public class TopologyComputationService
                 doneCount: g.Count(e => e.IsDone),
                 inProgressCount: g.Count(e => !e.IsDone)))
             .OrderBy(i => i.Server, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => long.TryParse(i.ProcessId, out var pid) ? pid : long.MaxValue)
             .ThenBy(i => i.ProcessId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -10750,7 +10758,7 @@ LENGTH 9308
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 5414
+LENGTH 5415
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -10799,7 +10807,7 @@ LENGTH 5414
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=7");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=13");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -16669,7 +16677,7 @@ LENGTH 10034
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 29100
+LENGTH 32999
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16915,6 +16923,36 @@ LENGTH 29100
                     <div class="bm-inspector-section-label">Payload</div>
                     <div @ref="_jsonRef"></div>
                 </div>
+
+                <!-- JSONPath query bar — evaluated against this message's JsonPayload,
+                     result rendered into the same tree view above via bmJsonViewer. -->
+                <div class="bm-jsonpath-bar">
+                    <MudTextField T="string" @bind-Value="_jsonPathQuery" Immediate="true"
+                                  Placeholder="JSONPath — e.g. $.items[?(&#64;.price &gt; 10)]"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.ManageSearch"
+                                  @onkeydown="OnJsonPathKeyDown"
+                                  Class="bm-jsonpath-input" />
+                    <MudTooltip Text="Run query">
+                        <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
+                                       OnClick="RunJsonPathQueryAsync" />
+                    </MudTooltip>
+                    @if (!string.IsNullOrEmpty(_jsonPathQuery))
+                    {
+                        <MudTooltip Text="Clear — show full payload again">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Clear" Size="Size.Small"
+                                           OnClick="ClearJsonPathQueryAsync" />
+                        </MudTooltip>
+                    }
+                </div>
+                @if (_jsonPathError is not null)
+                {
+                    <div class="bm-jsonpath-error">@_jsonPathError</div>
+                }
+                else if (_jsonPathMatchCount is not null)
+                {
+                    <div class="bm-jsonpath-count bm-muted">@_jsonPathMatchCount match@(_jsonPathMatchCount == 1 ? "" : "es")</div>
+                }
             </div>
         }
     </div>
@@ -17231,12 +17269,69 @@ LENGTH 29100
         }
     }
 
+    // ── JSONPath query bar ───────────────────────────────────────────────────────
+
+    private string  _jsonPathQuery      = string.Empty;
+    private string? _jsonPathError;
+    private int?    _jsonPathMatchCount;
+
+    private async Task OnJsonPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunJsonPathQueryAsync();
+        else if (e.Key == "Escape") await ClearJsonPathQueryAsync();
+    }
+
+    private async Task RunJsonPathQueryAsync()
+    {
+        if (_selected is null) return;
+
+        if (string.IsNullOrWhiteSpace(_jsonPathQuery))
+        {
+            await ClearJsonPathQueryAsync();
+            return;
+        }
+
+        var result = JsonPathQueryService.Evaluate(_selected.JsonPayload, _jsonPathQuery);
+        if (!result.Success)
+        {
+            _jsonPathError      = result.Error;
+            _jsonPathMatchCount = null;
+            StateHasChanged();
+            return;
+        }
+
+        _jsonPathError      = null;
+        _jsonPathMatchCount = result.MatchCount;
+        try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, result.ResultJson); }
+        catch (JSDisconnectedException) { }
+        StateHasChanged();
+    }
+
+    private async Task ClearJsonPathQueryAsync()
+    {
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
+        if (_selected is not null)
+        {
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.JsonPayload ?? "{}"); }
+            catch (JSDisconnectedException) { }
+        }
+        StateHasChanged();
+    }
+
     // ── Row selection ─────────────────────────────────────────────────────────
 
     private void OnRowClick(TableRowClickEventArgs<KafkaMessage> args)
     {
         _selected  = ReferenceEquals(_selected, args.Item) ? null : args.Item;
         _jsonDirty = _selected is not null;
+        // A stale query result from a previously selected message shouldn't linger
+        // once the selection changes — reset the bar, OnAfterRenderAsync re-renders
+        // the newly selected message's full payload via _jsonDirty above.
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
     }
 
     private void OnRowSelected(KafkaMessage? msg) { } // handled by OnRowClick
@@ -18674,7 +18769,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 12487
+LENGTH 16358
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -18779,6 +18874,36 @@ LENGTH 12487
                 <div class="bm-inspector-detail-body">
                     <div @ref="_jsonRef"></div>
                 </div>
+
+                <!-- JSONPath query bar — evaluated against this document's JSON,
+                     result rendered into the same tree view above via bmJsonViewer. -->
+                <div class="bm-jsonpath-bar">
+                    <MudTextField T="string" @bind-Value="_jsonPathQuery" Immediate="true"
+                                  Placeholder="JSONPath — e.g. $.items[?(&#64;.price &gt; 10)]"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.ManageSearch"
+                                  @onkeydown="OnJsonPathKeyDown"
+                                  Class="bm-jsonpath-input" />
+                    <MudTooltip Text="Run query">
+                        <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
+                                       OnClick="RunJsonPathQueryAsync" />
+                    </MudTooltip>
+                    @if (!string.IsNullOrEmpty(_jsonPathQuery))
+                    {
+                        <MudTooltip Text="Clear — show full document again">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Clear" Size="Size.Small"
+                                           OnClick="ClearJsonPathQueryAsync" />
+                        </MudTooltip>
+                    }
+                </div>
+                @if (_jsonPathError is not null)
+                {
+                    <div class="bm-jsonpath-error">@_jsonPathError</div>
+                }
+                else if (_jsonPathMatchCount is not null)
+                {
+                    <div class="bm-jsonpath-count bm-muted">@_jsonPathMatchCount match@(_jsonPathMatchCount == 1 ? "" : "es")</div>
+                }
             </div>
         }
     </div>
@@ -18919,9 +19044,66 @@ LENGTH 12487
     {
         _selected  = ReferenceEquals(_selected, args.Item) ? null : args.Item;
         _jsonDirty = _selected is not null;
+        // A stale query result from a previously selected document shouldn't linger
+        // once the selection changes — reset the bar, OnAfterRenderAsync re-renders
+        // the newly selected document's full JSON via _jsonDirty above.
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
     }
 
     private void OnRowSelected(MongoDocument? doc) { } // handled by OnRowClick
+
+    // ── JSONPath query bar ───────────────────────────────────────────────────────
+
+    private string  _jsonPathQuery      = string.Empty;
+    private string? _jsonPathError;
+    private int?    _jsonPathMatchCount;
+
+    private async Task OnJsonPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunJsonPathQueryAsync();
+        else if (e.Key == "Escape") await ClearJsonPathQueryAsync();
+    }
+
+    private async Task RunJsonPathQueryAsync()
+    {
+        if (_selected is null) return;
+
+        if (string.IsNullOrWhiteSpace(_jsonPathQuery))
+        {
+            await ClearJsonPathQueryAsync();
+            return;
+        }
+
+        var result = JsonPathQueryService.Evaluate(_selected.Json, _jsonPathQuery);
+        if (!result.Success)
+        {
+            _jsonPathError      = result.Error;
+            _jsonPathMatchCount = null;
+            StateHasChanged();
+            return;
+        }
+
+        _jsonPathError      = null;
+        _jsonPathMatchCount = result.MatchCount;
+        try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, result.ResultJson); }
+        catch (JSDisconnectedException) { }
+        StateHasChanged();
+    }
+
+    private async Task ClearJsonPathQueryAsync()
+    {
+        _jsonPathQuery      = string.Empty;
+        _jsonPathError      = null;
+        _jsonPathMatchCount = null;
+        if (_selected is not null)
+        {
+            try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
+            catch (JSDisconnectedException) { }
+        }
+        StateHasChanged();
+    }
 
     private async Task OnResizerMouseDown(MouseEventArgs e)
     {
@@ -19298,7 +19480,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 17832
+LENGTH 17987
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -19361,7 +19543,8 @@ LENGTH 17832
     protected override async Task OnInitializedAsync()
     {
         _previousIsFocused = IsFocused;
-        _topologyService   = new TopologyComputationService();
+        _topologyService   = new TopologyComputationService(
+            TimeSpan.FromSeconds(UiOptions.Value.TopologyRecentActivityWindowSeconds));
         _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
 
         await LoadAsync();
@@ -19588,6 +19771,15 @@ LENGTH 17832
                 @EffectiveStatus
             </span>
 
+            @if (_topology is not null)
+            {
+                <div class="bm-detail-progress">
+                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor"
+                                       Size="Size.Small" Class="bm-detail-progress-bar" />
+                    <span class="bm-detail-progress-label">~@(ProgressPercent)%</span>
+                </div>
+            }
+
             @if (_details is not null && !string.IsNullOrWhiteSpace(_details.Type))
             {
                 <span class="bm-detail-type">@_details.Type</span>
@@ -19618,11 +19810,6 @@ LENGTH 17832
                     <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" />
                     @InProgressCount.ToString("N0")
                 </span>
-                <div class="bm-detail-progress">
-                    <MudProgressLinear Value="@ProgressPercent" Color="@ProgressColor"
-                                       Size="Size.Small" Class="bm-detail-progress-bar" />
-                    <span class="bm-detail-progress-label">~@(ProgressPercent)%</span>
-                </div>
             }
         </div>
 
@@ -20988,7 +21175,7 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 35705
+LENGTH 35809
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -21126,7 +21313,7 @@ LENGTH 35705
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=10");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=12");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await PushDataAsync();
             }
@@ -21618,7 +21805,7 @@ LENGTH 35705
             Add
         </MudButton>
 
-        <MudSelect T="GroupByOption" Label="Group" Value="_groupBy" ValueChanged="OnGroupByChanged"
+        <MudSelect T="GroupByOption" Label="Group by" Value="_groupBy" ValueChanged="OnGroupByChanged"
                    Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                    Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
                    PopoverClass="bm-tl-select-popover">
@@ -21629,7 +21816,7 @@ LENGTH 35705
             <MudSelectItem Value="GroupByOption.Pid">PID</MudSelectItem>
         </MudSelect>
 
-        <MudSelect T="ColourByOption" Label="Color" Value="_colourBy" ValueChanged="OnColourByChanged"
+        <MudSelect T="ColourByOption" Label="Color by" Value="_colourBy" ValueChanged="OnColourByChanged"
                    Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
                    Disabled="_stackView" FullWidth="false" Class="bm-tl-select bm-tl-select-labeled bm-select-fit"
                    PopoverClass="bm-tl-select-popover">
@@ -21750,6 +21937,7 @@ LENGTH 35705
                     <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                    <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Randomize block colors</td></tr>
                     <tr><td>Wheel on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
                     <tr><td><kbd>Ctrl</kbd>+wheel on lanes</td><td>Scroll lanes up / down</td></tr>
                     <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
@@ -21850,7 +22038,7 @@ LENGTH 35705
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 23503
+LENGTH 23504
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -21874,8 +22062,8 @@ LENGTH 23503
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
 
     <!-- Application CSS -->
-    <link href="css/app.css?v=52" rel="stylesheet" />
-    <link href="css/d3-graph.css?v=3" rel="stylesheet" />
+    <link href="css/app.css?v=54" rel="stylesheet" />
+    <link href="css/d3-graph.css?v=8" rel="stylesheet" />
     <link href="css/d3-timeline.css?v=1" rel="stylesheet" />
     <link href="css/log-viewer.css?v=1" rel="stylesheet" />
 </head>
@@ -22325,7 +22513,7 @@ LENGTH 23503
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
     <link rel="modulepreload" href="js/app.js?v=7" />
-    <link rel="modulepreload" href="js/d3-timeline.js?v=6" />
+    <link rel="modulepreload" href="js/d3-timeline.js?v=12" />
 </body>
 </html>
 FILE src/NxtUI.Web/Pages/_ViewImports.cshtml
@@ -22855,7 +23043,7 @@ public sealed class FocusGatedPoller : IDisposable
     public void Dispose() => Stop();
 }
 FILE src/NxtUI.Web/Services/HeartbeatMonitor.cs
-LENGTH 8529
+LENGTH 8504
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using NxtUI.Configuration;
@@ -23004,7 +23192,7 @@ public sealed class HeartbeatMonitor : BackgroundService, IHeartbeatMonitor
 
             if (_states.TryGetValue(env, out _)) // still subscribed — env wasn't idle-released mid-query
             {
-                var threshold = TimeSpan.FromSeconds(_settings.IntervalSeconds * 2);
+                var threshold = _settings.OfflineThreshold;
                 var now = DateTime.UtcNow;
 
                 lock (state.Lock)
@@ -23240,11 +23428,13 @@ public sealed class InfraHealthCache(
     }
 }
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
-LENGTH 17151
+LENGTH 18677
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
 using NxtUI.Core.Services;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -23257,6 +23447,7 @@ public class LogBrowserService : ILogBrowserService
 {
     private readonly LogPathSettings _settings;
     private readonly IReadOnlyList<CompiledLogFormat> _formats;
+    private readonly ILogger<LogBrowserService> _log;
 
     // Detects the start of a new log entry: line begins with a timestamp.
     private static readonly Regex TimestampPrefix =
@@ -23272,9 +23463,10 @@ public class LogBrowserService : ILogBrowserService
         string Message,
         string? Caller);
 
-    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config)
+    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config, ILogger<LogBrowserService> log)
     {
         _settings = settings.Value;
+        _log = log;
 
         // Same "Logs:Formats" templates the interactive LogViewer uses (see log-viewer-parser.js
         // compileFormat) — search must parse files the same way the viewer displays them, so a
@@ -23349,6 +23541,11 @@ public class LogBrowserService : ILogBrowserService
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var serverList = servers.ToList();
+        var sw = Stopwatch.StartNew();
+        var matchCount = 0;
+        _log.LogDebug("disk-search: started across {Count} server(s), glob='{Glob}', path='{Path}'",
+            serverList.Count, fileGlob, rootRelPath);
+
         // Bounded (not unbounded): if the reader (Blazor UI, one StateHasChanged round trip
         // per batch) falls behind a fast recursive scan across many servers, WriteAsync below
         // simply awaits until there's room instead of buffering every match unboundedly in memory.
@@ -23361,14 +23558,38 @@ public class LogBrowserService : ILogBrowserService
                 await channel.Writer.WriteAsync(entry, ct);
         }, ct)).ToArray();
 
-        _ = Task.WhenAll(producers).ContinueWith(
+        var producersTask = Task.WhenAll(producers);
+        _ = producersTask.ContinueWith(
             _ => channel.Writer.TryComplete(),
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.Default);
 
-        await foreach (var entry in channel.Reader.ReadAllAsync(ct))
-            yield return entry;
+        try
+        {
+            await foreach (var entry in channel.Reader.ReadAllAsync(ct))
+            {
+                matchCount++;
+                yield return entry;
+            }
+            // Observe producer exceptions so a per-server failure is logged instead of silently
+            // truncating the result set (WhenAll already completed by the time the channel drains).
+            try { await producersTask; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogError(ex, "disk-search: failed after {Ms}ms, {Count} match(es) so far", sw.ElapsedMilliseconds, matchCount);
+                throw;
+            }
+        }
+        finally
+        {
+            if (sw.Elapsed >= OperationLog.SlowThreshold)
+                _log.LogWarning("disk-search: completed in {Ms}ms (slow), {Count} match(es) across {Servers} server(s)",
+                    sw.ElapsedMilliseconds, matchCount, serverList.Count);
+            else
+                _log.LogDebug("disk-search: completed in {Ms}ms, {Count} match(es) across {Servers} server(s)",
+                    sw.ElapsedMilliseconds, matchCount, serverList.Count);
+        }
     }
 
     // ── private: folder / file helpers ───────────────────────────────────
@@ -24471,7 +24692,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 29857
+LENGTH 30365
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
@@ -24798,11 +25019,19 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             lock (entry.Sync) offset = entry.Offset;
 
             await _ioGate.WaitAsync(ct);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             IncrementalFileReader.Result result;
             try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, offset), ct); }
             catch (Exception ex) when (ex is not OperationCanceledException)
-            { _log.LogWarning(ex, "metrics: read failed {File}", file); return; }
+            {
+                _log.LogWarning(ex, "metrics: read failed {File} after {Ms}ms", file, sw.ElapsedMilliseconds);
+                return;
+            }
             finally { _ioGate.Release(); }
+
+            if (sw.Elapsed >= OperationLog.SlowThreshold)
+                _log.LogWarning("metrics: read+parse {File} completed in {Ms}ms (slow), {Count} line(s)",
+                    file, sw.ElapsedMilliseconds, result.Lines.Count);
 
             if (result.Lines.Count == 0)
             {
@@ -25062,11 +25291,12 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         var file = Path.Combine(folder, _paths.MetricsFileName);
 
         await _ioGate.WaitAsync(ct);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         IncrementalFileReader.Result result;
         try { result = await Task.Run(() => IncrementalFileReader.ReadNew(file, 0), ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogWarning(ex, "metrics [{Env}]: backfill read failed {File}", env, file);
+            _log.LogWarning(ex, "metrics [{Env}]: backfill read failed {File} after {Ms}ms", env, file, sw.ElapsedMilliseconds);
             lock (entry.Sync) entry.DiskBackfilled = true; // don't retry forever on a broken file
             return;
         }
@@ -25097,8 +25327,8 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         }
 
         _log.LogInformation(
-            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
-            env, filled, svc.ServiceName, svc.HostName, processStartUtc, kafkaEarliestUtc);
+            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk in {Ms}ms, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
+            env, filled, svc.ServiceName, svc.HostName, sw.ElapsedMilliseconds, processStartUtc, kafkaEarliestUtc);
     }
 
     /// <summary>Inserts/replaces by timestamp, keeps History sorted ascending, caps at MaxHistory.</summary>
@@ -30044,9 +30274,10 @@ public class MessageRegistryTests
     }
 }
 FILE tests/NxtUI.Tests/Services/LogBrowserServiceFormatTests.cs
-LENGTH 4381
+LENGTH 4470
 using AwesomeAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Filtering;
@@ -30070,7 +30301,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
             .AddInMemoryCollection(formats.Select((f, i) =>
                 new KeyValuePair<string, string?>($"Logs:Formats:{i}", f)))
             .Build();
-        return new LogBrowserService(Options.Create(settings), config);
+        return new LogBrowserService(Options.Create(settings), config, NullLogger<LogBrowserService>.Instance);
     }
 
     private string WriteLogFile(string relativeDir, string fileName, string content)
@@ -30404,7 +30635,7 @@ public sealed class KafkaConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Kafka/KafkaService.cs
-LENGTH 29835
+LENGTH 31743
 using System.Threading.Channels;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
@@ -30425,85 +30656,82 @@ public class KafkaService(
 
     // ── IKafkaMonitor ────────────────────────────────────────────────────────
 
-    public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: cluster info", env);
-        // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
-        // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
-        return Task.Run(() =>
-        {
-            using var admin = BuildAdmin(env);
-            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
-            return new KafkaClusterInfo
+    public Task<KafkaClusterInfo> GetClusterInfoAsync(string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: cluster info", () =>
+            // admin.GetMetadata is a synchronous blocking librdkafka call (no async overload).
+            // Run it on a thread-pool thread so it never blocks a Blazor circuit's UI thread.
+            Task.Run(() =>
             {
-                ClusterId = meta.OriginatingBrokerId.ToString(),
-                ControllerId = meta.OriginatingBrokerId,
-                Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
-                    { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
-            };
-        }, ct);
-    }
+                using var admin = BuildAdmin(env);
+                var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+                return new KafkaClusterInfo
+                {
+                    ClusterId = meta.OriginatingBrokerId.ToString(),
+                    ControllerId = meta.OriginatingBrokerId,
+                    Brokers = [.. meta.Brokers.Select(b => new KafkaBroker
+                        { Id = b.BrokerId, Host = b.Host, Port = b.Port, IsOnline = true })],
+                };
+            }, ct));
 
-    public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: listing topics", env);
-        // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
-        return Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+    public Task<IReadOnlyList<KafkaTopicSummary>> GetTopicsAsync(string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: listing topics", () =>
+            // admin.GetMetadata blocks synchronously — offload so the UI thread stays free.
+            Task.Run<IReadOnlyList<KafkaTopicSummary>>(() =>
+            {
+                using var admin = BuildAdmin(env);
+                var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
+
+                return [.. meta.Topics
+                    .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
+                    .Select(t => new KafkaTopicSummary
+                    {
+                        Name              = t.Topic,
+                        PartitionCount    = t.Partitions.Count,
+                        ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+                        CleanupPolicy     = "delete",
+                        RetentionMs       = 604_800_000,
+                    })
+                    .OrderBy(t => t.Name)];
+            }, ct));
+
+    public Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: config for '{topicName}'", async () =>
         {
             using var admin = BuildAdmin(env);
-            var meta = admin.GetMetadata(TimeSpan.FromSeconds(10));
 
-            return [.. meta.Topics
-                .Where(t => !t.Error.IsError && !t.Topic.StartsWith("__"))
-                .Select(t => new KafkaTopicSummary
-                {
-                    Name              = t.Topic,
-                    PartitionCount    = t.Partitions.Count,
-                    ReplicationFactor = t.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-                    CleanupPolicy     = "delete",
-                    RetentionMs       = 604_800_000,
-                })
-                .OrderBy(t => t.Name)];
-        }, ct);
-    }
+            var results = await admin.DescribeConfigsAsync(
+                [new ConfigResource { Type = ResourceType.Topic, Name = topicName }]);
 
-    public async Task<KafkaTopicConfig> GetTopicConfigAsync(string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: config for '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
+            var cfg = results.First();
+            long Lng(string k, long d) =>
+                cfg.Entries.TryGetValue(k, out var e) && long.TryParse(e.Value, out var v) ? v : d;
+            int Int(string k, int d) =>
+                cfg.Entries.TryGetValue(k, out var e) && int.TryParse(e.Value, out var v) ? v : d;
+            string Str(string k, string d) =>
+                cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
 
-        var results = await admin.DescribeConfigsAsync(
-            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }]);
+            // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
+            var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
+            var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
 
-        var cfg = results.First();
-        long Lng(string k, long d) =>
-            cfg.Entries.TryGetValue(k, out var e) && long.TryParse(e.Value, out var v) ? v : d;
-        int Int(string k, int d) =>
-            cfg.Entries.TryGetValue(k, out var e) && int.TryParse(e.Value, out var v) ? v : d;
-        string Str(string k, string d) =>
-            cfg.Entries.TryGetValue(k, out var e) ? e.Value : d;
+            return new KafkaTopicConfig
+            {
+                RetentionMs = Lng("retention.ms", 604_800_000),
+                CleanupPolicy = Str("cleanup.policy", "delete"),
+                MaxMessageBytes = Lng("max.message.bytes", 1_048_576),
+                MinInSyncReplicas = Int("min.insync.replicas", 1),
+                CompressionType = Str("compression.type", "producer"),
+                PartitionCount = topicMeta?.Partitions.Count ?? 0,
+                ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
+            };
+        });
 
-        // GetMetadata blocks synchronously — offload it (DescribeConfigsAsync above is already async).
-        var meta = await Task.Run(() => admin.GetMetadata(topicName, TimeSpan.FromSeconds(10)), ct);
-        var topicMeta = meta.Topics.FirstOrDefault(t => t.Topic == topicName);
-
-        return new KafkaTopicConfig
-        {
-            RetentionMs = Lng("retention.ms", 604_800_000),
-            CleanupPolicy = Str("cleanup.policy", "delete"),
-            MaxMessageBytes = Lng("max.message.bytes", 1_048_576),
-            MinInSyncReplicas = Int("min.insync.replicas", 1),
-            CompressionType = Str("compression.type", "producer"),
-            PartitionCount = topicMeta?.Partitions.Count ?? 0,
-            ReplicationFactor = topicMeta?.Partitions.FirstOrDefault()?.Replicas.Length ?? 1,
-        };
-    }
-
-    public async Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
+    public Task<IReadOnlyDictionary<string, KafkaTopicEnrichment>> GetTopicEnrichmentAsync(
         string env, IReadOnlyList<KafkaTopicSummary> topics, CancellationToken ct = default)
     {
         var withPartitions = topics.Where(t => t.PartitionCount > 0).ToList();
-        if (withPartitions.Count == 0) return new Dictionary<string, KafkaTopicEnrichment>();
+        if (withPartitions.Count == 0)
+            return Task.FromResult<IReadOnlyDictionary<string, KafkaTopicEnrichment>>(new Dictionary<string, KafkaTopicEnrichment>());
 
         // Partitions are numbered contiguously from 0, so the list can be built from
         // the partition count everyone already has — no metadata round trip needed.
@@ -30512,79 +30740,81 @@ public class KafkaService(
             for (var p = 0; p < t.PartitionCount; p++)
                 partitions.Add(new TopicPartition(t.Name, new Partition(p)));
 
-        log.LogDebug("kafka [{Env}]: enriching {TopicCount} topics ({PartitionCount} partitions) — 3 round trips total",
-            env, withPartitions.Count, partitions.Count);
-
-        using var admin = BuildAdmin(env);
-        var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
-
-        // One batched DescribeConfigs call for every topic's cleanup.policy (result list
-        // is index-aligned with the request list — DescribeConfigsResult carries no
-        // topic name of its own), and one batched ListOffsets call each for the earliest
-        // and latest offset of every partition — 3 broker round trips total, regardless
-        // of topic/partition count, instead of up to 2 per topic.
-        var configsTask = admin.DescribeConfigsAsync(
-            withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
-        var earliestTask = admin.ListOffsetsAsync(
-            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
-            timeout);
-        var latestTask = admin.ListOffsetsAsync(
-            partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
-            timeout);
-
-        await Task.WhenAll(configsTask, earliestTask, latestTask);
-
-        var configs = configsTask.Result;
-        var earliest = earliestTask.Result.ResultInfos.ToDictionary(
-            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
-        var latest = latestTask.Result.ResultInfos.ToDictionary(
-            r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
-
-        var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
-        for (var i = 0; i < withPartitions.Count; i++)
-        {
-            var t = withPartitions[i];
-            var cfg = i < configs.Count ? configs[i] : null;
-            var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
-                ? e.Value : "delete";
-
-            long messageCount = 0;
-            for (var p = 0; p < t.PartitionCount; p++)
+        return OperationLog.RunAsync(log,
+            $"kafka [{env}]: enriching {withPartitions.Count} topics ({partitions.Count} partitions)",
+            async () =>
             {
-                var tp = new TopicPartition(t.Name, new Partition(p));
-                if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
-                    messageCount += Math.Max(0, hi - lo);
-            }
+                using var admin = BuildAdmin(env);
+                var timeout = new ListOffsetsOptions { RequestTimeout = TimeSpan.FromSeconds(10) };
 
-            result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
-        }
+                // One batched DescribeConfigs call for every topic's cleanup.policy (result list
+                // is index-aligned with the request list — DescribeConfigsResult carries no
+                // topic name of its own), and one batched ListOffsets call each for the earliest
+                // and latest offset of every partition — 3 broker round trips total, regardless
+                // of topic/partition count, instead of up to 2 per topic.
+                var configsTask = admin.DescribeConfigsAsync(
+                    withPartitions.Select(t => new ConfigResource { Type = ResourceType.Topic, Name = t.Name }));
+                var earliestTask = admin.ListOffsetsAsync(
+                    partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Earliest() }),
+                    timeout);
+                var latestTask = admin.ListOffsetsAsync(
+                    partitions.Select(tp => new TopicPartitionOffsetSpec { TopicPartition = tp, OffsetSpec = OffsetSpec.Latest() }),
+                    timeout);
 
-        return result;
+                await Task.WhenAll(configsTask, earliestTask, latestTask);
+
+                var configs = configsTask.Result;
+                var earliest = earliestTask.Result.ResultInfos.ToDictionary(
+                    r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+                var latest = latestTask.Result.ResultInfos.ToDictionary(
+                    r => r.TopicPartitionOffsetError.TopicPartition, r => r.TopicPartitionOffsetError.Offset.Value);
+
+                var result = new Dictionary<string, KafkaTopicEnrichment>(StringComparer.Ordinal);
+                for (var i = 0; i < withPartitions.Count; i++)
+                {
+                    var t = withPartitions[i];
+                    var cfg = i < configs.Count ? configs[i] : null;
+                    var cleanupPolicy = cfg is not null && cfg.Entries.TryGetValue("cleanup.policy", out var e)
+                        ? e.Value : "delete";
+
+                    long messageCount = 0;
+                    for (var p = 0; p < t.PartitionCount; p++)
+                    {
+                        var tp = new TopicPartition(t.Name, new Partition(p));
+                        if (earliest.TryGetValue(tp, out var lo) && latest.TryGetValue(tp, out var hi))
+                            messageCount += Math.Max(0, hi - lo);
+                    }
+
+                    result[t.Name] = new KafkaTopicEnrichment(cleanupPolicy, messageCount);
+                }
+
+                return (IReadOnlyDictionary<string, KafkaTopicEnrichment>)result;
+            });
     }
 
-    public async Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
-        string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: consumer groups for '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
-
-        var listing = await admin.ListConsumerGroupsAsync();
-        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
-        if (groupIds.Count == 0) return [];
-
-        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result = new List<KafkaTopicConsumerGroup>();
-
-        foreach (var desc in described.ConsumerGroupDescriptions)
+    public Task<IReadOnlyList<KafkaTopicConsumerGroup>> GetTopicConsumerGroupsAsync(
+        string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: consumer groups for '{topicName}'", async () =>
         {
-            if (!desc.Members.Any(m => m.Assignment.TopicPartitions.Any(tp => tp.Topic == topicName)))
-                continue;
-            var lag = await ComputeGroupLagForTopicAsync(env, desc.GroupId, topicName, ct);
-            result.Add(new KafkaTopicConsumerGroup
-            { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
-        }
-        return result;
-    }
+            using var admin = BuildAdmin(env);
+
+            var listing = await admin.ListConsumerGroupsAsync();
+            var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+            if (groupIds.Count == 0) return (IReadOnlyList<KafkaTopicConsumerGroup>)[];
+
+            var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+            var result = new List<KafkaTopicConsumerGroup>();
+
+            foreach (var desc in described.ConsumerGroupDescriptions)
+            {
+                if (!desc.Members.Any(m => m.Assignment.TopicPartitions.Any(tp => tp.Topic == topicName)))
+                    continue;
+                var lag = await ComputeGroupLagForTopicAsync(env, desc.GroupId, topicName, ct);
+                result.Add(new KafkaTopicConsumerGroup
+                { GroupId = desc.GroupId, State = desc.State.ToString(), TotalLag = lag });
+            }
+            return (IReadOnlyList<KafkaTopicConsumerGroup>)result;
+        });
 
     public async IAsyncEnumerable<KafkaMessage> TailTopicAsync(
         string env, string topicName, KafkaSeekDirective directive,
@@ -30646,6 +30876,9 @@ public class KafkaService(
     {
         IAdminClient? admin = null;
         IConsumer<string?, byte[]>? consumer = null;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var consumedTotal = 0;
+        log.LogDebug("kafka [{Env}]: tail started for '{Topic}'", env, topicName);
         try
         {
             var groupId = $"nxtui-tail-{Guid.NewGuid():N}";
@@ -30744,15 +30977,19 @@ public class KafkaService(
 
                 consumed++;
             }
+            consumedTotal = consumed;
         }
         catch (OperationCanceledException) { /* normal: paused / navigated away / superseded */ }
         catch (Exception ex)
         {
-            log.LogError(ex, "kafka [{Env}]: tail producer for '{Topic}' failed", env, topicName);
+            log.LogError(ex, "kafka [{Env}]: tail for '{Topic}' failed after {Ms}ms and {Count} message(s)",
+                env, topicName, sw.ElapsedMilliseconds, consumedTotal);
             writer.TryComplete(ex);
         }
         finally
         {
+            log.LogDebug("kafka [{Env}]: tail for '{Topic}' ended after {Ms}ms, {Count} message(s)",
+                env, topicName, sw.ElapsedMilliseconds, consumedTotal);
             if (consumer is not null)
             {
                 try { consumer.Close(); } catch { /* best-effort close */ }
@@ -30764,13 +31001,11 @@ public class KafkaService(
     }
 
     public Task<IReadOnlyList<KafkaPartitionStats>> GetPartitionStatsAsync(
-        string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: partition stats for '{Topic}'", env, topicName);
-
+        string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: partition stats for '{topicName}'", () =>
         // GetMetadata, QueryWatermarkOffsets and FetchTimestampAt (Consume) are all
         // synchronous blocking librdkafka calls — run the whole thing off the UI thread.
-        return Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
+        Task.Run<IReadOnlyList<KafkaPartitionStats>>(() =>
         {
             var groupId = $"nxtui-stats-{Guid.NewGuid():N}";
             var config = factory.BuildConsumerConfig(env, groupId);
@@ -30807,8 +31042,7 @@ public class KafkaService(
             }
 
             return result;
-        }, ct);
-    }
+        }, ct));
 
     public Task<byte[]?> FetchRawBytesAsync(
         string env, string topicName, int partition, long offset, CancellationToken ct = default)
@@ -30842,85 +31076,85 @@ public class KafkaService(
         }, ct);
     }
 
-    public async Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(
-        string env, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: all consumer groups", env);
-        using var admin = BuildAdmin(env);
-        var listing = await admin.ListConsumerGroupsAsync();
-        var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
-        if (groupIds.Count == 0) return [];
-
-        var described = await admin.DescribeConsumerGroupsAsync(groupIds);
-        var result = new List<KafkaConsumerGroupOverview>();
-
-        foreach (var desc in described.ConsumerGroupDescriptions)
+    public Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(
+        string env, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: all consumer groups", async () =>
         {
-            var topics = desc.Members
-                .SelectMany(m => m.Assignment.TopicPartitions.Select(tp => tp.Topic))
-                .Distinct().OrderBy(t => t).ToList();
-            var lag = await ComputeGroupTotalLagAsync(env, desc.GroupId, ct);
-            result.Add(new KafkaConsumerGroupOverview
+            using var admin = BuildAdmin(env);
+            var listing = await admin.ListConsumerGroupsAsync();
+            var groupIds = listing.Valid.Select(g => g.GroupId).ToList();
+            if (groupIds.Count == 0) return (IReadOnlyList<KafkaConsumerGroupOverview>)[];
+
+            var described = await admin.DescribeConsumerGroupsAsync(groupIds);
+            var result = new List<KafkaConsumerGroupOverview>();
+
+            foreach (var desc in described.ConsumerGroupDescriptions)
             {
-                GroupId = desc.GroupId,
-                State = desc.State.ToString(),
-                TopicCount = topics.Count,
-                TotalLag = lag,
-                Topics = topics
-            });
-        }
-        return [.. result.OrderBy(g => g.GroupId)];
-    }
+                var topics = desc.Members
+                    .SelectMany(m => m.Assignment.TopicPartitions.Select(tp => tp.Topic))
+                    .Distinct().OrderBy(t => t).ToList();
+                var lag = await ComputeGroupTotalLagAsync(env, desc.GroupId, ct);
+                result.Add(new KafkaConsumerGroupOverview
+                {
+                    GroupId = desc.GroupId,
+                    State = desc.State.ToString(),
+                    TopicCount = topics.Count,
+                    TotalLag = lag,
+                    Topics = topics
+                });
+            }
+            return (IReadOnlyList<KafkaConsumerGroupOverview>)[.. result.OrderBy(g => g.GroupId)];
+        });
 
-    public async Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(
-        string env, string groupId, CancellationToken ct = default)
-    {
-        log.LogDebug("kafka [{Env}]: lag for group '{Group}'", env, groupId);
-        using var admin = BuildAdmin(env);
-        var described = await admin.DescribeConsumerGroupsAsync([groupId]);
-        var desc = described.ConsumerGroupDescriptions.First();
-
-        var topicPartitions = desc.Members
-            .SelectMany(m => m.Assignment.TopicPartitions)
-            .GroupBy(tp => tp.Topic)
-            .Select(g => (Topic: g.Key, PartitionCount: g.Count()))
-            .ToList();
-
-        var result = new List<KafkaGroupTopicLag>();
-        foreach (var (topic, partCount) in topicPartitions)
+    public Task<IReadOnlyList<KafkaGroupTopicLag>> GetGroupTopicLagsAsync(
+        string env, string groupId, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: lag for group '{groupId}'", async () =>
         {
-            var lag = await ComputeGroupLagForTopicAsync(env, groupId, topic, ct);
-            result.Add(new KafkaGroupTopicLag { TopicName = topic, Partitions = partCount, Lag = lag });
-        }
-        return [.. result.OrderBy(x => x.TopicName)];
-    }
+            using var admin = BuildAdmin(env);
+            var described = await admin.DescribeConsumerGroupsAsync([groupId]);
+            var desc = described.ConsumerGroupDescriptions.First();
+
+            var topicPartitions = desc.Members
+                .SelectMany(m => m.Assignment.TopicPartitions)
+                .GroupBy(tp => tp.Topic)
+                .Select(g => (Topic: g.Key, PartitionCount: g.Count()))
+                .ToList();
+
+            var result = new List<KafkaGroupTopicLag>();
+            foreach (var (topic, partCount) in topicPartitions)
+            {
+                var lag = await ComputeGroupLagForTopicAsync(env, groupId, topic, ct);
+                result.Add(new KafkaGroupTopicLag { TopicName = topic, Partitions = partCount, Lag = lag });
+            }
+            return (IReadOnlyList<KafkaGroupTopicLag>)[.. result.OrderBy(x => x.TopicName)];
+        });
 
     // ── IKafkaAdmin ──────────────────────────────────────────────────────────
 
-    public async Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: deleting topic '{Topic}'", env, topicName);
-        using var admin = BuildAdmin(env);
-        await admin.DeleteTopicsAsync([topicName]);
-    }
-
-    public async Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: retention '{Topic}' → {Ms}ms", env, topicName, retentionMs);
-        using var admin = BuildAdmin(env);
-        await admin.AlterConfigsAsync(new Dictionary<ConfigResource, List<ConfigEntry>>
+    public Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: deleting topic '{topicName}'", async () =>
         {
-            [new ConfigResource { Type = ResourceType.Topic, Name = topicName }] =
-                [new ConfigEntry { Name = "retention.ms", Value = retentionMs.ToString() }]
+            using var admin = BuildAdmin(env);
+            await admin.DeleteTopicsAsync([topicName]);
         });
-    }
 
-    public async Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default)
-    {
-        log.LogInformation("kafka [{Env}]: deleting group '{Group}'", env, groupId);
-        using var admin = BuildAdmin(env);
-        await admin.DeleteGroupsAsync([groupId]);
-    }
+    public Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: retention '{topicName}' -> {retentionMs}ms", async () =>
+        {
+            using var admin = BuildAdmin(env);
+            await admin.AlterConfigsAsync(new Dictionary<ConfigResource, List<ConfigEntry>>
+            {
+                [new ConfigResource { Type = ResourceType.Topic, Name = topicName }] =
+                    [new ConfigEntry { Name = "retention.ms", Value = retentionMs.ToString() }]
+            });
+        });
+
+    public Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: deleting group '{groupId}'", async () =>
+        {
+            using var admin = BuildAdmin(env);
+            await admin.DeleteGroupsAsync([groupId]);
+        });
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -31038,7 +31272,11 @@ public class KafkaService(
                 }
                 return lag;
             }
-            catch { return 0L; }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "kafka [{Env}]: lag computation failed for group '{Group}' topic '{Topic}' — reporting 0", env, groupId, topicName);
+                return 0L;
+            }
         }, ct);
 
     private async Task<long> ComputeGroupTotalLagAsync(string env, string groupId, CancellationToken ct)
@@ -31870,7 +32108,7 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
-LENGTH 1917
+LENGTH 1892
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31905,7 +32143,7 @@ public class MongoHeartbeatService(
             .ToListAsync(ct);
         sw.Stop();
 
-        var threshold = TimeSpan.FromSeconds(_heartbeat.IntervalSeconds * 2);
+        var threshold = _heartbeat.OfflineThreshold;
         var now = DateTime.UtcNow;
 
         log.LogDebug("heartbeat [{Env}]: {Count} services returned in {Ms}ms", env, docs.Count, sw.ElapsedMilliseconds);
@@ -32377,7 +32615,7 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 10222
+LENGTH 10539
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -32522,30 +32760,33 @@ public class SqlRunService(
             "sql [{Env}]: ast={Ast} -> sql={Sql} params={@Params}",
             env, filter?.FilterAst, sql, allParams.Select(p => $"{p.ParameterName}={p.Value}"));
 
-        await using var conn = new SqlConnection(sqlCfg.ConnectionString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.AddRange(allParams.ToArray());
-
-        var results = new List<RunSummary>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-        while (await reader.ReadAsync(ct))
+        return await OperationLog.RunAsync(log, $"sql [{env}]: GetRuns", async () =>
         {
-            results.Add(new RunSummary
-            {
-                RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
-                Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                End = reader.IsDBNull(5) ? null
-                              : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
-            });
-        }
+            await using var conn = new SqlConnection(sqlCfg.ConnectionString);
+            await conn.OpenAsync(ct);
 
-        return results;
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddRange(allParams.ToArray());
+
+            var results = new List<RunSummary>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+            while (await reader.ReadAsync(ct))
+            {
+                results.Add(new RunSummary
+                {
+                    RunId = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                    Status = sqlCfg.ParseStatus(reader.IsDBNull(1) ? null : reader.GetString(1)),
+                    Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                    Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                    Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
+                    End = reader.IsDBNull(5) ? null
+                                  : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
+                });
+            }
+
+            return results;
+        });
     }
 
     public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default) =>
@@ -32554,22 +32795,23 @@ public class SqlRunService(
     public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException("Run details not available from this SQL service.");
 
-    public async Task<List<PerformanceEvent>> GetRunEventsAsync(
-        string env, string runId, DateTime from, CancellationToken ct = default)
-    {
-        var db = mongoFactory.GetDatabase(env);
-        var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
+    public Task<List<PerformanceEvent>> GetRunEventsAsync(
+        string env, string runId, DateTime from, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"sql [{env}]: GetRunEvents '{runId}'", async () =>
+        {
+            var db = mongoFactory.GetDatabase(env);
+            var col = db.GetCollection<BsonDocument>(mongoSettings.Value.PerformanceTrackerCollection);
 
-        var filter = Builders<BsonDocument>.Filter.And(
-            Builders<BsonDocument>.Filter.Eq("RunId", runId),
-            Builders<BsonDocument>.Filter.Gte("Start", from.ToUniversalTime()));
+            var filter = Builders<BsonDocument>.Filter.And(
+                Builders<BsonDocument>.Filter.Eq("RunId", runId),
+                Builders<BsonDocument>.Filter.Gte("Start", from.ToUniversalTime()));
 
-        var docs = await col.Find(filter)
-            .Sort(Builders<BsonDocument>.Sort.Ascending("Start"))
-            .ToListAsync(ct);
+            var docs = await col.Find(filter)
+                .Sort(Builders<BsonDocument>.Sort.Ascending("Start"))
+                .ToListAsync(ct);
 
-        return docs.Select(MapToPerformanceEvent).ToList();
-    }
+            return docs.Select(MapToPerformanceEvent).ToList();
+        });
 
     private static PerformanceEvent MapToPerformanceEvent(BsonDocument d) => new()
     {
@@ -32600,7 +32842,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 98149
+LENGTH 98585
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -33498,12 +33740,11 @@ html, body {
 .bm-detail-count-done .mud-icon-root { color:#3FB950; }
 .bm-detail-count-inprogress .mud-icon-root { color:#388BFD; }
 
-/* Inline progress bar + "~N% estimated" label. margin-left:auto pins it to the
-   far right of bm-detail-topbar-left (i.e. flush against the action icons),
-   same row as the other labels — every other item here has flex-shrink:0, so
-   only the description (bm-detail-batch-name) ellipsizes to make room. */
+/* Inline progress bar + "~N% estimated" label — sits right after the status chip.
+   flex-shrink:0 like every other item on this row; only the description
+   (bm-detail-batch-name) ellipsizes to make room under space pressure. */
 .bm-detail-progress {
-    display:flex; align-items:center; gap:8px; margin-left:auto;
+    display:flex; align-items:center; gap:8px;
     min-width: 140px; max-width: 220px; flex: 0 0 180px;
 }
 .bm-detail-progress-bar { flex:1; border-radius:4px; }
@@ -34121,6 +34362,27 @@ html, body {
     flex: 1;
     overflow-y: auto;
     padding: 10px 16px 16px;
+}
+
+/* JSONPath query bar — pinned to the foot of the detail sidebar (Kafka message /
+   Mongo document inspectors), below the scrolling JSON tree. */
+.bm-jsonpath-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-top: 1px solid var(--mud-palette-divider);
+}
+.bm-jsonpath-input { flex: 1; }
+.bm-jsonpath-error {
+    padding: 0 12px 6px;
+    font-size: 11px;
+    color: var(--mud-palette-error);
+}
+.bm-jsonpath-count {
+    padding: 0 12px 6px;
+    font-size: 11px;
 }
 
 .bm-inspector-section-label {
@@ -35865,7 +36127,7 @@ tr.bm-row-searching td:first-child {
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 7884
+LENGTH 6460
 /* ================================================================
    D3 FLOW GRAPH  (rev 4)
    ================================================================ */
@@ -35909,12 +36171,16 @@ LENGTH 7884
     filter: brightness(1.35);
 }
 
-.bm-hdr-errored    { stroke: #F85149; filter: drop-shadow(0 0 6px rgba(248,81,73,0.4)); }
-.bm-hdr-active     { stroke: #3FB950; filter: drop-shadow(0 0 6px rgba(63,185,80,0.35)); }
-.bm-hdr-inprogress { stroke: #388BFD; }
-.bm-hdr-idle       { stroke: var(--mud-palette-divider); }
-.bm-hdr-completed  { stroke: var(--mud-palette-divider); }
-.bm-hdr-notstarted { stroke: var(--mud-palette-divider); opacity: 0.55; }
+/* Green = fully drained (nothing left in flight), blue = still has work in
+   flight; bright = that happened/is happening recently, dim = true but quiet
+   for a while. See stateColor()/stateClass() in d3-graph.js. */
+.bm-hdr-errored      { stroke: #F85149; filter: drop-shadow(0 0 6px rgba(248,81,73,0.4)); }
+.bm-hdr-active-green { stroke: #3FB950; filter: drop-shadow(0 0 6px rgba(63,185,80,0.35)); }
+.bm-hdr-active-blue  { stroke: #388BFD; filter: drop-shadow(0 0 6px rgba(56,139,253,0.35)); }
+.bm-hdr-completed    { stroke: rgba(63,185,80,0.55); }
+.bm-hdr-inprogress   { stroke: rgba(56,139,253,0.55); }
+.bm-hdr-idle         { stroke: var(--mud-palette-divider); }
+.bm-hdr-notstarted   { stroke: var(--mud-palette-divider); opacity: 0.55; }
 
 .bm-node-accent { pointer-events: none; }
 
@@ -35960,7 +36226,7 @@ LENGTH 7884
 .bm-row-fill  { transition: width 350ms ease; }
 
 .bm-row-counts {
-    font-size: 0.62rem;
+    font-size: 0.72rem;
     font-family: var(--bm-font-mono, monospace);
     fill: var(--mud-palette-text-secondary);
     pointer-events: none;
@@ -35976,7 +36242,8 @@ LENGTH 7884
 }
 
 .bm-edge-label {
-    font-size: 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
     font-family: var(--bm-font-mono, monospace);
     fill: var(--mud-palette-text-secondary);
     /* Halo so label is readable on both dark and light themes. */
@@ -36007,33 +36274,9 @@ LENGTH 7884
 .bm-pop-hdr {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--mud-palette-divider);
+    justify-content: flex-end;
+    padding: 4px 6px 0;
 }
-.bm-pop-title {
-    font-weight: 700;
-    font-size: 0.78rem;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bm-pop-badge {
-    font-size: 0.57rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 1px 5px;
-    border-radius: 4px;
-    flex-shrink: 0;
-}
-.bm-pop-active     { background:rgba(63,185,80,0.18);  color:#3FB950; }
-.bm-pop-inprogress { background:rgba(56,139,253,0.18); color:#388BFD; }
-.bm-pop-errored    { background:rgba(248,81,73,0.18);  color:#F85149; }
-.bm-pop-completed  { background:rgba(139,148,158,0.14); color:var(--mud-palette-text-secondary); }
-.bm-pop-idle       { background:rgba(139,148,158,0.10); color:var(--mud-palette-text-secondary); }
-.bm-pop-notstarted { background:rgba(139,148,158,0.08); color:var(--mud-palette-text-secondary); }
 
 .bm-pop-x {
     background: none; border: none;
@@ -36044,69 +36287,34 @@ LENGTH 7884
 }
 .bm-pop-x:hover { opacity: 1; color: #F85149; }
 
-.bm-pop-prog-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-}
-.bm-pop-track {
-    flex: 1; height: 4px;
-    background: var(--mud-palette-divider);
-    border-radius: 2px; overflow: hidden;
-}
-.bm-pop-fill { height: 100%; border-radius: 2px; transition: width 350ms ease; }
-.bm-pop-pct {
-    font-size: 0.65rem; font-family: monospace;
-    color: var(--mud-palette-text-secondary);
-    flex-shrink: 0; width: 32px; text-align: right;
-}
-
 .bm-pop-topic {
-    display: flex; align-items: center;
-    gap: 6px; padding: 2px 10px 6px;
-    font-size: 0.67rem; color: var(--mud-palette-text-secondary);
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--mud-palette-divider);
 }
-/* Truncate to one line instead of wrapping — a long topic name wrapping to two
-   lines pushed the Kafka button off-center/overlapping the text. */
-.bm-pop-topic-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bm-pop-topic code { font-family: monospace; }
 
 .bm-pop-kafka {
+    width: 100%;
     background: none;
     border: 1px solid rgba(56,139,253,0.4);
     border-radius: 4px; color: #388BFD; cursor: pointer;
-    font-size: 0.62rem; padding: 1px 6px; flex-shrink: 0;
+    font-size: 0.72rem; padding: 5px 8px;
     transition: background 110ms;
 }
 .bm-pop-kafka:hover { background: rgba(56,139,253,0.12); }
 
-.bm-pop-sep {
-    height: 1px;
-    background: var(--mud-palette-divider);
-}
-
-.bm-pop-inst-hdr {
-    padding: 5px 10px 3px;
-    font-size: 0.63rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--mud-palette-text-secondary);
-}
-
 .bm-pop-inst {
-    display: flex; align-items: center; gap: 5px;
-    padding: 3px 10px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 10px;
     border-top: 1px solid var(--mud-palette-divider);
-    font-size: 0.67rem;
+    font-size: 0.72rem;
 }
 .bm-pop-inst:first-of-type { border-top: none; }
 .bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bm-pop-pid { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
-.bm-pop-cnt { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.63rem; }
+/* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
+   left-aligned — PID is the leftmost column, so the server column after it
+   lines up regardless of whether a given PID is 2 digits or 5. */
+.bm-pop-pid { width: 9ch; flex: 0 0 9ch; text-align: left; color: var(--mud-palette-text-secondary); font-family: monospace; font-size: 0.72rem; }
+.bm-pop-cnt { color: var(--mud-palette-text-secondary); flex-shrink: 0; font-family: monospace; font-size: 0.72rem; }
 
 .bm-pop-empty {
     padding: 6px 10px 8px;
@@ -37776,7 +37984,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 41393
+LENGTH 44722
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -37796,7 +38004,7 @@ const D3Graph = (() => {
     const NODE_WIDTH     = 234;   // floor width — nodes grow past this to fit their text
     const MAX_NODE_WIDTH = 460;   // safety cap so one long name can't blow up the whole layout
     const HEADER_HEIGHT  = 32;
-    const ROW_HEIGHT     = 40;
+    const ROW_HEIGHT     = 46;   // was 40 — the name/counts text sat too close to the row's top divider
     const MIN_ROWS       = 1;
     const DEBOUNCE_MS    = 500;
     const T              = 280;   // transition duration ms
@@ -37812,17 +38020,41 @@ const D3Graph = (() => {
             .getPropertyValue('--mud-palette-divider').trim() || 'rgba(139,148,158,0.2)';
     }
 
+    // Two-hue palette: green = fully drained (nothing left in flight), blue = still
+    // has work in flight. Each hue has a bright and a dim shade — bright means "the
+    // state that earned this colour happened recently" (PipelineState.Active),
+    // dim means "true, but it's been quiet for a while" (Completed / InProgress).
+    // "Active" alone doesn't say which hue applies — DetermineState (see
+    // TopologyComputationService) assigns Active purely by recency, so the caller
+    // must also check whether the row/node/edge still has work in flight.
     const STATE_COLOR = {
-        errored:    '#F85149',
-        active:     '#3FB950',
-        inprogress: '#388BFD',
-        idle:       '#8B949E',
-        completed:  '#8B949E',
-        notstarted: 'rgba(139,148,158,0.22)',
+        errored:     '#F85149',
+        activeGreen: '#3FB950',
+        activeBlue:  '#388BFD',
+        completed:   'rgba(63,185,80,0.55)',
+        inprogress:  'rgba(56,139,253,0.55)',
+        idle:        '#8B949E',
+        notstarted:  'rgba(139,148,158,0.22)',
     };
 
     function sk(s) { return String(s || 'notstarted').toLowerCase(); }
-    function sc(s) { return STATE_COLOR[sk(s)] || STATE_COLOR.notstarted; }
+
+    // stillWorking: true if the thing this state belongs to still has work in
+    // flight (only matters when state is 'active' — every other state already
+    // implies one hue unambiguously).
+    function stateColor(s, stillWorking) {
+        const st = sk(s);
+        if (st === 'active') return stillWorking ? STATE_COLOR.activeBlue : STATE_COLOR.activeGreen;
+        return STATE_COLOR[st] || STATE_COLOR.notstarted;
+    }
+
+    // CSS class suffix — same disambiguation as stateColor(), for styles that
+    // can't be set as inline SVG attributes (e.g. the header's stroke + glow).
+    function stateClass(s, stillWorking) {
+        const st = sk(s);
+        if (st !== 'active') return st;
+        return stillWorking ? 'active-blue' : 'active-green';
+    }
 
     // Counts are shown as "done / total" so the fraction visually matches the
     // progress bar. Row total = done + in-progress (all chunks seen on the row);
@@ -38068,7 +38300,10 @@ const D3Graph = (() => {
         const dx = end.x - prev.x, dy = end.y - prev.y;
         const len = Math.hypot(dx, dy) || 1;
         const back = Math.min(len * 0.5, 40);
-        return { x: end.x - (dx / len) * back, y: end.y - (dy / len) * back - 7 };
+        // Extra fixed nudge (left/up) on top of the directional back-offset — the label's
+        // bigger font (see .bm-edge-label) made it sit too close to the arrow/edge line,
+        // especially once its bounding box grows for multi-digit counts.
+        return { x: end.x - (dx / len) * back - 6, y: end.y - (dy / len) * back - 11 };
     }
 
     // ── init ─────────────────────────────────────────────────────────────
@@ -38110,7 +38345,17 @@ const D3Graph = (() => {
 
         const zoom = d3.zoom()
             .scaleExtent([0.12, 3])
-            .on('zoom', ev => { root.attr('transform', ev.transform); handle.userZoomed = true; });
+            // ev.sourceEvent is the originating DOM event (wheel/mousedown/dblclick/touch)
+            // for a real user gesture, and null for a programmatic .call(zoom.transform, ...)
+            // — which is exactly how fitToView applies its computed transform. Without this
+            // check, the very first auto-fit (right after the initial topology loads) marked
+            // the graph as user-zoomed and permanently blocked every later auto-fit in
+            // commitLayout, leaving the view stuck at whatever scale matched that first,
+            // possibly-incomplete topology as more data streamed in.
+            .on('zoom', ev => {
+                root.attr('transform', ev.transform);
+                if (ev.sourceEvent) handle.userZoomed = true;
+            });
         svg.call(zoom);
         svg.on('click', () => hidePopover(handle));
 
@@ -38269,8 +38514,11 @@ const D3Graph = (() => {
         sel.each(function(d) {
             const el  = d3.select(this);
             const hw  = d.width / 2, hh = d.height / 2;
-            const st  = sk(d.data.headerState);
-            const col = sc(d.data.headerState);
+            // A node's own "still working" is true if ANY of its pipeline rows still
+            // has something in flight, regardless of which row is the recently-active one.
+            const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
+            const st  = stateClass(d.data.headerState, stillWorking);
+            const col = stateColor(d.data.headerState, stillWorking);
 
             // Clip the pipeline-rows group to the card shape so long row names /
             // counts can never spill outside the rounded rectangle. (Previously the
@@ -38329,7 +38577,8 @@ const D3Graph = (() => {
             el.select('.bm-node-pulse')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .classed('bm-pulse-active', st === 'active');
+                .attr('fill', col)
+                .classed('bm-pulse-active', st === 'active-green' || st === 'active-blue');
 
             renderRows(el, d, handle, bg);
         });
@@ -38390,7 +38639,7 @@ const D3Graph = (() => {
         merged.each(function(r) {
             const row  = d3.select(this);
             const top  = r._cy - ROW_HEIGHT / 2;
-            const col  = sc(r.state);
+            const col  = stateColor(r.state, (r.inProgressCount ?? 0) > 0);
 
             row.select('.bm-row-hit')
                 .attr('x', -hw).attr('y', top)
@@ -38403,8 +38652,10 @@ const D3Graph = (() => {
 
             // Name (top-left) and counts (top-right) share the upper line; the
             // progress bar spans the full width beneath them (matches the mock).
-            const textY = top + 16;
-            const barY  = top + 27;
+            // textY was top+16 — with the row's top divider right at `top`, that left
+            // the text sitting almost flush against it; +20 gives it real breathing room.
+            const textY = top + 20;
+            const barY  = top + 32;
 
             row.select('.bm-row-name')
                 .attr('x', -hw + PAD).attr('y', textY)
@@ -38445,38 +38696,34 @@ const D3Graph = (() => {
 
         const instances = pipeline.instances || [];
         const topic     = pipeline.topic || '';
-        const progress  = Math.round((pipeline.progress ?? 0) * 100);
 
         const instHtml = instances.length > 0
-            ? instances.map(i =>
-                `<div class="bm-pop-inst">
+            ? instances.map(i => {
+                const done = i.doneCount ?? 0, total = done + (i.inProgressCount ?? 0);
+                // Pad the digits (not the "PID " prefix) to a fixed width with non-breaking
+                // spaces, so the "PID " label is always the same length and the server
+                // column after it still lines up regardless of the PID's digit count.
+                const pid = String(i.processId ?? '').padStart(5, ' ');
+                return `<div class="bm-pop-inst">
+                    <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
                     <span class="bm-pop-srv">${esc(i.server)}</span>
-                    <span class="bm-pop-pid">PID&nbsp;${esc(i.processId)}</span>
-                    <span class="bm-pop-cnt">✓${i.doneCount ?? 0}&nbsp;⟳${i.inProgressCount ?? 0}</span>
-                </div>`).join('')
+                    <span class="bm-pop-cnt">${done} / ${total}</span>
+                </div>`;
+            }).join('')
             : '<div class="bm-pop-empty">No instances seen yet</div>';
 
         const topicHtml = topic
             ? `<div class="bm-pop-topic">
-                   <span class="bm-pop-topic-name" title="${esc(topic)}">Topic:&nbsp;<code>${esc(topic)}</code></span>
-                   <button class="bm-pop-kafka">↗&nbsp;Kafka</button>
+                   <button class="bm-pop-kafka" title="${esc(topic)}">↗&nbsp;Browse topic</button>
                </div>`
             : '';
 
         handle.popover.html(`
             <div class="bm-pop-hdr">
-                <span class="bm-pop-title">${esc(pipeline.displayName || pipeline.name)}</span>
-                <span class="bm-pop-badge bm-pop-${esc(sk(pipeline.state))}">${esc(sk(pipeline.state))}</span>
                 <button class="bm-pop-x">×</button>
             </div>
-            <div class="bm-pop-prog-row">
-                <div class="bm-pop-track"><div class="bm-pop-fill" style="width:${progress}%;background:${sc(pipeline.state)}"></div></div>
-                <span class="bm-pop-pct">${progress}%</span>
-            </div>
-            ${topicHtml}
-            <div class="bm-pop-sep"></div>
-            <div class="bm-pop-inst-hdr">Instances (${instances.length})</div>
             ${instHtml}
+            ${topicHtml}
         `)
         .style('opacity', 1)
         .style('pointer-events', 'auto');
@@ -38560,7 +38807,7 @@ const D3Graph = (() => {
         const merged = enter.merge(sel);
 
         merged.each(function(d) {
-            const col = sc(d.data?.state);
+            const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data);
             const path = d3.select(this).select('.bm-edge-path');
             // Set stroke as attribute so context-stroke on the marker resolves.
@@ -38578,6 +38825,17 @@ const D3Graph = (() => {
                 .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
         });
+    }
+
+    // An edge's colour should match its SOURCE pipeline row's own colour — not a
+    // separately-derived notion of "still working" — so a completed (green) row
+    // never feeds a blue arrow. waitingEstimate (chunks handed off but not yet
+    // seen at the target) is about the target's backlog, not the source's own
+    // state, so it isn't the right signal here.
+    function edgeStillWorking(handle, e) {
+        const srcNode = handle.currentGraph?.nodes?.get(e?.source);
+        const row = srcNode?.data?.pipelines?.find(p => p.name === e?.sourcePipeline);
+        return (row?.inProgressCount ?? 0) > 0;
     }
 
     function edgeW(e) {
@@ -38606,7 +38864,7 @@ const D3Graph = (() => {
         handle.eLayer.selectAll('g.bm-edge').each(function(d) {
             const s = sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
             const r = tick(s, dt);
-            const col = sc(d.data?.state);
+            const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data) + r.thicknessBoost;
 
             d3.select(this).select('.bm-edge-path')
@@ -39507,7 +39765,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 54353
+LENGTH 57123
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -39771,6 +40029,10 @@ const TIMELINE_ALIASES = {
             hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
+            // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
+            // this) — same key still always gets the same colour for a given seed, only
+            // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
+            paletteSeed: 0,
             selFn: null,
             isVisible: true,
             // Last transform.y consumed from D3 zoom's internal state — used to turn
@@ -39955,11 +40217,23 @@ const TIMELINE_ALIASES = {
 
     function buildGroups(s, batch, groupBy, filterAst) {
         const map = new Map();
+        const sortIdxByKey = new Map();
+        // Hierarchical first-seen order — see firstSeenTuple(). Reset per call so
+        // ordering reflects the currently-filtered event set (hiding an event can
+        // change who's "first"), not some stale cross-render state.
+        const orderMaps = [];
+
         for (const e of (batch.events || [])) {
             if (e.finishMs == null) continue;
             if (!evaluate(filterAst, e)) continue;
             const key = groupKey(e, groupBy);
-            if (!map.has(key)) map.set(key, []);
+            if (!map.has(key)) {
+                map.set(key, []);
+                // Assigned once, the moment this group's first event is seen — never
+                // recomputed afterward, so a group's position stays fixed for the rest
+                // of this render even as more of its own events stream in.
+                sortIdxByKey.set(key, firstSeenTuple(orderMaps, groupSortTuple(e, groupBy)));
+            }
             map.get(key).push(e);
         }
         const groups = [];
@@ -39967,16 +40241,36 @@ const TIMELINE_ALIASES = {
             const subrows = packSubrows(events);
             const SH = s.subrowHOverride ?? SUBROW_H;
             const rowH = ROW_PAD * 2 + subrows.length * (SH + BLOCK_GAP);
-            groups.push({ key, events, subrows, rowH });
+            groups.push({ key, events, subrows, rowH, _sortIdx: sortIdxByKey.get(key) });
         }
-        // All events in a group share the same field values (that's what defines the
-        // group), so events[0] is representative — sort hierarchically instead of
-        // leaving the Map's insertion order, so e.g. every row for the same service
-        // clusters together regardless of which order distinct combinations first
-        // appeared in the raw event stream.
-        groups.sort((a, b) =>
-            compareGroupTuples(groupSortTuple(a.events[0], groupBy), groupSortTuple(b.events[0], groupBy)));
+        // Order by first occurrence, hierarchically: a group's position is decided the
+        // moment its first event arrives — mirroring how the data is actually produced
+        // (a service is "created" when its first message arrives, and asks its
+        // pipelines to render in the order THEY were created under it). For composite
+        // groupings (e.g. Service / Pipeline) a child level's order is scoped to its
+        // parent's value, not global and not alphabetical — see firstSeenTuple().
+        groups.sort((a, b) => compareGroupTuples(a._sortIdx, b._sortIdx));
         return groups;
+    }
+
+    // Assigns each level of `tuple` a first-seen index scoped to its parent's value.
+    // orderMaps[d] maps "parentScope thisLevelValue" -> the index that scoped
+    // value got the first time it was seen (Map.size at insertion time = next free
+    // index). Called once per distinct group key (see buildGroups), so e.g. under
+    // Service/Pipeline, a service's pipelines are numbered 0,1,2... in the order they
+    // first appeared specifically under THAT service, independent of any other
+    // service's pipelines.
+    function firstSeenTuple(orderMaps, tuple) {
+        let scope = '';
+        const idx = [];
+        for (let d = 0; d < tuple.length; d++) {
+            if (!orderMaps[d]) orderMaps[d] = new Map();
+            const scopeKey = scope + ' ' + tuple[d];
+            if (!orderMaps[d].has(scopeKey)) orderMaps[d].set(scopeKey, orderMaps[d].size);
+            idx.push(orderMaps[d].get(scopeKey));
+            scope = scopeKey;
+        }
+        return idx;
     }
 
     function buildStackGroups(s, batch, filterAst) {
@@ -40134,7 +40428,7 @@ const TIMELINE_ALIASES = {
                         e, ck,
                         x,
                         w: Math.max(1, w),
-                        colour: colourForKey(ck, colourBy),
+                        colour: colourForKey(ck, colourBy, s.paletteSeed),
                         bse:    sec.batch.batchStartEpochMs || 0,
                         stableKey: `${sec.batch.runId}:${e.id}`,
                         y: sy,
@@ -40535,6 +40829,17 @@ const TIMELINE_ALIASES = {
                 computeLayout(s);
                 updateLaneSvgHeight(s);
                 renderAll(s);
+            } else if (e.key === 'r' || e.key === 'R') {
+                // Reshuffle which PALETTE slot each key lands on — same key still always
+                // gets the same colour for the new seed (colourForKey stays deterministic
+                // per key+seed), only the seed itself is random. Doesn't touch Status mode's
+                // fixed semantic colours.
+                e.preventDefault();
+                let next;
+                do { next = Math.floor(Math.random() * PALETTE.length); }
+                while (next === s.paletteSeed && PALETTE.length > 1);
+                s.paletteSeed = next;
+                renderAll(s);
             }
             return;
         }
@@ -40683,8 +40988,8 @@ const TIMELINE_ALIASES = {
             default:         return e.source;
         }
     }
-    function colourForKey(key, c) {
-        return c === 'Status' ? (STATUS_COLOR[key] || '#8B949E') : PALETTE[hashStr(key) % PALETTE.length];
+    function colourForKey(key, c, seed) {
+        return c === 'Status' ? (STATUS_COLOR[key] || '#8B949E') : PALETTE[(hashStr(key) + (seed || 0)) % PALETTE.length];
     }
     function hashStr(s) {
         let h = 0;

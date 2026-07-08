@@ -12,7 +12,7 @@ public class PerformanceEvent
     public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
     public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
     public string Server    { get; set; }   // Host that processed it
-    public string ProcessId { get; set; }   // OS process ID
+    public int ProcessId { get; set; }   // OS process ID
     public DateTime Start   { get; set; }
     public DateTime? Finish { get; set; }   // null = still in progress
     public string? Error    { get; set; }   // null = no error
