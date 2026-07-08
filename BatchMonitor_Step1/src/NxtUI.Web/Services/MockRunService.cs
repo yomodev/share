@@ -1,8 +1,6 @@
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
-using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
-using Microsoft.AspNetCore.SignalR;
 using NxtUI.Core.Filtering;
 
 namespace NxtUI.Web.Services;
@@ -93,7 +91,7 @@ public class MockRunService : IRunService
     private readonly List<RunSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
-    private readonly IHubContext<RunEventsHub>? _hubContext;
+    private readonly RunEventBroker? _eventBroker;
     private readonly RunsSettings _runsSettings;
     private readonly CancellationTokenSource _bgCts = new();
 
@@ -104,9 +102,9 @@ public class MockRunService : IRunService
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockRunService(IHubContext<RunEventsHub>? hubContext = null, RunsSettings? runsSettings = null)
+    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null)
     {
-        _hubContext = hubContext;
+        _eventBroker = eventBroker;
         _runsSettings = runsSettings ?? new RunsSettings();
         var rng = new Random(42);
 
@@ -134,7 +132,7 @@ public class MockRunService : IRunService
 
         GenerateMockEvents(rng);
 
-        if (_hubContext is not null)
+        if (_eventBroker is not null)
             _ = SimulateLivePushAsync(_bgCts.Token);
     }
 
@@ -301,7 +299,6 @@ public class MockRunService : IRunService
                 foreach (var batch in _store.Where(b => b.Status == RunStatus.Running))
                 {
                     var env = "DEV1";
-                    var group = RunEventsHub.GroupName(env, batch.RunId);
 
                     foreach (var evt in GenerateLiveEvents(ref chunkCounter, rng))
                     {
@@ -309,8 +306,7 @@ public class MockRunService : IRunService
                             _eventsByRunId[batch.RunId] = new();
                         _eventsByRunId[batch.RunId].Add(evt);
 
-                        await _hubContext!.Clients.Group(group)
-                            .SendAsync("RunEvent", env, batch.RunId, evt, ct);
+                        _eventBroker?.Publish(env, batch.RunId, evt);
                     }
                 }
             }

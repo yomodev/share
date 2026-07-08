@@ -89,10 +89,12 @@ public class Program
             o.AddFilter<ErrorNotificationHubFilter>());
 
         // ── Batch / Run service ──────────────────────────────────────────────
+        builder.Services.AddSingleton<RunEventBroker>();
+
         // Mock: fast demo without any backend.  Swap comment for a real backend.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(
-                sp.GetRequiredService<IHubContext<RunEventsHub>>(),
+                sp.GetRequiredService<RunEventBroker>(),
                 sp.GetRequiredService<IOptions<RunsSettings>>().Value));
         // builder.Services.AddSingleton<IRunService>(sp => new MongoRunService(
         //     sp.GetRequiredService<MongoConnectionFactory>(),
@@ -166,7 +168,6 @@ public class Program
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
         builder.Services.AddScoped<EnvironmentSelectorService>();
-        builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<DateTimeDisplayService>();
         builder.Services.AddScoped<ErrorNotificationService>();
@@ -193,7 +194,6 @@ public class Program
         app.MapRazorPages();
         app.MapBlazorHub();
         app.MapHub<RunHub>("/hubs/run");
-        app.MapHub<RunEventsHub>("/hubs/run-events");
 
         // Lightweight JSON endpoint for the home treemap — JS polls this directly
         // so the data never travels over SignalR.

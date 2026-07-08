@@ -7,25 +7,25 @@ namespace NxtUI.Web.Services;
 /// Per-tab event accumulator. Combines two delivery paths (Step 9):
 ///
 ///   1. HTTP polling (fallback, always active): loads historical events on
-///      startup; polls incrementally for completed batches where SignalR
-///      push is not available.
+///      startup; polls incrementally for completed batches where live push
+///      is not available.
 ///
-///   2. SignalR push (primary for running batches): low-latency event delivery
-///      from the server via <see cref="SignalRConnectionService"/>. When push
+///   2. Live push (primary for running batches): low-latency event delivery
+///      via <see cref="RunEventBroker"/>, an in-process pub/sub. When push
 ///      is active, the polling interval is relaxed to a slow fallback rate.
 ///
 /// Focus-aware: while the owning tab is unfocused, polling slows to 10 s and
-/// SignalR events are still accumulated (the component just won't re-render
+/// pushed events are still accumulated (the component just won't re-render
 /// until it regains focus — see BatchDetail.ShouldRender).
 /// </summary>
 public class PerformanceEventService : IDisposable
 {
     public const int FocusedPollIntervalMs = 3_000;
     public const int UnfocusedPollIntervalMs = 15_000;
-    // When SignalR push is active, poll much less frequently (safety net only).
-    public const int SignalRFallbackPollMs = 30_000;
+    // When live push is active, poll much less frequently (safety net only).
+    public const int PushFallbackPollMs = 30_000;
     // No backend pushes a completion event today — periodically re-check the run's own
-    // status while live so SignalR gets torn down (and the UI's status chip updates)
+    // status while live so push gets torn down (and the UI's status chip updates)
     // as soon as it finishes, instead of only relying on events stopping.
     private static readonly TimeSpan StatusCheckInterval = TimeSpan.FromSeconds(30);
 
@@ -34,8 +34,8 @@ public class PerformanceEventService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private Action? _onEventsUpdated;
-    private IDisposable? _signalRSubscription;
-    private bool _signalRActive;
+    private IDisposable? _pushSubscription;
+    private bool _pushActive;
     private bool _isRunning;
     private DateTime _nextStatusCheck;
 
@@ -72,7 +72,7 @@ public class PerformanceEventService : IDisposable
     // ── Startup ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads full history from run start, then subscribes to SignalR push
+    /// Loads full history from run start, then subscribes to live push
     /// (live runs) and starts a fallback polling loop.
     /// </summary>
     public async Task StartAsync(
@@ -82,7 +82,7 @@ public class PerformanceEventService : IDisposable
         bool isRunning,
         bool isFocused = true,
         Action? onEventsUpdated = null,
-        SignalRConnectionService? signalR = null,
+        RunEventBroker? eventBroker = null,
         CancellationToken ct = default)
     {
         _onEventsUpdated = onEventsUpdated;
@@ -98,19 +98,19 @@ public class PerformanceEventService : IDisposable
         // 1. Load full history.
         await LoadHistoryAsync(env, runId, startTime, _cts.Token);
 
-        // 2. Subscribe to SignalR push for running batches.
-        if (isRunning && signalR is not null)
+        // 2. Subscribe to live push for running batches.
+        if (isRunning && eventBroker is not null)
         {
             try
             {
-                _signalRSubscription = await signalR.SubscribeToRunAsync(
-                    env, runId, OnSignalREvent, _cts.Token);
-                _signalRActive = true;
-                Console.WriteLine($"[EventService] SignalR push active for {runId}");
+                _pushSubscription = await eventBroker.SubscribeToRunAsync(
+                    env, runId, OnPushEvent, _cts.Token);
+                _pushActive = true;
+                Console.WriteLine($"[EventService] Live push active for {runId}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EventService] SignalR subscription failed, using polling only: {ex.Message}");
+                Console.WriteLine($"[EventService] Push subscription failed, using polling only: {ex.Message}");
             }
         }
 
@@ -118,9 +118,9 @@ public class PerformanceEventService : IDisposable
         _pollingTask = PollLoopAsync(env, runId, _cts.Token);
     }
 
-    // ── SignalR push handler ──────────────────────────────────────────────
+    // ── Live push handler ───────────────────────────────────────────────────
 
-    private Task OnSignalREvent(PerformanceEvent evt)
+    private Task OnPushEvent(PerformanceEvent evt)
     {
         _eventStore.UpsertEvent(evt);
         _onEventsUpdated?.Invoke();
@@ -131,9 +131,9 @@ public class PerformanceEventService : IDisposable
 
     public void StopPolling()
     {
-        _signalRSubscription?.Dispose();
-        _signalRSubscription = null;
-        _signalRActive = false;
+        _pushSubscription?.Dispose();
+        _pushSubscription = null;
+        _pushActive = false;
 
         if (_cts is not null)
         {
@@ -181,14 +181,14 @@ public class PerformanceEventService : IDisposable
             try
             {
                 int interval;
-                if (_signalRActive)
-                    interval = SignalRFallbackPollMs;
+                if (_pushActive)
+                    interval = PushFallbackPollMs;
                 else if (!IsFocused)
                     interval = UnfocusedPollIntervalMs;
                 else
                     interval = FocusedPollIntervalMs;
 
-                if (!IsFocused && !_signalRActive)
+                if (!IsFocused && !_pushActive)
                 {
                     _focusRegainedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     await Task.WhenAny(Task.Delay(interval, ct), _focusRegainedSignal.Task);
@@ -227,11 +227,11 @@ public class PerformanceEventService : IDisposable
             {
                 _isRunning = false;
                 DetectedStatus = details.Status;
-                _signalRSubscription?.Dispose();
-                _signalRSubscription = null;
-                _signalRActive = false;
+                _pushSubscription?.Dispose();
+                _pushSubscription = null;
+                _pushActive = false;
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped SignalR, falling back to slow poll.");
+                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped live push, falling back to slow poll.");
             }
             else
             {

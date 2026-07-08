@@ -2,7 +2,7 @@
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
 @inject IRunService RunService
-@inject SignalRConnectionService SignalR
+@inject RunEventBroker RunEvents
 @inject IJSRuntime JS
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
@@ -173,7 +173,7 @@
             }
             else
             {
-                var batch = new TimelineRun(env, runId, RunService, SignalR,
+                var batch = new TimelineRun(env, runId, RunService, RunEvents,
                     onUpdated: async () => await DebouncedPushAsync());
                 await batch.LoadAsync();
                 _runs.Add(batch);

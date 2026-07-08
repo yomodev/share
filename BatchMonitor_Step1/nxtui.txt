@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 7031
+LENGTH 6965
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -86,7 +86,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
 		docs\09_Features.md = docs\09_Features.md
 		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
-		docs\11_ResponsivenessAudit.md = docs\11_ResponsivenessAudit.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
@@ -940,7 +939,7 @@ js/
 5. **Frozen domain** — timeline x-axis never moves when new data arrives
 6. **BatchMonitor.Core split** — testability and future API reuse
 FILE docs/02_Models_DataFlow.md
-LENGTH 7627
+LENGTH 7624
 # BatchMonitor — Models & Data Flow
 
 ## PerformanceEvent
@@ -955,7 +954,7 @@ public class PerformanceEvent
     public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
     public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
     public string Server    { get; set; }   // Host that processed it
-    public string ProcessId { get; set; }   // OS process ID
+    public int ProcessId { get; set; }   // OS process ID
     public DateTime Start   { get; set; }
     public DateTime? Finish { get; set; }   // null = still in progress
     public string? Error    { get; set; }   // null = no error
@@ -5898,7 +5897,7 @@ LENGTH 8576
 
 </nlog>
 FILE src/NxtUI.Web/NxtUI.Web.csproj
-LENGTH 1029
+LENGTH 942
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -5920,7 +5919,6 @@ LENGTH 1029
 
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="9.6.0" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.0" />
     <PackageReference Include="NLog.Web.AspNetCore" Version="5.3.15" />
   </ItemGroup>
 
@@ -5937,7 +5935,7 @@ LENGTH 1029
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 12642
+LENGTH 12571
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -6029,10 +6027,12 @@ public class Program
             o.AddFilter<ErrorNotificationHubFilter>());
 
         // ── Batch / Run service ──────────────────────────────────────────────
+        builder.Services.AddSingleton<RunEventBroker>();
+
         // Mock: fast demo without any backend.  Swap comment for a real backend.
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(
-                sp.GetRequiredService<IHubContext<RunEventsHub>>(),
+                sp.GetRequiredService<RunEventBroker>(),
                 sp.GetRequiredService<IOptions<RunsSettings>>().Value));
         // builder.Services.AddSingleton<IRunService>(sp => new MongoRunService(
         //     sp.GetRequiredService<MongoConnectionFactory>(),
@@ -6106,7 +6106,6 @@ public class Program
         // ── Application services (Scoped = one per Blazor circuit/session) ───
         builder.Services.AddScoped<TabService>();
         builder.Services.AddScoped<EnvironmentSelectorService>();
-        builder.Services.AddScoped<SignalRConnectionService>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<DateTimeDisplayService>();
         builder.Services.AddScoped<ErrorNotificationService>();
@@ -6133,7 +6132,6 @@ public class Program
         app.MapRazorPages();
         app.MapBlazorHub();
         app.MapHub<RunHub>("/hubs/run");
-        app.MapHub<RunEventsHub>("/hubs/run-events");
 
         // Lightweight JSON endpoint for the home treemap — JS polls this directly
         // so the data never travels over SignalR.
@@ -10560,7 +10558,7 @@ LENGTH 2228
     }
 }
 FILE src/NxtUI.Web/Components/BmRunsTable.razor
-LENGTH 9308
+LENGTH 8857
 @namespace NxtUI.Web.Components
 @using NxtUI.Core.Models
 @using NxtUI.Web.Services
@@ -10595,37 +10593,33 @@ LENGTH 9308
             }
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="padding-left:12px;"
-                   @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            @{
+                var clk = EventCallback.Factory.Create(this, () => OnRowClick.InvokeAsync(context));
+                var dbl = EventCallback.Factory.Create(this, () => OnOpenDetail.InvokeAsync(context));
+            }
+            <MudTd Style="padding-left:12px;" @onclick="clk" @ondblclick="dbl">
                 <StatusIcon Status="@context.Status" />
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.RunId</MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2">@context.Description</MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudChip T="string" Size="Size.Small" Class="bm-type-chip">@context.Type</MudChip>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">
                     @DtSvc.Format(context.Start, "yyyy-MM-dd HH:mm:ss")
                 </MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <MudText Typo="Typo.body2" Class="bm-monospace">
                     @FormatDuration(context.Duration)
                 </MudText>
             </MudTd>
-            <MudTd @onclick="@(() => OnRowClick.InvokeAsync(context))"
-                   @ondblclick="@(() => OnOpenDetail.InvokeAsync(context))">
+            <MudTd @onclick="clk" @ondblclick="dbl">
                 <span class="bm-status-text bm-status-@context.Status.ToString().ToLower()">
                     @context.Status
                 </span>
@@ -12183,33 +12177,6 @@ public class RunsController(IRunService svc) : ControllerBase
         catch (OperationCanceledException) { return BadRequest(); }
         catch (Exception) { return StatusCode(500); }
     }
-}
-FILE src/NxtUI.Web/Hubs/RunEventsHub.cs
-LENGTH 928
-using NxtUI.Core.Models;
-using Microsoft.AspNetCore.SignalR;
-
-namespace NxtUI.Web.Hubs;
-
-/// <summary>
-/// SignalR hub for real-time run event streaming.
-///
-/// Clients call <see cref="SubscribeToRun"/> to join a group named
-/// "{env}:{runId}". The server (MockRunService / MongoRunService)
-/// pushes <see cref="PerformanceEvent"/> objects to that group via
-/// <see cref="IHubContext{RunEventsHub}"/>.
-///
-/// Client-side method pushed to clients: "RunEvent" (single event upsert).
-/// </summary>
-public class RunEventsHub : Hub
-{
-    public async Task SubscribeToRun(string env, string runId) =>
-        await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(env, runId));
-
-    public async Task UnsubscribeFromRun(string env, string runId) =>
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(env, runId));
-
-    public static string GroupName(string env, string runId) => $"{env}:{runId}";
 }
 FILE src/NxtUI.Web/Hubs/RunHub.cs
 LENGTH 527
@@ -14107,7 +14074,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FileBrowser.razor
-LENGTH 41701
+LENGTH 41674
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -14281,19 +14248,20 @@ LENGTH 41701
                             <MudTh></MudTh>
                         </HeaderContent>
                         <RowTemplate>
-                            <MudTd DataLabel="Host" @ondblclick="@(() => OpenInViewer(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
-                            <MudTd DataLabel="File" @ondblclick="@(() => OpenInViewer(context))">
+                            @{ var dbl = EventCallback.Factory.Create(this, () => OpenInViewer(context)); }
+                            <MudTd DataLabel="Host" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.Server</MudText></MudTd>
+                            <MudTd DataLabel="File" @ondblclick="dbl">
                                 <MudTooltip Text="@context.FullPath">
                                     <MudText Typo="Typo.body2">@context.FileName</MudText>
                                 </MudTooltip>
                             </MudTd>
-                            <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Size" Style="text-align:right" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@FormatSize(context.SizeBytes)</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Created" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Created" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
-                            <MudTd DataLabel="Last Updated" @ondblclick="@(() => OpenInViewer(context))">
+                            <MudTd DataLabel="Last Updated" @ondblclick="dbl">
                                 <MudText Typo="Typo.body2" Class="bm-monospace">@DtSvc.Format(context.LastModifiedUtc, "yyyy-MM-dd HH:mm:ss")</MudText>
                             </MudTd>
                             <MudTd>
@@ -15799,7 +15767,7 @@ LENGTH 4506
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 28198
+LENGTH 28188
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -15884,13 +15852,14 @@ LENGTH 28198
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => OpenInspector(context.Name)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-topic-name">@context.Name</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <MudTd @ondblclick="dbl">
                         <span>@context.PartitionCount</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                    <MudTd @ondblclick="dbl">
                         @if (context.ConfigLoaded) { <span class="bm-kafka-mono">@FormatMessages(context)</span> }
                         else { <span class="bm-muted">—</span> }
                     </MudTd>
@@ -15977,17 +15946,18 @@ LENGTH 28198
                     <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => OnGroupSelected(context)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd @ondblclick="dbl">
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                                  Color="@StateColor(context.State)">@context.State</MudChip>
                     </MudTd>
-                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd Style="text-align:right;" @ondblclick="dbl">
                         @context.TopicCount
                     </MudTd>
-                    <MudTd Style="text-align:right;" @ondblclick="@(() => OnGroupSelected(context))">
+                    <MudTd Style="text-align:right;" @ondblclick="dbl">
                         @if (context.TotalLag > 0)
                         {
                             <span class="bm-kafka-lag-warn">
@@ -16431,7 +16401,7 @@ LENGTH 28198
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaGroupsDashboard.razor
-LENGTH 10034
+LENGTH 10019
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16493,17 +16463,18 @@ LENGTH 10034
                 </MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                @{ var dbl = EventCallback.Factory.Create(this, () => OnRowSelected(context)); }
+                <MudTd @ondblclick="dbl">
                     <span class="bm-kafka-mono bm-kafka-group-id-main">@context.GroupId</span>
                 </MudTd>
-                <MudTd @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd @ondblclick="dbl">
                     <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
                              Color="@StateColor(context.State)">@context.State</MudChip>
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @context.TopicCount
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OnRowSelected(context))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.TotalLag > 0)
                     {
                         <span class="bm-kafka-lag-warn">
@@ -16677,7 +16648,7 @@ LENGTH 10034
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 32999
+LENGTH 32862
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16845,25 +16816,26 @@ LENGTH 32999
                     <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => DownloadMessageAsync(context)); }
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono">@context.Offset</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono">@context.Partition</span>
                     </MudTd>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-inspector-key">@(context.Key ?? "<null>")</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-payload-type @TypeChipClass(context.PayloadType)">@context.PayloadType</span>
                     </MudTd>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-muted">@context.RawSizeBytes B</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.Timestamp, "HH:mm:ss.fff")</span>
                     </MudTd>
-                    <MudTd @ondblclick="@(() => DownloadMessageAsync(context))">
+                    <MudTd @ondblclick="dbl">
                         <span class="bm-inspector-preview">@TruncateValue(context.JsonPayload)</span>
                     </MudTd>
                 </RowTemplate>
@@ -18769,7 +18741,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 16358
+LENGTH 16399
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -18828,10 +18800,11 @@ LENGTH 16358
                     <MudTh Style="width:100%;">Preview</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="white-space:nowrap;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    @{ var dbl = EventCallback.Factory.Create(this, () => SaveDocumentAsync(context)); }
+                    <MudTd Style="white-space:nowrap;" @ondblclick="dbl">
                         <span class="bm-kafka-mono bm-mongo-id">@context.Id</span>
                     </MudTd>
-                    <MudTd Style="width:100%; max-width:0;" @ondblclick="@(() => SaveDocumentAsync(context))">
+                    <MudTd Style="width:100%; max-width:0;" @ondblclick="dbl">
                         <span class="bm-inspector-preview">@TruncateJson(context.Json)</span>
                     </MudTd>
                 </RowTemplate>
@@ -19163,7 +19136,7 @@ LENGTH 16358
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11567
+LENGTH 11537
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19241,10 +19214,11 @@ LENGTH 11567
                 <MudTh Style="white-space:nowrap; text-align:center;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd @ondblclick="@(() => OpenInspector(context.Name))">
+                @{ var dbl = EventCallback.Factory.Create(this, () => OpenInspector(context.Name)); }
+                <MudTd @ondblclick="dbl">
                     <span class="bm-kafka-topic-name">@context.Name</span>
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.StatsLoaded)
                     {
                         <span class="bm-kafka-mono">@context.DocumentCount.ToString("N0")</span>
@@ -19254,7 +19228,7 @@ LENGTH 11567
                         <span class="bm-muted">—</span>
                     }
                 </MudTd>
-                <MudTd Style="text-align:right;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:right;" @ondblclick="dbl">
                     @if (context.StatsLoaded)
                     {
                         <span class="bm-kafka-mono">@FormatBytes(context.StorageSizeBytes)</span>
@@ -19264,7 +19238,7 @@ LENGTH 11567
                         <span class="bm-muted">—</span>
                     }
                 </MudTd>
-                <MudTd Style="text-align:center;" @ondblclick="@(() => OpenInspector(context.Name))">
+                <MudTd Style="text-align:center;" @ondblclick="dbl">
                     @if (context.StatsLoaded) { @context.IndexCount }
                     else { <span class="bm-muted">—</span> }
                 </MudTd>
@@ -19480,14 +19454,14 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 17987
+LENGTH 17981
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
 @using Microsoft.Extensions.Options
 @inject IRunService RunService
 @inject TabService TabService
-@inject SignalRConnectionService SignalR
+@inject RunEventBroker RunEvents
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
@@ -19613,7 +19587,7 @@ LENGTH 17987
             isRunning:      _details.Status == RunStatus.Running,
             isFocused:      IsFocused,
             onEventsUpdated: DebouncedTopologyCompute,
-            signalR:        SignalR);
+            eventBroker:    RunEvents);
     }
 
     private void DebouncedTopologyCompute()
@@ -20117,7 +20091,7 @@ LENGTH 6876
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 35391
+LENGTH 35236
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20282,21 +20256,22 @@ LENGTH 35391
                     @{
                         var rowKey  = ServiceKey(context);
                         var rowPath = DiscoverySvc.GetCachedPath(context, Env);
+                        var dbl     = EventCallback.Factory.Create(this, () => OpenLogViewerAsync(context));
                     }
-                    <MudTd Style="padding-left:12px;" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd Style="padding-left:12px;" @ondblclick="dbl">
                         <MudIcon Icon="@(context.IsOnline ? Icons.Material.Filled.Circle : Icons.Material.Outlined.Circle)"
                                  Size="Size.Small"
                                  Color="@(context.IsOnline ? Color.Success : Color.Error)" />
                     </MudTd>
-                    <MudTd DataLabel="Service" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
-                    <MudTd DataLabel="Host" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
-                    <MudTd DataLabel="PID" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
-                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
-                    <MudTd DataLabel="Started" @ondblclick="@(() => OpenLogViewerAsync(context))"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
-                    <MudTd DataLabel="Mem (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="Service" @ondblclick="dbl"><MudText Typo="Typo.body2">@context.ServiceName</MudText></MudTd>
+                    <MudTd DataLabel="Host" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.HostName</MudText></MudTd>
+                    <MudTd DataLabel="PID" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@context.ProcessId</MudText></MudTd>
+                    <MudTd DataLabel="Last Heartbeat" data-value="@DtSvc.Format(context.UpdatedDateTime, "yyyy-MM-dd HH:mm:ss")" @ondblclick="dbl"><MudText Typo="Typo.body2">@FormatAge(context.UpdatedDateTime)</MudText></MudTd>
+                    <MudTd DataLabel="Started" @ondblclick="dbl"><MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@DtSvc.Format(context.CreatedDateTime, "yyyy-MM-dd HH:mm:ss")</MudText></MudTd>
+                    <MudTd DataLabel="Mem (MB)" Style="text-align:right;" data-value="@(context.RamMb?.ToString("F2") ?? "")" @ondblclick="dbl">
                         <MudText Typo="Typo.body2" Class="bm-monospace" Style="@MemColorStyle(context.RamMb)">@FormatMb(context.RamMb)</MudText>
                     </MudTd>
-                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="@(() => OpenLogViewerAsync(context))">
+                    <MudTd DataLabel="Peak (MB)" Style="text-align:right;" data-value="@(context.PeakMb?.ToString("F2") ?? "")" @ondblclick="dbl">
                         <MudText Typo="Typo.body2" Class="bm-monospace bm-muted">@FormatMb(context.PeakMb)</MudText>
                     </MudTd>
                     <MudTd Style="text-align:center;">
@@ -21175,12 +21150,12 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 35809
+LENGTH 35803
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
 @inject IRunService RunService
-@inject SignalRConnectionService SignalR
+@inject RunEventBroker RunEvents
 @inject IJSRuntime JS
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
@@ -21351,7 +21326,7 @@ LENGTH 35809
             }
             else
             {
-                var batch = new TimelineRun(env, runId, RunService, SignalR,
+                var batch = new TimelineRun(env, runId, RunService, RunEvents,
                     onUpdated: async () => await DebouncedPushAsync());
                 await batch.LoadAsync();
                 _runs.Add(batch);
@@ -23935,12 +23910,10 @@ public class LogViewerService : ILogViewerService
         }, ct);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16973
+LENGTH 16751
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
-using NxtUI.Web.Hubs;
 using NxtUI.Core.Models;
-using Microsoft.AspNetCore.SignalR;
 using NxtUI.Core.Filtering;
 
 namespace NxtUI.Web.Services;
@@ -24031,7 +24004,7 @@ public class MockRunService : IRunService
     private readonly List<RunSummary> _store;
     private readonly Dictionary<string, List<PerformanceEvent>> _eventsByRunId = new();
     private readonly TopologyComputationService _topologyService = new();
-    private readonly IHubContext<RunEventsHub>? _hubContext;
+    private readonly RunEventBroker? _eventBroker;
     private readonly RunsSettings _runsSettings;
     private readonly CancellationTokenSource _bgCts = new();
 
@@ -24042,9 +24015,9 @@ public class MockRunService : IRunService
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockRunService(IHubContext<RunEventsHub>? hubContext = null, RunsSettings? runsSettings = null)
+    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null)
     {
-        _hubContext = hubContext;
+        _eventBroker = eventBroker;
         _runsSettings = runsSettings ?? new RunsSettings();
         var rng = new Random(42);
 
@@ -24072,7 +24045,7 @@ public class MockRunService : IRunService
 
         GenerateMockEvents(rng);
 
-        if (_hubContext is not null)
+        if (_eventBroker is not null)
             _ = SimulateLivePushAsync(_bgCts.Token);
     }
 
@@ -24239,7 +24212,6 @@ public class MockRunService : IRunService
                 foreach (var batch in _store.Where(b => b.Status == RunStatus.Running))
                 {
                     var env = "DEV1";
-                    var group = RunEventsHub.GroupName(env, batch.RunId);
 
                     foreach (var evt in GenerateLiveEvents(ref chunkCounter, rng))
                     {
@@ -24247,8 +24219,7 @@ public class MockRunService : IRunService
                             _eventsByRunId[batch.RunId] = new();
                         _eventsByRunId[batch.RunId].Add(evt);
 
-                        await _hubContext!.Clients.Group(group)
-                            .SendAsync("RunEvent", env, batch.RunId, evt, ct);
+                        _eventBroker?.Publish(env, batch.RunId, evt);
                     }
                 }
             }
@@ -24351,7 +24322,7 @@ public sealed class OperationTracker
     }
 }
 FILE src/NxtUI.Web/Services/PerformanceEventService.cs
-LENGTH 9788
+LENGTH 9728
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -24361,25 +24332,25 @@ namespace NxtUI.Web.Services;
 /// Per-tab event accumulator. Combines two delivery paths (Step 9):
 ///
 ///   1. HTTP polling (fallback, always active): loads historical events on
-///      startup; polls incrementally for completed batches where SignalR
-///      push is not available.
+///      startup; polls incrementally for completed batches where live push
+///      is not available.
 ///
-///   2. SignalR push (primary for running batches): low-latency event delivery
-///      from the server via <see cref="SignalRConnectionService"/>. When push
+///   2. Live push (primary for running batches): low-latency event delivery
+///      via <see cref="RunEventBroker"/>, an in-process pub/sub. When push
 ///      is active, the polling interval is relaxed to a slow fallback rate.
 ///
 /// Focus-aware: while the owning tab is unfocused, polling slows to 10 s and
-/// SignalR events are still accumulated (the component just won't re-render
+/// pushed events are still accumulated (the component just won't re-render
 /// until it regains focus — see BatchDetail.ShouldRender).
 /// </summary>
 public class PerformanceEventService : IDisposable
 {
     public const int FocusedPollIntervalMs = 3_000;
     public const int UnfocusedPollIntervalMs = 15_000;
-    // When SignalR push is active, poll much less frequently (safety net only).
-    public const int SignalRFallbackPollMs = 30_000;
+    // When live push is active, poll much less frequently (safety net only).
+    public const int PushFallbackPollMs = 30_000;
     // No backend pushes a completion event today — periodically re-check the run's own
-    // status while live so SignalR gets torn down (and the UI's status chip updates)
+    // status while live so push gets torn down (and the UI's status chip updates)
     // as soon as it finishes, instead of only relying on events stopping.
     private static readonly TimeSpan StatusCheckInterval = TimeSpan.FromSeconds(30);
 
@@ -24388,8 +24359,8 @@ public class PerformanceEventService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private Action? _onEventsUpdated;
-    private IDisposable? _signalRSubscription;
-    private bool _signalRActive;
+    private IDisposable? _pushSubscription;
+    private bool _pushActive;
     private bool _isRunning;
     private DateTime _nextStatusCheck;
 
@@ -24426,7 +24397,7 @@ public class PerformanceEventService : IDisposable
     // ── Startup ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads full history from run start, then subscribes to SignalR push
+    /// Loads full history from run start, then subscribes to live push
     /// (live runs) and starts a fallback polling loop.
     /// </summary>
     public async Task StartAsync(
@@ -24436,7 +24407,7 @@ public class PerformanceEventService : IDisposable
         bool isRunning,
         bool isFocused = true,
         Action? onEventsUpdated = null,
-        SignalRConnectionService? signalR = null,
+        RunEventBroker? eventBroker = null,
         CancellationToken ct = default)
     {
         _onEventsUpdated = onEventsUpdated;
@@ -24452,19 +24423,19 @@ public class PerformanceEventService : IDisposable
         // 1. Load full history.
         await LoadHistoryAsync(env, runId, startTime, _cts.Token);
 
-        // 2. Subscribe to SignalR push for running batches.
-        if (isRunning && signalR is not null)
+        // 2. Subscribe to live push for running batches.
+        if (isRunning && eventBroker is not null)
         {
             try
             {
-                _signalRSubscription = await signalR.SubscribeToRunAsync(
-                    env, runId, OnSignalREvent, _cts.Token);
-                _signalRActive = true;
-                Console.WriteLine($"[EventService] SignalR push active for {runId}");
+                _pushSubscription = await eventBroker.SubscribeToRunAsync(
+                    env, runId, OnPushEvent, _cts.Token);
+                _pushActive = true;
+                Console.WriteLine($"[EventService] Live push active for {runId}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EventService] SignalR subscription failed, using polling only: {ex.Message}");
+                Console.WriteLine($"[EventService] Push subscription failed, using polling only: {ex.Message}");
             }
         }
 
@@ -24472,9 +24443,9 @@ public class PerformanceEventService : IDisposable
         _pollingTask = PollLoopAsync(env, runId, _cts.Token);
     }
 
-    // ── SignalR push handler ──────────────────────────────────────────────
+    // ── Live push handler ───────────────────────────────────────────────────
 
-    private Task OnSignalREvent(PerformanceEvent evt)
+    private Task OnPushEvent(PerformanceEvent evt)
     {
         _eventStore.UpsertEvent(evt);
         _onEventsUpdated?.Invoke();
@@ -24485,9 +24456,9 @@ public class PerformanceEventService : IDisposable
 
     public void StopPolling()
     {
-        _signalRSubscription?.Dispose();
-        _signalRSubscription = null;
-        _signalRActive = false;
+        _pushSubscription?.Dispose();
+        _pushSubscription = null;
+        _pushActive = false;
 
         if (_cts is not null)
         {
@@ -24535,14 +24506,14 @@ public class PerformanceEventService : IDisposable
             try
             {
                 int interval;
-                if (_signalRActive)
-                    interval = SignalRFallbackPollMs;
+                if (_pushActive)
+                    interval = PushFallbackPollMs;
                 else if (!IsFocused)
                     interval = UnfocusedPollIntervalMs;
                 else
                     interval = FocusedPollIntervalMs;
 
-                if (!IsFocused && !_signalRActive)
+                if (!IsFocused && !_pushActive)
                 {
                     _focusRegainedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     await Task.WhenAny(Task.Delay(interval, ct), _focusRegainedSignal.Task);
@@ -24581,11 +24552,11 @@ public class PerformanceEventService : IDisposable
             {
                 _isRunning = false;
                 DetectedStatus = details.Status;
-                _signalRSubscription?.Dispose();
-                _signalRSubscription = null;
-                _signalRActive = false;
+                _pushSubscription?.Dispose();
+                _pushSubscription = null;
+                _pushActive = false;
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped SignalR, falling back to slow poll.");
+                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped live push, falling back to slow poll.");
             }
             else
             {
@@ -24601,6 +24572,102 @@ public class PerformanceEventService : IDisposable
     }
 
     public void Dispose() => StopPolling();
+}
+FILE src/NxtUI.Web/Services/RunEventBroker.cs
+LENGTH 3558
+using NxtUI.Core.Models;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Singleton in-process pub/sub for live run events.
+///
+/// Replaces a per-circuit SignalR client connection that looped back to this
+/// same process's own <c>/hubs/run-events</c> hub — every event was serialized,
+/// sent over a websocket, received by the same process, and deserialized, for
+/// no reason: the only publisher (<see cref="MockRunService"/>) runs in-process.
+/// <see cref="RunDetail"/>/<see cref="TimelineRun"/> tabs call
+/// <see cref="SubscribeToRunAsync"/> to register a callback keyed by (env, runId);
+/// a publisher calls <see cref="Publish"/> to fan an event out to every
+/// subscriber of that run, synchronously and in-process.
+///
+/// If a genuinely external process ever needs to publish run events over the
+/// network, reintroduce a hub that calls <see cref="Publish"/> on receipt —
+/// subscribers here don't need to change.
+/// </summary>
+public class RunEventBroker(ILogger<RunEventBroker> logger)
+{
+    private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
+    private readonly object _lock = new();
+
+    // ── Public API ────────────────────────────────────────────────────────
+
+    public Task<IDisposable> SubscribeToRunAsync(
+        string env, string runId,
+        Func<PerformanceEvent, Task> handler,
+        CancellationToken ct = default)
+    {
+        var key = Key(env, runId);
+        lock (_lock)
+        {
+            if (!_handlers.TryGetValue(key, out var list))
+            {
+                list = new List<Func<PerformanceEvent, Task>>();
+                _handlers[key] = list;
+            }
+            list.Add(handler);
+        }
+
+        return Task.FromResult<IDisposable>(new Unsubscriber(() => Unsubscribe(key, handler)));
+    }
+
+    public void UnsubscribeFromRun(string env, string runId)
+    {
+        var key = Key(env, runId);
+        lock (_lock) { _handlers.Remove(key); }
+    }
+
+    /// <summary>Fans an event out to every current subscriber of (env, runId). Fire-and-forget per handler.</summary>
+    public void Publish(string env, string runId, PerformanceEvent evt)
+    {
+        var key = Key(env, runId);
+        List<Func<PerformanceEvent, Task>> snapshot;
+        lock (_lock)
+        {
+            if (!_handlers.TryGetValue(key, out var list)) return;
+            snapshot = list.ToList();
+        }
+
+        foreach (var handler in snapshot)
+            _ = InvokeSafeAsync(handler, evt);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static string Key(string env, string runId) => $"{env}:{runId}";
+
+    private async Task InvokeSafeAsync(Func<PerformanceEvent, Task> handler, PerformanceEvent evt)
+    {
+        try { await handler(evt); }
+        catch (Exception ex) { logger.LogWarning(ex, "RunEvent handler error"); }
+    }
+
+    private void Unsubscribe(string key, Func<PerformanceEvent, Task> handler)
+    {
+        lock (_lock)
+        {
+            if (_handlers.TryGetValue(key, out var list))
+            {
+                list.Remove(handler);
+                if (list.Count == 0) _handlers.Remove(key);
+            }
+        }
+    }
+
+    private sealed class Unsubscriber(Action action) : IDisposable
+    {
+        public void Dispose() => action();
+    }
 }
 FILE src/NxtUI.Web/Services/ServerDiagnosticsMonitor.cs
 LENGTH 3587
@@ -25384,174 +25451,6 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release(_env);
     }
 }
-FILE src/NxtUI.Web/Services/SignalRConnectionService.cs
-LENGTH 6087
-using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.SignalR.Client;
-using NxtUI.Core.Models;
-
-namespace NxtUI.Web.Services;
-
-/// <summary>
-/// Scoped service (one per Blazor circuit) that owns a single SignalR
-/// connection to <c>/hubs/run-events</c>.
-///
-/// Multiple <see cref="RunDetail"/> tabs share this connection — each tab
-/// calls <see cref="SubscribeToRunAsync"/> to join its group and registers
-/// a callback; the service fans incoming events out to all registered
-/// callbacks keyed by (env, runId).
-/// </summary>
-public class SignalRConnectionService(
-    ILogger<SignalRConnectionService> logger,
-    NavigationManager nav) : IAsyncDisposable
-{
-    private HubConnection? _connection;
-    private IDisposable? _eventSubscription;
-
-    private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
-    private readonly SemaphoreSlim _lock = new(1, 1);
-
-    // ── Public API ────────────────────────────────────────────────────────
-
-    public async Task<IDisposable> SubscribeToRunAsync(
-        string env, string runId,
-        Func<PerformanceEvent, Task> handler,
-        CancellationToken ct = default)
-    {
-        await EnsureConnectedAsync(ct);
-
-        var key = Key(env, runId);
-        await _lock.WaitAsync(ct);
-        try
-        {
-            if (!_handlers.TryGetValue(key, out var list))
-            {
-                list = new List<Func<PerformanceEvent, Task>>();
-                _handlers[key] = list;
-            }
-            list.Add(handler);
-        }
-        finally { _lock.Release(); }
-
-        if (_connection?.State == HubConnectionState.Connected)
-        {
-            try { await _connection.InvokeAsync("SubscribeToRun", env, runId, ct); }
-            catch (Exception ex) { logger.LogWarning(ex, "Failed to join SignalR group {Key}", key); }
-        }
-
-        return new Unsubscriber(() => _ = UnsubscribeAsync(env, runId, handler));
-    }
-
-    public async Task UnsubscribeFromRunAsync(string env, string runId)
-    {
-        var key = Key(env, runId);
-        await _lock.WaitAsync();
-        try { _handlers.Remove(key); }
-        finally { _lock.Release(); }
-
-        if (_connection?.State == HubConnectionState.Connected)
-        {
-            try { await _connection.InvokeAsync("UnsubscribeFromRun", env, runId); }
-            catch (Exception ex) { logger.LogWarning(ex, "SignalR UnsubscribeFromRun failed for {Env}/{RunId}", env, runId); }
-        }
-    }
-
-    // ── Connection management ─────────────────────────────────────────────
-
-    private async Task EnsureConnectedAsync(CancellationToken ct)
-    {
-        if (_connection is not null) return;
-
-        var url = nav.ToAbsoluteUri("/hubs/run-events").ToString();
-
-        _connection = new HubConnectionBuilder()
-            .WithUrl(url)
-            .WithAutomaticReconnect([TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)])
-            .Build();
-
-        _eventSubscription = _connection.On<string, string, PerformanceEvent>(
-            "RunEvent", async (env, runId, evt) =>
-            {
-                var key = Key(env, runId);
-                List<Func<PerformanceEvent, Task>> snapshot;
-                await _lock.WaitAsync();
-                try
-                {
-                    snapshot = _handlers.TryGetValue(key, out var list)
-                        ? list.ToList()
-                        : new List<Func<PerformanceEvent, Task>>();
-                }
-                finally { _lock.Release(); }
-
-                foreach (var h in snapshot)
-                {
-                    try { await h(evt); }
-                    catch (Exception ex) { logger.LogWarning(ex, "RunEvent handler error"); }
-                }
-            });
-
-        _connection.Reconnected += async connectionId =>
-        {
-            logger.LogInformation("SignalR reconnected ({Id})", connectionId);
-            await _lock.WaitAsync();
-            var keys = _handlers.Keys.ToList();
-            _lock.Release();
-            foreach (var k in keys)
-            {
-                var parts = k.Split(':', 2);
-                if (parts.Length == 2)
-                {
-                    try { await _connection.InvokeAsync("SubscribeToRun", parts[0], parts[1]); }
-                    catch (Exception ex) { logger.LogError(ex, "SignalR re-subscribe failed for {Key}", k); }
-                }
-            }
-        };
-
-        try
-        {
-            await _connection.StartAsync(ct);
-            logger.LogInformation("SignalR connected to {Url}", url);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "SignalR connection failed — events will arrive via polling only");
-        }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-
-    private static string Key(string env, string runId) => $"{env}:{runId}";
-
-    private async Task UnsubscribeAsync(string env, string runId, Func<PerformanceEvent, Task> handler)
-    {
-        var key = Key(env, runId);
-        await _lock.WaitAsync();
-        try
-        {
-            if (_handlers.TryGetValue(key, out var list))
-            {
-                list.Remove(handler);
-                if (list.Count == 0) _handlers.Remove(key);
-            }
-        }
-        finally { _lock.Release(); }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _eventSubscription?.Dispose();
-        if (_connection is not null)
-        {
-            try { await _connection.DisposeAsync(); }
-            catch (Exception ex) { logger.LogDebug(ex, "SignalR connection dispose failed"); }
-        }
-    }
-
-    private sealed class Unsubscriber(Action action) : IDisposable
-    {
-        public void Dispose() => action();
-    }
-}
 FILE src/NxtUI.Web/Services/TabLoadingScope.cs
 LENGTH 936
 using NxtUI.Web.Models;
@@ -26285,7 +26184,7 @@ public class ThemeService
     };
 }
 FILE src/NxtUI.Web/Services/TimelineRun.cs
-LENGTH 7423
+LENGTH 7298
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -26293,13 +26192,13 @@ namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-run data container for the Timeline tab.
-/// Owns the event store, SignalR subscription, and 3h timeout for live runs.
+/// Owns the event store, live-push subscription, and 3h timeout for live runs.
 /// </summary>
 public class TimelineRun(
     string env,
     string runId,
     IRunService runService,
-    SignalRConnectionService signalR,
+    RunEventBroker eventBroker,
     Func<Task> onUpdated) : IAsyncDisposable
 {
     public string RunId { get; } = runId;
@@ -26319,7 +26218,7 @@ public class TimelineRun(
     // including the render-time .Count access — are O(1).
     private List<PerformanceEvent>? _sortedCache;
 
-    private IDisposable? _signalRSub;
+    private IDisposable? _pushSub;
     private CancellationTokenSource? _timeoutCts;
 
     private static readonly TimeSpan LiveTimeout = TimeSpan.FromHours(3);
@@ -26369,14 +26268,14 @@ public class TimelineRun(
     {
         try
         {
-            _signalRSub = await signalR.SubscribeToRunAsync(Env, RunId, OnRunEvent);
+            _pushSub = await eventBroker.SubscribeToRunAsync(Env, RunId, OnRunEvent);
 
             _timeoutCts = new CancellationTokenSource();
             _ = StatusWatchLoopAsync(_timeoutCts.Token);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelineRun] SignalR subscription failed for {RunId}: {ex.Message}");
+            Console.WriteLine($"[TimelineRun] Live push subscription failed for {RunId}: {ex.Message}");
         }
     }
 
@@ -26424,8 +26323,8 @@ public class TimelineRun(
     private async Task StopLiveAsync(string reason)
     {
         IsLive = false;
-        _signalRSub?.Dispose();
-        _signalRSub = null;
+        _pushSub?.Dispose();
+        _pushSub = null;
         Console.WriteLine($"[TimelineRun] Live subscription stopped for {RunId} ({reason})");
         await onUpdated();
     }
@@ -26477,17 +26376,12 @@ public class TimelineRun(
 
     // ── Dispose ───────────────────────────────────────────────────────────
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _timeoutCts?.Cancel();
         _timeoutCts?.Dispose();
-        _signalRSub?.Dispose();
-
-        if (IsLive)
-        {
-            try { await signalR.UnsubscribeFromRunAsync(Env, RunId); }
-            catch (Exception) { }
-        }
+        _pushSub?.Dispose();
+        return ValueTask.CompletedTask;
     }
 }
 FILE src/NxtUI.Web/Shared/ConfirmDialog.razor
@@ -27821,7 +27715,7 @@ public class FilterParserTests
     }
 }
 FILE tests/NxtUI.Tests/Filtering/MongoFilterBuilderTests.cs
-LENGTH 6412
+LENGTH 6843
 using AwesomeAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -27942,7 +27836,7 @@ public class MongoFilterBuilderTests
     public void Plain_bare_term_is_a_case_insensitive_contains_on_name()
     {
         RenderCollectionFilter("ccr").Should()
-            .Be("{ \"name\" : /ccr/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"ccr\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -27963,14 +27857,14 @@ public class MongoFilterBuilderTests
         // Previously "wcr*" was raw regex — '*' quantifies the preceding char, not a
         // "starts with" wildcard — so this only coincidentally looked like it worked.
         RenderCollectionFilter("wcr*").Should()
-            .Be("{ \"name\" : /^wcr.*$/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"^wcr.*$\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
     public void Trailing_glob_star_anchors_to_ends_with()
     {
         RenderCollectionFilter("*str").Should()
-            .Be("{ \"name\" : /^.*str$/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"^.*str$\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -27980,7 +27874,7 @@ public class MongoFilterBuilderTests
         // (any-char / quantifier), so e.g. searching "log.events" would also match
         // "logXevents". The shared grammar escapes literal characters via Regex.Escape.
         RenderCollectionFilter("log.events").Should()
-            .Be("{ \"name\" : /log\\.events/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"log\\\\.events\", \"options\" : \"i\" } } }");
     }
 
     [Theory]
@@ -27988,7 +27882,8 @@ public class MongoFilterBuilderTests
     [InlineData("collection:ccr")]
     public void Field_prefixed_aliases_resolve_to_the_name_field(string search)
     {
-        RenderCollectionFilter(search).Should().Be("{ \"name\" : /ccr/i }");
+        RenderCollectionFilter(search).Should()
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"ccr\", \"options\" : \"i\" } } }");
     }
 
     [Fact]
@@ -27997,7 +27892,7 @@ public class MongoFilterBuilderTests
         // An unbalanced paren is a parse error in the shared grammar — the search box
         // must never just throw or silently return nothing for odd input.
         RenderCollectionFilter("(ccr").Should()
-            .Be("{ \"name\" : /\\(ccr/i }");
+            .Be("{ \"name\" : { \"$regularExpression\" : { \"pattern\" : \"\\\\(ccr\", \"options\" : \"i\" } } }");
     }
 }
 FILE tests/NxtUI.Tests/Filtering/SqlFilterBuilderTests.cs

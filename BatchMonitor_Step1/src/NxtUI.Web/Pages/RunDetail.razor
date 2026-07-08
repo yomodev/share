@@ -4,7 +4,7 @@
 @using Microsoft.Extensions.Options
 @inject IRunService RunService
 @inject TabService TabService
-@inject SignalRConnectionService SignalR
+@inject RunEventBroker RunEvents
 @inject IJSRuntime JS
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
@@ -130,7 +130,7 @@
             isRunning:      _details.Status == RunStatus.Running,
             isFocused:      IsFocused,
             onEventsUpdated: DebouncedTopologyCompute,
-            signalR:        SignalR);
+            eventBroker:    RunEvents);
     }
 
     private void DebouncedTopologyCompute()

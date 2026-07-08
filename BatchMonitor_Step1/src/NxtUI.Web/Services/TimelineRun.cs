@@ -5,13 +5,13 @@ namespace NxtUI.Web.Services;
 
 /// <summary>
 /// Per-run data container for the Timeline tab.
-/// Owns the event store, SignalR subscription, and 3h timeout for live runs.
+/// Owns the event store, live-push subscription, and 3h timeout for live runs.
 /// </summary>
 public class TimelineRun(
     string env,
     string runId,
     IRunService runService,
-    SignalRConnectionService signalR,
+    RunEventBroker eventBroker,
     Func<Task> onUpdated) : IAsyncDisposable
 {
     public string RunId { get; } = runId;
@@ -31,7 +31,7 @@ public class TimelineRun(
     // including the render-time .Count access — are O(1).
     private List<PerformanceEvent>? _sortedCache;
 
-    private IDisposable? _signalRSub;
+    private IDisposable? _pushSub;
     private CancellationTokenSource? _timeoutCts;
 
     private static readonly TimeSpan LiveTimeout = TimeSpan.FromHours(3);
@@ -81,14 +81,14 @@ public class TimelineRun(
     {
         try
         {
-            _signalRSub = await signalR.SubscribeToRunAsync(Env, RunId, OnRunEvent);
+            _pushSub = await eventBroker.SubscribeToRunAsync(Env, RunId, OnRunEvent);
 
             _timeoutCts = new CancellationTokenSource();
             _ = StatusWatchLoopAsync(_timeoutCts.Token);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelineRun] SignalR subscription failed for {RunId}: {ex.Message}");
+            Console.WriteLine($"[TimelineRun] Live push subscription failed for {RunId}: {ex.Message}");
         }
     }
 
@@ -136,8 +136,8 @@ public class TimelineRun(
     private async Task StopLiveAsync(string reason)
     {
         IsLive = false;
-        _signalRSub?.Dispose();
-        _signalRSub = null;
+        _pushSub?.Dispose();
+        _pushSub = null;
         Console.WriteLine($"[TimelineRun] Live subscription stopped for {RunId} ({reason})");
         await onUpdated();
     }
@@ -189,16 +189,11 @@ public class TimelineRun(
 
     // ── Dispose ───────────────────────────────────────────────────────────
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _timeoutCts?.Cancel();
         _timeoutCts?.Dispose();
-        _signalRSub?.Dispose();
-
-        if (IsLive)
-        {
-            try { await signalR.UnsubscribeFromRunAsync(Env, RunId); }
-            catch (Exception) { }
-        }
+        _pushSub?.Dispose();
+        return ValueTask.CompletedTask;
     }
 }
