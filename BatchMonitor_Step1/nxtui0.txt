@@ -5608,7 +5608,7 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 4057
+LENGTH 3901
 {
   "AllowedHosts": "*",
 
@@ -5625,10 +5625,7 @@ LENGTH 4057
     // Seconds since a pipeline's last finished chunk it still shows as "recently
     // active" (bright header/row color) in the run-detail flow graph. Raise this if
     // Replay's timestamp-truncated snapshots make too many pipelines look gray.
-    "TopologyRecentActivityWindowSeconds": 15,
-    // Delay (ms) before the Timeline highlights same-id blocks / shows the hover
-    // popup. 0 (default) = immediate.
-    "TimelineHighlightDelayMs": 0
+    "TopologyRecentActivityWindowSeconds": 15
   },
 
   "Kafka": {
@@ -5938,7 +5935,7 @@ LENGTH 942
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 12830
+LENGTH 12571
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -6047,11 +6044,6 @@ public class Program
         //     sp.GetRequiredService<MongoConnectionFactory>(),
         //     sp.GetRequiredService<IOptions<MongoSettings>>(),
         //     sp.GetRequiredService<ILogger<SqlRunService>>()));
-
-        // Shares one poll loop across all circuits watching the same run, for
-        // backends that don't push events themselves (skips MockRunService — see
-        // IPushesOwnRunEvents).
-        builder.Services.AddHostedService<RunEventWatcher>();
 
         // ── Kafka ─────────────────────────────────────────────────────────────
         // Mock: no broker required.  Real: swap comment block below.
@@ -6800,7 +6792,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 3834
+LENGTH 3522
 namespace NxtUI.Core.Configuration;
 
 public class UiSettings
@@ -6864,13 +6856,6 @@ public class UiSettings
     /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
     /// </summary>
     public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
-
-    /// <summary>
-    /// Delay (ms) before the Timeline highlights same-id blocks / shows the hover
-    /// popup. 0 (default) = immediate. If the pointer leaves a block before this
-    /// elapses, nothing highlights/shows at all.
-    /// </summary>
-    public int TimelineHighlightDelayMs { get; set; } = 0;
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -9441,7 +9426,7 @@ public interface ILogBrowserService
         CancellationToken ct = default);
 }
 FILE src/NxtUI.Core/Services/ILogPathDiscoveryService.cs
-LENGTH 2601
+LENGTH 1913
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -9469,17 +9454,6 @@ public interface ILogPathDiscoveryService
     /// starting a fresh one. Returns the path or null if nothing matched.
     /// </summary>
     Task<string?> FindNowAsync(ServiceStatus svc, string env);
-
-    /// <summary>
-    /// Resolves the folder one level up from the PID-specific instance folder —
-    /// i.e. the same templates with the path segment containing {pid} dropped
-    /// entirely, not wildcarded. For when the caller only knows the service and
-    /// server (e.g. a historical run's log instance) and can't find (or doesn't
-    /// need) the exact PID's folder: this parent is expected to always exist once
-    /// the service has logged at all that day, independent of any specific PID.
-    /// Not cached — callers already have a specific PID's result cached/failed.
-    /// </summary>
-    Task<string?> FindServiceParentFolderAsync(ServiceStatus svc, string env);
 
     /// <summary>
     /// Fires when a path is successfully resolved. Argument is the cache key
@@ -9763,7 +9737,7 @@ public static class JsonPathQueryService
     }
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 7288
+LENGTH 6176
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
@@ -9815,28 +9789,6 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         _cache[key] = task;
         return await task;
     }
-
-    public Task<string?> FindServiceParentFolderAsync(ServiceStatus svc, string env) =>
-        Task.Run(() =>
-        {
-            foreach (var template in options.Value.ServiceTemplates)
-            {
-                // Drop the path segment containing {pid} entirely — not just the PID
-                // itself — so this doesn't depend on any specific instance having ever
-                // logged (the parent, e.g. "{service}_{env}" for the day, is expected to
-                // always exist once the service has run at all that day).
-                var pidIdx = template.IndexOf("{pid}", StringComparison.OrdinalIgnoreCase);
-                if (pidIdx < 0) continue;
-                var slashBeforePid = template.LastIndexOf('\\', pidIdx);
-                if (slashBeforePid < 0) continue;
-
-                var parentTemplate = template[..slashBeforePid];
-                var expanded = ExpandTemplate(parentTemplate, svc, env);
-                var resolved = ResolveWildcard(expanded);
-                if (resolved is not null) return resolved;
-            }
-            return null;
-        });
 
     public void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys)
     {
@@ -10800,7 +10752,7 @@ LENGTH 8857
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 5914
+LENGTH 5415
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -10829,9 +10781,6 @@ LENGTH 5914
     /// <summary>Fired when the user clicks the "Kafka" link in a pipeline row's popover.</summary>
     [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
 
-    /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
-    [Parameter] public EventCallback<(string Service, string Server, string ProcessId)> OnOpenInstanceLog { get; set; }
-
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
@@ -10852,7 +10801,7 @@ LENGTH 5914
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=15");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=13");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -10872,11 +10821,6 @@ LENGTH 5914
     /// <summary>Invoked from d3-graph.js when the popover's "Kafka" link is clicked.</summary>
     [JSInvokable]
     public Task RequestOpenKafkaTopic(string topic) => OnOpenKafkaTopic.InvokeAsync(topic);
-
-    /// <summary>Invoked from d3-graph.js when an instance row in the popover is clicked.</summary>
-    [JSInvokable]
-    public Task RequestOpenInstanceLog(string service, string server, string processId) =>
-        OnOpenInstanceLog.InvokeAsync((service, server, processId));
 
     protected override async Task OnParametersSetAsync()
     {
@@ -15333,7 +15277,7 @@ LENGTH 17756
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16341
+LENGTH 16342
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -15504,7 +15448,7 @@ LENGTH 16341
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <BmRunsTable Rows="@_recent"
                      Loading="@_runsLoading"
-                     FixedHeader="true"
+                     FixedHeader="false"
                      ShowPaginationAndFilter="false"
                      OnOpenDetail="@(r => OpenDetail(r))"
                      OnOpenTimeline="@(r => OpenTimeline(r))"
@@ -19510,7 +19454,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 19366
+LENGTH 17981
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -19522,8 +19466,6 @@ LENGTH 19366
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<UiSettings> UiOptions
-@inject ILogPathDiscoveryService DiscoverySvc
-@inject ISnackbar Snackbar
 @implements IDisposable
 
 @code {
@@ -19778,37 +19720,6 @@ LENGTH 19366
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    private async Task OpenInstanceLogFromGraph((string Service, string Server, string ProcessId) info)
-    {
-        var (service, server, processId) = info;
-        if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
-
-        var svc = new ServiceStatus
-        {
-            ServiceName = service,
-            HostName = server,
-            ProcessId = int.TryParse(processId, out var pid) ? pid : 0,
-            UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
-        };
-
-        // Exact PID-specific folder first; if that instance was never seen (or its
-        // folder aged out), fall back to the service's parent folder, which is
-        // expected to always exist once the service has logged at all that day.
-        var path = DiscoverySvc.GetCachedPath(svc, Environment)
-            ?? await DiscoverySvc.FindNowAsync(svc, Environment)
-            ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
-
-        if (path is null)
-        {
-            Snackbar.Add("Log path not found", Severity.Warning);
-            return;
-        }
-
-        var tab = TabModel.CreateFilesDashboard(Environment);
-        tab.NavigationHint = path;
-        TabService.OpenOrFocus(tab);
-    }
-
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
@@ -19944,8 +19855,7 @@ LENGTH 19366
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
         <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
-                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
-                     OnOpenInstanceLog="OpenInstanceLogFromGraph" />
+                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
@@ -21240,7 +21150,7 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 36033
+LENGTH 35803
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -21250,7 +21160,6 @@ LENGTH 36033
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
-@inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.UiSettings> UiOptions
 @inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
@@ -21379,9 +21288,8 @@ LENGTH 36033
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=13");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=12");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
-                await _tlModule.InvokeVoidAsync("setHoverDelayMs", _instanceKey, Math.Max(0, UiOptions.Value.TimelineHighlightDelayMs));
                 await PushDataAsync();
             }
             catch (Exception ex)
@@ -22130,7 +22038,7 @@ LENGTH 23504
 
     <!-- Application CSS -->
     <link href="css/app.css?v=54" rel="stylesheet" />
-    <link href="css/d3-graph.css?v=9" rel="stylesheet" />
+    <link href="css/d3-graph.css?v=8" rel="stylesheet" />
     <link href="css/d3-timeline.css?v=1" rel="stylesheet" />
     <link href="css/log-viewer.css?v=1" rel="stylesheet" />
 </head>
@@ -22247,7 +22155,7 @@ LENGTH 23504
     <script src="js/d3-memory-stacked.js?v=1"></script>
 
     <!-- Home memory treemap -->
-    <script src="js/d3-home-treemap.js?v=20"></script>
+    <script src="js/d3-home-treemap.js?v=19"></script>
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
@@ -22580,7 +22488,7 @@ LENGTH 23504
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
     <link rel="modulepreload" href="js/app.js?v=7" />
-    <link rel="modulepreload" href="js/d3-timeline.js?v=13" />
+    <link rel="modulepreload" href="js/d3-timeline.js?v=12" />
 </body>
 </html>
 FILE src/NxtUI.Web/Pages/_ViewImports.cshtml
@@ -23494,17 +23402,6 @@ public sealed class InfraHealthCache(
         lock (_lock) _mongoCache[env] = result;
     }
 }
-FILE src/NxtUI.Web/Services/IPushesOwnRunEvents.cs
-LENGTH 430
-namespace NxtUI.Web.Services;
-
-/// <summary>
-/// Marker for an <see cref="NxtUI.Core.Services.IRunService"/> that already publishes
-/// live events to <see cref="RunEventBroker"/> itself (see <see cref="MockRunService"/>).
-/// <see cref="RunEventWatcher"/> skips backends that implement this — polling them
-/// for "new" events would just republish what they already pushed.
-/// </summary>
-public interface IPushesOwnRunEvents;
 FILE src/NxtUI.Web/Services/LogBrowserService.cs
 LENGTH 18677
 using Microsoft.Extensions.Logging;
@@ -24013,7 +23910,7 @@ public class LogViewerService : ILogViewerService
         }, ct);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16772
+LENGTH 16751
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
@@ -24021,7 +23918,7 @@ using NxtUI.Core.Filtering;
 
 namespace NxtUI.Web.Services;
 
-public class MockRunService : IRunService, IPushesOwnRunEvents
+public class MockRunService : IRunService
 {
     private static readonly string[] RunTypes = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] RunEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
@@ -24677,7 +24574,7 @@ public class PerformanceEventService : IDisposable
     public void Dispose() => StopPolling();
 }
 FILE src/NxtUI.Web/Services/RunEventBroker.cs
-LENGTH 4499
+LENGTH 3558
 using NxtUI.Core.Models;
 
 namespace NxtUI.Web.Services;
@@ -24697,20 +24594,11 @@ namespace NxtUI.Web.Services;
 /// If a genuinely external process ever needs to publish run events over the
 /// network, reintroduce a hub that calls <see cref="Publish"/> on receipt —
 /// subscribers here don't need to change.
-///
-/// <see cref="RunWatchStarted"/>/<see cref="RunWatchStopped"/> fire on the
-/// 0→1 / 1→0 subscriber-count transition for a given run, regardless of who's
-/// subscribing or publishing — <see cref="RunEventWatcher"/> uses these to
-/// start/stop a shared server-side poller for backends that don't push on
-/// their own (see <see cref="IPushesOwnRunEvents"/>).
 /// </summary>
 public class RunEventBroker(ILogger<RunEventBroker> logger)
 {
     private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
     private readonly object _lock = new();
-
-    public event Action<string, string>? RunWatchStarted;
-    public event Action<string, string>? RunWatchStopped;
 
     // ── Public API ────────────────────────────────────────────────────────
 
@@ -24720,29 +24608,23 @@ public class RunEventBroker(ILogger<RunEventBroker> logger)
         CancellationToken ct = default)
     {
         var key = Key(env, runId);
-        bool isFirst;
         lock (_lock)
         {
-            isFirst = !_handlers.TryGetValue(key, out var list);
-            if (isFirst)
+            if (!_handlers.TryGetValue(key, out var list))
             {
                 list = new List<Func<PerformanceEvent, Task>>();
                 _handlers[key] = list;
             }
-            list!.Add(handler);
+            list.Add(handler);
         }
 
-        if (isFirst) RunWatchStarted?.Invoke(env, runId);
-
-        return Task.FromResult<IDisposable>(new Unsubscriber(() => Unsubscribe(env, runId, key, handler)));
+        return Task.FromResult<IDisposable>(new Unsubscriber(() => Unsubscribe(key, handler)));
     }
 
     public void UnsubscribeFromRun(string env, string runId)
     {
         var key = Key(env, runId);
-        bool hadAny;
-        lock (_lock) { hadAny = _handlers.Remove(key); }
-        if (hadAny) RunWatchStopped?.Invoke(env, runId);
+        lock (_lock) { _handlers.Remove(key); }
     }
 
     /// <summary>Fans an event out to every current subscriber of (env, runId). Fire-and-forget per handler.</summary>
@@ -24770,156 +24652,22 @@ public class RunEventBroker(ILogger<RunEventBroker> logger)
         catch (Exception ex) { logger.LogWarning(ex, "RunEvent handler error"); }
     }
 
-    private void Unsubscribe(string env, string runId, string key, Func<PerformanceEvent, Task> handler)
+    private void Unsubscribe(string key, Func<PerformanceEvent, Task> handler)
     {
-        bool becameEmpty;
         lock (_lock)
         {
-            if (!_handlers.TryGetValue(key, out var list))
-            {
-                becameEmpty = false;
-            }
-            else
+            if (_handlers.TryGetValue(key, out var list))
             {
                 list.Remove(handler);
-                becameEmpty = list.Count == 0;
-                if (becameEmpty) _handlers.Remove(key);
+                if (list.Count == 0) _handlers.Remove(key);
             }
         }
-
-        if (becameEmpty) RunWatchStopped?.Invoke(env, runId);
     }
 
     private sealed class Unsubscriber(Action action) : IDisposable
     {
         public void Dispose() => action();
     }
-}
-FILE src/NxtUI.Web/Services/RunEventWatcher.cs
-LENGTH 4434
-using NxtUI.Core.Models;
-using NxtUI.Core.Services;
-
-namespace NxtUI.Web.Services;
-
-/// <summary>
-/// Shared, run-scoped poller that gives real (non-self-pushing)
-/// <see cref="IRunService"/> backends — SqlRunService, MongoRunService — live
-/// push without every open circuit polling the database on its own.
-///
-/// Wires into <see cref="RunEventBroker"/>'s subscriber-count transitions:
-/// starts polling a run's events the moment the first circuit subscribes via
-/// <see cref="RunEventBroker.SubscribeToRunAsync"/>, and stops the moment the
-/// last one unsubscribes — so N circuits watching the same run share one poll
-/// loop instead of each running their own (today, each circuit's
-/// PerformanceEventService polls independently).
-///
-/// Backends that already push directly (<see cref="IPushesOwnRunEvents"/>,
-/// e.g. <see cref="MockRunService"/>) are skipped entirely — nothing to add here.
-/// </summary>
-public class RunEventWatcher(
-    IRunService runService,
-    RunEventBroker broker,
-    ILogger<RunEventWatcher> logger) : IHostedService
-{
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
-
-    private sealed class Watch
-    {
-        public required CancellationTokenSource Cts { get; init; }
-        public int RefCount;
-        public DateTime Since;
-    }
-
-    private readonly Dictionary<string, Watch> _watches = new();
-    private readonly object _lock = new();
-
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        if (runService is IPushesOwnRunEvents) return Task.CompletedTask;
-
-        broker.RunWatchStarted += OnRunWatchStarted;
-        broker.RunWatchStopped += OnRunWatchStopped;
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        broker.RunWatchStarted -= OnRunWatchStarted;
-        broker.RunWatchStopped -= OnRunWatchStopped;
-
-        lock (_lock)
-        {
-            foreach (var watch in _watches.Values) watch.Cts.Cancel();
-            _watches.Clear();
-        }
-        return Task.CompletedTask;
-    }
-
-    private void OnRunWatchStarted(string env, string runId)
-    {
-        var key = Key(env, runId);
-        lock (_lock)
-        {
-            if (_watches.TryGetValue(key, out var existing) && !existing.Cts.IsCancellationRequested)
-            {
-                existing.RefCount++;
-                return;
-            }
-
-            // Start a few seconds before "now" rather than at the run's start — each
-            // subscribing circuit already loaded full history itself before subscribing
-            // (see PerformanceEventService.LoadHistoryAsync); this loop only needs to
-            // deliver events created from here forward.
-            var watch = new Watch { Cts = new CancellationTokenSource(), RefCount = 1, Since = DateTime.UtcNow.AddSeconds(-5) };
-            _watches[key] = watch;
-            _ = PollLoopAsync(env, runId, key, watch, watch.Cts.Token);
-        }
-    }
-
-    private void OnRunWatchStopped(string env, string runId)
-    {
-        var key = Key(env, runId);
-        lock (_lock)
-        {
-            if (!_watches.TryGetValue(key, out var watch)) return;
-            watch.RefCount--;
-            if (watch.RefCount <= 0) watch.Cts.Cancel();
-        }
-    }
-
-    private async Task PollLoopAsync(string env, string runId, string key, Watch watch, CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(PollInterval, ct);
-                if (ct.IsCancellationRequested) break;
-
-                var events = await runService.GetRunEventsAsync(env, runId, watch.Since, ct);
-                if (events?.Count > 0)
-                {
-                    foreach (var evt in events)
-                        broker.Publish(env, runId, evt);
-                    watch.Since = events.Max(e => e.LastUpdate);
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "RunEventWatcher poll error for {Env}/{RunId}", env, runId);
-            }
-        }
-
-        lock (_lock)
-        {
-            if (_watches.TryGetValue(key, out var current) && ReferenceEquals(current, watch))
-                _watches.Remove(key);
-        }
-    }
-
-    private static string Key(string env, string runId) => $"{env}:{runId}";
 }
 FILE src/NxtUI.Web/Services/ServerDiagnosticsMonitor.cs
 LENGTH 3587
@@ -32989,7 +32737,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 99555
+LENGTH 98585
 /* ================================================================
    Batch Monitor — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -33471,11 +33219,9 @@ html, body {
    ================================================================ */
 
 .bm-home {
-    /* No page-level scrollbar — the header and both section headers are fixed
-       height (flex-shrink:0 below), and the treemap/runs-table sections fill
-       whatever's left (flex:1) with their own internal scrolling instead. */
     height: 100%;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: 24px 28px;
     display: flex;
     flex-direction: column;
@@ -33553,20 +33299,12 @@ html, body {
     text-transform: uppercase; letter-spacing: 0.06em;
 }
 
-/* Mini summary table — takes 3/4 of whatever's left of .bm-home below the
-   fixed-height header/section-headers (see .bm-home-treemap-wrap's 1/4 share),
-   with BmRunsTable's own .bm-table-wrap/.bm-batch-table flex chain (app.css
-   below) filling it in turn: sticky header, internally scrolling body only
-   (min-height:0 so it can actually shrink to that space instead of overflowing
-   and forcing a page-level scrollbar). */
+/* Mini summary table */
 .bm-mini-summary {
     border: 1px solid var(--mud-palette-divider) !important;
     border-radius: var(--bm-radius-lg) !important;
     overflow: hidden;
-    flex: 3;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
+    flex-shrink: 0;
 }
 .bm-mini-summary-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -34891,7 +34629,6 @@ html, body {
     align-items: center;
     justify-content: space-between;
     margin: 20px 0 10px;
-    flex-shrink: 0;
 }
 
 .bm-infra-grid {
@@ -34904,12 +34641,7 @@ html, body {
 .bm-home-treemap-wrap {
     position: relative;
     width: 100%;
-    /* 1:3 split of whatever's left of .bm-home below the fixed-height
-       header/section headers — see .bm-mini-summary, which takes the rest.
-       min-height keeps it from being squeezed below a usable size when the
-       viewport is short. */
-    flex: 1;
-    min-height: 80px;
+    height: 200px;
 }
 
 .bm-home-treemap {
@@ -36290,9 +36022,9 @@ tr.bm-row-searching td:first-child {
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 6643
+LENGTH 6460
 /* ================================================================
-   D3 FLOW GRAPH  (rev 5)
+   D3 FLOW GRAPH  (rev 4)
    ================================================================ */
 
 .bm-d3-flow-graph {
@@ -36470,12 +36202,8 @@ LENGTH 6643
     padding: 4px 10px;
     border-top: 1px solid var(--mud-palette-divider);
     font-size: 0.72rem;
-    cursor: pointer;
-    transition: background 110ms;
 }
 .bm-pop-inst:first-of-type { border-top: none; }
-.bm-pop-inst:hover { background: rgba(56,139,253,0.12); }
-.bm-pop-inst:hover .bm-pop-srv { color: var(--mud-palette-primary); }
 .bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
    left-aligned — PID is the leftmost column, so the server column after it
@@ -38151,7 +37879,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 45108
+LENGTH 44722
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -38871,7 +38599,7 @@ const D3Graph = (() => {
                 // spaces, so the "PID " label is always the same length and the server
                 // column after it still lines up regardless of the PID's digit count.
                 const pid = String(i.processId ?? '').padStart(5, ' ');
-                return `<div class="bm-pop-inst" title="Open logs">
+                return `<div class="bm-pop-inst">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
                     <span class="bm-pop-srv">${esc(i.server)}</span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
@@ -38898,13 +38626,6 @@ const D3Graph = (() => {
         handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
         handle.popover.select('.bm-pop-kafka').on('click', () => {
             if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenKafkaTopic', topic);
-        });
-        handle.popover.selectAll('.bm-pop-inst').each(function (_, idx) {
-            const inst = instances[idx];
-            d3.select(this).on('click', () => {
-                if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, String(inst.processId ?? ''));
-            });
         });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))
@@ -39127,7 +38848,7 @@ export function setVisible(key, visible) { const h = _handles.get(key); if (h) D
 /** @param {string} key */
 export function dispose(key)             { const h = _handles.get(key); if (h) { D3Graph.dispose(h); _handles.delete(key); } }
 FILE src/NxtUI.Web/wwwroot/js/d3-home-treemap.js
-LENGTH 15882
+LENGTH 15000
 window.homeMemoryTreemap = (function () {
 
     // ── colour + label helpers ─────────────────────────────────────────────────
@@ -39172,26 +38893,15 @@ window.homeMemoryTreemap = (function () {
 
     // ── paint ──────────────────────────────────────────────────────────────────
 
-    function paint(container, data, forcedW, forcedH) {
+    function paint(container, data, forcedW) {
         // Only clear the container (which may hold the spinner) when we actually
         // have data to show. Returning before clearing keeps the spinner alive.
         if (!data || !data.children || data.children.length === 0) return;
 
-        const rect = container.getBoundingClientRect();
-        const W = forcedW || rect.width  || container.offsetWidth  || 600;
-        const H = forcedH || rect.height || container.offsetHeight || 0;
-
-        // The container hasn't been laid out yet — e.g. paint() runs synchronously
-        // from start() right as a hidden tab regains visibility, before the browser
-        // has committed this frame's flex layout, so getBoundingClientRect() still
-        // reports a stale/collapsed box. Painting into that gave the "sometimes very
-        // small" treemap; retry next frame instead of drawing at a bogus height.
-        if (H < 20) {
-            requestAnimationFrame(() => paint(container, data, forcedW, forcedH));
-            return;
-        }
-
         d3.select(container).selectAll('*').remove();
+
+        const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
+        const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
 
         // Each service gets at least 4 units so offline/no-data services are
         // still visible as small rectangles rather than collapsed to nothing.
@@ -39398,13 +39108,10 @@ window.homeMemoryTreemap = (function () {
                 '</div>';
         }
 
-        // ResizeObserver repaints on resize using the last fetched data. Reacts to
-        // height changes too (not just width) — a container that settles to its
-        // final height without a width change (e.g. late flex layout) still needs
-        // a repaint, otherwise it stays stuck at whatever height paint() saw last.
+        // ResizeObserver repaints on resize using the last fetched data.
         s.ro = new ResizeObserver(entries => {
-            const cr = entries[0]?.contentRect;
-            if (cr && (cr.width > 0 || cr.height > 0) && s.data) paint(container, s.data, cr.width, cr.height);
+            const w = entries[0]?.contentRect.width;
+            if (w > 0 && s.data) paint(container, s.data, w);
         });
         s.ro.observe(container);
 
@@ -39953,7 +39660,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 58065
+LENGTH 57123
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -40217,11 +39924,6 @@ const TIMELINE_ALIASES = {
             hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
-            // Delay (ms) before highlighting same-id blocks / showing the tooltip on
-            // hover — see setHoverDelayMs. 0 = immediate. If the pointer leaves the
-            // block before this fires, hoverDelayTimer is cancelled and nothing shows.
-            hoverDelayMs: 0,
-            hoverDelayTimer: null,
             // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
             // this) — same key still always gets the same colour for a given seed, only
             // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
@@ -40343,7 +40045,6 @@ const TIMELINE_ALIASES = {
         s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
-        clearTimeout(s.hoverDelayTimer);
         try { s.laneSvg.remove(); } catch {}
         try { s.botSvg.remove(); } catch {}
         try { s.tooltip.remove(); } catch {}
@@ -40879,33 +40580,21 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        const delay = s.hoverDelayMs || 0;
-        if (delay <= 0) {
-            applyHoverHighlight(s, event, d);
-            return;
-        }
-        s.hoverDelayTimer = setTimeout(() => applyHoverHighlight(s, event, d), delay);
-    }
-
-    function onBlockLeave(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        s.hoverDelayTimer = null;
-        s.hoveredName   = null;
-        s.hoveredBlockData = null;
-        s.blockL.selectAll('rect.bm-tl-block')
-            .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
-            .style('stroke-width', '0.5px');
-        hideTooltip(s);
-    }
-
-    function applyHoverHighlight(s, event, d) {
         s.hoveredName  = d.e.name;
         s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
             .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
         if (s.showTooltip) showTooltip(s, event, d);
+    }
+
+    function onBlockLeave(s, event, d) {
+        s.hoveredName   = null;
+        s.hoveredBlockData = null;
+        s.blockL.selectAll('rect.bm-tl-block')
+            .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
+            .style('stroke-width', '0.5px');
+        hideTooltip(s);
     }
 
     // ── Tooltip ───────────────────────────────────────────────────────────
@@ -41221,13 +40910,7 @@ const TIMELINE_ALIASES = {
         if (!show) hideTooltip(s);
     }
 
-    function setHoverDelayMs(key, ms) {
-        const s = _instances.get(key);
-        if (!s) return;
-        s.hoverDelayMs = Math.max(0, ms | 0);
-    }
-
-export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelayMs };
+export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
 FILE src/NxtUI.Web/wwwroot/js/filter.js
 LENGTH 21274
 // Batch Monitor — Filter engine (ES module)

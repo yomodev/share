@@ -50,16 +50,22 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         return await task;
     }
 
-    public Task<string?> FindServiceFolderAsync(ServiceStatus svc, string env) =>
+    public Task<string?> FindServiceParentFolderAsync(ServiceStatus svc, string env) =>
         Task.Run(() =>
         {
             foreach (var template in options.Value.ServiceTemplates)
             {
-                // Pre-substitute {pid} with '*' before Expand runs, so Expand's own
-                // {pid} replacement is a no-op and ResolveWildcard treats it as any
-                // other wildcard segment (picks the most-recently-modified match).
-                var wildcardTemplate = template.Replace("{pid}", "*", StringComparison.OrdinalIgnoreCase);
-                var expanded = ExpandTemplate(wildcardTemplate, svc, env);
+                // Drop the path segment containing {pid} entirely — not just the PID
+                // itself — so this doesn't depend on any specific instance having ever
+                // logged (the parent, e.g. "{service}_{env}" for the day, is expected to
+                // always exist once the service has run at all that day).
+                var pidIdx = template.IndexOf("{pid}", StringComparison.OrdinalIgnoreCase);
+                if (pidIdx < 0) continue;
+                var slashBeforePid = template.LastIndexOf('\\', pidIdx);
+                if (slashBeforePid < 0) continue;
+
+                var parentTemplate = template[..slashBeforePid];
+                var expanded = ExpandTemplate(parentTemplate, svc, env);
                 var resolved = ResolveWildcard(expanded);
                 if (resolved is not null) return resolved;
             }

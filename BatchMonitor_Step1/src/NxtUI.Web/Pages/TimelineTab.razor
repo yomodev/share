@@ -7,6 +7,7 @@
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
+@inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.UiSettings> UiOptions
 @inject DateTimeDisplayService DtSvc
 @implements IAsyncDisposable
 
@@ -46,10 +47,6 @@
     private ColourByOption _colourBy = ColourByOption.Source;
     private bool _stackView   = false;
     private bool _showTooltip = true;
-    // Delay before highlighting same-id blocks / showing the popup on hover.
-    // 0 = immediate; otherwise the mouse must stay over the block for this long
-    // before anything shows — moving off first cancels it entirely.
-    private int  _highlightDelayMs = 0;
 
     // ── Shortcuts dialog ──────────────────────────────────────────────────
     private bool _shortcutsOpen = false;
@@ -141,6 +138,7 @@
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
                 _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=13");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
+                await _tlModule.InvokeVoidAsync("setHoverDelayMs", _instanceKey, Math.Max(0, UiOptions.Value.TimelineHighlightDelayMs));
                 await PushDataAsync();
             }
             catch (Exception ex)
@@ -327,13 +325,6 @@
         _showTooltip = !_showTooltip;
         if (_tlModule is not null)
             await _tlModule.InvokeVoidAsync("setTooltipVisible", _instanceKey, _showTooltip);
-    }
-
-    private async Task OnHighlightDelayChanged(int ms)
-    {
-        _highlightDelayMs = Math.Max(0, ms);
-        if (_tlModule is not null)
-            await _tlModule.InvokeVoidAsync("setHoverDelayMs", _instanceKey, _highlightDelayMs);
     }
 
     private async Task ResetView()
@@ -695,14 +686,6 @@
             <MudIconButton Icon="@(_showTooltip ? Icons.Material.Outlined.SpeakerNotes : Icons.Material.Outlined.SpeakerNotesOff)"
                            Color="@(_showTooltip ? Color.Default : Color.Primary)"
                            Size="Size.Small" OnClick="ToggleTooltipAsync" />
-        </MudTooltip>
-
-        <MudTooltip Text="Delay (ms) before highlighting same-id blocks / showing the popup on hover — 0 = immediate">
-            <MudNumericField T="int" Value="_highlightDelayMs" ValueChanged="OnHighlightDelayChanged"
-                             Margin="Margin.Dense" Variant="Variant.Outlined"
-                             Min="0" Max="5000" Step="50"
-                             Adornment="Adornment.End" AdornmentText="ms"
-                             Class="bm-select-fit" Style="width:100px" />
         </MudTooltip>
 
         <MudTooltip Text="Export CSV">

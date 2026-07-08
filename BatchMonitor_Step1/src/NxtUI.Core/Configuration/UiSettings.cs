@@ -61,4 +61,11 @@ public class UiSettings
     /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
     /// </summary>
     public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Delay (ms) before the Timeline highlights same-id blocks / shows the hover
+    /// popup. 0 (default) = immediate. If the pointer leaves a block before this
+    /// elapses, nothing highlights/shows at all.
+    /// </summary>
+    public int TimelineHighlightDelayMs { get; set; } = 0;
 }

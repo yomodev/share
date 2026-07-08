@@ -278,9 +278,12 @@
             UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
         };
 
+        // Exact PID-specific folder first; if that instance was never seen (or its
+        // folder aged out), fall back to the service's parent folder, which is
+        // expected to always exist once the service has logged at all that day.
         var path = DiscoverySvc.GetCachedPath(svc, Environment)
             ?? await DiscoverySvc.FindNowAsync(svc, Environment)
-            ?? await DiscoverySvc.FindServiceFolderAsync(svc, Environment);
+            ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
 
         if (path is null)
         {

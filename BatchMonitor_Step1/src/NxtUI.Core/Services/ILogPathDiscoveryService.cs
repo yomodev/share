@@ -27,13 +27,15 @@ public interface ILogPathDiscoveryService
     Task<string?> FindNowAsync(ServiceStatus svc, string env);
 
     /// <summary>
-    /// Like <see cref="FindNowAsync"/>, but resolves the same templates with the
-    /// PID segment treated as a wildcard — for when the caller only knows the
-    /// service and server (e.g. a historical run's log instance whose PID isn't
-    /// currently running) and any matching folder for that service is good enough.
+    /// Resolves the folder one level up from the PID-specific instance folder —
+    /// i.e. the same templates with the path segment containing {pid} dropped
+    /// entirely, not wildcarded. For when the caller only knows the service and
+    /// server (e.g. a historical run's log instance) and can't find (or doesn't
+    /// need) the exact PID's folder: this parent is expected to always exist once
+    /// the service has logged at all that day, independent of any specific PID.
     /// Not cached — callers already have a specific PID's result cached/failed.
     /// </summary>
-    Task<string?> FindServiceFolderAsync(ServiceStatus svc, string env);
+    Task<string?> FindServiceParentFolderAsync(ServiceStatus svc, string env);
 
     /// <summary>
     /// Fires when a path is successfully resolved. Argument is the cache key
