@@ -749,7 +749,7 @@ const D3Graph = (() => {
             const inst = instances[idx];
             d3.select(this).on('click', () => {
                 if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, String(inst.processId ?? ''));
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0);
             });
         });
         handle.popover

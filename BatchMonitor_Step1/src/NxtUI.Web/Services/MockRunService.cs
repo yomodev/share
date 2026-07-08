@@ -84,7 +84,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         return s[rng.Next(s.Length)];
     }
     private static string PickServer(Random rng) => Servers[rng.Next(Servers.Length)];
-    private static string PickPid(Random rng) => rng.Next(1000, 65000).ToString();
+    private static int PickPid(Random rng) => rng.Next(1000, 65000);
 
     // ── State ─────────────────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
     // Each tuple represents an independent service instance that will process this chunk.
-    private readonly Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, string Pid)>>
+    private readonly Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, int Pid)>>
         _livePool = new();
 
     // ── Construction ──────────────────────────────────────────────────────
@@ -326,7 +326,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         {
             var chunkId = $"LIVE-{counter++:D5}";
             int hops = rng.Next(4, 13);
-            var pending = new List<(string, string, string, string, string)>(hops);
+            var pending = new List<(string, string, string, string, int)>(hops);
             for (int h = 0; h < hops; h++)
             {
                 var svc = PickService(rng);

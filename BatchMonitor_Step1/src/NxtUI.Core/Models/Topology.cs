@@ -103,13 +103,13 @@ public class PipelineRow
 public class InstanceStats
 {
     public string Server { get; set; } = string.Empty;
-    public string ProcessId { get; set; } = string.Empty;
+    public int ProcessId { get; set; }
     public int DoneCount { get; set; }
     public int InProgressCount { get; set; }
 
     public InstanceStats() { }
 
-    public InstanceStats(string server, string processId, int doneCount, int inProgressCount)
+    public InstanceStats(string server, int processId, int doneCount, int inProgressCount)
     {
         Server = server;
         ProcessId = processId;

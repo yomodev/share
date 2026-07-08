@@ -29,7 +29,14 @@
     private PerformanceEventService? _eventService;
     private TopologyComputationService? _topologyService;
     private Func<string, string>? _labelFormatter;
-    private CancellationTokenSource? _topologyDebounce;
+
+    // "Debounced" recompute without per-event allocation: DebouncedTopologyCompute (called
+    // once per incoming event/poll batch) just flips a flag; a single PeriodicTimer loop
+    // recomputes at most once per tick if something changed since the last one. Same
+    // worst-case latency as a true debounce, but no CancellationTokenSource/Task.Delay
+    // churn per event on high-volume live runs.
+    private volatile bool _topologyDirty;
+    private PeriodicTimer? _topologyTimer;
     private const int TopologyDebounceMs = 400;
 
     // ── Topology (live and replay) ────────────────────────────────────────
@@ -65,6 +72,9 @@
         _topologyService   = new TopologyComputationService(
             TimeSpan.FromSeconds(UiOptions.Value.TopologyRecentActivityWindowSeconds));
         _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
+
+        _topologyTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(TopologyDebounceMs));
+        _ = RunTopologyLoopAsync();
 
         await LoadAsync();
     }
@@ -135,42 +145,47 @@
             eventBroker:    RunEvents);
     }
 
-    private void DebouncedTopologyCompute()
+    private void DebouncedTopologyCompute() => _topologyDirty = true;
+
+    private async Task RunTopologyLoopAsync()
     {
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
-        _topologyDebounce = new CancellationTokenSource();
-        var token = _topologyDebounce.Token;
-
-        _ = Task.Delay(TopologyDebounceMs, token).ContinueWith(async _ =>
+        // WaitForNextTickAsync returns false once the timer is disposed (component
+        // teardown) — ends the loop gracefully with no separate cancellation token needed.
+        while (await _topologyTimer!.WaitForNextTickAsync())
         {
-            if (token.IsCancellationRequested) return;
-            try
-            {
-                if (_eventService is null || _topologyService is null) return;
+            if (!_topologyDirty) continue;
+            _topologyDirty = false;
+            await RecomputeTopologyAsync();
+        }
+    }
 
-                if (_eventService.DetectedStatus is { } detected && _details is not null)
-                    _details.Status = detected;
+    private async Task RecomputeTopologyAsync()
+    {
+        try
+        {
+            if (_eventService is null || _topologyService is null) return;
 
-                var allEvents = _eventService.Events;
+            if (_eventService.DetectedStatus is { } detected && _details is not null)
+                _details.Status = detected;
 
-                IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue
-                    ? allEvents.Where(kv => kv.Value.Start <= _replayTimestamp.Value)
-                               .ToDictionary(kv => kv.Key, kv => kv.Value)
-                    : allEvents;
+            var allEvents = _eventService.Events;
 
-                _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
-                _eventCount = _eventService.EventCount;
+            IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue
+                ? allEvents.Where(kv => kv.Value.Start <= _replayTimestamp.Value)
+                           .ToDictionary(kv => kv.Key, kv => kv.Value)
+                : allEvents;
 
-                UpdateSliderRange(allEvents.Values);
+            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
+            _eventCount = _eventService.EventCount;
 
-                await InvokeAsync(StateHasChanged);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Topology compute failed");
-            }
-        }, TaskScheduler.Default);
+            UpdateSliderRange(allEvents.Values);
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Topology compute failed");
+        }
     }
 
     // ── Slider & Replay ───────────────────────────────────────────────────
@@ -265,7 +280,7 @@
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    private async Task OpenInstanceLogFromGraph((string Service, string Server, string ProcessId) info)
+    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId) info)
     {
         var (service, server, processId) = info;
         if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
@@ -274,7 +289,7 @@
         {
             ServiceName = service,
             HostName = server,
-            ProcessId = int.TryParse(processId, out var pid) ? pid : 0,
+            ProcessId = processId,
             UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
         };
 
@@ -301,8 +316,7 @@
     public void Dispose()
     {
         _eventService?.Dispose();
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
+        _topologyTimer?.Dispose();
     }
 
     private static string FormatDuration(TimeSpan ts) =>

@@ -22,7 +22,7 @@ public class PerformanceEvent
     public string Server { get; set; } = string.Empty;
 
     /// <summary>OS process ID of the worker that handled this chunk.</summary>
-    public string ProcessId { get; set; } = string.Empty;
+    public int ProcessId { get; set; }
 
     /// <summary>When processing started. Always present.</summary>
     public DateTime Start { get; set; }

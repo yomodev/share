@@ -11,6 +11,7 @@ public class PerformanceEventStore
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, PerformanceEvent> _events = new();
+    private DateTime? _lastEventTimestamp;
 
     /// <summary>
     /// Returns a read-only snapshot of all events.
@@ -41,17 +42,14 @@ public class PerformanceEventStore
     }
 
     /// <summary>
-    /// Timestamp of the most recent event, or null if empty.
+    /// Timestamp of the most recent event, or null if empty. Maintained incrementally
+    /// on upsert rather than scanning every event on each access — safe because a key's
+    /// timestamp only ever moves forward (see UpsertEvent) and keys are never removed
+    /// except by Clear(), so the running max stays correct without a rescan.
     /// </summary>
     public DateTime? LastEventTimestamp
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _events.Values.MaxBy(e => e.Timestamp)?.Timestamp;
-            }
-        }
+        get { lock (_lock) return _lastEventTimestamp; }
     }
 
     /// <summary>
@@ -65,7 +63,11 @@ public class PerformanceEventStore
         lock (_lock)
         {
             if (!_events.TryGetValue(evt.Id, out var existing) || evt.Timestamp > existing.Timestamp)
+            {
                 _events[evt.Id] = evt;
+                if (_lastEventTimestamp is null || evt.Timestamp > _lastEventTimestamp)
+                    _lastEventTimestamp = evt.Timestamp;
+            }
         }
     }
 
@@ -90,6 +92,7 @@ public class PerformanceEventStore
         lock (_lock)
         {
             _events.Clear();
+            _lastEventTimestamp = null;
         }
     }
 }

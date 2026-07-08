@@ -2577,7 +2577,7 @@ Corner cases to cover:
 - Empty `Or` list → matches nothing (`$nor: [{}]` or equivalent)
 - Empty `And` list → matches everything (no filter)
 FILE docs/09_Features.md
-LENGTH 9121
+LENGTH 10551
 # 09 — Features & Usage Guide
 
 ## Overview
@@ -2643,6 +2643,30 @@ A filterable, sortable table of every AI run.
   regardless of what the filter/page size requests.
 - Double-click a row (or use the row actions) to open its detail tab or its
   Timeline.
+
+---
+
+## Run Detail
+
+Opened from a Runs row (or the Recent Runs list on Home). Shows the run's flow
+graph — one node per service, one row per pipeline within it — inferred live
+from the run's events.
+
+- **Pipeline row popover** — click a pipeline row to see its per-instance
+  breakdown (server + PID, done/in-progress counts):
+  - Click an instance row (tooltip "Open logs") to open that instance's log
+    folder in the File Browser. If the exact server+PID folder isn't found
+    (e.g. the process isn't running anymore), it falls back to the service's
+    parent folder for that day instead of failing outright.
+  - "Browse topic" opens the pipeline's inferred input topic in the Kafka
+    Topic Inspector.
+- **Row/header color**: green = fully drained (nothing left in flight for
+  that pipeline), blue = still has work in flight; bright = active recently,
+  dim = true but quiet for a while.
+- **Replay slider** — scrubs the graph back to how it looked at any past
+  timestamp; drag to the right edge (or the Live button) to snap back to the
+  live view.
+- **Timeline** button (top bar) opens this run in the Timeline tab.
 
 ---
 
@@ -2750,6 +2774,10 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   search bar pauses it (search results are a point-in-time snapshot, not a
   live view), and it stops entirely if the tab isn't focused.
 - Double-click a file (or use its row actions) to open it in the Log Viewer.
+  Depending on `Logs:FileAccessMode` in config, this may read the file
+  directly in your browser instead of via the server (Chromium only —
+  Chrome/Edge): the first file opened per server prompts a one-time "grant
+  folder access" dialog, and later opens on that server reuse it silently.
 
 ### Log Viewer
 
@@ -5608,7 +5636,7 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 4057
+LENGTH 4451
 {
   "AllowedHosts": "*",
 
@@ -5688,7 +5716,12 @@ LENGTH 4057
     "StartupFolder": "{today}",
     "FolderScanIntervalSeconds": 30,
     "FolderScanMinIntervalSeconds": 10,
-    "IdleReleaseMinutes": 10
+    "IdleReleaseMinutes": 10,
+    // "ServerOnly" (original behavior) | "ClientWithFallback" (try client-side File System
+    // Access read first, fall back to server read on any failure) | "ClientOnly" (client-side
+    // only, no fallback -- shows an error instead, useful for verifying it actually works
+    // since ClientWithFallback's fallback can mask a broken client-side path).
+    "FileAccessMode": "ClientOnly"
   },
 
   "Runs": {
@@ -6553,7 +6586,7 @@ public class TopicDeserializerRule
     public List<string> Types { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
-LENGTH 3444
+LENGTH 5183
 namespace NxtUI.Core.Configuration;
 
 public class LogPathSettings
@@ -6626,6 +6659,42 @@ public class LogPathSettings
     /// result list and the render workload without bound for as long as the search keeps running.
     /// </summary>
     public int MaxSearchResults { get; set; } = 5000;
+
+    /// <summary>
+    /// How the Log Browser reads a file's content when a file is opened. See
+    /// <see cref="LogFileAccessMode"/>. Default: <see cref="LogFileAccessMode.ServerOnly"/>
+    /// (unchanged historical behavior).
+    /// </summary>
+    public LogFileAccessMode FileAccessMode { get; set; } = LogFileAccessMode.ServerOnly;
+}
+
+/// <summary>
+/// Controls how the Log Browser reads a file's content when opened (double-click, or the
+/// toolbar "view" button). The client-side modes use the File System Access API — Chromium
+/// only (Chrome/Edge; no Firefox/Safari) — reading directly from the log root's network
+/// share instead of having the server read it and ship the content over the SignalR
+/// circuit. The first file opened per server prompts a one-time "grant folder access"
+/// dialog; later opens on that server reuse the granted handle (re-requesting permission
+/// only, no dialog, if the browser reset the grant on reload).
+/// </summary>
+public enum LogFileAccessMode
+{
+    /// <summary>Server always reads the file and ships it over SignalR (original behavior).</summary>
+    ServerOnly,
+
+    /// <summary>
+    /// Try client-side read first; if it fails for any reason (unsupported browser, user
+    /// cancelled the grant, granted folder doesn't contain the file), fall back to
+    /// <see cref="ServerOnly"/> automatically.
+    /// </summary>
+    ClientWithFallback,
+
+    /// <summary>
+    /// Client-side read only — if it fails, show an error instead of silently falling back
+    /// to a server read. Useful for verifying the client-side path is actually working,
+    /// since <see cref="ClientWithFallback"/>'s fallback can mask a broken client-side path.
+    /// </summary>
+    ClientOnly,
 }
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
 LENGTH 2158
@@ -8895,7 +8964,7 @@ public record MongoCollectionDetails
     public IReadOnlyList<MongoIndexInfo> Indexes { get; init; } = [];
 }
 FILE src/NxtUI.Core/Models/PerformanceEvent.cs
-LENGTH 2875
+LENGTH 2856
 namespace NxtUI.Core.Models;
 
 /// <summary>
@@ -8920,7 +8989,7 @@ public class PerformanceEvent
     public string Server { get; set; } = string.Empty;
 
     /// <summary>OS process ID of the worker that handled this chunk.</summary>
-    public string ProcessId { get; set; } = string.Empty;
+    public int ProcessId { get; set; }
 
     /// <summary>When processing started. Always present.</summary>
     public DateTime Start { get; set; }
@@ -9038,7 +9107,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 6828
+LENGTH 6806
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -9144,13 +9213,13 @@ public class PipelineRow
 public class InstanceStats
 {
     public string Server { get; set; } = string.Empty;
-    public string ProcessId { get; set; } = string.Empty;
+    public int ProcessId { get; set; }
     public int DoneCount { get; set; }
     public int InProgressCount { get; set; }
 
     public InstanceStats() { }
 
-    public InstanceStats(string server, string processId, int doneCount, int inProgressCount)
+    public InstanceStats(string server, int processId, int doneCount, int inProgressCount)
     {
         Server = server;
         ProcessId = processId;
@@ -10004,7 +10073,7 @@ public static class OperationLog
     }
 }
 FILE src/NxtUI.Core/Services/PerformanceEventStore.cs
-LENGTH 2207
+LENGTH 2642
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -10018,6 +10087,7 @@ public class PerformanceEventStore
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, PerformanceEvent> _events = new();
+    private DateTime? _lastEventTimestamp;
 
     /// <summary>
     /// Returns a read-only snapshot of all events.
@@ -10048,17 +10118,14 @@ public class PerformanceEventStore
     }
 
     /// <summary>
-    /// Timestamp of the most recent event, or null if empty.
+    /// Timestamp of the most recent event, or null if empty. Maintained incrementally
+    /// on upsert rather than scanning every event on each access — safe because a key's
+    /// timestamp only ever moves forward (see UpsertEvent) and keys are never removed
+    /// except by Clear(), so the running max stays correct without a rescan.
     /// </summary>
     public DateTime? LastEventTimestamp
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _events.Values.MaxBy(e => e.Timestamp)?.Timestamp;
-            }
-        }
+        get { lock (_lock) return _lastEventTimestamp; }
     }
 
     /// <summary>
@@ -10072,7 +10139,11 @@ public class PerformanceEventStore
         lock (_lock)
         {
             if (!_events.TryGetValue(evt.Id, out var existing) || evt.Timestamp > existing.Timestamp)
+            {
                 _events[evt.Id] = evt;
+                if (_lastEventTimestamp is null || evt.Timestamp > _lastEventTimestamp)
+                    _lastEventTimestamp = evt.Timestamp;
+            }
         }
     }
 
@@ -10097,11 +10168,12 @@ public class PerformanceEventStore
         lock (_lock)
         {
             _events.Clear();
+            _lastEventTimestamp = null;
         }
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 11603
+LENGTH 11297
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -10188,7 +10260,8 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         var allNames = events.Select(e => e.Name).Distinct().ToHashSet();
         topology.TotalChunks = allNames.Count;
         topology.TotalDone = events.Count(e => e.IsDone);
-        topology.TotalInProgress = events.Count(e => !e.IsDone);
+        // Every event is either done or not — no need for a second full scan.
+        topology.TotalInProgress = events.Count - topology.TotalDone;
 
         // ── Phase 3: infer pipeline-to-pipeline edges from chunk flow ────
         // For each chunk, order the (service, pipeline) hops it visited by
@@ -10289,9 +10362,14 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime,
         Func<string, string> format, TimeSpan recentActivityWindow)
     {
-        var done = pipelineEvents.Count(e => e.IsDone);
-        var inProgress = pipelineEvents.Count(e => !e.IsDone);
-        var errors = pipelineEvents.Count(e => e.IsError);
+        // Single pass instead of four separate Count() scans over the same list.
+        int done = 0, inProgress = 0, errors = 0, recentDone = 0;
+        foreach (var e in pipelineEvents)
+        {
+            if (e.IsDone) done++; else inProgress++;
+            if (e.IsError) errors++;
+            if (e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= recentActivityWindow) recentDone++;
+        }
 
         var row = new PipelineRow
         {
@@ -10306,19 +10384,13 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
 
         // Recent throughput: fraction of "done" events that finished within
         // the recent-activity window of the latest known event time.
-        var recentDone = pipelineEvents.Count(e =>
-            e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= recentActivityWindow);
         row.RecentThroughputScore = done > 0
             ? Math.Clamp((double)recentDone / Math.Max(done, 1), 0.0, 1.0)
             : 0.0;
 
         row.State = DetermineState(row, recentDone);
 
-        // Per-instance breakdown, sorted by server then PID per §8.2. ProcessId is a
-        // display string (see PerformanceEvent.ProcessId), but it represents an
-        // integer — sorting it with StringComparer put PID "10" before "2". Same bug
-        // class as the Timeline's group sort; fix is the same idea: parse numerically
-        // for ordering, falling back to the raw string only if it's ever non-numeric.
+        // Per-instance breakdown, sorted by server then PID per §8.2.
         row.Instances = pipelineEvents
             .GroupBy(e => (e.Server, e.ProcessId))
             .Select(g => new InstanceStats(
@@ -10327,8 +10399,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                 doneCount: g.Count(e => e.IsDone),
                 inProgressCount: g.Count(e => !e.IsDone)))
             .OrderBy(i => i.Server, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(i => long.TryParse(i.ProcessId, out var pid) ? pid : long.MaxValue)
-            .ThenBy(i => i.ProcessId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => i.ProcessId)
             .ToList();
 
         return row;
@@ -10800,7 +10871,7 @@ LENGTH 8857
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 5914
+LENGTH 5908
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -10830,7 +10901,7 @@ LENGTH 5914
     [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
 
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
-    [Parameter] public EventCallback<(string Service, string Server, string ProcessId)> OnOpenInstanceLog { get; set; }
+    [Parameter] public EventCallback<(string Service, string Server, int ProcessId)> OnOpenInstanceLog { get; set; }
 
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
@@ -10852,7 +10923,7 @@ LENGTH 5914
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=15");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=16");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -10875,7 +10946,7 @@ LENGTH 5914
 
     /// <summary>Invoked from d3-graph.js when an instance row in the popover is clicked.</summary>
     [JSInvokable]
-    public Task RequestOpenInstanceLog(string service, string server, string processId) =>
+    public Task RequestOpenInstanceLog(string service, string server, int processId) =>
         OnOpenInstanceLog.InvokeAsync((service, server, processId));
 
     protected override async Task OnParametersSetAsync()
@@ -14130,7 +14201,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FileBrowser.razor
-LENGTH 41674
+LENGTH 42789
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -14145,6 +14216,7 @@ LENGTH 41674
 @inject IJSRuntime JS
 @inject ILogger<FileBrowser> Logger
 @inject DateTimeDisplayService DtSvc
+@inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -14435,9 +14507,10 @@ LENGTH 41674
     // full RelativePath by default (not just its own Name), so typing an ancestor
     // segment (e.g. "orders") surfaces every folder underneath it, not just folders
     // literally named "orders". A folder is kept if it matches OR any of its (loaded)
-    // descendants match — see NodeMatchesOrHasDescendantMatch — and the whole subtree
-    // is eagerly loaded once a filter is active (see EnsureTreeLoadedAsync) so the
-    // filter can actually see branches the user hasn't manually expanded yet.
+    // descendants match — see NodeMatchesOrHasDescendantMatch. Purely client-side:
+    // operates only on whatever's already in _rootNodes/_childCache (i.e. branches the
+    // user has manually expanded at some point) — typing a filter never itself triggers
+    // a server call to go fetch unexplored branches just to search inside them.
     private static readonly FilterParser TreeFilterParser = new(
         searchableFields: ["RelativePath"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -14455,50 +14528,14 @@ LENGTH 41674
     private string      _treeFilterText  = "";
     private string?     _treeFilterError;
     private FilterNode? _treeFilterNode;
-    private bool        _treeFullyLoaded;
 
-    private async Task OnTreeFilterChanged(string v)
+    private void OnTreeFilterChanged(string v)
     {
         _treeFilterText  = v;
         _treeFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _treeFilterNode = null; return; }
         try   { _treeFilterNode = TreeFilterParser.Parse(v, DtSvc.UseUtc); }
-        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; return; }
-
-        await EnsureTreeLoadedAsync();
-        StateHasChanged();
-    }
-
-    /// <summary>
-    /// Eagerly loads folders 3 levels deep so the tree filter has something to search
-    /// inside branches the user hasn't manually expanded yet. This 3-level cap is a
-    /// deliberate eager-prefetch bound for the filter only — it does not limit how deep
-    /// a user can manually expand/navigate (LogBrowserTreeNode fetches on demand at
-    /// unlimited depth; this just controls how far ahead the filter searches without
-    /// the user having opened anything). Runs once per session (or since the last full
-    /// Refresh) — real infra may have many folders, so this isn't repeated on every keystroke.
-    /// </summary>
-    private async Task EnsureTreeLoadedAsync()
-    {
-        if (_treeFullyLoaded) return;
-        _treeFullyLoaded = true;
-
-        async Task LoadLevelAsync(IEnumerable<LogFolderNode> nodes, int depthRemaining)
-        {
-            if (depthRemaining <= 0) return;
-            foreach (var node in nodes)
-            {
-                if (!node.HasChildren) continue;
-                if (!_childCache.ContainsKey(node.RelativePath))
-                {
-                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
-                    _childCache[node.RelativePath] = children;
-                }
-                await LoadLevelAsync(_childCache[node.RelativePath], depthRemaining - 1);
-            }
-        }
-
-        await LoadLevelAsync(_rootNodes, 3);
+        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; }
     }
 
     private List<LogFolderNode> FilteredRootNodes =>
@@ -14661,6 +14698,14 @@ LENGTH 41674
 
             current = string.IsNullOrEmpty(current) ? seg : current + "\\" + seg;
             _expanded.Add(current);
+
+            // Fetch this node's own children too, not just as a lookahead for the next
+            // segment — without this, the deepest (last) segment gets marked expanded
+            // but its children never get cached, so the tree shows it as expanded with
+            // nothing underneath until the user manually collapses and re-expands it
+            // (which is what triggers OnExpandedChangedAsync's own fetch below).
+            if (!_childCache.ContainsKey(current))
+                _childCache[current] = await BrowserSvc.GetSubfoldersAsync(_servers, current, _cts.Token);
         }
     }
 
@@ -15008,8 +15053,54 @@ LENGTH 41674
 
     // ── helpers ───────────────────────────────────────────────────────────
 
-    private void OpenInViewer(LogFileEntry file) =>
+    private async Task OpenInViewer(LogFileEntry file)
+    {
+        var mode = LogSettings.Value.FileAccessMode;
+
+        if (mode != LogFileAccessMode.ServerOnly)
+        {
+            var key = await TryOpenClientSideAsync(file);
+            if (key is not null)
+            {
+                var tab = TabModel.CreateLogWorkspace("local:" + key, Env);
+                tab.Label      = file.FileName;
+                tab.NoNavigate = true;
+                TabService.OpenOrFocus(tab);
+                return;
+            }
+
+            if (mode == LogFileAccessMode.ClientOnly)
+            {
+                Snackbar.Add("Client-side file access failed — see browser console for details", Severity.Error);
+                return;
+            }
+        }
+
+        // ServerOnly, or ClientWithFallback's fallback: server reads the file and ships
+        // it over the circuit — either the browser doesn't support the File System
+        // Access API, the user cancelled the one-time folder grant, or the granted
+        // folder didn't actually contain this file (wrong folder granted).
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
+    }
+
+    /// <summary>
+    /// Tries to read <paramref name="file"/> directly in the browser instead of having
+    /// the server read it. Returns a window._localFiles key on success, null on any
+    /// failure (caller falls back to the normal server-read path).
+    /// </summary>
+    private async Task<string?> TryOpenClientSideAsync(LogFileEntry file)
+    {
+        if (BrowserSvc.ParseHintPath(file.FullPath, _servers) is not (var server, var relPath))
+            return null;
+
+        var lastSep = relPath.LastIndexOfAny(['\\', '/']);
+        var relDir  = lastSep >= 0 ? relPath[..lastSep] : string.Empty;
+        var rootTemplate = LogSettings.Value.RootFolder;
+
+        var key = await JS.InvokeAsync<string?>("bmLogFileAccess.tryOpenSilently", server, rootTemplate, relDir, file.FileName);
+        key ??= await JS.InvokeAsync<string?>("bmLogFileAccess.openWithGrant", server, rootTemplate, relDir, file.FileName);
+        return key;
+    }
 
     private void OpenInWorkspace(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
@@ -19510,7 +19601,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 19366
+LENGTH 19935
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -19542,7 +19633,14 @@ LENGTH 19366
     private PerformanceEventService? _eventService;
     private TopologyComputationService? _topologyService;
     private Func<string, string>? _labelFormatter;
-    private CancellationTokenSource? _topologyDebounce;
+
+    // "Debounced" recompute without per-event allocation: DebouncedTopologyCompute (called
+    // once per incoming event/poll batch) just flips a flag; a single PeriodicTimer loop
+    // recomputes at most once per tick if something changed since the last one. Same
+    // worst-case latency as a true debounce, but no CancellationTokenSource/Task.Delay
+    // churn per event on high-volume live runs.
+    private volatile bool _topologyDirty;
+    private PeriodicTimer? _topologyTimer;
     private const int TopologyDebounceMs = 400;
 
     // ── Topology (live and replay) ────────────────────────────────────────
@@ -19578,6 +19676,9 @@ LENGTH 19366
         _topologyService   = new TopologyComputationService(
             TimeSpan.FromSeconds(UiOptions.Value.TopologyRecentActivityWindowSeconds));
         _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
+
+        _topologyTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(TopologyDebounceMs));
+        _ = RunTopologyLoopAsync();
 
         await LoadAsync();
     }
@@ -19648,42 +19749,47 @@ LENGTH 19366
             eventBroker:    RunEvents);
     }
 
-    private void DebouncedTopologyCompute()
+    private void DebouncedTopologyCompute() => _topologyDirty = true;
+
+    private async Task RunTopologyLoopAsync()
     {
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
-        _topologyDebounce = new CancellationTokenSource();
-        var token = _topologyDebounce.Token;
-
-        _ = Task.Delay(TopologyDebounceMs, token).ContinueWith(async _ =>
+        // WaitForNextTickAsync returns false once the timer is disposed (component
+        // teardown) — ends the loop gracefully with no separate cancellation token needed.
+        while (await _topologyTimer!.WaitForNextTickAsync())
         {
-            if (token.IsCancellationRequested) return;
-            try
-            {
-                if (_eventService is null || _topologyService is null) return;
+            if (!_topologyDirty) continue;
+            _topologyDirty = false;
+            await RecomputeTopologyAsync();
+        }
+    }
 
-                if (_eventService.DetectedStatus is { } detected && _details is not null)
-                    _details.Status = detected;
+    private async Task RecomputeTopologyAsync()
+    {
+        try
+        {
+            if (_eventService is null || _topologyService is null) return;
 
-                var allEvents = _eventService.Events;
+            if (_eventService.DetectedStatus is { } detected && _details is not null)
+                _details.Status = detected;
 
-                IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue
-                    ? allEvents.Where(kv => kv.Value.Start <= _replayTimestamp.Value)
-                               .ToDictionary(kv => kv.Key, kv => kv.Value)
-                    : allEvents;
+            var allEvents = _eventService.Events;
 
-                _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
-                _eventCount = _eventService.EventCount;
+            IReadOnlyDictionary<string, PerformanceEvent> filtered = _replayTimestamp.HasValue
+                ? allEvents.Where(kv => kv.Value.Start <= _replayTimestamp.Value)
+                           .ToDictionary(kv => kv.Key, kv => kv.Value)
+                : allEvents;
 
-                UpdateSliderRange(allEvents.Values);
+            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
+            _eventCount = _eventService.EventCount;
 
-                await InvokeAsync(StateHasChanged);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Topology compute failed");
-            }
-        }, TaskScheduler.Default);
+            UpdateSliderRange(allEvents.Values);
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Topology compute failed");
+        }
     }
 
     // ── Slider & Replay ───────────────────────────────────────────────────
@@ -19778,7 +19884,7 @@ LENGTH 19366
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    private async Task OpenInstanceLogFromGraph((string Service, string Server, string ProcessId) info)
+    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId) info)
     {
         var (service, server, processId) = info;
         if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
@@ -19787,7 +19893,7 @@ LENGTH 19366
         {
             ServiceName = service,
             HostName = server,
-            ProcessId = int.TryParse(processId, out var pid) ? pid : 0,
+            ProcessId = processId,
             UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
         };
 
@@ -19814,8 +19920,7 @@ LENGTH 19366
     public void Dispose()
     {
         _eventService?.Dispose();
-        _topologyDebounce?.Cancel();
-        _topologyDebounce?.Dispose();
+        _topologyTimer?.Dispose();
     }
 
     private static string FormatDuration(TimeSpan ts) =>
@@ -21240,7 +21345,7 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 36033
+LENGTH 36070
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -21664,7 +21769,7 @@ LENGTH 36033
                 Source    = Col(iSource),
                 Pipeline  = Col(iPipeline),
                 Service   = Col(iService),
-                ProcessId = Col(iPid),
+                ProcessId = int.TryParse(Col(iPid), out var pid) ? pid : 0,
                 Server    = Col(iServer),
                 Start     = startDt,
                 Finish    = finishDt,
@@ -22105,7 +22210,7 @@ LENGTH 36033
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 23504
+LENGTH 23644
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22251,6 +22356,9 @@ LENGTH 23504
 
     <!-- Interactive JSON tree viewer -->
     <script src="js/json-viewer.js?v=1"></script>
+
+    <!-- Client-side (browser-native) log file access — File System Access API -->
+    <script src="js/log-file-access.js?v=7"></script>
 
     <!-- Load MudBlazor script first, then append blazor.server.js once MudBlazor finished loading.
          This ensures MudBlazor registers its global JS functions (e.g. mudElementRef.*)
@@ -24013,7 +24121,7 @@ public class LogViewerService : ILogViewerService
         }, ct);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16772
+LENGTH 16752
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
@@ -24100,7 +24208,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         return s[rng.Next(s.Length)];
     }
     private static string PickServer(Random rng) => Servers[rng.Next(Servers.Length)];
-    private static string PickPid(Random rng) => rng.Next(1000, 65000).ToString();
+    private static int PickPid(Random rng) => rng.Next(1000, 65000);
 
     // ── State ─────────────────────────────────────────────────────────────
 
@@ -24113,7 +24221,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
     // Each tuple represents an independent service instance that will process this chunk.
-    private readonly Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, string Pid)>>
+    private readonly Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, int Pid)>>
         _livePool = new();
 
     // ── Construction ──────────────────────────────────────────────────────
@@ -24342,7 +24450,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         {
             var chunkId = $"LIVE-{counter++:D5}";
             int hops = rng.Next(4, 13);
-            var pending = new List<(string, string, string, string, string)>(hops);
+            var pending = new List<(string, string, string, string, int)>(hops);
             for (int h = 0; h < hops; h++)
             {
                 var svc = PickService(rng);
@@ -32762,7 +32870,7 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 10539
+LENGTH 10559
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -32967,7 +33075,7 @@ public class SqlRunService(
         Service = d.GetValue("Service", BsonNull.Value).AsString ?? string.Empty,
         Pipeline = d.GetValue("Pipeline", BsonNull.Value).AsString ?? string.Empty,
         Server = d.GetValue("Server", BsonNull.Value).AsString ?? string.Empty,
-        ProcessId = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
+        ProcessId = d.Contains("ProcessId") && !d["ProcessId"].IsBsonNull ? d["ProcessId"].ToInt32() : 0,
         Start = d.GetValue("Start", BsonNull.Value).ToUniversalTime(),
         Finish = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
         Error = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,
@@ -38151,7 +38259,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 45108
+LENGTH 45099
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -38903,7 +39011,7 @@ const D3Graph = (() => {
             const inst = instances[idx];
             d3.select(this).on('click', () => {
                 if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, String(inst.processId ?? ''));
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0);
             });
         });
         handle.popover
@@ -42243,6 +42351,192 @@ window.bmJsonViewer = (() => {
 
     return { render, setAllCollapsed };
 })();
+FILE src/NxtUI.Web/wwwroot/js/log-file-access.js
+LENGTH 8686
+// Client-side (browser-native) file reads for the Log Browser, using the File
+// System Access API. Lets a double-click open a log file directly from the
+// browser's own access to a shared network folder, instead of the server
+// reading it and shipping the content over the SignalR circuit.
+//
+// Chromium-only (Chrome/Edge) — feature-detected. Every entry point resolves
+// to null on any failure (unsupported browser, user cancelled, permission
+// denied, path not found under the granted folder) so callers fall back to
+// the existing server-read path.
+window.bmLogFileAccess = (function () {
+    const DB_NAME = 'bm-log-file-access';
+    const STORE   = 'dirHandles';
+
+    function openDb() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror   = () => reject(req.error);
+        });
+    }
+
+    async function getStoredHandle(server) {
+        try {
+            const db = await openDb();
+            return await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE, 'readonly');
+                const rq = tx.objectStore(STORE).get(server);
+                rq.onsuccess = () => resolve(rq.result || null);
+                rq.onerror   = () => reject(rq.error);
+            });
+        } catch (err) {
+            console.warn('[bmLogFileAccess] getStoredHandle failed:', err);
+            return null;
+        }
+    }
+
+    async function storeHandle(server, handle) {
+        // Best-effort — a failed persist just means the next open re-prompts.
+        try {
+            const db = await openDb();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE, 'readwrite');
+                tx.objectStore(STORE).put(handle, server);
+                tx.oncomplete = resolve;
+                tx.onerror    = () => reject(tx.error);
+            });
+        } catch (err) {
+            console.warn('[bmLogFileAccess] storeHandle failed (will re-prompt next time):', err);
+        }
+    }
+
+    async function resolveFile(dirHandle, relDir, fileName) {
+        let dir = dirHandle;
+        for (const seg of relDir.split(/[\\/]/).filter(Boolean))
+            dir = await dir.getDirectoryHandle(seg);
+        return await dir.getFileHandle(fileName);
+    }
+
+    // There's no way to hint the native folder picker at a specific starting folder, so
+    // the user could grant any ancestor of the true per-server log root: the exact root
+    // itself (Logs:RootFolder with {server} expanded), its parent, or further up.
+    // rootTemplate is that same config value (e.g. "C:\Temp\logs\{server}"). Expand
+    // {server} and split it into segments, then try resolving as if the granted folder
+    // were each possible depth along that chain, closest-to-leaf first — this covers
+    // whatever level the user actually picked instead of guessing one specific ancestor
+    // depth. Doesn't try to match the granted folder's name against anything.
+    function candidatePaths(server, rootTemplate, relDir) {
+        const candidates = [relDir]; // exact-root case: granted folder IS the per-server root
+        if (rootTemplate) {
+            const segs = rootTemplate.split(/[\\/]+/).filter(Boolean)
+                .map(s => s.replace(/\{server\}/gi, server));
+            for (let i = segs.length - 1; i >= 0; i--)
+                candidates.push([...segs.slice(i + 1), relDir].filter(Boolean).join('\\'));
+        }
+        return candidates;
+    }
+
+    async function resolveFileFlexible(dirHandle, server, rootTemplate, relDir, fileName) {
+        const candidates = candidatePaths(server, rootTemplate, relDir);
+        let lastErr;
+        for (const path of candidates) {
+            try {
+                return await resolveFile(dirHandle, path, fileName);
+            } catch (err) {
+                lastErr = err;
+            }
+        }
+        console.warn('[bmLogFileAccess] could not resolve', JSON.stringify(fileName), 'under granted folder',
+            JSON.stringify(dirHandle.name), '- tried relative paths:', candidates, lastErr);
+        throw lastErr;
+    }
+
+    let _seq = 0;
+    function stashText(text) {
+        window._localFiles = window._localFiles || new Map();
+        const key = 'lf' + (++_seq);
+        window._localFiles.set(key, text);
+        return key;
+    }
+
+    return {
+        isSupported: () => !!window.showDirectoryPicker,
+
+        // Reuses a previously-granted folder for this server — no folder-picker
+        // dialog. Chrome/Edge don't persist the *permission grant* itself across
+        // page reloads (only the handle survives in IndexedDB), so this still
+        // has to re-request permission on that same handle if it reverted to
+        // 'prompt'; that's a lightweight one-line confirm bar, not a folder
+        // reselection, and still only fires as an effect of the caller's own
+        // user gesture (e.g. the double-click that led here).
+        // Returns a _localFiles key on success, or null if there's no stored
+        // handle at all, or the user declines the permission re-confirm
+        // (caller should then fall back to openWithGrant).
+        tryOpenSilently: async function (server, rootTemplate, relDir, fileName) {
+            if (!window.showDirectoryPicker) return null;
+            try {
+                const handle = await getStoredHandle(server);
+                if (!handle) return null;
+
+                let perm = await handle.queryPermission({ mode: 'read' });
+                if (perm !== 'granted') perm = await handle.requestPermission({ mode: 'read' });
+                if (perm !== 'granted') return null;
+
+                const fh = await resolveFileFlexible(handle, server, rootTemplate, relDir, fileName);
+                const file = await fh.getFile();
+                return stashText(await file.text());
+            } catch (err) {
+                console.warn('[bmLogFileAccess] tryOpenSilently failed:', err);
+                return null;
+            }
+        },
+
+        // Prompts the user to grant access to a folder (native picker — call this from
+        // a user-gesture context, e.g. a click handler), then resolves the file from it.
+        // Returns a _localFiles key, or null if the user cancelled, the browser doesn't
+        // support this API, or the granted folder doesn't contain the expected path at
+        // any ancestor depth along rootTemplate.
+        openWithGrant: async function (server, rootTemplate, relDir, fileName) {
+            if (!window.showDirectoryPicker) return null;
+            try {
+                const handle = await window.showDirectoryPicker({ id: 'bm-log-root-' + server, mode: 'read' });
+                const fh = await resolveFileFlexible(handle, server, rootTemplate, relDir, fileName);
+                const file = await fh.getFile();
+                const text = await file.text();
+                await storeHandle(server, handle); // persist only once it's confirmed to resolve
+                return stashText(text);
+            } catch (err) {
+                if (err && err.name === 'AbortError') return null; // user cancelled — not an error
+                console.warn('[bmLogFileAccess] grant/open failed:', err);
+                return null;
+            }
+        },
+    };
+})();
+
+// Single-file picker for the File Browser's "Open local file" toolbar button —
+// unrelated to the granted-folder flow above (reads whatever file the user
+// picks, doesn't try to match it against any configured log root).
+window.bmOpenLocalLogFile = async function (dotNetRef) {
+    try {
+        let file;
+        if (window.showOpenFilePicker) {
+            const [fh] = await window.showOpenFilePicker({ multiple: false });
+            file = await fh.getFile();
+        } else {
+            file = await new Promise((resolve, reject) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.onchange = () => resolve(input.files[0] || null);
+                input.onerror   = reject;
+                input.click();
+            });
+        }
+        if (!file) return;
+        window._localFiles = window._localFiles || new Map();
+        const key = 'lf-local-' + Date.now();
+        window._localFiles.set(key, await file.text());
+        await dotNetRef.invokeMethodAsync('OnLocalFileOpened', key, file.name);
+    } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.warn('[bmOpenLocalLogFile] failed:', err);
+    }
+};
 FILE src/NxtUI.Web/wwwroot/js/log-format-grammar.contract.test.js
 LENGTH 1560
 import { describe, it, expect } from 'vitest'

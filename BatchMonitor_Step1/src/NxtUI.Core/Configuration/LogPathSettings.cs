@@ -70,4 +70,40 @@ public class LogPathSettings
     /// result list and the render workload without bound for as long as the search keeps running.
     /// </summary>
     public int MaxSearchResults { get; set; } = 5000;
+
+    /// <summary>
+    /// How the Log Browser reads a file's content when a file is opened. See
+    /// <see cref="LogFileAccessMode"/>. Default: <see cref="LogFileAccessMode.ServerOnly"/>
+    /// (unchanged historical behavior).
+    /// </summary>
+    public LogFileAccessMode FileAccessMode { get; set; } = LogFileAccessMode.ServerOnly;
+}
+
+/// <summary>
+/// Controls how the Log Browser reads a file's content when opened (double-click, or the
+/// toolbar "view" button). The client-side modes use the File System Access API — Chromium
+/// only (Chrome/Edge; no Firefox/Safari) — reading directly from the log root's network
+/// share instead of having the server read it and ship the content over the SignalR
+/// circuit. The first file opened per server prompts a one-time "grant folder access"
+/// dialog; later opens on that server reuse the granted handle (re-requesting permission
+/// only, no dialog, if the browser reset the grant on reload).
+/// </summary>
+public enum LogFileAccessMode
+{
+    /// <summary>Server always reads the file and ships it over SignalR (original behavior).</summary>
+    ServerOnly,
+
+    /// <summary>
+    /// Try client-side read first; if it fails for any reason (unsupported browser, user
+    /// cancelled the grant, granted folder doesn't contain the file), fall back to
+    /// <see cref="ServerOnly"/> automatically.
+    /// </summary>
+    ClientWithFallback,
+
+    /// <summary>
+    /// Client-side read only — if it fails, show an error instead of silently falling back
+    /// to a server read. Useful for verifying the client-side path is actually working,
+    /// since <see cref="ClientWithFallback"/>'s fallback can mask a broken client-side path.
+    /// </summary>
+    ClientOnly,
 }

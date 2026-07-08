@@ -12,6 +12,7 @@
 @inject IJSRuntime JS
 @inject ILogger<FileBrowser> Logger
 @inject DateTimeDisplayService DtSvc
+@inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -302,9 +303,10 @@
     // full RelativePath by default (not just its own Name), so typing an ancestor
     // segment (e.g. "orders") surfaces every folder underneath it, not just folders
     // literally named "orders". A folder is kept if it matches OR any of its (loaded)
-    // descendants match — see NodeMatchesOrHasDescendantMatch — and the whole subtree
-    // is eagerly loaded once a filter is active (see EnsureTreeLoadedAsync) so the
-    // filter can actually see branches the user hasn't manually expanded yet.
+    // descendants match — see NodeMatchesOrHasDescendantMatch. Purely client-side:
+    // operates only on whatever's already in _rootNodes/_childCache (i.e. branches the
+    // user has manually expanded at some point) — typing a filter never itself triggers
+    // a server call to go fetch unexplored branches just to search inside them.
     private static readonly FilterParser TreeFilterParser = new(
         searchableFields: ["RelativePath"],
         aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -322,50 +324,14 @@
     private string      _treeFilterText  = "";
     private string?     _treeFilterError;
     private FilterNode? _treeFilterNode;
-    private bool        _treeFullyLoaded;
 
-    private async Task OnTreeFilterChanged(string v)
+    private void OnTreeFilterChanged(string v)
     {
         _treeFilterText  = v;
         _treeFilterError = null;
         if (string.IsNullOrWhiteSpace(v)) { _treeFilterNode = null; return; }
         try   { _treeFilterNode = TreeFilterParser.Parse(v, DtSvc.UseUtc); }
-        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; return; }
-
-        await EnsureTreeLoadedAsync();
-        StateHasChanged();
-    }
-
-    /// <summary>
-    /// Eagerly loads folders 3 levels deep so the tree filter has something to search
-    /// inside branches the user hasn't manually expanded yet. This 3-level cap is a
-    /// deliberate eager-prefetch bound for the filter only — it does not limit how deep
-    /// a user can manually expand/navigate (LogBrowserTreeNode fetches on demand at
-    /// unlimited depth; this just controls how far ahead the filter searches without
-    /// the user having opened anything). Runs once per session (or since the last full
-    /// Refresh) — real infra may have many folders, so this isn't repeated on every keystroke.
-    /// </summary>
-    private async Task EnsureTreeLoadedAsync()
-    {
-        if (_treeFullyLoaded) return;
-        _treeFullyLoaded = true;
-
-        async Task LoadLevelAsync(IEnumerable<LogFolderNode> nodes, int depthRemaining)
-        {
-            if (depthRemaining <= 0) return;
-            foreach (var node in nodes)
-            {
-                if (!node.HasChildren) continue;
-                if (!_childCache.ContainsKey(node.RelativePath))
-                {
-                    var children = await BrowserSvc.GetSubfoldersAsync(_servers, node.RelativePath, _cts.Token);
-                    _childCache[node.RelativePath] = children;
-                }
-                await LoadLevelAsync(_childCache[node.RelativePath], depthRemaining - 1);
-            }
-        }
-
-        await LoadLevelAsync(_rootNodes, 3);
+        catch (Exception ex) { _treeFilterError = ex.Message; _treeFilterNode = null; }
     }
 
     private List<LogFolderNode> FilteredRootNodes =>
@@ -528,6 +494,14 @@
 
             current = string.IsNullOrEmpty(current) ? seg : current + "\\" + seg;
             _expanded.Add(current);
+
+            // Fetch this node's own children too, not just as a lookahead for the next
+            // segment — without this, the deepest (last) segment gets marked expanded
+            // but its children never get cached, so the tree shows it as expanded with
+            // nothing underneath until the user manually collapses and re-expands it
+            // (which is what triggers OnExpandedChangedAsync's own fetch below).
+            if (!_childCache.ContainsKey(current))
+                _childCache[current] = await BrowserSvc.GetSubfoldersAsync(_servers, current, _cts.Token);
         }
     }
 
@@ -875,8 +849,54 @@
 
     // ── helpers ───────────────────────────────────────────────────────────
 
-    private void OpenInViewer(LogFileEntry file) =>
+    private async Task OpenInViewer(LogFileEntry file)
+    {
+        var mode = LogSettings.Value.FileAccessMode;
+
+        if (mode != LogFileAccessMode.ServerOnly)
+        {
+            var key = await TryOpenClientSideAsync(file);
+            if (key is not null)
+            {
+                var tab = TabModel.CreateLogWorkspace("local:" + key, Env);
+                tab.Label      = file.FileName;
+                tab.NoNavigate = true;
+                TabService.OpenOrFocus(tab);
+                return;
+            }
+
+            if (mode == LogFileAccessMode.ClientOnly)
+            {
+                Snackbar.Add("Client-side file access failed — see browser console for details", Severity.Error);
+                return;
+            }
+        }
+
+        // ServerOnly, or ClientWithFallback's fallback: server reads the file and ships
+        // it over the circuit — either the browser doesn't support the File System
+        // Access API, the user cancelled the one-time folder grant, or the granted
+        // folder didn't actually contain this file (wrong folder granted).
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));
+    }
+
+    /// <summary>
+    /// Tries to read <paramref name="file"/> directly in the browser instead of having
+    /// the server read it. Returns a window._localFiles key on success, null on any
+    /// failure (caller falls back to the normal server-read path).
+    /// </summary>
+    private async Task<string?> TryOpenClientSideAsync(LogFileEntry file)
+    {
+        if (BrowserSvc.ParseHintPath(file.FullPath, _servers) is not (var server, var relPath))
+            return null;
+
+        var lastSep = relPath.LastIndexOfAny(['\\', '/']);
+        var relDir  = lastSep >= 0 ? relPath[..lastSep] : string.Empty;
+        var rootTemplate = LogSettings.Value.RootFolder;
+
+        var key = await JS.InvokeAsync<string?>("bmLogFileAccess.tryOpenSilently", server, rootTemplate, relDir, file.FileName);
+        key ??= await JS.InvokeAsync<string?>("bmLogFileAccess.openWithGrant", server, rootTemplate, relDir, file.FileName);
+        return key;
+    }
 
     private void OpenInWorkspace(LogFileEntry file) =>
         TabService.OpenOrFocus(TabModel.CreateLogWorkspace(file.FullPath, Env));

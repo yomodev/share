@@ -66,6 +66,30 @@ A filterable, sortable table of every AI run.
 
 ---
 
+## Run Detail
+
+Opened from a Runs row (or the Recent Runs list on Home). Shows the run's flow
+graph — one node per service, one row per pipeline within it — inferred live
+from the run's events.
+
+- **Pipeline row popover** — click a pipeline row to see its per-instance
+  breakdown (server + PID, done/in-progress counts):
+  - Click an instance row (tooltip "Open logs") to open that instance's log
+    folder in the File Browser. If the exact server+PID folder isn't found
+    (e.g. the process isn't running anymore), it falls back to the service's
+    parent folder for that day instead of failing outright.
+  - "Browse topic" opens the pipeline's inferred input topic in the Kafka
+    Topic Inspector.
+- **Row/header color**: green = fully drained (nothing left in flight for
+  that pipeline), blue = still has work in flight; bright = active recently,
+  dim = true but quiet for a while.
+- **Replay slider** — scrubs the graph back to how it looked at any past
+  timestamp; drag to the right edge (or the Live button) to snap back to the
+  live view.
+- **Timeline** button (top bar) opens this run in the Timeline tab.
+
+---
+
 ## Services
 
 A live table/card view of every running service process, refreshed on a
@@ -170,6 +194,10 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   search bar pauses it (search results are a point-in-time snapshot, not a
   live view), and it stops entirely if the tab isn't focused.
 - Double-click a file (or use its row actions) to open it in the Log Viewer.
+  Depending on `Logs:FileAccessMode` in config, this may read the file
+  directly in your browser instead of via the server (Chromium only —
+  Chrome/Edge): the first file opened per server prompts a one-time "grant
+  folder access" dialog, and later opens on that server reuse it silently.
 
 ### Log Viewer
 

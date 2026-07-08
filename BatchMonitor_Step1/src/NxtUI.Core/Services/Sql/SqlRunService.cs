@@ -202,7 +202,7 @@ public class SqlRunService(
         Service = d.GetValue("Service", BsonNull.Value).AsString ?? string.Empty,
         Pipeline = d.GetValue("Pipeline", BsonNull.Value).AsString ?? string.Empty,
         Server = d.GetValue("Server", BsonNull.Value).AsString ?? string.Empty,
-        ProcessId = d.GetValue("ProcessId", BsonNull.Value).AsString ?? string.Empty,
+        ProcessId = d.Contains("ProcessId") && !d["ProcessId"].IsBsonNull ? d["ProcessId"].ToInt32() : 0,
         Start = d.GetValue("Start", BsonNull.Value).ToUniversalTime(),
         Finish = d.Contains("Finish") && !d["Finish"].IsBsonNull ? d["Finish"].ToUniversalTime() : null,
         Error = d.Contains("Error") && !d["Error"].IsBsonNull ? d["Error"].AsString : null,

@@ -84,7 +84,8 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         var allNames = events.Select(e => e.Name).Distinct().ToHashSet();
         topology.TotalChunks = allNames.Count;
         topology.TotalDone = events.Count(e => e.IsDone);
-        topology.TotalInProgress = events.Count(e => !e.IsDone);
+        // Every event is either done or not — no need for a second full scan.
+        topology.TotalInProgress = events.Count - topology.TotalDone;
 
         // ── Phase 3: infer pipeline-to-pipeline edges from chunk flow ────
         // For each chunk, order the (service, pipeline) hops it visited by
@@ -185,9 +186,14 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         string pipeline, List<PerformanceEvent> pipelineEvents, DateTime latestEventTime,
         Func<string, string> format, TimeSpan recentActivityWindow)
     {
-        var done = pipelineEvents.Count(e => e.IsDone);
-        var inProgress = pipelineEvents.Count(e => !e.IsDone);
-        var errors = pipelineEvents.Count(e => e.IsError);
+        // Single pass instead of four separate Count() scans over the same list.
+        int done = 0, inProgress = 0, errors = 0, recentDone = 0;
+        foreach (var e in pipelineEvents)
+        {
+            if (e.IsDone) done++; else inProgress++;
+            if (e.IsError) errors++;
+            if (e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= recentActivityWindow) recentDone++;
+        }
 
         var row = new PipelineRow
         {
@@ -202,19 +208,13 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
 
         // Recent throughput: fraction of "done" events that finished within
         // the recent-activity window of the latest known event time.
-        var recentDone = pipelineEvents.Count(e =>
-            e.Finish.HasValue && (latestEventTime - e.Finish.Value) <= recentActivityWindow);
         row.RecentThroughputScore = done > 0
             ? Math.Clamp((double)recentDone / Math.Max(done, 1), 0.0, 1.0)
             : 0.0;
 
         row.State = DetermineState(row, recentDone);
 
-        // Per-instance breakdown, sorted by server then PID per §8.2. ProcessId is a
-        // display string (see PerformanceEvent.ProcessId), but it represents an
-        // integer — sorting it with StringComparer put PID "10" before "2". Same bug
-        // class as the Timeline's group sort; fix is the same idea: parse numerically
-        // for ordering, falling back to the raw string only if it's ever non-numeric.
+        // Per-instance breakdown, sorted by server then PID per §8.2.
         row.Instances = pipelineEvents
             .GroupBy(e => (e.Server, e.ProcessId))
             .Select(g => new InstanceStats(
@@ -223,8 +223,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                 doneCount: g.Count(e => e.IsDone),
                 inProgressCount: g.Count(e => !e.IsDone)))
             .OrderBy(i => i.Server, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(i => long.TryParse(i.ProcessId, out var pid) ? pid : long.MaxValue)
-            .ThenBy(i => i.ProcessId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => i.ProcessId)
             .ToList();
 
         return row;

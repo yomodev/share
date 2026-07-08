@@ -421,7 +421,7 @@
                 Source    = Col(iSource),
                 Pipeline  = Col(iPipeline),
                 Service   = Col(iService),
-                ProcessId = Col(iPid),
+                ProcessId = int.TryParse(Col(iPid), out var pid) ? pid : 0,
                 Server    = Col(iServer),
                 Start     = startDt,
                 Finish    = finishDt,
