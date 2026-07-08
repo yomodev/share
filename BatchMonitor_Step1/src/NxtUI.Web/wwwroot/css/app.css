@@ -479,9 +479,11 @@ html, body {
    ================================================================ */
 
 .bm-home {
+    /* No page-level scrollbar — the header and both section headers are fixed
+       height (flex-shrink:0 below), and the treemap/runs-table sections fill
+       whatever's left (flex:1) with their own internal scrolling instead. */
     height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     padding: 24px 28px;
     display: flex;
     flex-direction: column;
@@ -559,12 +561,20 @@ html, body {
     text-transform: uppercase; letter-spacing: 0.06em;
 }
 
-/* Mini summary table */
+/* Mini summary table — takes 3/4 of whatever's left of .bm-home below the
+   fixed-height header/section-headers (see .bm-home-treemap-wrap's 1/4 share),
+   with BmRunsTable's own .bm-table-wrap/.bm-batch-table flex chain (app.css
+   below) filling it in turn: sticky header, internally scrolling body only
+   (min-height:0 so it can actually shrink to that space instead of overflowing
+   and forcing a page-level scrollbar). */
 .bm-mini-summary {
     border: 1px solid var(--mud-palette-divider) !important;
     border-radius: var(--bm-radius-lg) !important;
     overflow: hidden;
-    flex-shrink: 0;
+    flex: 3;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 .bm-mini-summary-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -1889,6 +1899,7 @@ html, body {
     align-items: center;
     justify-content: space-between;
     margin: 20px 0 10px;
+    flex-shrink: 0;
 }
 
 .bm-infra-grid {
@@ -1901,7 +1912,12 @@ html, body {
 .bm-home-treemap-wrap {
     position: relative;
     width: 100%;
-    height: 200px;
+    /* 1:3 split of whatever's left of .bm-home below the fixed-height
+       header/section headers — see .bm-mini-summary, which takes the rest.
+       min-height keeps it from being squeezed below a usable size when the
+       viewport is short. */
+    flex: 1;
+    min-height: 80px;
 }
 
 .bm-home-treemap {

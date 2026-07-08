@@ -168,7 +168,7 @@
     <MudPaper Elevation="0" Class="bm-mini-summary">
         <BmRunsTable Rows="@_recent"
                      Loading="@_runsLoading"
-                     FixedHeader="false"
+                     FixedHeader="true"
                      ShowPaginationAndFilter="false"
                      OnOpenDetail="@(r => OpenDetail(r))"
                      OnOpenTimeline="@(r => OpenTimeline(r))"

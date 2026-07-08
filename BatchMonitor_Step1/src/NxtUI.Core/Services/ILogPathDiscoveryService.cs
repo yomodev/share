@@ -27,6 +27,15 @@ public interface ILogPathDiscoveryService
     Task<string?> FindNowAsync(ServiceStatus svc, string env);
 
     /// <summary>
+    /// Like <see cref="FindNowAsync"/>, but resolves the same templates with the
+    /// PID segment treated as a wildcard — for when the caller only knows the
+    /// service and server (e.g. a historical run's log instance whose PID isn't
+    /// currently running) and any matching folder for that service is good enough.
+    /// Not cached — callers already have a specific PID's result cached/failed.
+    /// </summary>
+    Task<string?> FindServiceFolderAsync(ServiceStatus svc, string env);
+
+    /// <summary>
     /// Fires when a path is successfully resolved. Argument is the cache key
     /// so subscribers can call StateHasChanged selectively.
     /// </summary>

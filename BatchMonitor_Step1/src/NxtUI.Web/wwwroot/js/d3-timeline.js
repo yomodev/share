@@ -261,6 +261,11 @@ const TIMELINE_ALIASES = {
             hoveredName: null,
             hoveredBlockData: null,
             subrowHOverride: null,
+            // Delay (ms) before highlighting same-id blocks / showing the tooltip on
+            // hover — see setHoverDelayMs. 0 = immediate. If the pointer leaves the
+            // block before this fires, hoverDelayTimer is cancelled and nothing shows.
+            hoverDelayMs: 0,
+            hoverDelayTimer: null,
             // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
             // this) — same key still always gets the same colour for a given seed, only
             // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
@@ -382,6 +387,7 @@ const TIMELINE_ALIASES = {
         s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
+        clearTimeout(s.hoverDelayTimer);
         try { s.laneSvg.remove(); } catch {}
         try { s.botSvg.remove(); } catch {}
         try { s.tooltip.remove(); } catch {}
@@ -917,21 +923,33 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        s.hoveredName  = d.e.name;
-        s.hoveredBlockData = d;
-        s.blockL.selectAll('rect.bm-tl-block')
-            .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
-            .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
-        if (s.showTooltip) showTooltip(s, event, d);
+        clearTimeout(s.hoverDelayTimer);
+        const delay = s.hoverDelayMs || 0;
+        if (delay <= 0) {
+            applyHoverHighlight(s, event, d);
+            return;
+        }
+        s.hoverDelayTimer = setTimeout(() => applyHoverHighlight(s, event, d), delay);
     }
 
     function onBlockLeave(s, event, d) {
+        clearTimeout(s.hoverDelayTimer);
+        s.hoverDelayTimer = null;
         s.hoveredName   = null;
         s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.status === 'inprogress' ? 0.6 : 1)
             .style('stroke-width', '0.5px');
         hideTooltip(s);
+    }
+
+    function applyHoverHighlight(s, event, d) {
+        s.hoveredName  = d.e.name;
+        s.hoveredBlockData = d;
+        s.blockL.selectAll('rect.bm-tl-block')
+            .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
+            .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
+        if (s.showTooltip) showTooltip(s, event, d);
     }
 
     // ── Tooltip ───────────────────────────────────────────────────────────
@@ -1247,4 +1265,10 @@ const TIMELINE_ALIASES = {
         if (!show) hideTooltip(s);
     }
 
-export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible };
+    function setHoverDelayMs(key, ms) {
+        const s = _instances.get(key);
+        if (!s) return;
+        s.hoverDelayMs = Math.max(0, ms | 0);
+    }
+
+export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelayMs };

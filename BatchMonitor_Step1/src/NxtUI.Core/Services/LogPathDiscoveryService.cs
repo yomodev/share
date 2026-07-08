@@ -50,6 +50,22 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         return await task;
     }
 
+    public Task<string?> FindServiceFolderAsync(ServiceStatus svc, string env) =>
+        Task.Run(() =>
+        {
+            foreach (var template in options.Value.ServiceTemplates)
+            {
+                // Pre-substitute {pid} with '*' before Expand runs, so Expand's own
+                // {pid} replacement is a no-op and ResolveWildcard treats it as any
+                // other wildcard segment (picks the most-recently-modified match).
+                var wildcardTemplate = template.Replace("{pid}", "*", StringComparison.OrdinalIgnoreCase);
+                var expanded = ExpandTemplate(wildcardTemplate, svc, env);
+                var resolved = ResolveWildcard(expanded);
+                if (resolved is not null) return resolved;
+            }
+            return null;
+        });
+
     public void PruneStaleEntries(string env, IReadOnlySet<string> activeKeys)
     {
         var prefix = env + "|";

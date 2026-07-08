@@ -9,6 +9,8 @@
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<UiSettings> UiOptions
+@inject ILogPathDiscoveryService DiscoverySvc
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 @code {
@@ -263,6 +265,34 @@
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
+    private async Task OpenInstanceLogFromGraph((string Service, string Server, string ProcessId) info)
+    {
+        var (service, server, processId) = info;
+        if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
+
+        var svc = new ServiceStatus
+        {
+            ServiceName = service,
+            HostName = server,
+            ProcessId = int.TryParse(processId, out var pid) ? pid : 0,
+            UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
+        };
+
+        var path = DiscoverySvc.GetCachedPath(svc, Environment)
+            ?? await DiscoverySvc.FindNowAsync(svc, Environment)
+            ?? await DiscoverySvc.FindServiceFolderAsync(svc, Environment);
+
+        if (path is null)
+        {
+            Snackbar.Add("Log path not found", Severity.Warning);
+            return;
+        }
+
+        var tab = TabModel.CreateFilesDashboard(Environment);
+        tab.NavigationHint = path;
+        TabService.OpenOrFocus(tab);
+    }
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public void Dispose()
@@ -398,7 +428,8 @@
         @* D3FlowGraph stays mounted permanently — mounting/unmounting it races
            with Blazor's DOM patcher and causes removeChild crashes. *@
         <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
-                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph" />
+                     OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
+                     OnOpenInstanceLog="OpenInstanceLogFromGraph" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>

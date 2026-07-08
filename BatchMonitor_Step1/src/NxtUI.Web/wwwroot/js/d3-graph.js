@@ -745,6 +745,13 @@ const D3Graph = (() => {
         handle.popover.select('.bm-pop-kafka').on('click', () => {
             if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenKafkaTopic', topic);
         });
+        handle.popover.selectAll('.bm-pop-inst').each(function (_, idx) {
+            const inst = instances[idx];
+            d3.select(this).on('click', () => {
+                if (handle.dotNetRef)
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.data.label, inst.server, String(inst.processId ?? ''));
+            });
+        });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))
             .on('mouseleave', () => scheduleHidePopover(handle));

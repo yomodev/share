@@ -1,5 +1,5 @@
 /* ================================================================
-   D3 FLOW GRAPH  (rev 4)
+   D3 FLOW GRAPH  (rev 5)
    ================================================================ */
 
 .bm-d3-flow-graph {
@@ -177,8 +177,12 @@
     padding: 4px 10px;
     border-top: 1px solid var(--mud-palette-divider);
     font-size: 0.72rem;
+    cursor: pointer;
+    transition: background 110ms;
 }
 .bm-pop-inst:first-of-type { border-top: none; }
+.bm-pop-inst:hover { background: rgba(56,139,253,0.12); }
+.bm-pop-inst:hover .bm-pop-srv { color: var(--mud-palette-primary); }
 .bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
    left-aligned — PID is the leftmost column, so the server column after it

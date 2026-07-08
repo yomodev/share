@@ -42,15 +42,26 @@ window.homeMemoryTreemap = (function () {
 
     // ── paint ──────────────────────────────────────────────────────────────────
 
-    function paint(container, data, forcedW) {
+    function paint(container, data, forcedW, forcedH) {
         // Only clear the container (which may hold the spinner) when we actually
         // have data to show. Returning before clearing keeps the spinner alive.
         if (!data || !data.children || data.children.length === 0) return;
 
-        d3.select(container).selectAll('*').remove();
+        const rect = container.getBoundingClientRect();
+        const W = forcedW || rect.width  || container.offsetWidth  || 600;
+        const H = forcedH || rect.height || container.offsetHeight || 0;
 
-        const W = forcedW || container.getBoundingClientRect().width || container.offsetWidth || 600;
-        const H = container.getBoundingClientRect().height || container.offsetHeight || 180;
+        // The container hasn't been laid out yet — e.g. paint() runs synchronously
+        // from start() right as a hidden tab regains visibility, before the browser
+        // has committed this frame's flex layout, so getBoundingClientRect() still
+        // reports a stale/collapsed box. Painting into that gave the "sometimes very
+        // small" treemap; retry next frame instead of drawing at a bogus height.
+        if (H < 20) {
+            requestAnimationFrame(() => paint(container, data, forcedW, forcedH));
+            return;
+        }
+
+        d3.select(container).selectAll('*').remove();
 
         // Each service gets at least 4 units so offline/no-data services are
         // still visible as small rectangles rather than collapsed to nothing.
@@ -257,10 +268,13 @@ window.homeMemoryTreemap = (function () {
                 '</div>';
         }
 
-        // ResizeObserver repaints on resize using the last fetched data.
+        // ResizeObserver repaints on resize using the last fetched data. Reacts to
+        // height changes too (not just width) — a container that settles to its
+        // final height without a width change (e.g. late flex layout) still needs
+        // a repaint, otherwise it stays stuck at whatever height paint() saw last.
         s.ro = new ResizeObserver(entries => {
-            const w = entries[0]?.contentRect.width;
-            if (w > 0 && s.data) paint(container, s.data, w);
+            const cr = entries[0]?.contentRect;
+            if (cr && (cr.width > 0 || cr.height > 0) && s.data) paint(container, s.data, cr.width, cr.height);
         });
         s.ro.observe(container);
 
