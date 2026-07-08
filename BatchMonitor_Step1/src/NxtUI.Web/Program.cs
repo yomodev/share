@@ -107,6 +107,11 @@ public class Program
         //     sp.GetRequiredService<IOptions<MongoSettings>>(),
         //     sp.GetRequiredService<ILogger<SqlRunService>>()));
 
+        // Shares one poll loop across all circuits watching the same run, for
+        // backends that don't push events themselves (skips MockRunService — see
+        // IPushesOwnRunEvents).
+        builder.Services.AddHostedService<RunEventWatcher>();
+
         // ── Kafka ─────────────────────────────────────────────────────────────
         // Mock: no broker required.  Real: swap comment block below.
         builder.Services.AddSingleton<MockKafkaService>();

@@ -17,11 +17,20 @@ namespace NxtUI.Web.Services;
 /// If a genuinely external process ever needs to publish run events over the
 /// network, reintroduce a hub that calls <see cref="Publish"/> on receipt —
 /// subscribers here don't need to change.
+///
+/// <see cref="RunWatchStarted"/>/<see cref="RunWatchStopped"/> fire on the
+/// 0→1 / 1→0 subscriber-count transition for a given run, regardless of who's
+/// subscribing or publishing — <see cref="RunEventWatcher"/> uses these to
+/// start/stop a shared server-side poller for backends that don't push on
+/// their own (see <see cref="IPushesOwnRunEvents"/>).
 /// </summary>
 public class RunEventBroker(ILogger<RunEventBroker> logger)
 {
     private readonly Dictionary<string, List<Func<PerformanceEvent, Task>>> _handlers = new();
     private readonly object _lock = new();
+
+    public event Action<string, string>? RunWatchStarted;
+    public event Action<string, string>? RunWatchStopped;
 
     // ── Public API ────────────────────────────────────────────────────────
 
@@ -31,23 +40,29 @@ public class RunEventBroker(ILogger<RunEventBroker> logger)
         CancellationToken ct = default)
     {
         var key = Key(env, runId);
+        bool isFirst;
         lock (_lock)
         {
-            if (!_handlers.TryGetValue(key, out var list))
+            isFirst = !_handlers.TryGetValue(key, out var list);
+            if (isFirst)
             {
                 list = new List<Func<PerformanceEvent, Task>>();
                 _handlers[key] = list;
             }
-            list.Add(handler);
+            list!.Add(handler);
         }
 
-        return Task.FromResult<IDisposable>(new Unsubscriber(() => Unsubscribe(key, handler)));
+        if (isFirst) RunWatchStarted?.Invoke(env, runId);
+
+        return Task.FromResult<IDisposable>(new Unsubscriber(() => Unsubscribe(env, runId, key, handler)));
     }
 
     public void UnsubscribeFromRun(string env, string runId)
     {
         var key = Key(env, runId);
-        lock (_lock) { _handlers.Remove(key); }
+        bool hadAny;
+        lock (_lock) { hadAny = _handlers.Remove(key); }
+        if (hadAny) RunWatchStopped?.Invoke(env, runId);
     }
 
     /// <summary>Fans an event out to every current subscriber of (env, runId). Fire-and-forget per handler.</summary>
@@ -75,16 +90,24 @@ public class RunEventBroker(ILogger<RunEventBroker> logger)
         catch (Exception ex) { logger.LogWarning(ex, "RunEvent handler error"); }
     }
 
-    private void Unsubscribe(string key, Func<PerformanceEvent, Task> handler)
+    private void Unsubscribe(string env, string runId, string key, Func<PerformanceEvent, Task> handler)
     {
+        bool becameEmpty;
         lock (_lock)
         {
-            if (_handlers.TryGetValue(key, out var list))
+            if (!_handlers.TryGetValue(key, out var list))
+            {
+                becameEmpty = false;
+            }
+            else
             {
                 list.Remove(handler);
-                if (list.Count == 0) _handlers.Remove(key);
+                becameEmpty = list.Count == 0;
+                if (becameEmpty) _handlers.Remove(key);
             }
         }
+
+        if (becameEmpty) RunWatchStopped?.Invoke(env, runId);
     }
 
     private sealed class Unsubscriber(Action action) : IDisposable

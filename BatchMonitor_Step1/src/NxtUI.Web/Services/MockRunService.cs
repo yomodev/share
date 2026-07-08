@@ -5,7 +5,7 @@ using NxtUI.Core.Filtering;
 
 namespace NxtUI.Web.Services;
 
-public class MockRunService : IRunService
+public class MockRunService : IRunService, IPushesOwnRunEvents
 {
     private static readonly string[] RunTypes = { "FullLoad", "DeltaSync", "Reconcile", "Archive" };
     private static readonly string[] RunEntities = { "Customers", "Orders", "Products", "Inventory", "Pricing", "Contracts", "Shipments", "Invoices" };
