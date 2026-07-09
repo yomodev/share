@@ -352,10 +352,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 foreach (var line in result.Lines)
                 {
                     if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
-                    entry.Latest = sample;
-                    entry.History.Add(sample);
-                    if (entry.History.Count > MaxHistory)
-                        entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
+                    // Sorted insert, not a blind Add — this same entry can also be written by
+                    // the Kafka-live path and the disk-backfill path (both already sorted via
+                    // UpsertSample). A blind append here could land a sample earlier than ones
+                    // already inserted by those other paths, breaking History's chronological
+                    // order — which showed up as a backward jump (a triangular "hole") in the
+                    // service card's sparkline, since its path-drawing just connects points in
+                    // list order and assumes ascending timestamps.
+                    UpsertSample(entry, sample);
                     parsedAny = true;
                     Interlocked.Increment(ref parsed);
                 }

@@ -9,6 +9,7 @@
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.UiSettings> UiOptions
 @inject DateTimeDisplayService DtSvc
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 @code {
@@ -361,6 +362,7 @@
         catch (Exception ex)
         {
             Console.WriteLine($"[Timeline] Import error: {ex.Message}");
+            Notifications.Report($"Failed to import CSV: {ex.Message}", ex, "Timeline");
         }
     }
 

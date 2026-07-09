@@ -804,6 +804,67 @@ function renderLocalFile(container, key, opts) {
     render(container, raw, opts);
 }
 
+/**
+ * Fetches a file over plain HTTP and parses it incrementally as bytes arrive, instead
+ * of the server reading the whole file into one string and shipping it over the
+ * SignalR circuit in a single interop call. Reuses render() for the first line-aligned
+ * chunk (sets up the doc/viewport, detects the line format) and appendRaw() for every
+ * chunk after that — same per-viewport update logic (search re-eval, scroll-follow)
+ * either way, no separate code path to keep in sync.
+ *
+ * Chunks from the network aren't aligned to line boundaries, so a trailing partial
+ * line is buffered ("carry") and prepended to the next chunk before parsing — parseMore
+ * expects complete lines, same assumption the live-tail appendRaw path already relies on.
+ *
+ * anchorLine is deferred until the whole file has streamed in, since the target line
+ * may not exist yet in the first chunk(s).
+ */
+async function renderStream(container, url, options = {}) {
+    let firstChunkDone = false;
+    let carry = '';
+
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+
+        while (true) {
+            const { done, value } = await reader.read();
+            const decoded = value ? decoder.decode(value, { stream: !done }) : '';
+            let text = carry + decoded;
+
+            if (!done) {
+                const lastNl = text.lastIndexOf('\n');
+                if (lastNl < 0) { carry = text; if (!value) break; continue; }
+                carry = text.slice(lastNl + 1);
+                text  = text.slice(0, lastNl + 1);
+            } else {
+                text += decoder.decode(); // flush any buffered multi-byte tail
+                carry = '';
+            }
+
+            if (text) {
+                if (!firstChunkDone) {
+                    firstChunkDone = true;
+                    render(container, text, { ...options, anchorLine: null });
+                } else {
+                    appendRaw(container, text);
+                }
+            }
+            if (done) break;
+        }
+    } catch (err) {
+        console.error('[logViewer] renderStream failed:', err);
+    }
+
+    // Empty/failed fetch — still stand up an (empty) viewport instead of leaving a blank pane.
+    if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
+
+    if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
+}
+
 // Expose on window so Blazor JS interop (InvokeVoidAsync / InvokeAsync) can reach it.
 function registerDotNetRef(container, dotNetRef) {
     const vp = _vp.get(container);
@@ -811,7 +872,7 @@ function registerDotNetRef(container, dotNetRef) {
 }
 
 window.logViewer = {
-    render, renderLocalFile,
+    render, renderLocalFile, renderStream,
     appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,

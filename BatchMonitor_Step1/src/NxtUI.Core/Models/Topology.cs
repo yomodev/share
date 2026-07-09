@@ -107,14 +107,26 @@ public class InstanceStats
     public int DoneCount { get; set; }
     public int InProgressCount { get; set; }
 
+    /// <summary>Count of chunks that errored on this specific instance.</summary>
+    public int ErrorCount { get; set; }
+
+    /// <summary>
+    /// Latest Finish (or Start, if still in progress) seen across this instance's events —
+    /// the actual day/time this instance was active, used to resolve its log folder
+    /// (which is dated) instead of guessing from the run's overall start time.
+    /// </summary>
+    public DateTime LastActivity { get; set; }
+
     public InstanceStats() { }
 
-    public InstanceStats(string server, int processId, int doneCount, int inProgressCount)
+    public InstanceStats(string server, int processId, int doneCount, int inProgressCount, int errorCount, DateTime lastActivity)
     {
         Server = server;
         ProcessId = processId;
         DoneCount = doneCount;
         InProgressCount = inProgressCount;
+        ErrorCount = errorCount;
+        LastActivity = lastActivity;
     }
 }
 

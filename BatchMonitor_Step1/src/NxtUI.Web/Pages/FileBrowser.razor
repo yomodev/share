@@ -12,7 +12,7 @@
 @inject IJSRuntime JS
 @inject ILogger<FileBrowser> Logger
 @inject DateTimeDisplayService DtSvc
-@inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -867,7 +867,9 @@
 
             if (mode == LogFileAccessMode.ClientOnly)
             {
-                Snackbar.Add("Client-side file access failed — see browser console for details", Severity.Error);
+                Notifications.Report(
+                    $"Client-side file access failed for \"{file.FileName}\" — see browser console for details",
+                    source: "File Browser");
                 return;
             }
         }

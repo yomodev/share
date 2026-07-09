@@ -236,6 +236,34 @@ public class Program
             return Results.Ok(new { name = "root", children = hosts });
         });
 
+        // Streams a log file's raw bytes over plain HTTP instead of the server reading
+        // the whole file into one C# string and shipping it as a single SignalR interop
+        // payload (see LogViewer.razor / log-viewer.js's renderStream). `length` caps the
+        // read to a size stat'd just before the fetch started, so the client's content and
+        // the tail-poll offset it continues from afterward agree on the same cutoff.
+        app.MapGet("/api/logs/read", async (
+            string path,
+            long? length,
+            HttpResponse response,
+            ILogViewerService svc,
+            CancellationToken ct) =>
+        {
+            response.ContentType = "text/plain; charset=utf-8";
+            await using var fs = svc.OpenRead(path);
+            var remaining = length ?? fs.Length;
+            if (length.HasValue) response.ContentLength = length;
+
+            var buffer = new byte[81920];
+            while (remaining > 0)
+            {
+                var toRead = (int)Math.Min(buffer.Length, remaining);
+                var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
+                if (read == 0) break;
+                await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                remaining -= read;
+            }
+        });
+
         app.MapFallbackToPage("/{**path}", "/_Host");
 
         app.Run();

@@ -8,6 +8,7 @@
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -156,12 +157,24 @@
                       OnRowClick="OnRowClick"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="white-space:nowrap;">Offset</MudTh>
-                    <MudTh Style="white-space:nowrap;">Part</MudTh>
-                    <MudTh Style="white-space:nowrap;">Key</MudTh>
-                    <MudTh Style="white-space:nowrap;">Type</MudTh>
-                    <MudTh Style="white-space:nowrap;">Size</MudTh>
-                    <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Offset">Offset</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Partition">Part</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Key ?? string.Empty">Key</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.PayloadType">Type</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.RawSizeBytes">Size</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Timestamp">Timestamp (UTC)</MudTableSortLabel>
+                    </MudTh>
                     <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -436,7 +449,7 @@
                 Tab?.EndLoading();
                 TabService.NotifyChanged();
                 StateHasChanged();
-                Snackbar.Add($"Failed to tail topic \"{TopicName}\": {ex.Message}", Severity.Error);
+                Notifications.Report($"Failed to tail topic \"{TopicName}\": {ex.Message}", ex, "Kafka Topic Inspector");
             });
         }
     }
@@ -545,7 +558,11 @@
             var result = await KafkaSvc.GetPartitionStatsAsync(Environment, TopicName);
             _stats = [.. result];
         }
-        catch (Exception ex) { Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName);
+            Notifications.Report($"Failed to load partition stats for \"{TopicName}\": {ex.Message}", ex, "Kafka Topic Inspector");
+        }
         finally
         {
             _statsLoading = false;
@@ -664,7 +681,11 @@
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.JsonPayload ?? "{}"); }
             catch (JSDisconnectedException) { }
-            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Topic}", TopicName); }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "JSON viewer render failed for {Topic}", TopicName);
+                Notifications.Report("Failed to render the message preview.", ex, "Kafka Topic Inspector");
+            }
         }
     }
 
@@ -680,7 +701,11 @@
             if (bytes is not null)
                 await JS.InvokeVoidAsync("bmSaveBytes", filename, bytes, "application/octet-stream");
         }
-        catch (Exception ex) { Logger.LogWarning(ex, "Download failed"); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Download failed");
+            Notifications.Report($"Failed to download message: {ex.Message}", ex, "Kafka Topic Inspector");
+        }
     }
 
     private async Task SaveJsonAsync(KafkaMessage? msg)

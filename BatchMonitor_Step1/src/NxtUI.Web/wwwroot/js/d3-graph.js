@@ -717,7 +717,8 @@ const D3Graph = (() => {
                 // spaces, so the "PID " label is always the same length and the server
                 // column after it still lines up regardless of the PID's digit count.
                 const pid = String(i.processId ?? '').padStart(5, ' ');
-                return `<div class="bm-pop-inst" title="Open logs">
+                const errored = (i.errorCount ?? 0) > 0;
+                return `<div class="bm-pop-inst${errored ? ' bm-pop-inst-error' : ''}" title="Open logs">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
                     <span class="bm-pop-srv">${esc(i.server)}</span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
@@ -749,7 +750,7 @@ const D3Graph = (() => {
             const inst = instances[idx];
             d3.select(this).on('click', () => {
                 if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0);
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0, inst.lastActivity);
             });
         });
         handle.popover

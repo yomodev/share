@@ -8,6 +8,7 @@
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -237,7 +238,7 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to query {Db}/{Col} in env {Env}", _database, _collection, Environment);
-            Snackbar.Add($"Failed to load documents: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load documents: {ex.Message}", ex, "Mongo Collection Inspector");
         }
         finally
         {
@@ -350,7 +351,11 @@
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
             catch (JSDisconnectedException) { }
-            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection); }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection);
+                Notifications.Report("Failed to render the document preview.", ex, "Mongo Collection Inspector");
+            }
         }
     }
 

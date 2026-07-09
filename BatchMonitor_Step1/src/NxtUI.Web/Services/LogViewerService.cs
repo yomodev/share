@@ -33,4 +33,10 @@ public class LogViewerService : ILogViewerService
             if (result.Lines.Count == 0) return ("", result.NewOffset);
             return (string.Join("\n", result.Lines), result.NewOffset);
         }, ct);
+
+    public Task<long> GetFileSizeAsync(string path, CancellationToken ct = default) =>
+        Task.Run(() => new FileInfo(path).Length, ct);
+
+    public FileStream OpenRead(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 }

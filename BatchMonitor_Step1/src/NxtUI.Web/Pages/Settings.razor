@@ -109,6 +109,12 @@
                             <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="ml-2">@_errors.Count</MudChip>
                         }
                     </MudText>
+                    <MudButton StartIcon="@Icons.Material.Outlined.ContentCopy"
+                               Size="Size.Small"
+                               Disabled="@(_errors.Count == 0)"
+                               OnClick="CopyAllErrorsAsync">
+                        Copy all
+                    </MudButton>
                     <MudButton StartIcon="@Icons.Material.Outlined.ClearAll"
                                Size="Size.Small"
                                Disabled="@(_errors.Count == 0)"
@@ -128,6 +134,7 @@
                             <MudTh Style="white-space:nowrap;">Time</MudTh>
                             <MudTh Style="width:110px;">Source</MudTh>
                             <MudTh Style="width:100%;">Message</MudTh>
+                            <MudTh Style="width:40px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd Style="white-space:nowrap;">
@@ -138,6 +145,13 @@
                             </MudTd>
                             <MudTd>
                                 <MudText Typo="Typo.body2" Style="white-space:pre-wrap;">@context.Message</MudText>
+                            </MudTd>
+                            <MudTd Style="text-align:right;">
+                                <MudTooltip Text="Copy error (including stack trace, if any)">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => CopyErrorAsync(context))" />
+                                </MudTooltip>
                             </MudTd>
                         </RowTemplate>
                     </MudTable>
@@ -188,6 +202,17 @@
         Notifications.Clear();
         _errors = [];
     }
+
+    private static string FormatError(ErrorNotificationEntry e) =>
+        $"[{e.TimestampUtc:yyyy-MM-dd HH:mm:ss}Z] {e.Source ?? "—"}: {e.Message}"
+        + (string.IsNullOrEmpty(e.Detail) ? "" : $"\n{e.Detail}");
+
+    private async Task CopyErrorAsync(ErrorNotificationEntry entry) =>
+        await JS.InvokeVoidAsync("copyText", FormatError(entry), "Error copied to clipboard");
+
+    private async Task CopyAllErrorsAsync() =>
+        await JS.InvokeVoidAsync("copyText",
+            string.Join("\n\n", _errors.Select(FormatError)), "All errors copied to clipboard");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

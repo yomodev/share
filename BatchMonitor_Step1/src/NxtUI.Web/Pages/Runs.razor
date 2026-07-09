@@ -2,6 +2,7 @@
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject DateTimeDisplayService DtSvc
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @using NxtUI.Core.Filtering
@@ -178,7 +179,7 @@
             await LoadAsync();
         }
         else
-            Snackbar.Add("Could not stop run", Severity.Error);
+            Notifications.Report($"Could not stop run {b.RunId}", source: "Runs");
     }
 
     public void Dispose() => _cts.Cancel();

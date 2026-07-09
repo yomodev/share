@@ -12,6 +12,7 @@
 @inject IOptions<RunsSettings> RunsOpts
 @inject IOptions<UiSettings> UiOpts
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-home">
@@ -143,7 +144,7 @@
                 {
                     <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
                 }
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Services</MudText>
             </div>
         </div>
         <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
@@ -261,7 +262,7 @@
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 10, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, 20, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -351,7 +352,7 @@
             await LoadRunsAsync();
         }
         else
-            Snackbar.Add("Could not stop run", Severity.Error);
+            Notifications.Report($"Could not stop run {b.RunId}", source: "Home");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

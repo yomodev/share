@@ -6,6 +6,7 @@
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject ILogger<KafkaDashboard> Logger
 @inject DateTimeDisplayService DtSvc
 @implements IDisposable
@@ -403,7 +404,7 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load Kafka {ViewMode} for env {Env}", _viewMode, Environment);
-            Snackbar.Add($"Failed to load Kafka data: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load Kafka data: {ex.Message}", ex, "Kafka Dashboard");
         }
         finally
         {
@@ -527,7 +528,7 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
-            Snackbar.Add($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", ex, "Kafka Dashboard");
         }
         finally
         {
@@ -562,9 +563,9 @@
                 await KafkaSvc.SetTopicRetentionAsync(Environment, topicName, 1, _cts.Token);
                 Snackbar.Add($"Could not delete \"{topicName}\" — retention set to 1 ms (messages will expire shortly).", Severity.Warning);
             }
-            catch
+            catch (Exception ex)
             {
-                Snackbar.Add($"Failed to delete or clear topic \"{topicName}\".", Severity.Error);
+                Notifications.Report($"Failed to delete or clear topic \"{topicName}\".", ex, "Kafka Dashboard");
                 return;
             }
         }
@@ -580,9 +581,9 @@
             if (_selectedGroup?.GroupId == groupId) { _selectedGroup = null; _topicLags = null; }
             Snackbar.Add($"Consumer group \"{groupId}\" deleted.", Severity.Success);
         }
-        catch
+        catch (Exception ex)
         {
-            Snackbar.Add($"Failed to delete consumer group \"{groupId}\".", Severity.Error);
+            Notifications.Report($"Failed to delete consumer group \"{groupId}\".", ex, "Kafka Dashboard");
             return;
         }
         await LoadAsync();

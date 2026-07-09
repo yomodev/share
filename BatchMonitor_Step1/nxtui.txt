@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 6965
+LENGTH 6907
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -85,7 +85,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\07_SessionContext.md = docs\07_SessionContext.md
 		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
 		docs\09_Features.md = docs\09_Features.md
-		docs\10_CodeReviewNotes.md = docs\10_CodeReviewNotes.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
@@ -2802,55 +2801,6 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   fetch **and** the actual line-parsing pass — large files can take a
   moment to parse, and the spinner now reflects that instead of
   disappearing early.
-FILE docs/10_CodeReviewNotes.md
-LENGTH 2274
-# 10 — Code Review Notes
-
-A running list of smells, inconsistencies, and improvement opportunities
-spotted while working across the codebase. These are *notes*, not a
-redesign plan — nothing here has been acted on unless explicitly marked
-"fixed".
-
----
-
-## Fixed this session
-
-- **Inconsistent loading feedback** — before this session, "does clicking
-  Refresh show the tab-bar spinner / disable the button?" had three
-  different answers depending on the page: some wired `Tab.BeginLoading()`
-  correctly (MongoDashboard, MongoCollectionInspector), some wired the tab
-  spinner but forgot to disable the button (Runs, Services), some had a
-  local `_loading` bool disabling the button but never touched `Tab` at all
-  (KafkaDashboard's filter/detail loads), and `KafkaTopicInspector` didn't
-  even have a `Tab` parameter. Unified across all of them — see git history
-  "Wire consistent tab-loading spinner/progress/disabled-refresh across pages".
-- **Duplicate `@keyframes bm-spin`** in `app.css` (defined twice, ~70 lines
-  apart) — removed the second definition.
-- **`FilterEvaluator.EvalField`'s `(MatchType.Exact, NumberValue)` case was
-  missing** — a bare-number filter term like `thread:5` silently evaluated
-  to `false` everywhere in the app (Runs, Services, LogBrowser search, any
-  future filter box), not just the case that surfaced it. Fixed; worth
-  double-checking the rest of that switch for other silently-unhandled
-  `(MatchType, FilterValue)` combinations that fall through to the `_ =>
-  false` default — I only audited the numeric-exact case, not the whole
-  matrix.
-
-## Open observations
-
-
-### Two different table-sort paradigms coexist
-
-`Runs.razor` now does fully server-side sort (click a header → re-query),
-while `KafkaDashboard`, `KafkaGroupsDashboard`, and `MongoDashboard` still
-use MudBlazor's built-in `<MudTableSortLabel>`, which sorts whatever's
-already been fetched, client-side. Both are reasonable choices depending on
-whether the full dataset is already in memory, but having both patterns
-active in visually-similar tables in the same app is inconsistent. Worth a
-deliberate per-page decision (documented, not just incidental) rather than
-each page picking whichever pattern was closest to hand when it was
-written.
-
-
 FILE docs/old/01_Shell_Theme_Tabs.md
 LENGTH 6829
 # Batch Monitor — Shell, Theme, and Tab System
@@ -5971,7 +5921,7 @@ LENGTH 942
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 12830
+LENGTH 14139
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -6208,6 +6158,34 @@ public class Program
                 .ToArray();
 
             return Results.Ok(new { name = "root", children = hosts });
+        });
+
+        // Streams a log file's raw bytes over plain HTTP instead of the server reading
+        // the whole file into one C# string and shipping it as a single SignalR interop
+        // payload (see LogViewer.razor / log-viewer.js's renderStream). `length` caps the
+        // read to a size stat'd just before the fetch started, so the client's content and
+        // the tail-poll offset it continues from afterward agree on the same cutoff.
+        app.MapGet("/api/logs/read", async (
+            string path,
+            long? length,
+            HttpResponse response,
+            ILogViewerService svc,
+            CancellationToken ct) =>
+        {
+            response.ContentType = "text/plain; charset=utf-8";
+            await using var fs = svc.OpenRead(path);
+            var remaining = length ?? fs.Length;
+            if (length.HasValue) response.ContentLength = length;
+
+            var buffer = new byte[81920];
+            while (remaining > 0)
+            {
+                var toRead = (int)Math.Min(buffer.Length, remaining);
+                var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
+                if (read == 0) break;
+                await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                remaining -= read;
+            }
         });
 
         app.MapFallbackToPage("/{**path}", "/_Host");
@@ -9107,7 +9085,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 6806
+LENGTH 7383
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -9217,14 +9195,26 @@ public class InstanceStats
     public int DoneCount { get; set; }
     public int InProgressCount { get; set; }
 
+    /// <summary>Count of chunks that errored on this specific instance.</summary>
+    public int ErrorCount { get; set; }
+
+    /// <summary>
+    /// Latest Finish (or Start, if still in progress) seen across this instance's events —
+    /// the actual day/time this instance was active, used to resolve its log folder
+    /// (which is dated) instead of guessing from the run's overall start time.
+    /// </summary>
+    public DateTime LastActivity { get; set; }
+
     public InstanceStats() { }
 
-    public InstanceStats(string server, int processId, int doneCount, int inProgressCount)
+    public InstanceStats(string server, int processId, int doneCount, int inProgressCount, int errorCount, DateTime lastActivity)
     {
         Server = server;
         ProcessId = processId;
         DoneCount = doneCount;
         InProgressCount = inProgressCount;
+        ErrorCount = errorCount;
+        LastActivity = lastActivity;
     }
 }
 
@@ -9568,7 +9558,7 @@ public interface ILogPathDiscoveryService
     void ClearEnv(string env);
 }
 FILE src/NxtUI.Core/Services/ILogViewerService.cs
-LENGTH 793
+LENGTH 1634
 namespace NxtUI.Core.Services;
 
 public interface ILogViewerService
@@ -9586,6 +9576,23 @@ public interface ILogViewerService
     /// touches the caller's (UI) thread.
     /// </summary>
     Task<(string Text, long NewOffset)> ReadDeltaAsync(string path, long fromOffset, CancellationToken ct = default);
+
+    /// <summary>
+    /// Cheap stat (no content read) — the file's current size in bytes. Used to know
+    /// where a later delta/tail read should start from when the initial content is
+    /// fetched separately (see the /api/logs/read HTTP endpoint) rather than via
+    /// ReadAllAsync.
+    /// </summary>
+    Task<long> GetFileSizeAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// Opens the file for a streaming read, same sharing mode as ReadAllAsync. Caller
+    /// owns and must dispose the returned stream. Used by the /api/logs/read endpoint
+    /// to serve content over plain HTTP without ever buffering the whole file into a
+    /// C# string (which ReadAllAsync does, and which then has to cross SignalR as one
+    /// interop payload).
+    /// </summary>
+    FileStream OpenRead(string path);
 }
 FILE src/NxtUI.Core/Services/IMongoService.cs
 LENGTH 2502
@@ -10173,7 +10180,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 11297
+LENGTH 11413
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -10397,7 +10404,9 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                 server: g.Key.Server,
                 processId: g.Key.ProcessId,
                 doneCount: g.Count(e => e.IsDone),
-                inProgressCount: g.Count(e => !e.IsDone)))
+                inProgressCount: g.Count(e => !e.IsDone),
+                errorCount: g.Count(e => e.IsError),
+                lastActivity: g.Max(e => e.Finish ?? e.Start)))
             .OrderBy(i => i.Server, StringComparer.OrdinalIgnoreCase)
             .ThenBy(i => i.ProcessId)
             .ToList();
@@ -10871,7 +10880,7 @@ LENGTH 8857
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 5908
+LENGTH 5968
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -10901,7 +10910,7 @@ LENGTH 5908
     [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
 
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
-    [Parameter] public EventCallback<(string Service, string Server, int ProcessId)> OnOpenInstanceLog { get; set; }
+    [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
@@ -10923,7 +10932,7 @@ LENGTH 5908
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=16");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=17");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -10946,8 +10955,8 @@ LENGTH 5908
 
     /// <summary>Invoked from d3-graph.js when an instance row in the popover is clicked.</summary>
     [JSInvokable]
-    public Task RequestOpenInstanceLog(string service, string server, int processId) =>
-        OnOpenInstanceLog.InvokeAsync((service, server, processId));
+    public Task RequestOpenInstanceLog(string service, string server, int processId, DateTime lastActivity) =>
+        OnOpenInstanceLog.InvokeAsync((service, server, processId, lastActivity));
 
     protected override async Task OnParametersSetAsync()
     {
@@ -11753,9 +11762,10 @@ LENGTH 7203
     }
 }
 FILE src/NxtUI.Web/Components/LogViewport.razor
-LENGTH 6333
+LENGTH 7365
 @namespace NxtUI.Web.Components
 @inject IJSRuntime JS
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 <div class="bm-lv-body" @ref="_bodyRef"></div>
@@ -11794,7 +11804,34 @@ LENGTH 6333
             return true;
         }
         catch (JSDisconnectedException) { return false; }
-        catch (Exception ex) { Console.Error.WriteLine($"[LogViewport] renderLocalFile: {ex.Message}"); return false; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LogViewport] renderLocalFile: {ex.Message}");
+            Notifications.Report($"Failed to open file: {ex.Message}", ex, "Log Viewer");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Fetches and parses a file directly in the browser (plain HTTP, bypassing the
+    /// SignalR circuit entirely) instead of the server reading the whole file into one
+    /// string and shipping it over interop — see logViewer.renderStream.
+    /// </summary>
+    public async Task<bool> RenderStreamAsync(string url, object opts)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("logViewer.renderStream", _bodyRef, url, opts);
+            await RegisterRefAsync();
+            return true;
+        }
+        catch (JSDisconnectedException) { return false; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LogViewport] renderStream: {ex.Message}");
+            Notifications.Report($"Failed to open file: {ex.Message}", ex, "Log Viewer");
+            return false;
+        }
     }
 
     public async Task AppendRawAsync(string text)
@@ -13511,13 +13548,14 @@ public sealed class WsSplit(WsDir dir, double ratio, WsNode a, WsNode b) : WsNod
     }
 }
 FILE src/NxtUI.Web/Pages/Batches.razor
-LENGTH 18257
+LENGTH 18315
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
 @inject IBatchCatalogService CatalogSvc
 @inject ISnackbar Snackbar
 @inject TabService TabService
+@inject ErrorNotificationService Notifications
 
 <div class="bm-page bm-page-fill bm-batches-page">
 
@@ -13865,7 +13903,7 @@ LENGTH 18257
         if (_lastResult.Success)
             Snackbar.Add(_lastResult.Message ?? "Batch triggered", Severity.Success);
         else
-            Snackbar.Add(_lastResult.Error ?? "Trigger failed", Severity.Error);
+            Notifications.Report(_lastResult.Error ?? "Trigger failed", source: "Batches");
     }
 
 }
@@ -14201,7 +14239,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FileBrowser.razor
-LENGTH 42789
+LENGTH 42891
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -14216,7 +14254,7 @@ LENGTH 42789
 @inject IJSRuntime JS
 @inject ILogger<FileBrowser> Logger
 @inject DateTimeDisplayService DtSvc
-@inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-lb-page">
@@ -15071,7 +15109,9 @@ LENGTH 42789
 
             if (mode == LogFileAccessMode.ClientOnly)
             {
-                Snackbar.Add("Client-side file access failed — see browser console for details", Severity.Error);
+                Notifications.Report(
+                    $"Client-side file access failed for \"{file.FileName}\" — see browser console for details",
+                    source: "File Browser");
                 return;
             }
         }
@@ -15424,7 +15464,7 @@ LENGTH 17756
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16341
+LENGTH 16409
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -15439,6 +15479,7 @@ LENGTH 16341
 @inject IOptions<RunsSettings> RunsOpts
 @inject IOptions<UiSettings> UiOpts
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-home">
@@ -15570,7 +15611,7 @@ LENGTH 16341
                 {
                     <MudIcon Icon="@Icons.Material.Outlined.Dns" Class="bm-memory-header-icon" />
                 }
-                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Memory</MudText>
+                <MudText Typo="Typo.subtitle2" Class="bm-section-title">Services</MudText>
             </div>
         </div>
         <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
@@ -15688,7 +15729,7 @@ LENGTH 16341
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 10, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, 20, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -15778,7 +15819,7 @@ LENGTH 16341
             await LoadRunsAsync();
         }
         else
-            Snackbar.Add("Could not stop run", Severity.Error);
+            Notifications.Report($"Could not stop run {b.RunId}", source: "Home");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -15914,7 +15955,7 @@ LENGTH 4506
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 28188
+LENGTH 28325
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -15923,6 +15964,7 @@ LENGTH 28188
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject ILogger<KafkaDashboard> Logger
 @inject DateTimeDisplayService DtSvc
 @implements IDisposable
@@ -16320,7 +16362,7 @@ LENGTH 28188
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load Kafka {ViewMode} for env {Env}", _viewMode, Environment);
-            Snackbar.Add($"Failed to load Kafka data: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load Kafka data: {ex.Message}", ex, "Kafka Dashboard");
         }
         finally
         {
@@ -16444,7 +16486,7 @@ LENGTH 28188
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load lags for group {GroupId}", group.GroupId);
-            Snackbar.Add($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load lag data for \"{group.GroupId}\": {ex.Message}", ex, "Kafka Dashboard");
         }
         finally
         {
@@ -16479,9 +16521,9 @@ LENGTH 28188
                 await KafkaSvc.SetTopicRetentionAsync(Environment, topicName, 1, _cts.Token);
                 Snackbar.Add($"Could not delete \"{topicName}\" — retention set to 1 ms (messages will expire shortly).", Severity.Warning);
             }
-            catch
+            catch (Exception ex)
             {
-                Snackbar.Add($"Failed to delete or clear topic \"{topicName}\".", Severity.Error);
+                Notifications.Report($"Failed to delete or clear topic \"{topicName}\".", ex, "Kafka Dashboard");
                 return;
             }
         }
@@ -16497,9 +16539,9 @@ LENGTH 28188
             if (_selectedGroup?.GroupId == groupId) { _selectedGroup = null; _topicLags = null; }
             Snackbar.Add($"Consumer group \"{groupId}\" deleted.", Severity.Success);
         }
-        catch
+        catch (Exception ex)
         {
-            Snackbar.Add($"Failed to delete consumer group \"{groupId}\".", Severity.Error);
+            Notifications.Report($"Failed to delete consumer group \"{groupId}\".", ex, "Kafka Dashboard");
             return;
         }
         await LoadAsync();
@@ -16795,7 +16837,7 @@ LENGTH 10019
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/KafkaTopicInspector.razor
-LENGTH 32862
+LENGTH 34154
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16806,6 +16848,7 @@ LENGTH 32862
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -16954,12 +16997,24 @@ LENGTH 32862
                       OnRowClick="OnRowClick"
                       Class="bm-batch-table bm-inspector-table">
                 <HeaderContent>
-                    <MudTh Style="white-space:nowrap;">Offset</MudTh>
-                    <MudTh Style="white-space:nowrap;">Part</MudTh>
-                    <MudTh Style="white-space:nowrap;">Key</MudTh>
-                    <MudTh Style="white-space:nowrap;">Type</MudTh>
-                    <MudTh Style="white-space:nowrap;">Size</MudTh>
-                    <MudTh Style="white-space:nowrap;">Timestamp (UTC)</MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Offset">Offset</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Partition">Part</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Key ?? string.Empty">Key</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.PayloadType">Type</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.RawSizeBytes">Size</MudTableSortLabel>
+                    </MudTh>
+                    <MudTh Style="white-space:nowrap;">
+                        <MudTableSortLabel T="KafkaMessage" SortBy="m => m.Timestamp">Timestamp (UTC)</MudTableSortLabel>
+                    </MudTh>
                     <MudTh Style="width:100%;">Payload</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -17234,7 +17289,7 @@ LENGTH 32862
                 Tab?.EndLoading();
                 TabService.NotifyChanged();
                 StateHasChanged();
-                Snackbar.Add($"Failed to tail topic \"{TopicName}\": {ex.Message}", Severity.Error);
+                Notifications.Report($"Failed to tail topic \"{TopicName}\": {ex.Message}", ex, "Kafka Topic Inspector");
             });
         }
     }
@@ -17343,7 +17398,11 @@ LENGTH 32862
             var result = await KafkaSvc.GetPartitionStatsAsync(Environment, TopicName);
             _stats = [.. result];
         }
-        catch (Exception ex) { Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed loading partition stats for {Topic}", TopicName);
+            Notifications.Report($"Failed to load partition stats for \"{TopicName}\": {ex.Message}", ex, "Kafka Topic Inspector");
+        }
         finally
         {
             _statsLoading = false;
@@ -17462,7 +17521,11 @@ LENGTH 32862
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.JsonPayload ?? "{}"); }
             catch (JSDisconnectedException) { }
-            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Topic}", TopicName); }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "JSON viewer render failed for {Topic}", TopicName);
+                Notifications.Report("Failed to render the message preview.", ex, "Kafka Topic Inspector");
+            }
         }
     }
 
@@ -17478,7 +17541,11 @@ LENGTH 32862
             if (bytes is not null)
                 await JS.InvokeVoidAsync("bmSaveBytes", filename, bytes, "application/octet-stream");
         }
-        catch (Exception ex) { Logger.LogWarning(ex, "Download failed"); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Download failed");
+            Notifications.Report($"Failed to download message: {ex.Message}", ex, "Kafka Topic Inspector");
+        }
     }
 
     private async Task SaveJsonAsync(KafkaMessage? msg)
@@ -17549,7 +17616,7 @@ LENGTH 32862
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 22944
+LENGTH 23449
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17713,7 +17780,7 @@ LENGTH 22944
     private bool    _isLoading;
     private string  _loadingLabel = "Loading file…";
     private string? _error;
-    private string? _rawContent;
+    private string? _streamUrl;
     private string? _localKey;
     private int?    _anchorLine;
     private long    _fileOffset;
@@ -17905,13 +17972,19 @@ LENGTH 22944
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
             {
                 _localKey   = Path["local:".Length..];
-                _rawContent = null;
+                _streamUrl  = null;
                 _fileOffset = 0;
             }
             else
             {
                 _localKey = null;
-                (_rawContent, _fileOffset) = await LogViewerSvc.ReadAllAsync(Path!, _cts.Token);
+                // Stat first, then have the browser fetch() exactly that many bytes over
+                // plain HTTP — the content never crosses the SignalR circuit as a giant
+                // interop payload, and both the viewer's content and the tail-poll offset
+                // below agree on the same cutoff (see /api/logs/read in Program.cs).
+                _fileOffset = await LogViewerSvc.GetFileSizeAsync(Path!, _cts.Token);
+                _streamUrl  = Nav.ToAbsoluteUri(
+                    $"/api/logs/read?path={Uri.EscapeDataString(Path!)}&length={_fileOffset}").ToString();
             }
             _dirty = true;
             // _isLoading / Tab loading stay on — RenderViewerAsync (fired from
@@ -17932,7 +18005,7 @@ LENGTH 22944
 
     private async Task RenderViewerAsync()
     {
-        if (_viewport is null || (_rawContent is null && _localKey is null) || !_rendered)
+        if (_viewport is null || (_streamUrl is null && _localKey is null) || !_rendered)
             return;
 
         try
@@ -17949,8 +18022,8 @@ LENGTH 22944
             }
             else
             {
-                await _viewport.RenderAsync(_rawContent!, opts);
-                _rawContent = null;
+                await _viewport.RenderStreamAsync(_streamUrl!, opts);
+                _streamUrl = null;
                 StartTail();
             }
         }
@@ -18888,7 +18961,7 @@ public partial class MongoCollectionInfoDialog
     };
 }
 FILE src/NxtUI.Web/Pages/MongoCollectionInspector.razor
-LENGTH 16399
+LENGTH 16626
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -18899,6 +18972,7 @@ LENGTH 16399
 @inject DateTimeDisplayService DtSvc
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill bm-inspector">
@@ -19128,7 +19202,7 @@ LENGTH 16399
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to query {Db}/{Col} in env {Env}", _database, _collection, Environment);
-            Snackbar.Add($"Failed to load documents: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load documents: {ex.Message}", ex, "Mongo Collection Inspector");
         }
         finally
         {
@@ -19241,7 +19315,11 @@ LENGTH 16399
             _jsonDirty = false;
             try { await JS.InvokeVoidAsync("bmJsonViewer.render", _jsonRef, _selected.Json); }
             catch (JSDisconnectedException) { }
-            catch (Exception ex) { Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection); }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "JSON viewer render failed for {Collection}", _collection);
+                Notifications.Report("Failed to render the document preview.", ex, "Mongo Collection Inspector");
+            }
         }
     }
 
@@ -19283,7 +19361,7 @@ LENGTH 16399
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11537
+LENGTH 11599
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19291,6 +19369,7 @@ LENGTH 11537
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
@@ -19506,7 +19585,7 @@ LENGTH 11537
         catch (OperationCanceledException) { return; }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load collections: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load collections: {ex.Message}", ex, "Mongo Dashboard");
         }
         finally
         {
@@ -19601,7 +19680,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 19935
+LENGTH 20337
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -19884,9 +19963,9 @@ LENGTH 19935
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId) info)
+    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId, DateTime LastActivity) info)
     {
-        var (service, server, processId) = info;
+        var (service, server, processId, lastActivity) = info;
         if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
 
         var svc = new ServiceStatus
@@ -19894,14 +19973,18 @@ LENGTH 19935
             ServiceName = service,
             HostName = server,
             ProcessId = processId,
-            UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
+            // The actual day/time THIS instance was active (from its own events), not the
+            // run's overall start time — a run can span multiple days, and the log folder
+            // is dated by when the instance ran, not when the run began.
+            UpdatedDateTime = lastActivity,
         };
 
-        // Exact PID-specific folder first; if that instance was never seen (or its
-        // folder aged out), fall back to the service's parent folder, which is
-        // expected to always exist once the service has logged at all that day.
-        var path = DiscoverySvc.GetCachedPath(svc, Environment)
-            ?? await DiscoverySvc.FindNowAsync(svc, Environment)
+        // Deliberately skip DiscoverySvc.GetCachedPath here: its cache key is
+        // (env, host, service, pid) only — it doesn't include the date — so a cached
+        // entry could belong to a completely different day's folder for the same PID
+        // (PIDs get reused by the OS over time, and this cache is shared with the live
+        // Services page's own discovery). Always do a fresh, date-correct search instead.
+        var path = await DiscoverySvc.FindNowAsync(svc, Environment)
             ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
 
         if (path is null)
@@ -20099,11 +20182,12 @@ LENGTH 19935
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 6876
+LENGTH 6942
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject DateTimeDisplayService DtSvc
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @using NxtUI.Core.Filtering
@@ -20280,13 +20364,13 @@ LENGTH 6876
             await LoadAsync();
         }
         else
-            Snackbar.Add("Could not stop run", Severity.Error);
+            Notifications.Report($"Could not stop run {b.RunId}", source: "Runs");
     }
 
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 35236
+LENGTH 35576
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20302,6 +20386,7 @@ LENGTH 35236
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
 @inject DateTimeDisplayService DtSvc
@@ -20670,7 +20755,7 @@ LENGTH 35236
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load services for env {Env}", Env);
-            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load services: {ex.Message}", ex, "Services");
         }
         finally
         {
@@ -20958,7 +21043,10 @@ LENGTH 35236
         if (history.Count < 2) return null;
 
         var cutoff = DateTime.UtcNow.AddHours(-6);
-        var window = history.Where(m => m.Timestamp >= cutoff).ToList();
+        // Sorted defensively — the path below draws a straight line between consecutive
+        // points assuming ascending timestamps; an out-of-order point draws a backward
+        // jump instead (visually: a triangular hole cut into the filled area).
+        var window = history.Where(m => m.Timestamp >= cutoff).OrderBy(m => m.Timestamp).ToList();
         if (window.Count < 2) return null;
 
         var tMin  = window[0].Timestamp;
@@ -21097,7 +21185,7 @@ public partial class ServicesPage
     }
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 11405
+LENGTH 12866
 @namespace NxtUI.Web.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
@@ -21209,6 +21297,12 @@ LENGTH 11405
                             <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="ml-2">@_errors.Count</MudChip>
                         }
                     </MudText>
+                    <MudButton StartIcon="@Icons.Material.Outlined.ContentCopy"
+                               Size="Size.Small"
+                               Disabled="@(_errors.Count == 0)"
+                               OnClick="CopyAllErrorsAsync">
+                        Copy all
+                    </MudButton>
                     <MudButton StartIcon="@Icons.Material.Outlined.ClearAll"
                                Size="Size.Small"
                                Disabled="@(_errors.Count == 0)"
@@ -21228,6 +21322,7 @@ LENGTH 11405
                             <MudTh Style="white-space:nowrap;">Time</MudTh>
                             <MudTh Style="width:110px;">Source</MudTh>
                             <MudTh Style="width:100%;">Message</MudTh>
+                            <MudTh Style="width:40px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd Style="white-space:nowrap;">
@@ -21238,6 +21333,13 @@ LENGTH 11405
                             </MudTd>
                             <MudTd>
                                 <MudText Typo="Typo.body2" Style="white-space:pre-wrap;">@context.Message</MudText>
+                            </MudTd>
+                            <MudTd Style="text-align:right;">
+                                <MudTooltip Text="Copy error (including stack trace, if any)">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => CopyErrorAsync(context))" />
+                                </MudTooltip>
                             </MudTd>
                         </RowTemplate>
                     </MudTable>
@@ -21288,6 +21390,17 @@ LENGTH 11405
         Notifications.Clear();
         _errors = [];
     }
+
+    private static string FormatError(ErrorNotificationEntry e) =>
+        $"[{e.TimestampUtc:yyyy-MM-dd HH:mm:ss}Z] {e.Source ?? "—"}: {e.Message}"
+        + (string.IsNullOrEmpty(e.Detail) ? "" : $"\n{e.Detail}");
+
+    private async Task CopyErrorAsync(ErrorNotificationEntry entry) =>
+        await JS.InvokeVoidAsync("copyText", FormatError(entry), "Error copied to clipboard");
+
+    private async Task CopyAllErrorsAsync() =>
+        await JS.InvokeVoidAsync("copyText",
+            string.Join("\n\n", _errors.Select(FormatError)), "All errors copied to clipboard");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -21345,7 +21458,7 @@ LENGTH 11405
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 36070
+LENGTH 36206
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -21357,6 +21470,7 @@ LENGTH 36070
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.UiSettings> UiOptions
 @inject DateTimeDisplayService DtSvc
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 @code {
@@ -21709,6 +21823,7 @@ LENGTH 36070
         catch (Exception ex)
         {
             Console.WriteLine($"[Timeline] Import error: {ex.Message}");
+            Notifications.Report($"Failed to import CSV: {ex.Message}", ex, "Timeline");
         }
     }
 
@@ -22210,7 +22325,7 @@ LENGTH 36070
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 23644
+LENGTH 23645
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22235,7 +22350,7 @@ LENGTH 23644
 
     <!-- Application CSS -->
     <link href="css/app.css?v=54" rel="stylesheet" />
-    <link href="css/d3-graph.css?v=9" rel="stylesheet" />
+    <link href="css/d3-graph.css?v=10" rel="stylesheet" />
     <link href="css/d3-timeline.css?v=1" rel="stylesheet" />
     <link href="css/log-viewer.css?v=1" rel="stylesheet" />
 </head>
@@ -22683,7 +22798,7 @@ LENGTH 23644
 
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
-    <script type="module" src="js/log-viewer.js?v=24"></script>
+    <script type="module" src="js/log-viewer.js?v=25"></script>
     <script src="js/workspace.js"></script>
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
@@ -24083,7 +24198,7 @@ public class LogBrowserService : ILogBrowserService
     }
 }
 FILE src/NxtUI.Web/Services/LogViewerService.cs
-LENGTH 1591
+LENGTH 1873
 using NxtUI.Core.Logging;
 using NxtUI.Core.Services;
 using System.Text;
@@ -24119,6 +24234,12 @@ public class LogViewerService : ILogViewerService
             if (result.Lines.Count == 0) return ("", result.NewOffset);
             return (string.Join("\n", result.Lines), result.NewOffset);
         }, ct);
+
+    public Task<long> GetFileSizeAsync(string path, CancellationToken ct = default) =>
+        Task.Run(() => new FileInfo(path).Length, ct);
+
+    public FileStream OpenRead(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
 LENGTH 16752
@@ -25119,7 +25240,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 30365
+LENGTH 30822
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
@@ -25474,10 +25595,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 foreach (var line in result.Lines)
                 {
                     if (!MetricsLogParser.TryParse(line, out var sample) || sample is null) continue;
-                    entry.Latest = sample;
-                    entry.History.Add(sample);
-                    if (entry.History.Count > MaxHistory)
-                        entry.History.RemoveRange(0, entry.History.Count - MaxHistory);
+                    // Sorted insert, not a blind Add — this same entry can also be written by
+                    // the Kafka-live path and the disk-backfill path (both already sorted via
+                    // UpsertSample). A blind append here could land a sample earlier than ones
+                    // already inserted by those other paths, breaking History's chronological
+                    // order — which showed up as a backward jump (a triangular "hole") in the
+                    // service card's sparkline, since its path-drawing just connects points in
+                    // list order and assumes ascending timestamps.
+                    UpsertSample(entry, sample);
                     parsedAny = true;
                     Interlocked.Increment(ref parsed);
                 }
@@ -36398,9 +36523,9 @@ tr.bm-row-searching td:first-child {
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 6643
+LENGTH 7283
 /* ================================================================
-   D3 FLOW GRAPH  (rev 5)
+   D3 FLOW GRAPH  (rev 6)
    ================================================================ */
 
 .bm-d3-flow-graph {
@@ -36531,7 +36656,12 @@ LENGTH 6643
 .bm-graph-popover {
     position: absolute;
     z-index: 20;
-    width: 254px;
+    /* Adapts to the widest server name instead of a fixed width that truncated
+       long host names — still bounded so one very long name can't blow up
+       past a sane popover size (bm-pop-srv wraps if it hits max-width). */
+    width: max-content;
+    min-width: 254px;
+    max-width: 420px;
     background: var(--mud-palette-surface);
     border: 1px solid var(--mud-palette-divider);
     border-radius: 10px;
@@ -36584,7 +36714,16 @@ LENGTH 6643
 .bm-pop-inst:first-of-type { border-top: none; }
 .bm-pop-inst:hover { background: rgba(56,139,253,0.12); }
 .bm-pop-inst:hover .bm-pop-srv { color: var(--mud-palette-primary); }
-.bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The instance that actually errored, inside a pipeline that has errors overall —
+   distinguishes which specific process caused the pipeline's error state. */
+.bm-pop-inst-error { background: rgba(248,81,73,0.10); }
+.bm-pop-inst-error:hover { background: rgba(248,81,73,0.18); }
+.bm-pop-inst-error .bm-pop-srv,
+.bm-pop-inst-error .bm-pop-pid,
+.bm-pop-inst-error .bm-pop-cnt { color: #F85149; }
+
+.bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; }
 /* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
    left-aligned — PID is the leftmost column, so the server column after it
    lines up regardless of whether a given PID is 2 digits or 5. */
@@ -38259,7 +38398,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 45099
+LENGTH 45213
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -38979,7 +39118,8 @@ const D3Graph = (() => {
                 // spaces, so the "PID " label is always the same length and the server
                 // column after it still lines up regardless of the PID's digit count.
                 const pid = String(i.processId ?? '').padStart(5, ' ');
-                return `<div class="bm-pop-inst" title="Open logs">
+                const errored = (i.errorCount ?? 0) > 0;
+                return `<div class="bm-pop-inst${errored ? ' bm-pop-inst-error' : ''}" title="Open logs">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
                     <span class="bm-pop-srv">${esc(i.server)}</span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
@@ -39011,7 +39151,7 @@ const D3Graph = (() => {
             const inst = instances[idx];
             d3.select(this).on('click', () => {
                 if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0);
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0, inst.lastActivity);
             });
         });
         handle.popover
@@ -43120,7 +43260,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 32634
+LENGTH 35170
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -43927,6 +44067,67 @@ function renderLocalFile(container, key, opts) {
     render(container, raw, opts);
 }
 
+/**
+ * Fetches a file over plain HTTP and parses it incrementally as bytes arrive, instead
+ * of the server reading the whole file into one string and shipping it over the
+ * SignalR circuit in a single interop call. Reuses render() for the first line-aligned
+ * chunk (sets up the doc/viewport, detects the line format) and appendRaw() for every
+ * chunk after that — same per-viewport update logic (search re-eval, scroll-follow)
+ * either way, no separate code path to keep in sync.
+ *
+ * Chunks from the network aren't aligned to line boundaries, so a trailing partial
+ * line is buffered ("carry") and prepended to the next chunk before parsing — parseMore
+ * expects complete lines, same assumption the live-tail appendRaw path already relies on.
+ *
+ * anchorLine is deferred until the whole file has streamed in, since the target line
+ * may not exist yet in the first chunk(s).
+ */
+async function renderStream(container, url, options = {}) {
+    let firstChunkDone = false;
+    let carry = '';
+
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+
+        while (true) {
+            const { done, value } = await reader.read();
+            const decoded = value ? decoder.decode(value, { stream: !done }) : '';
+            let text = carry + decoded;
+
+            if (!done) {
+                const lastNl = text.lastIndexOf('\n');
+                if (lastNl < 0) { carry = text; if (!value) break; continue; }
+                carry = text.slice(lastNl + 1);
+                text  = text.slice(0, lastNl + 1);
+            } else {
+                text += decoder.decode(); // flush any buffered multi-byte tail
+                carry = '';
+            }
+
+            if (text) {
+                if (!firstChunkDone) {
+                    firstChunkDone = true;
+                    render(container, text, { ...options, anchorLine: null });
+                } else {
+                    appendRaw(container, text);
+                }
+            }
+            if (done) break;
+        }
+    } catch (err) {
+        console.error('[logViewer] renderStream failed:', err);
+    }
+
+    // Empty/failed fetch — still stand up an (empty) viewport instead of leaving a blank pane.
+    if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
+
+    if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
+}
+
 // Expose on window so Blazor JS interop (InvokeVoidAsync / InvokeAsync) can reach it.
 function registerDotNetRef(container, dotNetRef) {
     const vp = _vp.get(container);
@@ -43934,7 +44135,7 @@ function registerDotNetRef(container, dotNetRef) {
 }
 
 window.logViewer = {
-    render, renderLocalFile,
+    render, renderLocalFile, renderStream,
     appendRaw, find, nextMatch, prevMatch,
     nextBookmark, prevBookmark,
     scrollToLine, getCurrentTopLine,

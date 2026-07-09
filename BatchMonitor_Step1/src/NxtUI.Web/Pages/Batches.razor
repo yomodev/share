@@ -4,6 +4,7 @@
 @inject IBatchCatalogService CatalogSvc
 @inject ISnackbar Snackbar
 @inject TabService TabService
+@inject ErrorNotificationService Notifications
 
 <div class="bm-page bm-page-fill bm-batches-page">
 
@@ -351,7 +352,7 @@
         if (_lastResult.Success)
             Snackbar.Add(_lastResult.Message ?? "Batch triggered", Severity.Success);
         else
-            Snackbar.Add(_lastResult.Error ?? "Trigger failed", Severity.Error);
+            Notifications.Report(_lastResult.Error ?? "Trigger failed", source: "Batches");
     }
 
 }

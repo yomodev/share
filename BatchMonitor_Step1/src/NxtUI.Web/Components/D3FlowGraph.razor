@@ -27,7 +27,7 @@
     [Parameter] public EventCallback<string> OnOpenKafkaTopic { get; set; }
 
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
-    [Parameter] public EventCallback<(string Service, string Server, int ProcessId)> OnOpenInstanceLog { get; set; }
+    [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
@@ -49,7 +49,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=16");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=17");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -72,8 +72,8 @@
 
     /// <summary>Invoked from d3-graph.js when an instance row in the popover is clicked.</summary>
     [JSInvokable]
-    public Task RequestOpenInstanceLog(string service, string server, int processId) =>
-        OnOpenInstanceLog.InvokeAsync((service, server, processId));
+    public Task RequestOpenInstanceLog(string service, string server, int processId, DateTime lastActivity) =>
+        OnOpenInstanceLog.InvokeAsync((service, server, processId, lastActivity));
 
     protected override async Task OnParametersSetAsync()
     {

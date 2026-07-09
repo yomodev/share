@@ -13,6 +13,7 @@
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject TabService TabService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
 @inject DateTimeDisplayService DtSvc
@@ -381,7 +382,7 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load services for env {Env}", Env);
-            Snackbar.Add($"Failed to load services: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load services: {ex.Message}", ex, "Services");
         }
         finally
         {
@@ -669,7 +670,10 @@
         if (history.Count < 2) return null;
 
         var cutoff = DateTime.UtcNow.AddHours(-6);
-        var window = history.Where(m => m.Timestamp >= cutoff).ToList();
+        // Sorted defensively — the path below draws a straight line between consecutive
+        // points assuming ascending timestamps; an out-of-order point draws a backward
+        // jump instead (visually: a triangular hole cut into the filled area).
+        var window = history.Where(m => m.Timestamp >= cutoff).OrderBy(m => m.Timestamp).ToList();
         if (window.Count < 2) return null;
 
         var tMin  = window[0].Timestamp;

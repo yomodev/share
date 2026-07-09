@@ -161,7 +161,7 @@
     private bool    _isLoading;
     private string  _loadingLabel = "Loading file…";
     private string? _error;
-    private string? _rawContent;
+    private string? _streamUrl;
     private string? _localKey;
     private int?    _anchorLine;
     private long    _fileOffset;
@@ -353,13 +353,19 @@
             if (Path!.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
             {
                 _localKey   = Path["local:".Length..];
-                _rawContent = null;
+                _streamUrl  = null;
                 _fileOffset = 0;
             }
             else
             {
                 _localKey = null;
-                (_rawContent, _fileOffset) = await LogViewerSvc.ReadAllAsync(Path!, _cts.Token);
+                // Stat first, then have the browser fetch() exactly that many bytes over
+                // plain HTTP — the content never crosses the SignalR circuit as a giant
+                // interop payload, and both the viewer's content and the tail-poll offset
+                // below agree on the same cutoff (see /api/logs/read in Program.cs).
+                _fileOffset = await LogViewerSvc.GetFileSizeAsync(Path!, _cts.Token);
+                _streamUrl  = Nav.ToAbsoluteUri(
+                    $"/api/logs/read?path={Uri.EscapeDataString(Path!)}&length={_fileOffset}").ToString();
             }
             _dirty = true;
             // _isLoading / Tab loading stay on — RenderViewerAsync (fired from
@@ -380,7 +386,7 @@
 
     private async Task RenderViewerAsync()
     {
-        if (_viewport is null || (_rawContent is null && _localKey is null) || !_rendered)
+        if (_viewport is null || (_streamUrl is null && _localKey is null) || !_rendered)
             return;
 
         try
@@ -397,8 +403,8 @@
             }
             else
             {
-                await _viewport.RenderAsync(_rawContent!, opts);
-                _rawContent = null;
+                await _viewport.RenderStreamAsync(_streamUrl!, opts);
+                _streamUrl = null;
                 StartTail();
             }
         }

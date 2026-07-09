@@ -280,9 +280,9 @@
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId) info)
+    private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId, DateTime LastActivity) info)
     {
-        var (service, server, processId) = info;
+        var (service, server, processId, lastActivity) = info;
         if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
 
         var svc = new ServiceStatus
@@ -290,14 +290,18 @@
             ServiceName = service,
             HostName = server,
             ProcessId = processId,
-            UpdatedDateTime = _details?.Start ?? DateTime.UtcNow,
+            // The actual day/time THIS instance was active (from its own events), not the
+            // run's overall start time — a run can span multiple days, and the log folder
+            // is dated by when the instance ran, not when the run began.
+            UpdatedDateTime = lastActivity,
         };
 
-        // Exact PID-specific folder first; if that instance was never seen (or its
-        // folder aged out), fall back to the service's parent folder, which is
-        // expected to always exist once the service has logged at all that day.
-        var path = DiscoverySvc.GetCachedPath(svc, Environment)
-            ?? await DiscoverySvc.FindNowAsync(svc, Environment)
+        // Deliberately skip DiscoverySvc.GetCachedPath here: its cache key is
+        // (env, host, service, pid) only — it doesn't include the date — so a cached
+        // entry could belong to a completely different day's folder for the same PID
+        // (PIDs get reused by the OS over time, and this cache is shared with the live
+        // Services page's own discovery). Always do a fresh, date-correct search instead.
+        var path = await DiscoverySvc.FindNowAsync(svc, Environment)
             ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
 
         if (path is null)

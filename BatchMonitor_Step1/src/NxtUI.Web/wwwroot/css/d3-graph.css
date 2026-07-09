@@ -1,5 +1,5 @@
 /* ================================================================
-   D3 FLOW GRAPH  (rev 5)
+   D3 FLOW GRAPH  (rev 6)
    ================================================================ */
 
 .bm-d3-flow-graph {
@@ -130,7 +130,12 @@
 .bm-graph-popover {
     position: absolute;
     z-index: 20;
-    width: 254px;
+    /* Adapts to the widest server name instead of a fixed width that truncated
+       long host names — still bounded so one very long name can't blow up
+       past a sane popover size (bm-pop-srv wraps if it hits max-width). */
+    width: max-content;
+    min-width: 254px;
+    max-width: 420px;
     background: var(--mud-palette-surface);
     border: 1px solid var(--mud-palette-divider);
     border-radius: 10px;
@@ -183,7 +188,16 @@
 .bm-pop-inst:first-of-type { border-top: none; }
 .bm-pop-inst:hover { background: rgba(56,139,253,0.12); }
 .bm-pop-inst:hover .bm-pop-srv { color: var(--mud-palette-primary); }
-.bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The instance that actually errored, inside a pipeline that has errors overall —
+   distinguishes which specific process caused the pipeline's error state. */
+.bm-pop-inst-error { background: rgba(248,81,73,0.10); }
+.bm-pop-inst-error:hover { background: rgba(248,81,73,0.18); }
+.bm-pop-inst-error .bm-pop-srv,
+.bm-pop-inst-error .bm-pop-pid,
+.bm-pop-inst-error .bm-pop-cnt { color: #F85149; }
+
+.bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; }
 /* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
    left-aligned — PID is the leftmost column, so the server column after it
    lines up regardless of whether a given PID is 2 digits or 5. */

@@ -221,7 +221,9 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                 server: g.Key.Server,
                 processId: g.Key.ProcessId,
                 doneCount: g.Count(e => e.IsDone),
-                inProgressCount: g.Count(e => !e.IsDone)))
+                inProgressCount: g.Count(e => !e.IsDone),
+                errorCount: g.Count(e => e.IsError),
+                lastActivity: g.Max(e => e.Finish ?? e.Start)))
             .OrderBy(i => i.Server, StringComparer.OrdinalIgnoreCase)
             .ThenBy(i => i.ProcessId)
             .ToList();

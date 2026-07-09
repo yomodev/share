@@ -5,6 +5,7 @@
 @inject TabService TabService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IDisposable
 
 <div class="bm-page bm-page-fill">
@@ -220,7 +221,7 @@
         catch (OperationCanceledException) { return; }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load collections: {ex.Message}", Severity.Error);
+            Notifications.Report($"Failed to load collections: {ex.Message}", ex, "Mongo Dashboard");
         }
         finally
         {

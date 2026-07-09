@@ -1,5 +1,6 @@
 @namespace NxtUI.Web.Components
 @inject IJSRuntime JS
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 <div class="bm-lv-body" @ref="_bodyRef"></div>
@@ -38,7 +39,34 @@
             return true;
         }
         catch (JSDisconnectedException) { return false; }
-        catch (Exception ex) { Console.Error.WriteLine($"[LogViewport] renderLocalFile: {ex.Message}"); return false; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LogViewport] renderLocalFile: {ex.Message}");
+            Notifications.Report($"Failed to open file: {ex.Message}", ex, "Log Viewer");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Fetches and parses a file directly in the browser (plain HTTP, bypassing the
+    /// SignalR circuit entirely) instead of the server reading the whole file into one
+    /// string and shipping it over interop — see logViewer.renderStream.
+    /// </summary>
+    public async Task<bool> RenderStreamAsync(string url, object opts)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("logViewer.renderStream", _bodyRef, url, opts);
+            await RegisterRefAsync();
+            return true;
+        }
+        catch (JSDisconnectedException) { return false; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LogViewport] renderStream: {ex.Message}");
+            Notifications.Report($"Failed to open file: {ex.Message}", ex, "Log Viewer");
+            return false;
+        }
     }
 
     public async Task AppendRawAsync(string text)
