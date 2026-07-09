@@ -5586,7 +5586,7 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 4451
+LENGTH 4515
 {
   "AllowedHosts": "*",
 
@@ -5651,9 +5651,9 @@ LENGTH 4451
 
   "Logs": {
     "Formats": [
+      "----- BEGIN {*}{newline}{timestamp}{newline}{level}|{host}|{pid}|{thread}|{message}|{caller}|{*}{newline}----- END {*}{newline}.{newline}",
       "{timestamp}|{level}|{host}|{pid}|{thread}|{message}|{caller}{*}{$}",
-      "{timestamp}|{level}|{thread}|{message}|{caller}{*}{$}",
-      "{timestamp}{newline}{host}|{pid}|{thread}|{message}|{caller}|{*}{newline}"
+      "{timestamp}|{level}|{thread}|{message}|{caller}{*}{$}"
     ],
     "ServiceTemplates": [ // it also accepts {date-1}
       "C:\\Temp\\NxtUI-testlogs\\{date}\\Services\\{service}_{env}\\{server}_*_Pid_{pid}",
@@ -5671,7 +5671,7 @@ LENGTH 4451
     // Access read first, fall back to server read on any failure) | "ClientOnly" (client-side
     // only, no fallback -- shows an error instead, useful for verifying it actually works
     // since ClientWithFallback's fallback can mask a broken client-side path).
-    "FileAccessMode": "ClientOnly"
+    "FileAccessMode": "ServerOnly"
   },
 
   "Runs": {
@@ -5921,7 +5921,7 @@ LENGTH 942
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 14139
+LENGTH 14888
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -6170,22 +6170,40 @@ public class Program
             long? length,
             HttpResponse response,
             ILogViewerService svc,
+            ILogger<Program> logger,
             CancellationToken ct) =>
         {
-            response.ContentType = "text/plain; charset=utf-8";
-            await using var fs = svc.OpenRead(path);
-            var remaining = length ?? fs.Length;
-            if (length.HasValue) response.ContentLength = length;
-
-            var buffer = new byte[81920];
-            while (remaining > 0)
+            // Fail with a real status + text/plain body instead of letting the framework's
+            // Developer Exception Page (HTML, 200 in some hosting configs) mask the failure
+            // and get misread by the client as if it were valid log content.
+            FileStream fs;
+            try
             {
-                var toRead = (int)Math.Min(buffer.Length, remaining);
-                var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
-                if (read == 0) break;
-                await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
-                remaining -= read;
+                fs = svc.OpenRead(path);
             }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to open log file for streaming: {Path}", path);
+                return Results.Problem(ex.Message, statusCode: StatusCodes.Status404NotFound);
+            }
+
+            await using (fs)
+            {
+                response.ContentType = "text/plain; charset=utf-8";
+                var remaining = length ?? fs.Length;
+                if (length.HasValue) response.ContentLength = length;
+
+                var buffer = new byte[81920];
+                while (remaining > 0)
+                {
+                    var toRead = (int)Math.Min(buffer.Length, remaining);
+                    var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
+                    if (read == 0) break;
+                    await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                    remaining -= read;
+                }
+            }
+            return Results.Empty;
         });
 
         app.MapFallbackToPage("/{**path}", "/_Host");
@@ -14239,7 +14257,7 @@ LENGTH 17333
     }
 }
 FILE src/NxtUI.Web/Pages/FileBrowser.razor
-LENGTH 42891
+LENGTH 43762
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -14795,8 +14813,17 @@ LENGTH 42891
         if (NavigationHint is not null && NavigationHint != _lastHint)
         {
             _lastHint = NavigationHint;
-            if (_initialized)
-                await ApplyHintAsync(NavigationHint);
+            // Deliberately not gated on _initialized: OnParametersSetAsync can fire while
+            // OnInitializedAsync's own GetSubfoldersAsync call is still in flight (Blazor
+            // dispatches a fresh parameter update to an already-constructing component
+            // instance the moment a second SetParametersAsync arrives, independent of
+            // whether our own _initialized field has flipped true yet). Gating on it here
+            // used to silently drop the hint whenever that race lost — and since _lastHint
+            // was already updated, retrying the same link did nothing either; only closing
+            // and reopening the tab (a fresh component instance) gave it another chance.
+            // ApplyHintAsync is self-sufficient — it loads whatever tree data it needs
+            // on demand — so it doesn't actually need to wait for init to finish first.
+            await ApplyHintAsync(NavigationHint);
         }
     }
 
@@ -22325,7 +22352,7 @@ LENGTH 36206
             : $"{ts.Minutes}m {ts.Seconds:D2}s";
 }
 FILE src/NxtUI.Web/Pages/_Host.cshtml
-LENGTH 23645
+LENGTH 23637
 @page "/"
 @namespace NxtUI.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -22337,7 +22364,7 @@ LENGTH 23645
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Batch Monitor</title>
+    <title>NxtUI</title>
     <base href="~/" />
 
     <!-- Inter font from Google Fonts -->
@@ -22798,9 +22825,9 @@ LENGTH 23645
 
     <!-- Application JS is loaded lazily as ES modules via Blazor JS isolation (IJSObjectReference).
          filter.js is pre-linked here as a modulepreload hint for faster first-use. -->
-    <script type="module" src="js/log-viewer.js?v=25"></script>
+    <script type="module" src="js/log-viewer.js?v=29"></script>
     <script src="js/workspace.js"></script>
-    <link rel="modulepreload" href="js/log-viewer-parser.js?v=5" />
+    <link rel="modulepreload" href="js/log-viewer-parser.js?v=8" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
     <link rel="modulepreload" href="js/app.js?v=7" />
     <link rel="modulepreload" href="js/d3-timeline.js?v=13" />
@@ -33222,9 +33249,9 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 99555
+LENGTH 99547
 /* ================================================================
-   Batch Monitor — Application Stylesheet  v2 (Step 2)
+   NxtUI — Application Stylesheet  v2 (Step 2)
    ================================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -42719,7 +42746,7 @@ describe('compileFormat — shared grammar fixture', () => {
     }
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer-parser.js
-LENGTH 11618
+LENGTH 13485
 // log-viewer-parser.js — ES module
 // Pure logic: no DOM, fully testable with Vitest.
 //
@@ -42736,6 +42763,15 @@ LENGTH 11618
 
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
+
+// Compiled formats' {newline} token only matches a bare "\n" — a literal token placed
+// immediately before it (e.g. a lone "." line) would otherwise fail to match on a
+// Windows-authored (CRLF) log file, since the "\r" sits between the literal and the
+// "\n" the pattern expects. Normalizing once at every text-ingestion point keeps line
+// counting ({newline} matches, lineIndex, split('\n')) consistent everywhere else too.
+function normalizeNewlines(text) {
+    return text.indexOf('\r') === -1 ? text : text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
 
 export function isTimestampLine(line) {
     return TIMESTAMP_RE.test(line);
@@ -42812,26 +42848,43 @@ export function compileFormat(formatStr) {
 
 /**
  * Detect the best matching format for rawText by trying each compiled format.
- * Returns the first format that matches at least 3 times in the first 10 KB,
- * or null (plain text fallback).
+ * Prefers whichever confidently-matching (>=3 matches) format explains the most of
+ * the sample by total matched character count, falling back to the same measure
+ * among formats matched only once or twice (e.g. a short errors.log with a single
+ * entry), or null (plain text fallback) if nothing matched at all.
  * @param {string} rawText
  * @param {Array} compiledFormats
  * @returns {object|null}
  */
 export function detectFormat(rawText, compiledFormats) {
     if (!compiledFormats || compiledFormats.length === 0) return null;
+    rawText = normalizeNewlines(rawText);
     const sample = rawText.length > 10000 ? rawText.slice(0, 10000) : rawText;
+
+    // A tighter/shorter format (e.g. one that matches a single pipe-delimited line)
+    // will often tie or beat a more complete multi-line format on raw match count —
+    // that used to pick whichever was listed first, silently preferring the wrong
+    // template when the "right" one for the data is later in the list. Total matched
+    // coverage is a better signal of which format actually models the data: a format
+    // that swallows more of the document (its literal delimiters + captured fields)
+    // is a more complete description of it than one nibbling a single line at a time.
+    let bestConfident = null, bestConfidentLen = -1;
+    let bestAny = null, bestAnyLen = -1;
     for (const fmt of compiledFormats) {
         const re = new RegExp(fmt.regex.source, fmt.regex.flags);
         re.lastIndex = 0;
-        let matches = 0;
+        let matches = 0, totalLen = 0;
         let hit;
         while ((hit = re.exec(sample)) !== null) {
             if (hit[0] === '') { re.lastIndex++; continue; }
-            if (++matches >= 3) return fmt;
+            matches++;
+            totalLen += hit[0].length;
         }
+        if (matches === 0) continue;
+        if (totalLen > bestAnyLen) { bestAny = fmt; bestAnyLen = totalLen; }
+        if (matches >= 3 && totalLen > bestConfidentLen) { bestConfident = fmt; bestConfidentLen = totalLen; }
     }
-    return null;
+    return bestConfident ?? bestAny;
 }
 
 // ── Format-driven parsing ────────────────────────────────────────────────────
@@ -42846,6 +42899,7 @@ export function detectFormat(rawText, compiledFormats) {
  */
 export function parseMore(rawText, detectedFormat) {
     if (!rawText) return [];
+    rawText = normalizeNewlines(rawText);
     return detectedFormat ? parseWithFormat(rawText, detectedFormat) : parsePlainText(rawText);
 }
 
@@ -42942,6 +42996,7 @@ function countNewlines(text) {
  */
 export function parseLog(rawText, compiledFormats) {
     if (!rawText) return [];
+    rawText = normalizeNewlines(rawText);
     const fmt = detectFormat(rawText, compiledFormats ?? []);
     return fmt ? parseWithFormat(rawText, fmt) : parsePlainText(rawText);
 }
@@ -43260,7 +43315,7 @@ describe('escapeHtml', () => {
     it('accepts zero', () => expect(escapeHtml(0)).toBe('0'))
 })
 FILE src/NxtUI.Web/wwwroot/js/log-viewer.js
-LENGTH 35170
+LENGTH 36110
 // log-viewer.js — ES module, sets window.logViewer for Blazor JS interop.
 // All rendering, virtual scroll, search, and bookmarks live here.
 // The server only supplies raw text; parsing and DOM work stay in the browser.
@@ -43272,7 +43327,7 @@ LENGTH 35170
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=5';
+import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=8';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -44090,6 +44145,16 @@ async function renderStream(container, url, options = {}) {
         const resp = await fetch(url);
         if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
 
+        // /api/logs/read always answers text/plain. A 200 with anything else (typically
+        // text/html) means the request never actually reached that endpoint — most likely
+        // the app's SPA fallback route serving _Host's markup because the endpoint didn't
+        // exist on whatever process is actually handling the request (stale build/server
+        // not restarted after this feature was added) — fail loudly instead of silently
+        // parsing that HTML as if it were log content.
+        const contentType = resp.headers.get('content-type') || '';
+        if (!contentType.toLowerCase().includes('text/plain'))
+            throw new Error(`Expected text/plain from ${url}, got "${contentType}" — is the server up to date?`);
+
         const reader  = resp.body.getReader();
         const decoder = new TextDecoder('utf-8');
 
@@ -44120,10 +44185,12 @@ async function renderStream(container, url, options = {}) {
         }
     } catch (err) {
         console.error('[logViewer] renderStream failed:', err);
+        // Still stand up an (empty) viewport instead of leaving a blank pane, but rethrow
+        // so the caller's C# catch (LogViewport.RenderStreamAsync) can report it via
+        // ErrorNotificationService instead of this failing completely silently.
+        if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
+        throw err;
     }
-
-    // Empty/failed fetch — still stand up an (empty) viewport instead of leaving a blank pane.
-    if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
 
     if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
 }

@@ -553,8 +553,17 @@
         if (NavigationHint is not null && NavigationHint != _lastHint)
         {
             _lastHint = NavigationHint;
-            if (_initialized)
-                await ApplyHintAsync(NavigationHint);
+            // Deliberately not gated on _initialized: OnParametersSetAsync can fire while
+            // OnInitializedAsync's own GetSubfoldersAsync call is still in flight (Blazor
+            // dispatches a fresh parameter update to an already-constructing component
+            // instance the moment a second SetParametersAsync arrives, independent of
+            // whether our own _initialized field has flipped true yet). Gating on it here
+            // used to silently drop the hint whenever that race lost — and since _lastHint
+            // was already updated, retrying the same link did nothing either; only closing
+            // and reopening the tab (a fresh component instance) gave it another chance.
+            // ApplyHintAsync is self-sufficient — it loads whatever tree data it needs
+            // on demand — so it doesn't actually need to wait for init to finish first.
+            await ApplyHintAsync(NavigationHint);
         }
     }
 

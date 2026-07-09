@@ -9,7 +9,7 @@
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=5';
+import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=8';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -827,6 +827,16 @@ async function renderStream(container, url, options = {}) {
         const resp = await fetch(url);
         if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
 
+        // /api/logs/read always answers text/plain. A 200 with anything else (typically
+        // text/html) means the request never actually reached that endpoint — most likely
+        // the app's SPA fallback route serving _Host's markup because the endpoint didn't
+        // exist on whatever process is actually handling the request (stale build/server
+        // not restarted after this feature was added) — fail loudly instead of silently
+        // parsing that HTML as if it were log content.
+        const contentType = resp.headers.get('content-type') || '';
+        if (!contentType.toLowerCase().includes('text/plain'))
+            throw new Error(`Expected text/plain from ${url}, got "${contentType}" — is the server up to date?`);
+
         const reader  = resp.body.getReader();
         const decoder = new TextDecoder('utf-8');
 
@@ -857,10 +867,12 @@ async function renderStream(container, url, options = {}) {
         }
     } catch (err) {
         console.error('[logViewer] renderStream failed:', err);
+        // Still stand up an (empty) viewport instead of leaving a blank pane, but rethrow
+        // so the caller's C# catch (LogViewport.RenderStreamAsync) can report it via
+        // ErrorNotificationService instead of this failing completely silently.
+        if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
+        throw err;
     }
-
-    // Empty/failed fetch — still stand up an (empty) viewport instead of leaving a blank pane.
-    if (!firstChunkDone) render(container, '', { ...options, anchorLine: null });
 
     if (options.anchorLine != null) scrollToLine(container, options.anchorLine);
 }

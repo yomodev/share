@@ -246,22 +246,40 @@ public class Program
             long? length,
             HttpResponse response,
             ILogViewerService svc,
+            ILogger<Program> logger,
             CancellationToken ct) =>
         {
-            response.ContentType = "text/plain; charset=utf-8";
-            await using var fs = svc.OpenRead(path);
-            var remaining = length ?? fs.Length;
-            if (length.HasValue) response.ContentLength = length;
-
-            var buffer = new byte[81920];
-            while (remaining > 0)
+            // Fail with a real status + text/plain body instead of letting the framework's
+            // Developer Exception Page (HTML, 200 in some hosting configs) mask the failure
+            // and get misread by the client as if it were valid log content.
+            FileStream fs;
+            try
             {
-                var toRead = (int)Math.Min(buffer.Length, remaining);
-                var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
-                if (read == 0) break;
-                await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
-                remaining -= read;
+                fs = svc.OpenRead(path);
             }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to open log file for streaming: {Path}", path);
+                return Results.Problem(ex.Message, statusCode: StatusCodes.Status404NotFound);
+            }
+
+            await using (fs)
+            {
+                response.ContentType = "text/plain; charset=utf-8";
+                var remaining = length ?? fs.Length;
+                if (length.HasValue) response.ContentLength = length;
+
+                var buffer = new byte[81920];
+                while (remaining > 0)
+                {
+                    var toRead = (int)Math.Min(buffer.Length, remaining);
+                    var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ct);
+                    if (read == 0) break;
+                    await response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+                    remaining -= read;
+                }
+            }
+            return Results.Empty;
         });
 
         app.MapFallbackToPage("/{**path}", "/_Host");

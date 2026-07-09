@@ -15,6 +15,15 @@
 // A log line starts with an ISO-like date: 2024-01-15 or 2024-01-15T
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[T ]/;
 
+// Compiled formats' {newline} token only matches a bare "\n" — a literal token placed
+// immediately before it (e.g. a lone "." line) would otherwise fail to match on a
+// Windows-authored (CRLF) log file, since the "\r" sits between the literal and the
+// "\n" the pattern expects. Normalizing once at every text-ingestion point keeps line
+// counting ({newline} matches, lineIndex, split('\n')) consistent everywhere else too.
+function normalizeNewlines(text) {
+    return text.indexOf('\r') === -1 ? text : text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 export function isTimestampLine(line) {
     return TIMESTAMP_RE.test(line);
 }
@@ -90,26 +99,43 @@ export function compileFormat(formatStr) {
 
 /**
  * Detect the best matching format for rawText by trying each compiled format.
- * Returns the first format that matches at least 3 times in the first 10 KB,
- * or null (plain text fallback).
+ * Prefers whichever confidently-matching (>=3 matches) format explains the most of
+ * the sample by total matched character count, falling back to the same measure
+ * among formats matched only once or twice (e.g. a short errors.log with a single
+ * entry), or null (plain text fallback) if nothing matched at all.
  * @param {string} rawText
  * @param {Array} compiledFormats
  * @returns {object|null}
  */
 export function detectFormat(rawText, compiledFormats) {
     if (!compiledFormats || compiledFormats.length === 0) return null;
+    rawText = normalizeNewlines(rawText);
     const sample = rawText.length > 10000 ? rawText.slice(0, 10000) : rawText;
+
+    // A tighter/shorter format (e.g. one that matches a single pipe-delimited line)
+    // will often tie or beat a more complete multi-line format on raw match count —
+    // that used to pick whichever was listed first, silently preferring the wrong
+    // template when the "right" one for the data is later in the list. Total matched
+    // coverage is a better signal of which format actually models the data: a format
+    // that swallows more of the document (its literal delimiters + captured fields)
+    // is a more complete description of it than one nibbling a single line at a time.
+    let bestConfident = null, bestConfidentLen = -1;
+    let bestAny = null, bestAnyLen = -1;
     for (const fmt of compiledFormats) {
         const re = new RegExp(fmt.regex.source, fmt.regex.flags);
         re.lastIndex = 0;
-        let matches = 0;
+        let matches = 0, totalLen = 0;
         let hit;
         while ((hit = re.exec(sample)) !== null) {
             if (hit[0] === '') { re.lastIndex++; continue; }
-            if (++matches >= 3) return fmt;
+            matches++;
+            totalLen += hit[0].length;
         }
+        if (matches === 0) continue;
+        if (totalLen > bestAnyLen) { bestAny = fmt; bestAnyLen = totalLen; }
+        if (matches >= 3 && totalLen > bestConfidentLen) { bestConfident = fmt; bestConfidentLen = totalLen; }
     }
-    return null;
+    return bestConfident ?? bestAny;
 }
 
 // ── Format-driven parsing ────────────────────────────────────────────────────
@@ -124,6 +150,7 @@ export function detectFormat(rawText, compiledFormats) {
  */
 export function parseMore(rawText, detectedFormat) {
     if (!rawText) return [];
+    rawText = normalizeNewlines(rawText);
     return detectedFormat ? parseWithFormat(rawText, detectedFormat) : parsePlainText(rawText);
 }
 
@@ -220,6 +247,7 @@ function countNewlines(text) {
  */
 export function parseLog(rawText, compiledFormats) {
     if (!rawText) return [];
+    rawText = normalizeNewlines(rawText);
     const fmt = detectFormat(rawText, compiledFormats ?? []);
     return fmt ? parseWithFormat(rawText, fmt) : parsePlainText(rawText);
 }
