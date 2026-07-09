@@ -262,10 +262,14 @@ const TIMELINE_ALIASES = {
             hoveredBlockData: null,
             subrowHOverride: null,
             // Delay (ms) before highlighting same-id blocks / showing the tooltip on
-            // hover — see setHoverDelayMs. 0 = immediate. If the pointer leaves the
-            // block before this fires, hoverDelayTimer is cancelled and nothing shows.
-            hoverDelayMs: 0,
-            hoverDelayTimer: null,
+            // hover — see setHoverDelaysMs. Independent timers/delays so one can be
+            // instant while the other is deferred (or vice versa). 0 = immediate. If
+            // the pointer leaves the block before a timer fires, it's cancelled and
+            // that effect never triggers.
+            highlightDelayMs: 0,
+            popupDelayMs: 0,
+            highlightDelayTimer: null,
+            popupDelayTimer: null,
             // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
             // this) — same key still always gets the same colour for a given seed, only
             // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
@@ -387,7 +391,8 @@ const TIMELINE_ALIASES = {
         s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
-        clearTimeout(s.hoverDelayTimer);
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
         try { s.laneSvg.remove(); } catch {}
         try { s.botSvg.remove(); } catch {}
         try { s.tooltip.remove(); } catch {}
@@ -923,18 +928,24 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        const delay = s.hoverDelayMs || 0;
-        if (delay <= 0) {
-            applyHoverHighlight(s, event, d);
-            return;
-        }
-        s.hoverDelayTimer = setTimeout(() => applyHoverHighlight(s, event, d), delay);
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
+
+        const hDelay = s.highlightDelayMs || 0;
+        if (hDelay <= 0) applyHighlight(s, d);
+        else s.highlightDelayTimer = setTimeout(() => applyHighlight(s, d), hDelay);
+
+        if (!s.showTooltip) return;
+        const pDelay = s.popupDelayMs || 0;
+        if (pDelay <= 0) showTooltip(s, event, d);
+        else s.popupDelayTimer = setTimeout(() => showTooltip(s, event, d), pDelay);
     }
 
     function onBlockLeave(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        s.hoverDelayTimer = null;
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
+        s.highlightDelayTimer = null;
+        s.popupDelayTimer = null;
         s.hoveredName   = null;
         s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
@@ -943,13 +954,12 @@ const TIMELINE_ALIASES = {
         hideTooltip(s);
     }
 
-    function applyHoverHighlight(s, event, d) {
+    function applyHighlight(s, d) {
         s.hoveredName  = d.e.name;
         s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
             .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
-        if (s.showTooltip) showTooltip(s, event, d);
     }
 
     // ── Tooltip ───────────────────────────────────────────────────────────
@@ -1265,10 +1275,11 @@ const TIMELINE_ALIASES = {
         if (!show) hideTooltip(s);
     }
 
-    function setHoverDelayMs(key, ms) {
+    function setHoverDelaysMs(key, highlightMs, popupMs) {
         const s = _instances.get(key);
         if (!s) return;
-        s.hoverDelayMs = Math.max(0, ms | 0);
+        s.highlightDelayMs = Math.max(0, highlightMs | 0);
+        s.popupDelayMs     = Math.max(0, popupMs | 0);
     }
 
-export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelayMs };
+export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelaysMs };

@@ -11,7 +11,7 @@
 @inject IOptions<UiSettings> UiOptions
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject ISnackbar Snackbar
-@implements IDisposable
+@implements IAsyncDisposable
 
 @code {
     [Parameter, EditorRequired] public string? RunId { get; set; }
@@ -59,10 +59,21 @@
     private double   _sliderValue;   // 0–1000
     private const double SliderSteps = 1000.0;
 
+    // ── Replay playback (auto-advance) ──────────────────────────────────────
+    // Animates the slider from wherever it currently sits to the end. Capped at
+    // PlaybackMaxDurationMs of real wall-clock time for a full 0→SliderSteps sweep —
+    // pausing partway through and resuming later only extends how long it *takes*,
+    // never how far a given resume-to-end stretch travels per second.
+    private const double PlaybackMaxDurationMs = 30_000;
+    private bool _isPlaying;
+    private CancellationTokenSource? _playbackCts;
+
     // ── UI ────────────────────────────────────────────────────────────────
-    // Always starts collapsed — the details strip is opt-in per view, not
-    // remembered across tabs/sessions.
+    // Persisted in localStorage (bm-rundetail-expanded) so it survives across tabs,
+    // sessions, and app restarts — read back in OnAfterRenderAsync's firstRender.
     private bool _detailsExpanded;
+    private IJSObjectReference? _appModule;
+    private const string DetailsExpandedStorageKey = "bm-rundetail-expanded";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -77,6 +88,23 @@
         _ = RunTopologyLoopAsync();
 
         await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+            var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", DetailsExpandedStorageKey);
+            var expanded = stored == "1";
+            if (expanded != _detailsExpanded)
+            {
+                _detailsExpanded = expanded;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "Failed to read persisted details-strip state"); }
     }
 
     protected override void OnParametersSet()
@@ -213,6 +241,9 @@
 
     private void OnSliderChanged(double value)
     {
+        // A manual drag always wins over an in-progress auto-play.
+        if (_isPlaying) StopPlayback();
+
         _sliderValue = value;
 
         // Snap to LIVE when dragged to/past the right edge.
@@ -233,12 +264,69 @@
         DebouncedTopologyCompute();
     }
 
-    private void EnterReplayMode()
+    private void TogglePlayback()
     {
+        if (_isPlaying)
+        {
+            StopPlayback();
+            return;
+        }
         if (_sliderMax <= _sliderMin) return;
-        _sliderValue     = SliderSteps * 0.75;
-        _replayTimestamp = SliderToDateTime(_sliderValue);
-        DebouncedTopologyCompute();
+
+        // Starting fresh from LIVE begins at the very start of the run; resuming from a
+        // paused mid-replay position (or a manually-scrubbed one) continues from there.
+        if (!IsReplay)
+        {
+            _sliderValue     = 0;
+            _replayTimestamp = SliderToDateTime(0);
+            DebouncedTopologyCompute();
+        }
+
+        _isPlaying = true;
+        _playbackCts?.Cancel();
+        _playbackCts?.Dispose();
+        _playbackCts = new CancellationTokenSource();
+        _ = RunPlaybackLoopAsync(_sliderValue, _playbackCts.Token);
+    }
+
+    private void StopPlayback()
+    {
+        _isPlaying = false;
+        _playbackCts?.Cancel();
+    }
+
+    private async Task RunPlaybackLoopAsync(double startValue, CancellationToken ct)
+    {
+        // The 30s budget covers a full 0→SliderSteps sweep; resuming partway through only
+        // animates the remaining fraction, at the same per-step rate, so playback never
+        // speeds up or slows down when paused and resumed.
+        var remainingFraction = 1.0 - (startValue / SliderSteps);
+        var remainingMs = PlaybackMaxDurationMs * remainingFraction;
+        if (remainingMs <= 0) { EnterLiveMode(); _isPlaying = false; await InvokeAsync(StateHasChanged); return; }
+
+        var startWall = DateTime.UtcNow;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var elapsedMs = (DateTime.UtcNow - startWall).TotalMilliseconds;
+                var progress  = Math.Min(1.0, elapsedMs / remainingMs);
+                _sliderValue     = startValue + (SliderSteps - startValue) * progress;
+                _replayTimestamp = SliderToDateTime(_sliderValue);
+                DebouncedTopologyCompute();
+                await InvokeAsync(StateHasChanged);
+
+                if (progress >= 1.0)
+                {
+                    _isPlaying = false;
+                    EnterLiveMode(); // arrived at the end — same data as live, so just go live
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) { /* paused or component disposed */ }
     }
 
     private string FormatSliderTime()
@@ -260,7 +348,15 @@
         _                   => Color.Default
     };
 
-    private void ToggleDetailsStrip() => _detailsExpanded = !_detailsExpanded;
+    private async Task ToggleDetailsStrip()
+    {
+        _detailsExpanded = !_detailsExpanded;
+        if (_appModule is not null)
+        {
+            try { await _appModule.InvokeVoidAsync("setLocalStorage", DetailsExpandedStorageKey, _detailsExpanded ? "1" : "0"); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist details-strip state"); }
+        }
+    }
 
     private async Task CancelRunAsync()
     {
@@ -315,12 +411,27 @@
         TabService.OpenOrFocus(tab);
     }
 
+    // Cache-only lookup (no filesystem search) for the popover's server-name tooltip —
+    // deliberately lighter weight than OpenInstanceLogFromGraph's click handler, which
+    // does a full fresh search. A cache miss here just means "not discovered yet".
+    private string? ResolveLogPathHint(string service, string server, int processId) =>
+        DiscoverySvc.GetCachedPath(
+            new ServiceStatus { ServiceName = service, HostName = server, ProcessId = processId },
+            Environment);
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _eventService?.Dispose();
         _topologyTimer?.Dispose();
+        _playbackCts?.Cancel();
+        _playbackCts?.Dispose();
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     private static string FormatDuration(TimeSpan ts) =>
@@ -450,7 +561,8 @@
            with Blazor's DOM patcher and causes removeChild crashes. *@
         <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
-                     OnOpenInstanceLog="OpenInstanceLogFromGraph" />
+                     OnOpenInstanceLog="OpenInstanceLogFromGraph"
+                     ResolveLogPathHint="ResolveLogPathHint" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
@@ -464,24 +576,12 @@
     <!-- ── Timeline slider (Step 8) ── -->
     <div class="bm-batch-detail-footer">
         <div class="bm-slider-row">
-            @if (IsReplay)
-            {
-                <MudTooltip Text="Return to live view">
-                    <MudIconButton Icon="@Icons.Material.Outlined.FiberManualRecord"
-                                   Color="Color.Error" Size="Size.Small"
-                                   Class="bm-live-btn"
-                                   OnClick="EnterLiveMode" />
-                </MudTooltip>
-            }
-            else
-            {
-                <MudTooltip Text="Scrub timeline (enter replay mode)">
-                    <MudIconButton Icon="@Icons.Material.Outlined.History"
-                                   Size="Size.Small"
-                                   Class="bm-replay-btn"
-                                   OnClick="EnterReplayMode" />
-                </MudTooltip>
-            }
+            <MudTooltip Text="@(_isPlaying ? "Pause replay" : IsReplay ? "Resume replay" : "Replay run (up to 30s)")">
+                <MudIconButton Icon="@(_isPlaying ? Icons.Material.Filled.Pause : Icons.Material.Filled.PlayArrow)"
+                               Size="Size.Small"
+                               Class="bm-replay-btn"
+                               OnClick="TogglePlayback" />
+            </MudTooltip>
 
             <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : DtSvc.Format(_sliderMin, "HH:mm:ss"))</span>
 

@@ -28,6 +28,12 @@ public class LogPathSettings
     public int MetricsIntervalSeconds { get; set; } = 90;
 
     /// <summary>
+    /// Where memory metrics are pulled from. See <see cref="MetricsSourceMode"/>.
+    /// Default: <see cref="MetricsSourceMode.Both"/> (unchanged historical behavior).
+    /// </summary>
+    public MetricsSourceMode MetricsSource { get; set; } = MetricsSourceMode.Both;
+
+    /// <summary>
     /// UNC path template for the Log Browser's top-level "Root" node, per server.
     /// Placeholder: {server} — server hostname.
     /// Example: "\\{server}\Shared"
@@ -106,4 +112,30 @@ public enum LogFileAccessMode
     /// since <see cref="ClientWithFallback"/>'s fallback can mask a broken client-side path.
     /// </summary>
     ClientOnly,
+}
+
+/// <summary>
+/// Controls where <see cref="ServiceMetricsMonitor"/> (in NxtUI.Web) pulls per-service
+/// memory metrics from.
+/// </summary>
+public enum MetricsSourceMode
+{
+    /// <summary>
+    /// Kafka (live) plus a one-time on-disk backfill for the pre-Kafka-retention gap, and a
+    /// full on-disk fallback for any environment whose Kafka topic has no data at all.
+    /// Unchanged historical behavior.
+    /// </summary>
+    Both,
+
+    /// <summary>
+    /// On-disk metrics log files only — the Kafka metrics consumer and disk backfill never
+    /// run. Use when Kafka metrics publishing isn't wired up, or to rule it out for debugging.
+    /// </summary>
+    FileSystem,
+
+    /// <summary>
+    /// Kafka only, including its one-time disk backfill for the pre-retention gap — but no
+    /// ongoing file-tail polling, even for services/environments where Kafka has no data.
+    /// </summary>
+    Kafka,
 }

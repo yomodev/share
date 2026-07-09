@@ -14,7 +14,7 @@ public class AppSettings
     public int DefaultPageSize { get; set; } = 25;
 
     /// <summary>All environments known to this portal instance.</summary>
-    public List<EnvironmentDefinition> Environments { get; set; } = new();
+    public List<EnvironmentDefinition> Environments { get; set; } = [];
 }
 
 /// <summary>

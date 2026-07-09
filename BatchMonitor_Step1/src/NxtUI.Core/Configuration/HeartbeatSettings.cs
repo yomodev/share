@@ -19,8 +19,9 @@ public class HeartbeatSettings
     public int OfflineThresholdSeconds { get; set; } = 0;
 
     /// <summary>Resolved offline threshold, applying the IntervalSeconds * 2 fallback.</summary>
-    public TimeSpan OfflineThreshold =>
-        TimeSpan.FromSeconds(OfflineThresholdSeconds > 0 ? OfflineThresholdSeconds : IntervalSeconds * 2);
+    public TimeSpan OfflineThreshold => TimeSpan.FromSeconds(OfflineThresholdSeconds > 0
+        ? OfflineThresholdSeconds
+        : IntervalSeconds * 2);
 
     /// <summary>
     /// Only services with a heartbeat within this many minutes are fetched from MongoDB.

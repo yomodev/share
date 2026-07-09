@@ -210,6 +210,13 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 ["RecordsProcessed"] = "12,345",
                 ["WorkerNode"] = "node-7",
                 ["RequestId"] = Guid.NewGuid().ToString(),
+                ["InitiatedBy"] = "User",
+                ["Priority"] = "High",
+                ["Notes"] = "This is a mock run for demonstration purposes.",
+                ["Tags"] = "demo, test, mock",
+                ["Environment"] = env,
+                ["PipelineVersion"] = "v1.2.3",
+                ["ErrorDetails"] = summary?.Status == RunStatus.Failed ? "Simulated failure for testing." : string.Empty,
             },
         };
         return Task.FromResult(details);

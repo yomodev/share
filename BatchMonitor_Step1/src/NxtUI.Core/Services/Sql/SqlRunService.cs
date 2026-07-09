@@ -162,8 +162,7 @@ public class SqlRunService(
                     Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                     Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
                     Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                    End = reader.IsDBNull(5) ? null
-                                  : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
+                    End = reader.IsDBNull(5) ? null : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
                 });
             }
 

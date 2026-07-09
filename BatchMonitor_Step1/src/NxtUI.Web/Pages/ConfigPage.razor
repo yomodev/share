@@ -1,0 +1,86 @@
+@namespace NxtUI.Web.Pages
+@using NxtUI.Core.Configuration
+@using NxtUI.Core.Services
+@using Microsoft.Extensions.Options
+@inject IOptions<EnvConfigSettings> ConfigOptions
+@inject IEnvironmentService EnvironmentSvc
+@inject ILogViewerService LogViewerSvc
+@inject ErrorNotificationService Notifications
+
+<div class="bm-page bm-page-fill bm-config-page">
+
+    <div class="bm-batch-toolbar">
+        <span class="bm-config-path bm-monospace bm-muted" title="@_sourcePath">@(_sourcePath ?? "")</span>
+        <ToolbarRefresh Loading="@_loading" OnRefresh="LoadAsync" />
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+    else if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="ma-2">@_error</MudAlert>
+    }
+    else
+    {
+        @* Interim viewer — a real syntax-highlighted/editable CodeMirror component is the
+           next step for this page (see conversation); this proves out path resolution,
+           read, and the page's place in the tab system first. *@
+        <MudTextField T="string" Value="@_content" ReadOnly="true" Lines="30"
+                      Class="bm-config-textarea bm-monospace" Variant="Variant.Outlined" />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
+
+    private string? _sourcePath;
+    private string  _content = "";
+    private string? _error;
+    private bool    _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error   = null;
+        StateHasChanged();
+
+        try
+        {
+            var template = ConfigOptions.Value.SourcePathTemplate;
+            if (string.IsNullOrWhiteSpace(template))
+            {
+                _error = "EnvConfig:SourcePathTemplate is not configured.";
+                return;
+            }
+
+            var servers = EnvironmentSvc.GetServers(Environment);
+            if (servers.Count == 0)
+            {
+                _error = $"No servers configured for environment '{Environment}'.";
+                return;
+            }
+
+            _sourcePath = Expand(template, servers[0], Environment);
+            var (text, _) = await LogViewerSvc.ReadAllAsync(_sourcePath);
+            _content = text;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Notifications.Report($"Failed to load config file: {ex.Message}", ex, "Config");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string Expand(string template, string server, string env) =>
+        template.Replace("{server}", server, StringComparison.OrdinalIgnoreCase)
+                 .Replace("{env}", env, StringComparison.OrdinalIgnoreCase);
+}

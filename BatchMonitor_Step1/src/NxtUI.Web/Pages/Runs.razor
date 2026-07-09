@@ -57,11 +57,7 @@
     private int _pageSize = 25;
     private Result<List<RunSummary>> _result;
 
-    // Default filter: last 10 days — the query always runs server-side, so this
-    // is the first WHERE clause SQL sees, not a client-side post-filter.
-    private const string DefaultFilterText = "start:>=-10d";
-
-    private string      _filterText       = DefaultFilterText;
+    private string      _filterText       = string.Empty;
     private string?     _filterParseError = null;
     private FilterNode? _filterAst        = null;
 
@@ -91,7 +87,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        ParseFilterText(DefaultFilterText);
+        ParseFilterText(RunsOptions.Value.DefaultFilterText);
         await LoadAsync();
     }
 

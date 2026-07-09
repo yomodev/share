@@ -84,14 +84,11 @@
                             OnClick="@(() => Open(TabModel.CreateEnvironmentDashboard(EnvService.SelectedId)))" />
             }
 
-            @if (DtSvc.DevMode)
-            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.Tune"
                             Label="Config"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:config:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateConfigDashboard(EnvService.SelectedId)))" />
-            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Folder"
                             Label="Files"

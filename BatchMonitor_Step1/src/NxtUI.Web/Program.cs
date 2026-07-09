@@ -48,6 +48,9 @@ public class Program
         builder.Services.Configure<UiSettings>(
             builder.Configuration.GetSection(UiSettings.SectionName));
 
+        builder.Services.Configure<EnvConfigSettings>(
+            builder.Configuration.GetSection(EnvConfigSettings.SectionName));
+
         // ── Per-environment config loader ─────────────────────────────────────
         builder.Services.AddSingleton(new EnvironmentConfigOptions
         {

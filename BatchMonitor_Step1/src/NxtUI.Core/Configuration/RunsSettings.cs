@@ -15,4 +15,10 @@ public class RunsSettings
 
     /// <summary>Hard cap on rows returned per query, regardless of what the caller requests. Default: 1000.</summary>
     public int MaxResults { get; set; } = 1000;
+
+    /// <summary>
+    /// Filter text pre-populated in the Runs page's filter box on load. Uses the same
+    /// syntax as the filter box itself (e.g. "start:&gt;=-10d"). Default: "start:&gt;=-10d".
+    /// </summary>
+    public string DefaultFilterText { get; set; } = "start:>=-10d";
 }

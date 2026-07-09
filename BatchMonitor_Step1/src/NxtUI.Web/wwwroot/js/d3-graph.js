@@ -720,7 +720,7 @@ const D3Graph = (() => {
                 const errored = (i.errorCount ?? 0) > 0;
                 return `<div class="bm-pop-inst${errored ? ' bm-pop-inst-error' : ''}" title="Open logs">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
-                    <span class="bm-pop-srv">${esc(i.server)}</span>
+                    <span class="bm-pop-srv" title="Resolving log path…">${esc(i.server)}</span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
                 </div>`;
             }).join('')
@@ -748,10 +748,17 @@ const D3Graph = (() => {
         });
         handle.popover.selectAll('.bm-pop-inst').each(function (_, idx) {
             const inst = instances[idx];
-            d3.select(this).on('click', () => {
+            const row  = d3.select(this);
+            row.on('click', () => {
                 if (handle.dotNetRef)
                     handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0, inst.lastActivity);
             });
+            if (handle.dotNetRef) {
+                handle.dotNetRef
+                    .invokeMethodAsync('RequestInstanceLogPathHint', nodeDatum.id, inst.server, inst.processId ?? 0)
+                    .then(path => row.select('.bm-pop-srv').attr('title', path || 'Log path not discovered yet'))
+                    .catch(() => {});
+            }
         });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))

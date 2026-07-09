@@ -262,7 +262,7 @@
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 20, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, UiOpts.Value.HomeRecentRunsCount, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }

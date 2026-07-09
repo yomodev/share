@@ -63,9 +63,28 @@ public class UiSettings
     public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
 
     /// <summary>
-    /// Delay (ms) before the Timeline highlights same-id blocks / shows the hover
-    /// popup. 0 (default) = immediate. If the pointer leaves a block before this
-    /// elapses, nothing highlights/shows at all.
+    /// Delay (ms) before the Timeline highlights same-id blocks on hover. 0 (default) =
+    /// immediate. If the pointer leaves a block before this elapses, nothing highlights.
+    /// Independent of <see cref="TimelinePopupDelayMs"/>.
     /// </summary>
     public int TimelineHighlightDelayMs { get; set; } = 0;
+
+    /// <summary>
+    /// Delay (ms) before the Timeline shows the hover popup/tooltip. 0 (default) =
+    /// immediate. If the pointer leaves a block before this elapses, nothing shows.
+    /// Independent of <see cref="TimelineHighlightDelayMs"/>.
+    /// </summary>
+    public int TimelinePopupDelayMs { get; set; } = 0;
+
+    /// <summary>
+    /// Number of most-recent runs shown in the Home page's "Recent Runs" panel.
+    /// Default: 20.
+    /// </summary>
+    public int HomeRecentRunsCount { get; set; } = 20;
+
+    /// <summary>
+    /// Filter text pre-populated in the Services page's filter box on load.
+    /// Default: "updated:&gt;-30m".
+    /// </summary>
+    public string ServicesDefaultFilterText { get; set; } = "updated:>-30m";
 }

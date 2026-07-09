@@ -26,6 +26,10 @@ namespace NxtUI.Web.Services;
 /// If an environment's Kafka topic has no data at all (not yet wired up there), this falls
 /// back entirely to the original continuous file-polling behavior for that environment.
 ///
+/// <see cref="LogPathSettings.MetricsSource"/> can restrict this to one source only
+/// (<see cref="MetricsSourceMode.FileSystem"/> or <see cref="MetricsSourceMode.Kafka"/>)
+/// instead of the default <see cref="MetricsSourceMode.Both"/>.
+///
 /// Polling is paused when an environment has no subscribers, but cached data (file offsets
 /// and sample history) is kept for <c>IdleReleaseMinutes</c> so that re-subscribing resumes
 /// from where it left off — no redundant file re-reads or Kafka replays.
@@ -122,7 +126,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
 
             // Start (or resume) the Kafka metrics consumer for this env.
-            if (!_kafkaCts.ContainsKey(env))
+            if (_paths.MetricsSource != MetricsSourceMode.FileSystem && !_kafkaCts.ContainsKey(env))
             {
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
                 _kafkaCts[env] = cts;
@@ -243,6 +247,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         if (!HasSubscribers(env)) return;
         if (string.IsNullOrWhiteSpace(_paths.MetricsFileName)) return;
+        if (_paths.MetricsSource == MetricsSourceMode.Kafka) return;
 
         var gate = _envGates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0, ct))

@@ -29,6 +29,13 @@
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
     [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
+    /// <summary>
+    /// Resolves the log folder path shown as a tooltip when hovering an instance row's
+    /// server name in the popover. Returns null if not (yet) known — a cache-only lookup,
+    /// never triggers a filesystem search. (service, server, processId) -> path or null.
+    /// </summary>
+    [Parameter] public Func<string, string, int, string?>? ResolveLogPathHint { get; set; }
+
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
@@ -49,7 +56,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=17");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=18");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -74,6 +81,12 @@
     [JSInvokable]
     public Task RequestOpenInstanceLog(string service, string server, int processId, DateTime lastActivity) =>
         OnOpenInstanceLog.InvokeAsync((service, server, processId, lastActivity));
+
+    /// <summary>Invoked from d3-graph.js right after the popover opens, to populate each
+    /// instance row's server-name tooltip with its resolved log path (cache-only, no I/O).</summary>
+    [JSInvokable]
+    public string? RequestInstanceLogPathHint(string service, string server, int processId) =>
+        ResolveLogPathHint?.Invoke(service, server, processId);
 
     protected override async Task OnParametersSetAsync()
     {
