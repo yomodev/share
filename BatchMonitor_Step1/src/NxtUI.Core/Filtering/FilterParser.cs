@@ -59,6 +59,8 @@ public sealed class FilterParser
             ["ended"] = "EndTime",
             ["finish"] = "EndTime",
             ["finished"] = "EndTime",
+            ["env"] = "Env",
+            ["environment"] = "Env",
             // ServiceStatus
             ["svcname"] = "ServiceName",
             ["servicename"] = "ServiceName",

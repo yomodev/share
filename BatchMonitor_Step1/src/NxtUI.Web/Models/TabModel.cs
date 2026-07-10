@@ -23,7 +23,8 @@ public enum TabType
     LogWorkspace,
     FilterHelp,
     MemoryGraph,
-    Environment
+    Environment,
+    RunStats
 }
 
 /// <summary>
@@ -169,6 +170,17 @@ public class TabModel
         Icon = Outlined.Computer
     };
 
+    // Not scoped to a single environment (the page itself picks which envs to show) —
+    // one global tab, same pattern as Settings/FilterHelp.
+    public static TabModel CreateRunStats() => new()
+    {
+        Id = "dashboard:runstats",
+        Type = TabType.RunStats,
+        Label = "Run Stats",
+        Environment = null,
+        Icon = Outlined.QueryStats
+    };
+
     public static TabModel CreateSettings() => new()
     {
         Id = "dashboard:settings",
@@ -274,6 +286,7 @@ public class TabModel
         TabType.LogViewer => $"/log/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.LogWorkspace => $"/workspace/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Settings => "/settings",
+        TabType.RunStats => "/runstats",
         TabType.FilterHelp => "/help/filter",
         TabType.RunDetail => $"/run/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
         TabType.Timeline => $"/timeline/{Environment}/{Uri.EscapeDataString(EntityId ?? "")}",
@@ -355,6 +368,9 @@ public class TabModel
 
             "settings"
                 => CreateSettings(),
+
+            "runstats"
+                => CreateRunStats(),
 
             "help" when parts.Length >= 2 && parts[1].Equals("filter", StringComparison.OrdinalIgnoreCase)
                 => CreateFilterHelp(),

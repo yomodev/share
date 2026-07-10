@@ -73,6 +73,9 @@
             TabType.Environment =>
                 @<EnvironmentPage Env="@env" />,
 
+            TabType.RunStats =>
+                @<RunStatsPage Tab="@Tab" />,
+
             _ =>
                 @<PlaceholderPage Title="@label" Icon="@Icons.Material.Outlined.Dashboard" Environment="@env" />,
         };

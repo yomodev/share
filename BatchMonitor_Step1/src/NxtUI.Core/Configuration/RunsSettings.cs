@@ -21,4 +21,11 @@ public class RunsSettings
     /// syntax as the filter box itself (e.g. "start:&gt;=-10d"). Default: "start:&gt;=-10d".
     /// </summary>
     public string DefaultFilterText { get; set; } = "start:>=-10d";
+
+    /// <summary>
+    /// Filter text pre-populated in the Run Stats page's filter box on load — deliberately
+    /// a much shorter window than the Runs page's own default, since Run Stats fans a
+    /// separate request out to every selected environment. Default: "start:&gt;=-24h".
+    /// </summary>
+    public string RunStatsDefaultFilterText { get; set; } = "start:>=-24h";
 }

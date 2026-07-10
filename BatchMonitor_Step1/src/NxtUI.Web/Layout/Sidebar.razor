@@ -39,6 +39,12 @@
                             IsActive="@IsTabActive($"dashboard:runs:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateRunsDashboard(EnvService.SelectedId)))" />
 
+            <SidebarNavItem Icon="@Icons.Material.Outlined.QueryStats"
+                            Label="Run Stats"
+                            IsOpen="@_drawerOpen"
+                            IsActive="@IsTabActive("dashboard:runstats")"
+                            OnClick="@(() => Open(TabModel.CreateRunStats()))" />
+
             @if (DtSvc.DevMode)
             {
             <SidebarNavItem Icon="@Icons.Material.Outlined.ListAlt"

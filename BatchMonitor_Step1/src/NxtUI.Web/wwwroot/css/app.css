@@ -3349,3 +3349,42 @@ tr.bm-row-searching td:first-child {
 .bm-purge-row-clickable:hover { background: color-mix(in srgb, var(--mud-palette-error) 20%, transparent); }
 .bm-purge-progress-label { font-size: 12px; margin-top: 4px; }
 .bm-purge-hint { font-style: italic; }
+
+/* ================================================================
+   RUN STATS PAGE
+   ================================================================ */
+
+.bm-runstats-env-select { width: 220px; flex: none; }
+.bm-runstats-mode-toggle { flex: none; }
+.bm-runstats-filter-fill { flex: 1; min-width: 160px; }
+
+.bm-runstats-chart {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden; /* the svg scales to fill this box (see run-stats-chart.js) — never scrolls */
+}
+.bm-runstats-svg { display: block; width: 100%; height: 100%; }
+.bm-runstats-axis text { fill: var(--mud-palette-text-secondary); font-size: 11px; }
+.bm-runstats-axis path,
+.bm-runstats-axis line { stroke: var(--mud-palette-lines-default); }
+.bm-runstats-legend-text { fill: var(--mud-palette-text-secondary); font-size: 11px; }
+.bm-runstats-bar rect:hover { filter: brightness(1.2); }
+
+.bm-runstats-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    opacity: 0;
+    transition: opacity 0.1s;
+    z-index: 20;
+    max-width: 260px;
+}
+.bm-runstats-tt-fail { color: #F85149; }
+.bm-runstats-empty { padding: 24px; text-align: center; }
