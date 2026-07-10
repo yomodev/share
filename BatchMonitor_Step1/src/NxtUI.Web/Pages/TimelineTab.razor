@@ -137,7 +137,7 @@
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=14");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=15");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await _tlModule.InvokeVoidAsync("setHoverDelaysMs", _instanceKey,
                     Math.Max(0, TimelineOptions.Value.HighlightDelayMs),

@@ -347,31 +347,44 @@ const TIMELINE_ALIASES = {
         bottomEl.addEventListener('wheel', wh, { passive: false });
         s.wheelFn = wh;
 
-        // Wheel directly over the lanes zooms toward the cursor's time position —
-        // same feel as the run-detail graph's free zoom, adapted to this timeline's
-        // 1D horizontal axis. This replaces native wheel-scroll of the lane list
-        // (bm-tl-canvas-wrap's overflow-y:auto) — preventDefault() here stops that
-        // regardless of which ancestor would have scrolled; Ctrl+wheel below restores
-        // vertical scrolling explicitly (also the browser's own ctrl+wheel page-zoom
-        // gesture, which preventDefault() suppresses here in favour of our own
-        // behaviour). ↑/↓ (see handleKey) and dragging the scrollbar thumb remain as
-        // other ways to scroll lanes vertically. clampTransform (via applyZoom)
-        // already caps zoom-out at "the whole [0, globalMax] range fits the
-        // viewport" — no extra capping needed here.
+        // Wheel/gesture handling over the lanes, matching the convention most spatial
+        // navigation tools use (Figma, Google Maps): browsers synthesize ctrlKey:true
+        // on the wheel event for an actual trackpad PINCH (this is the one reliable
+        // cross-browser signal for it — there's no separate "gesture" event outside
+        // Safari's own proprietary ones), and a real held-Ctrl + wheel produces the
+        // same signal, so both collapse into one code path deliberately:
+        //
+        //   Ctrl+wheel / pinch  → ZOOM toward the cursor's time position.
+        //   plain deltaX        → PAN through time (trackpad 2-finger horizontal swipe
+        //                         — same feel as the tab bar's own horizontal scroll).
+        //   plain deltaY        → SCROLL the lane list vertically, same as every other
+        //                         scrollable panel in the app (mouse wheel notches
+        //                         land here too, same as trackpad vertical scroll).
+        //
+        // Mouse-only users (no pinch, no horizontal wheel) still reach zoom via
+        // Ctrl+wheel or the Ctrl+←/→ keyboard shortcut (see handleKey) — the same
+        // tradeoff Figma/Maps make. clampTransform (via applyZoom) already caps
+        // zoom-out/pan at the domain edges — no extra clamping needed here.
         const whMain = e => {
             if (!s.isVisible || !s.frozenDomainMax) return;
             e.preventDefault();
 
+            const t = s.xZoom;
+
             if (e.ctrlKey) {
-                const wrap = s.laneEl.parentElement;
-                if (wrap) wrap.scrollTop += e.deltaY;
+                const mx     = e.clientX - s.laneEl.getBoundingClientRect().left;
+                const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+                applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
                 return;
             }
 
-            const mx     = e.clientX - s.laneEl.getBoundingClientRect().left;
-            const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
-            const t      = s.xZoom;
-            applyZoom(s, d3.zoomIdentity.translate(mx * (1 - factor) + t.x * factor, 0).scale(t.k * factor));
+            if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+                applyZoom(s, d3.zoomIdentity.translate(t.x - e.deltaX, 0).scale(t.k));
+                return;
+            }
+
+            const wrap = s.laneEl.parentElement;
+            if (wrap) wrap.scrollTop += e.deltaY;
         };
         laneEl.addEventListener('wheel', whMain, { passive: false });
         s.wheelMainFn = whMain;
