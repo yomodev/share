@@ -17,6 +17,7 @@
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
 @inject DateTimeDisplayService DtSvc
+@inject IDialogService DialogService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -57,6 +58,10 @@
         </div>
 
         <div class="bm-svc-toolbar-right">
+            <MudTooltip Text="Restart services…">
+                <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt" Size="Size.Small" OnClick="OpenRestartDialogAsync" />
+            </MudTooltip>
+
             <ToolbarRefresh LastUpdated="@_lastUpdated"
                             Loading="@_loading"
                             OnRefresh="RefreshAsync" />
@@ -620,6 +625,18 @@
 
     private void OpenMemoryGraph() =>
         TabService.OpenOrFocus(TabModel.CreateMemoryGraph(Env));
+
+    private async Task OpenRestartDialogAsync()
+    {
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Restart" },
+            { x => x.ItemLabel,      "service" },
+            { x => x.LoadItemsAsync, () => Task.FromResult(_all.Select(s => s.ServiceName).Distinct().ToList()) },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Restart services", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+    }
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 

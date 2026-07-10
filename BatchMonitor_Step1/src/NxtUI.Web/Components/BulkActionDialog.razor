@@ -1,0 +1,257 @@
+@namespace NxtUI.Web.Components
+@using System.Text.Json
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
+@implements IAsyncDisposable
+
+<MudDialog>
+    <TitleContent>@ActionVerb @Kind(true)</TitleContent>
+    <DialogContent>
+        @if (_loadingItems)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-2" />
+        }
+        else
+        {
+            <MudTextField T="string" Value="@_filterText" ValueChanged="OnFilterChanged"
+                          Label="Filter (wildcards: * and ?)" Placeholder="e.g. *test*"
+                          Immediate="true" AutoFocus="true" Disabled="@_running" Class="mb-2" />
+
+            <div class="bm-restart-svc-list">
+                @if (_matches.Count == 0)
+                {
+                    <div class="bm-muted bm-restart-svc-empty">No matching @Kind(false).</div>
+                }
+                else
+                {
+                    @foreach (var name in _matches)
+                    {
+                        var result = _results.GetValueOrDefault(name);
+                        var failed = result is { Success: false };
+                        <div class="bm-restart-svc-row @(result is not null ? (result.Success ? "bm-purge-row-ok" : "bm-purge-row-fail bm-purge-row-clickable") : "")"
+                             title="@(failed ? result!.Message : null)"
+                             @onclick="@(() => CopyErrorAsync(failed ? result!.Message : null))">
+                            <span class="bm-restart-svc-name">@name</span>
+                            @if (result is not null)
+                            {
+                                <MudIcon Icon="@(result.Success ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Error)"
+                                         Size="Size.Small" Color="@(result.Success ? Color.Success : Color.Error)"
+                                         Title="@(failed ? "Click to copy the error" : null)" />
+                            }
+                        </div>
+                    }
+                }
+            </div>
+
+            @if (_running || _completed is not null)
+            {
+                <MudProgressLinear Value="@_progressPercent" Color="Color.Warning" Class="mt-2" />
+                <div class="bm-muted bm-purge-progress-label">
+                    @if (_completed is { } c)
+                    {
+                        <span>Done — @c.SuccessCount succeeded, @c.FailCount failed (of @c.Total).</span>
+                        @if (c.FailCount > 0)
+                        {
+                            <span class="bm-purge-hint"> Hover a failed row to see why; click it to copy the error.</span>
+                        }
+                    }
+                    else
+                    {
+                        <span>@(ActionVerb)ing @_doneCount / @_matches.Count…</span>
+                    }
+                </div>
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Close(DialogResult.Ok(true)))" Disabled="@_running">
+            Close
+        </MudButton>
+        <MudButton Color="@ButtonColor" Variant="Variant.Filled"
+                   Disabled="@(_matches.Count == 0 || _running || _loadingItems)"
+                   OnClick="RunAsync">
+            @if (_running)
+            {
+                @($"{ActionVerb}ing…")
+            }
+            else if (_completed is not null)
+            {
+                @($"{ActionVerb} again ({_matches.Count})")
+            }
+            else
+            {
+                @($"{ActionVerb} ({_matches.Count})")
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Verb shown in the title/button/progress text, e.g. "Restart" / "Purge".</summary>
+    [Parameter] public string ActionVerb { get; set; } = "Run";
+
+    /// <summary>Label used in messages, e.g. "service" / "Kafka topic" / "Mongo collection".</summary>
+    [Parameter, EditorRequired] public string ItemLabel { get; set; } = "item";
+
+    /// <summary>Supplies the full candidate list to filter — may itself be async (e.g. a fresh Mongo query).</summary>
+    [Parameter, EditorRequired] public Func<Task<List<string>>> LoadItemsAsync { get; set; } = () => Task.FromResult(new List<string>());
+
+    [Parameter] public Color ButtonColor { get; set; } = Color.Warning;
+
+    private string Kind(bool titleCase) => titleCase ? char.ToUpper(ItemLabel[0]) + ItemLabel[1..] + "s" : ItemLabel + "s";
+
+    private List<string> _allItems = [];
+    private List<string> _matches  = [];
+    private string _filterText = "";
+    private bool _loadingItems = true;
+    private bool _running;
+    private string? _error;
+    private int _doneCount;
+    private readonly Dictionary<string, ItemResult> _results = new();
+    private RunSummary? _completed;
+
+    private double _progressPercent => _matches.Count == 0 ? 0 : 100.0 * _doneCount / _matches.Count;
+
+    private DotNetObjectReference<BulkActionDialog>? _selfRef;
+    private IJSObjectReference? _module;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _allItems = await LoadItemsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load {Kind(false)}: {ex.Message}";
+        }
+        finally
+        {
+            _loadingItems = false;
+            ApplyFilter();
+        }
+    }
+
+    private void OnFilterChanged(string text)
+    {
+        _filterText = text;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        _matches = string.IsNullOrWhiteSpace(_filterText)
+            ? _allItems
+            : _allItems.Where(n => WildcardFilter.ToRegex(_filterText).IsMatch(n)).ToList();
+    }
+
+    private async Task CopyErrorAsync(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return;
+        await JS.InvokeVoidAsync("copyText", message, "Error copied to clipboard");
+    }
+
+    /// <summary>Runs (or re-runs — the button stays enabled after completion) the action
+    /// against the currently filtered list, so a failed run can be repeated without
+    /// closing the dialog or re-typing the filter.</summary>
+    private async Task RunAsync()
+    {
+        _running = true;
+        _error = null;
+        _doneCount = 0;
+        _results.Clear();
+        _completed = null;
+        StateHasChanged();
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/purge-stream.js?v=1");
+            _selfRef ??= DotNetObjectReference.Create(this);
+
+            var url  = new Uri(new Uri(Nav.BaseUri), "api/bulk-action-simulate");
+            var body = new { Action = ActionVerb, Kind = ItemLabel, Items = _matches };
+            await _module.InvokeVoidAsync("run", url, body, _selfRef);
+        }
+        catch (Exception ex)
+        {
+            _error = $"{ActionVerb} failed: {ex.Message}";
+            Notifications.Report(_error, ex, ActionVerb);
+            _running = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Invoked from purge-stream.js for every NDJSON line as it streams in.</summary>
+    [JSInvokable]
+    public void OnPurgeLine(string json)
+    {
+        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        try
+        {
+            var evt = JsonSerializer.Deserialize<RunEvent>(json, opts);
+            if (evt is null) return;
+
+            if (evt.Done)
+            {
+                _completed = new RunSummary(evt.Total, evt.SuccessCount, evt.FailCount);
+                _running = false;
+                if (evt.FailCount == 0)
+                    Snackbar.Add($"{ActionVerb}d {evt.SuccessCount} {Kind(false)} successfully.", Severity.Success);
+                else
+                    Snackbar.Add($"{ActionVerb} finished — {evt.SuccessCount} succeeded, {evt.FailCount} failed.", Severity.Warning);
+            }
+            else if (evt.Item is not null)
+            {
+                _results[evt.Item] = new ItemResult(evt.Success, evt.Message);
+                _doneCount++;
+            }
+        }
+        catch (JsonException ex)
+        {
+            Notifications.Report($"Malformed {ActionVerb.ToLowerInvariant()} progress line: {ex.Message}", ex, ActionVerb);
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Invoked from purge-stream.js if the fetch/stream itself fails.</summary>
+    [JSInvokable]
+    public void OnPurgeError(string message)
+    {
+        _error = $"{ActionVerb} stream failed: {message}";
+        _running = false;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try { await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+        _selfRef?.Dispose();
+    }
+
+    private sealed record ItemResult(bool Success, string? Message);
+    private sealed record RunSummary(int Total, int SuccessCount, int FailCount);
+
+    private sealed class RunEvent
+    {
+        public bool Done { get; set; }
+        public int Index { get; set; }
+        public int Total { get; set; }
+        public string? Item { get; set; }
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        public int SuccessCount { get; set; }
+        public int FailCount { get; set; }
+    }
+}

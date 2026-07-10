@@ -173,13 +173,14 @@ function invokeDotNet(view, method) {
     return true;
 }
 
-async function init(container, initialText, fileNameOrPath, editable, dotNetRef, isDark) {
+async function init(container, initialText, fileNameOrPath, editable, dotNetRef, isDark, wordWrap) {
     dispose(container);
 
     const langLoader = LANG_LOADERS[extensionOf(fileNameOrPath)];
     const langExt = langLoader ? await langLoader() : [];
     const readOnlyCompartment = new Compartment();
     const styleCompartment = new Compartment();
+    const wrapCompartment = new Compartment();
     const initial = initialText ?? '';
 
     const updateListener = EditorView.updateListener.of((update) => {
@@ -207,9 +208,10 @@ async function init(container, initialText, fileNameOrPath, editable, dotNetRef,
                 { key: 'Mod-Alt-]', run: unfoldAllCmd },
                 { key: 'Mod-s',     run: (v) => invokeDotNet(v, 'OnSaveShortcut') },
                 { key: 'Mod-Alt-r', run: (v) => invokeDotNet(v, 'OnReloadShortcut') },
+                { key: 'Mod-Alt-w', run: (v) => { toggleWrap(container); return true; } },
                 ...foldKeymap, ...searchKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap,
             ]),
-            EditorView.lineWrapping,
+            wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
             styleCompartment.of(buildTheme(!!isDark)),
             langExt,
             readOnlyCompartment.of(EditorView.editable.of(!!editable)),
@@ -218,7 +220,7 @@ async function init(container, initialText, fileNameOrPath, editable, dotNetRef,
     });
 
     const view = new EditorView({ state, parent: container });
-    _views.set(container, { view, readOnlyCompartment, styleCompartment, cleanDoc: initial, dotNetRef, isDirty: false });
+    _views.set(container, { view, readOnlyCompartment, styleCompartment, wrapCompartment, cleanDoc: initial, dotNetRef, isDirty: false, wordWrap: !!wordWrap });
 }
 
 function setDirty(container, entry, dirty) {
@@ -279,6 +281,24 @@ function setTheme(container, isDark) {
     });
 }
 
+function getWordWrap(container) {
+    return _views.get(container)?.wordWrap ?? false;
+}
+
+function setWordWrap(container, enabled) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    entry.wordWrap = !!enabled;
+    entry.view.dispatch({
+        effects: entry.wrapCompartment.reconfigure(entry.wordWrap ? EditorView.lineWrapping : []),
+    });
+    entry.dotNetRef?.invokeMethodAsync('OnWordWrapChanged', entry.wordWrap).catch(() => {});
+}
+
+function toggleWrap(container) {
+    setWordWrap(container, !getWordWrap(container));
+}
+
 // ── Toolbar commands ─────────────────────────────────────────────────────────
 function withView(container, fn) {
     const entry = _views.get(container);
@@ -289,6 +309,7 @@ function cmRedo(container)      { withView(container, redo); }
 function cmFoldAll(container)   { withView(container, foldAllDeep); }
 function cmUnfoldAll(container) { withView(container, unfoldAllCmd); }
 function cmFind(container)      { withView(container, openSearchPanel); }
+function cmToggleWrap(container) { toggleWrap(container); }
 
 function dispose(container) {
     const entry = _views.get(container);
@@ -299,9 +320,9 @@ function dispose(container) {
 }
 
 const api = {
-    init, getValue, setValue, markClean, setEditable, setTheme, isDirty, dispose,
-    cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind,
+    init, getValue, setValue, markClean, setEditable, setTheme, getWordWrap, setWordWrap, isDirty, dispose,
+    cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind, cmToggleWrap,
 };
 window.bmTextEditor = api;
 export default api;
-export { init, getValue, setValue, markClean, setEditable, setTheme, isDirty, dispose, cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind };
+export { init, getValue, setValue, markClean, setEditable, setTheme, getWordWrap, setWordWrap, isDirty, dispose, cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind, cmToggleWrap };

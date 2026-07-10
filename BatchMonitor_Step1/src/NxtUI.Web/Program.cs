@@ -286,8 +286,55 @@ public class Program
             return Results.Empty;
         });
 
+        // Placeholder for a real bulk-action backend (restart services, purge Kafka
+        // topics/Mongo collections, ...) — streams one NDJSON progress line per item as
+        // it's "processed" (simulated delay + random ~80% success rate), ending with a
+        // summary line ({"done":true,...}), so BulkActionDialog can show a live progress
+        // bar and per-item results instead of waiting on one big response. Swap the
+        // per-item work for a real call later — the NDJSON contract is what the dialog
+        // depends on, not this loop's implementation. `Action` is just a display verb
+        // ("restart"/"purge") baked into each item's message; it has no effect on the
+        // simulated outcome.
+        app.MapPost("/api/bulk-action-simulate", async (HttpResponse response, BulkActionRequest req, CancellationToken ct) =>
+        {
+            response.ContentType = "application/x-ndjson";
+            var items = req.Items ?? [];
+            int successCount = 0, failCount = 0;
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                await Task.Delay(Random.Shared.Next(150, 450), ct);
+                var ok = Random.Shared.Next(10) > 1; // ~80% success rate
+                if (ok) successCount++; else failCount++;
+
+                var line = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    index = i,
+                    total = items.Count,
+                    item = items[i],
+                    success = ok,
+                    message = ok
+                        ? $"[SIMULATION] {req.Action} succeeded for {req.Kind} '{items[i]}'."
+                        : $"[SIMULATION] {req.Action} failed for {req.Kind} '{items[i]}' — the orchestrator did not accept it.",
+                });
+                await response.WriteAsync(line + "\n", ct);
+                await response.Body.FlushAsync(ct);
+            }
+
+            var summary = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                done = true,
+                total = items.Count,
+                successCount,
+                failCount,
+            });
+            await response.WriteAsync(summary + "\n", ct);
+        });
+
         app.MapFallbackToPage("/{**path}", "/_Host");
 
         app.Run();
     }
 }
+
+public sealed record BulkActionRequest(string Action, string Kind, List<string> Items);

@@ -3315,3 +3315,36 @@ tr.bm-row-searching td:first-child {
 .bm-config-edit-toolbar { gap: 2px; }
 .bm-config-footer { justify-content: flex-start; }
 .bm-config-dirty-flag { margin-left: auto; font-size: 12px; color: var(--mud-palette-warning); }
+
+/* ================================================================
+   RESTART SERVICES DIALOG
+   ================================================================ */
+
+.bm-restart-svc-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+.bm-restart-svc-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    font-size: 13px;
+}
+.bm-restart-svc-row:last-child { border-bottom: none; }
+.bm-restart-svc-host { font-size: 12px; }
+.bm-restart-svc-empty { padding: 12px; text-align: center; font-size: 13px; }
+
+/* ================================================================
+   BULK ACTION DIALOG (restart services / purge Kafka topics / purge Mongo collections)
+   ================================================================ */
+
+.bm-purge-row-ok   { background: color-mix(in srgb, var(--mud-palette-success) 10%, transparent); }
+.bm-purge-row-fail { background: color-mix(in srgb, var(--mud-palette-error) 10%, transparent); }
+.bm-purge-row-clickable { cursor: pointer; }
+.bm-purge-row-clickable:hover { background: color-mix(in srgb, var(--mud-palette-error) 20%, transparent); }
+.bm-purge-progress-label { font-size: 12px; margin-top: 4px; }
+.bm-purge-hint { font-style: italic; }

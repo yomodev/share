@@ -5586,7 +5586,7 @@ LENGTH 317
   }
 }
 FILE src/NxtUI.Web/appsettings.json
-LENGTH 4515
+LENGTH 6197
 {
   "AllowedHosts": "*",
 
@@ -5604,9 +5604,14 @@ LENGTH 4515
     // active" (bright header/row color) in the run-detail flow graph. Raise this if
     // Replay's timestamp-truncated snapshots make too many pipelines look gray.
     "TopologyRecentActivityWindowSeconds": 15,
-    // Delay (ms) before the Timeline highlights same-id blocks / shows the hover
-    // popup. 0 (default) = immediate.
-    "TimelineHighlightDelayMs": 0
+    // Delay (ms) before the Timeline highlights same-id blocks on hover. 0 (default) = immediate.
+    "TimelineHighlightDelayMs": 0,
+    // Delay (ms) before the Timeline shows the hover popup/tooltip. 0 (default) = immediate.
+    "TimelinePopupDelayMs": 0,
+    // Number of most-recent runs shown in the Home page's "Recent Runs" panel.
+    "HomeRecentRunsCount": 20,
+    // Filter text pre-populated in the Services page's filter box on load.
+    "ServicesDefaultFilterText": "updated:>-30m"
   },
 
   "Kafka": {
@@ -5661,7 +5666,11 @@ LENGTH 4515
     ],
     "MetricsFileName": "Metrics.log",
     "MetricsIntervalSeconds": 90,
-    "RootFolder": "C:\\Temp\\logs\\{server}",
+    // "Both" (default: Kafka live + one-time disk backfill, falls back fully to disk if
+    // an env's Kafka topic has no data) | "FileSystem" (disk only, no Kafka) | "Kafka"
+    // (Kafka + its one-time disk backfill only, no ongoing file-tail polling).
+    "MetricsSource": "Both",
+    "RootFolder": "C:\\Temp\\logs",
     //"RootFolder": "\\\\{server}\\Shared",
     "StartupFolder": "{today}",
     "FolderScanIntervalSeconds": 30,
@@ -5678,7 +5687,25 @@ LENGTH 4515
     "PollingIntervalSeconds": 30,
     "WindowMonths": 4,
     "PageSize": 100,
-    "MaxResults": 1000
+    "MaxResults": 1000,
+    // Filter text pre-populated in the Runs page's filter box on load.
+    "DefaultFilterText": "start:>=-10d"
+  },
+
+  "EnvConfig": {
+    // Source-of-truth copy — read/edited on the Config page; backed up (timestamped)
+    // just before every save. Expanded against the environment's first configured
+    // server and the environment id. Placeholders: {server}, {env}.
+    "SourcePathTemplate": "C:\\temp\\config\\settings.json",
+    // Same file's path on every server in the environment (including the source
+    // server) — overwritten on save, no backup taken here. Placeholders: {server}, {env}.
+    "PathTemplate": "C:\\temp\\{server}\\settings.json",
+    // Whether the Config page allows editing/saving at all. Default: false (read-only) --
+    // this can write files on every server in an environment, so it's opt-in.
+    "EditingEnabled": true,
+    // "SingleLocation" (save only overwrites SourcePathTemplate, with a backup) |
+    // "AllServers" (also mirrors to PathTemplate on every server, no backup on those).
+    "SaveMode": "AllServers"
   },
 
   "Diagnostics": {
@@ -5921,7 +5948,7 @@ LENGTH 942
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 14888
+LENGTH 17410
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -5971,6 +5998,9 @@ public class Program
 
         builder.Services.Configure<UiSettings>(
             builder.Configuration.GetSection(UiSettings.SectionName));
+
+        builder.Services.Configure<EnvConfigSettings>(
+            builder.Configuration.GetSection(EnvConfigSettings.SectionName));
 
         // ── Per-environment config loader ─────────────────────────────────────
         builder.Services.AddSingleton(new EnvironmentConfigOptions
@@ -6072,6 +6102,7 @@ public class Program
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddSingleton<IEnvConfigService, EnvConfigService>();
         builder.Services.AddSingleton<InfraHealthCache>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<InfraHealthCache>());
         builder.Services.AddHttpClient();
@@ -6206,11 +6237,58 @@ public class Program
             return Results.Empty;
         });
 
+        // Placeholder for a real bulk-action backend (restart services, purge Kafka
+        // topics/Mongo collections, ...) — streams one NDJSON progress line per item as
+        // it's "processed" (simulated delay + random ~80% success rate), ending with a
+        // summary line ({"done":true,...}), so BulkActionDialog can show a live progress
+        // bar and per-item results instead of waiting on one big response. Swap the
+        // per-item work for a real call later — the NDJSON contract is what the dialog
+        // depends on, not this loop's implementation. `Action` is just a display verb
+        // ("restart"/"purge") baked into each item's message; it has no effect on the
+        // simulated outcome.
+        app.MapPost("/api/bulk-action-simulate", async (HttpResponse response, BulkActionRequest req, CancellationToken ct) =>
+        {
+            response.ContentType = "application/x-ndjson";
+            var items = req.Items ?? [];
+            int successCount = 0, failCount = 0;
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                await Task.Delay(Random.Shared.Next(150, 450), ct);
+                var ok = Random.Shared.Next(10) > 1; // ~80% success rate
+                if (ok) successCount++; else failCount++;
+
+                var line = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    index = i,
+                    total = items.Count,
+                    item = items[i],
+                    success = ok,
+                    message = ok
+                        ? $"[SIMULATION] {req.Action} succeeded for {req.Kind} '{items[i]}'."
+                        : $"[SIMULATION] {req.Action} failed for {req.Kind} '{items[i]}' — the orchestrator did not accept it.",
+                });
+                await response.WriteAsync(line + "\n", ct);
+                await response.Body.FlushAsync(ct);
+            }
+
+            var summary = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                done = true,
+                total = items.Count,
+                successCount,
+                failCount,
+            });
+            await response.WriteAsync(summary + "\n", ct);
+        });
+
         app.MapFallbackToPage("/{**path}", "/_Host");
 
         app.Run();
     }
 }
+
+public sealed record BulkActionRequest(string Action, string Kind, List<string> Items);
 FILE src/NxtUI.Web/_Imports.razor
 LENGTH 642
 @using System.Net.Http
@@ -6421,7 +6499,7 @@ LENGTH 1280
   }
 ]
 FILE src/NxtUI.Core/Configuration/AppSettings.cs
-LENGTH 1378
+LENGTH 1375
 namespace NxtUI.Configuration;
 
 /// <summary>
@@ -6438,7 +6516,7 @@ public class AppSettings
     public int DefaultPageSize { get; set; } = 25;
 
     /// <summary>All environments known to this portal instance.</summary>
-    public List<EnvironmentDefinition> Environments { get; set; } = new();
+    public List<EnvironmentDefinition> Environments { get; set; } = [];
 }
 
 /// <summary>
@@ -6458,8 +6536,62 @@ public class EnvironmentDefinition
     /// <summary>Hostnames of servers belonging to this environment.</summary>
     public List<string> Servers { get; set; } = [];
 }
+FILE src/NxtUI.Core/Configuration/EnvConfigSettings.cs
+LENGTH 2205
+namespace NxtUI.Core.Configuration;
+
+/// <summary>
+/// Locates the per-environment config JSON file shown/edited on the Config page.
+/// </summary>
+public class EnvConfigSettings
+{
+    public const string SectionName = "EnvConfig";
+
+    /// <summary>
+    /// UNC path template for the source-of-truth copy of the file — this is what the
+    /// Config page reads and edits, and where a timestamped backup is written just
+    /// before any save. Expanded against the environment's source server (the first
+    /// entry in that environment's <c>Servers</c> list) and the environment id.
+    /// Placeholders: {server}, {env}.
+    /// </summary>
+    public string SourcePathTemplate { get; set; } = "";
+
+    /// <summary>
+    /// UNC path template for this same file on every server in the environment
+    /// (including the source server) — expanded once per server. When editing is
+    /// enabled and the save mode is AllServers, a save overwrites this resolved path
+    /// on every server after the source copy's backup+write succeeds.
+    /// Placeholders: {server}, {env}.
+    /// </summary>
+    public string PathTemplate { get; set; } = "";
+
+    /// <summary>
+    /// Whether the Config page allows editing/saving at all. Default: false (read-only) —
+    /// this writes files on potentially every server in an environment, so it's opt-in.
+    /// </summary>
+    public bool EditingEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Where a save is written. See <see cref="EnvConfigSaveMode"/>. Default: SingleLocation.
+    /// </summary>
+    public EnvConfigSaveMode SaveMode { get; set; } = EnvConfigSaveMode.SingleLocation;
+}
+
+/// <summary>Controls where a Config page save is written.</summary>
+public enum EnvConfigSaveMode
+{
+    /// <summary>Only the source-of-truth file (<see cref="EnvConfigSettings.SourcePathTemplate"/>) is written, with a backup.</summary>
+    SingleLocation,
+
+    /// <summary>
+    /// The source file is written (with a backup, same as SingleLocation), then the same
+    /// content is copied to every server's <see cref="EnvConfigSettings.PathTemplate"/>
+    /// path — no backup is taken for those mirror copies.
+    /// </summary>
+    AllServers,
+}
 FILE src/NxtUI.Core/Configuration/HeartbeatSettings.cs
-LENGTH 1369
+LENGTH 1377
 namespace NxtUI.Configuration;
 
 public class HeartbeatSettings
@@ -6481,8 +6613,9 @@ public class HeartbeatSettings
     public int OfflineThresholdSeconds { get; set; } = 0;
 
     /// <summary>Resolved offline threshold, applying the IntervalSeconds * 2 fallback.</summary>
-    public TimeSpan OfflineThreshold =>
-        TimeSpan.FromSeconds(OfflineThresholdSeconds > 0 ? OfflineThresholdSeconds : IntervalSeconds * 2);
+    public TimeSpan OfflineThreshold => TimeSpan.FromSeconds(OfflineThresholdSeconds > 0
+        ? OfflineThresholdSeconds
+        : IntervalSeconds * 2);
 
     /// <summary>
     /// Only services with a heartbeat within this many minutes are fetched from MongoDB.
@@ -6582,7 +6715,7 @@ public class TopicDeserializerRule
     public List<string> Types { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/LogPathSettings.cs
-LENGTH 5183
+LENGTH 6396
 namespace NxtUI.Core.Configuration;
 
 public class LogPathSettings
@@ -6611,6 +6744,12 @@ public class LogPathSettings
 
     /// <summary>How often (seconds) to re-read the metrics file for new lines.</summary>
     public int MetricsIntervalSeconds { get; set; } = 90;
+
+    /// <summary>
+    /// Where memory metrics are pulled from. See <see cref="MetricsSourceMode"/>.
+    /// Default: <see cref="MetricsSourceMode.Both"/> (unchanged historical behavior).
+    /// </summary>
+    public MetricsSourceMode MetricsSource { get; set; } = MetricsSourceMode.Both;
 
     /// <summary>
     /// UNC path template for the Log Browser's top-level "Root" node, per server.
@@ -6692,6 +6831,32 @@ public enum LogFileAccessMode
     /// </summary>
     ClientOnly,
 }
+
+/// <summary>
+/// Controls where <see cref="ServiceMetricsMonitor"/> (in NxtUI.Web) pulls per-service
+/// memory metrics from.
+/// </summary>
+public enum MetricsSourceMode
+{
+    /// <summary>
+    /// Kafka (live) plus a one-time on-disk backfill for the pre-Kafka-retention gap, and a
+    /// full on-disk fallback for any environment whose Kafka topic has no data at all.
+    /// Unchanged historical behavior.
+    /// </summary>
+    Both,
+
+    /// <summary>
+    /// On-disk metrics log files only — the Kafka metrics consumer and disk backfill never
+    /// run. Use when Kafka metrics publishing isn't wired up, or to rule it out for debugging.
+    /// </summary>
+    FileSystem,
+
+    /// <summary>
+    /// Kafka only, including its one-time disk backfill for the pre-retention gap — but no
+    /// ongoing file-tail polling, even for services/environments where Kafka has no data.
+    /// </summary>
+    Kafka,
+}
 FILE src/NxtUI.Core/Configuration/MongoSettings.cs
 LENGTH 2158
 using System.Security.Cryptography;
@@ -6747,7 +6912,7 @@ public class MongoSettings
     }
 }
 FILE src/NxtUI.Core/Configuration/RunsSettings.cs
-LENGTH 711
+LENGTH 998
 namespace NxtUI.Configuration;
 
 public class RunsSettings
@@ -6765,6 +6930,12 @@ public class RunsSettings
 
     /// <summary>Hard cap on rows returned per query, regardless of what the caller requests. Default: 1000.</summary>
     public int MaxResults { get; set; } = 1000;
+
+    /// <summary>
+    /// Filter text pre-populated in the Runs page's filter box on load. Uses the same
+    /// syntax as the filter box itself (e.g. "start:&gt;=-10d"). Default: "start:&gt;=-10d".
+    /// </summary>
+    public string DefaultFilterText { get; set; } = "start:>=-10d";
 }
 FILE src/NxtUI.Core/Configuration/SqlSettings.cs
 LENGTH 2739
@@ -6865,7 +7036,7 @@ public class TestLogGeneratorSettings
     public List<string> Environments { get; set; } = [];
 }
 FILE src/NxtUI.Core/Configuration/UiSettings.cs
-LENGTH 3834
+LENGTH 4606
 namespace NxtUI.Core.Configuration;
 
 public class UiSettings
@@ -6931,11 +7102,30 @@ public class UiSettings
     public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
 
     /// <summary>
-    /// Delay (ms) before the Timeline highlights same-id blocks / shows the hover
-    /// popup. 0 (default) = immediate. If the pointer leaves a block before this
-    /// elapses, nothing highlights/shows at all.
+    /// Delay (ms) before the Timeline highlights same-id blocks on hover. 0 (default) =
+    /// immediate. If the pointer leaves a block before this elapses, nothing highlights.
+    /// Independent of <see cref="TimelinePopupDelayMs"/>.
     /// </summary>
     public int TimelineHighlightDelayMs { get; set; } = 0;
+
+    /// <summary>
+    /// Delay (ms) before the Timeline shows the hover popup/tooltip. 0 (default) =
+    /// immediate. If the pointer leaves a block before this elapses, nothing shows.
+    /// Independent of <see cref="TimelineHighlightDelayMs"/>.
+    /// </summary>
+    public int TimelinePopupDelayMs { get; set; } = 0;
+
+    /// <summary>
+    /// Number of most-recent runs shown in the Home page's "Recent Runs" panel.
+    /// Default: 20.
+    /// </summary>
+    public int HomeRecentRunsCount { get; set; } = 20;
+
+    /// <summary>
+    /// Filter text pre-populated in the Services page's filter box on load.
+    /// Default: "updated:&gt;-30m".
+    /// </summary>
+    public string ServicesDefaultFilterText { get; set; } = "updated:>-30m";
 }
 FILE src/NxtUI.Core/Filtering/FilterAst.cs
 LENGTH 4018
@@ -9377,6 +9567,46 @@ public interface IBatchCatalogService
         string env,
         CancellationToken ct = default);
 }
+FILE src/NxtUI.Core/Services/IEnvConfigService.cs
+LENGTH 1714
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Reads/saves the per-environment config file shown on the Config page. See
+/// <see cref="NxtUI.Core.Configuration.EnvConfigSettings"/> for path templates and save mode.
+/// </summary>
+public interface IEnvConfigService
+{
+    /// <summary>True if editing/saving is enabled and the environment has a resolvable path.</summary>
+    bool IsEditingEnabled(string env);
+
+    /// <summary>The source-of-truth file's resolved absolute path for this environment.</summary>
+    string? GetSourcePath(string env);
+
+    /// <summary>
+    /// Every path a save would write to, in write order (source first). Used to populate
+    /// the pre-save confirmation dialog — does not perform any I/O.
+    /// </summary>
+    IReadOnlyList<string> GetSaveTargets(string env);
+
+    /// <summary>
+    /// Backs up the source file (timestamped, same folder, source server only), writes
+    /// the new content there, then — if the configured save mode is AllServers — copies
+    /// the same content to every other resolved target. Every target is attempted even
+    /// if an earlier one fails; each gets its own result.
+    /// </summary>
+    Task<IReadOnlyList<EnvConfigSaveResult>> SaveAsync(string env, string content, CancellationToken ct = default);
+
+    /// <summary>
+    /// Backups previously taken by <see cref="SaveAsync"/> for this environment's source
+    /// file (same folder, "{filename}.{yyyyMMdd_HHmmss}.bak"), newest first.
+    /// </summary>
+    IReadOnlyList<EnvConfigBackup> ListBackups(string env);
+}
+
+public sealed record EnvConfigSaveResult(string Path, bool Success, string? Error);
+
+public sealed record EnvConfigBackup(string Path, DateTime TakenAtUtc);
 FILE src/NxtUI.Core/Services/IEnvironmentService.cs
 LENGTH 247
 using NxtUI.Core.Models;
@@ -10897,8 +11127,267 @@ LENGTH 8857
             ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
 }
+FILE src/NxtUI.Web/Components/BulkActionDialog.razor
+LENGTH 9689
+@namespace NxtUI.Web.Components
+@using System.Text.Json
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
+@implements IAsyncDisposable
+
+<MudDialog>
+    <TitleContent>@ActionVerb @Kind(true)</TitleContent>
+    <DialogContent>
+        @if (_loadingItems)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-2" />
+        }
+        else
+        {
+            <MudTextField T="string" Value="@_filterText" ValueChanged="OnFilterChanged"
+                          Label="Filter (wildcards: * and ?)" Placeholder="e.g. *test*"
+                          Immediate="true" AutoFocus="true" Disabled="@_running" Class="mb-2" />
+
+            <div class="bm-restart-svc-list">
+                @if (_matches.Count == 0)
+                {
+                    <div class="bm-muted bm-restart-svc-empty">No matching @Kind(false).</div>
+                }
+                else
+                {
+                    @foreach (var name in _matches)
+                    {
+                        var result = _results.GetValueOrDefault(name);
+                        var failed = result is { Success: false };
+                        <div class="bm-restart-svc-row @(result is not null ? (result.Success ? "bm-purge-row-ok" : "bm-purge-row-fail bm-purge-row-clickable") : "")"
+                             title="@(failed ? result!.Message : null)"
+                             @onclick="@(() => CopyErrorAsync(failed ? result!.Message : null))">
+                            <span class="bm-restart-svc-name">@name</span>
+                            @if (result is not null)
+                            {
+                                <MudIcon Icon="@(result.Success ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Error)"
+                                         Size="Size.Small" Color="@(result.Success ? Color.Success : Color.Error)"
+                                         Title="@(failed ? "Click to copy the error" : null)" />
+                            }
+                        </div>
+                    }
+                }
+            </div>
+
+            @if (_running || _completed is not null)
+            {
+                <MudProgressLinear Value="@_progressPercent" Color="Color.Warning" Class="mt-2" />
+                <div class="bm-muted bm-purge-progress-label">
+                    @if (_completed is { } c)
+                    {
+                        <span>Done — @c.SuccessCount succeeded, @c.FailCount failed (of @c.Total).</span>
+                        @if (c.FailCount > 0)
+                        {
+                            <span class="bm-purge-hint"> Hover a failed row to see why; click it to copy the error.</span>
+                        }
+                    }
+                    else
+                    {
+                        <span>@(ActionVerb)ing @_doneCount / @_matches.Count…</span>
+                    }
+                </div>
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Close(DialogResult.Ok(true)))" Disabled="@_running">
+            Close
+        </MudButton>
+        <MudButton Color="@ButtonColor" Variant="Variant.Filled"
+                   Disabled="@(_matches.Count == 0 || _running || _loadingItems)"
+                   OnClick="RunAsync">
+            @if (_running)
+            {
+                @($"{ActionVerb}ing…")
+            }
+            else if (_completed is not null)
+            {
+                @($"{ActionVerb} again ({_matches.Count})")
+            }
+            else
+            {
+                @($"{ActionVerb} ({_matches.Count})")
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Verb shown in the title/button/progress text, e.g. "Restart" / "Purge".</summary>
+    [Parameter] public string ActionVerb { get; set; } = "Run";
+
+    /// <summary>Label used in messages, e.g. "service" / "Kafka topic" / "Mongo collection".</summary>
+    [Parameter, EditorRequired] public string ItemLabel { get; set; } = "item";
+
+    /// <summary>Supplies the full candidate list to filter — may itself be async (e.g. a fresh Mongo query).</summary>
+    [Parameter, EditorRequired] public Func<Task<List<string>>> LoadItemsAsync { get; set; } = () => Task.FromResult(new List<string>());
+
+    [Parameter] public Color ButtonColor { get; set; } = Color.Warning;
+
+    private string Kind(bool titleCase) => titleCase ? char.ToUpper(ItemLabel[0]) + ItemLabel[1..] + "s" : ItemLabel + "s";
+
+    private List<string> _allItems = [];
+    private List<string> _matches  = [];
+    private string _filterText = "";
+    private bool _loadingItems = true;
+    private bool _running;
+    private string? _error;
+    private int _doneCount;
+    private readonly Dictionary<string, ItemResult> _results = new();
+    private RunSummary? _completed;
+
+    private double _progressPercent => _matches.Count == 0 ? 0 : 100.0 * _doneCount / _matches.Count;
+
+    private DotNetObjectReference<BulkActionDialog>? _selfRef;
+    private IJSObjectReference? _module;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _allItems = await LoadItemsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load {Kind(false)}: {ex.Message}";
+        }
+        finally
+        {
+            _loadingItems = false;
+            ApplyFilter();
+        }
+    }
+
+    private void OnFilterChanged(string text)
+    {
+        _filterText = text;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        _matches = string.IsNullOrWhiteSpace(_filterText)
+            ? _allItems
+            : _allItems.Where(n => WildcardFilter.ToRegex(_filterText).IsMatch(n)).ToList();
+    }
+
+    private async Task CopyErrorAsync(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return;
+        await JS.InvokeVoidAsync("copyText", message, "Error copied to clipboard");
+    }
+
+    /// <summary>Runs (or re-runs — the button stays enabled after completion) the action
+    /// against the currently filtered list, so a failed run can be repeated without
+    /// closing the dialog or re-typing the filter.</summary>
+    private async Task RunAsync()
+    {
+        _running = true;
+        _error = null;
+        _doneCount = 0;
+        _results.Clear();
+        _completed = null;
+        StateHasChanged();
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/purge-stream.js?v=1");
+            _selfRef ??= DotNetObjectReference.Create(this);
+
+            var url  = new Uri(new Uri(Nav.BaseUri), "api/bulk-action-simulate");
+            var body = new { Action = ActionVerb, Kind = ItemLabel, Items = _matches };
+            await _module.InvokeVoidAsync("run", url, body, _selfRef);
+        }
+        catch (Exception ex)
+        {
+            _error = $"{ActionVerb} failed: {ex.Message}";
+            Notifications.Report(_error, ex, ActionVerb);
+            _running = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Invoked from purge-stream.js for every NDJSON line as it streams in.</summary>
+    [JSInvokable]
+    public void OnPurgeLine(string json)
+    {
+        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        try
+        {
+            var evt = JsonSerializer.Deserialize<RunEvent>(json, opts);
+            if (evt is null) return;
+
+            if (evt.Done)
+            {
+                _completed = new RunSummary(evt.Total, evt.SuccessCount, evt.FailCount);
+                _running = false;
+                if (evt.FailCount == 0)
+                    Snackbar.Add($"{ActionVerb}d {evt.SuccessCount} {Kind(false)} successfully.", Severity.Success);
+                else
+                    Snackbar.Add($"{ActionVerb} finished — {evt.SuccessCount} succeeded, {evt.FailCount} failed.", Severity.Warning);
+            }
+            else if (evt.Item is not null)
+            {
+                _results[evt.Item] = new ItemResult(evt.Success, evt.Message);
+                _doneCount++;
+            }
+        }
+        catch (JsonException ex)
+        {
+            Notifications.Report($"Malformed {ActionVerb.ToLowerInvariant()} progress line: {ex.Message}", ex, ActionVerb);
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Invoked from purge-stream.js if the fetch/stream itself fails.</summary>
+    [JSInvokable]
+    public void OnPurgeError(string message)
+    {
+        _error = $"{ActionVerb} stream failed: {message}";
+        _running = false;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try { await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+        _selfRef?.Dispose();
+    }
+
+    private sealed record ItemResult(bool Success, string? Message);
+    private sealed record RunSummary(int Total, int SuccessCount, int FailCount);
+
+    private sealed class RunEvent
+    {
+        public bool Done { get; set; }
+        public int Index { get; set; }
+        public int Total { get; set; }
+        public string? Item { get; set; }
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+        public int SuccessCount { get; set; }
+        public int FailCount { get; set; }
+    }
+}
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 5968
+LENGTH 6739
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -10930,6 +11419,13 @@ LENGTH 5968
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
     [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
+    /// <summary>
+    /// Resolves the log folder path shown as a tooltip when hovering an instance row's
+    /// server name in the popover. Returns null if not (yet) known — a cache-only lookup,
+    /// never triggers a filesystem search. (service, server, processId) -> path or null.
+    /// </summary>
+    [Parameter] public Func<string, string, int, string?>? ResolveLogPathHint { get; set; }
+
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
@@ -10950,7 +11446,7 @@ LENGTH 5968
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=17");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=18");
                 var portConstraints = string.Equals(UiOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(UiOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -10975,6 +11471,12 @@ LENGTH 5968
     [JSInvokable]
     public Task RequestOpenInstanceLog(string service, string server, int processId, DateTime lastActivity) =>
         OnOpenInstanceLog.InvokeAsync((service, server, processId, lastActivity));
+
+    /// <summary>Invoked from d3-graph.js right after the popover opens, to populate each
+    /// instance row's server-name tooltip with its resolved log path (cache-only, no I/O).</summary>
+    [JSInvokable]
+    public string? RequestInstanceLogPathHint(string service, string server, int processId) =>
+        ResolveLogPathHint?.Invoke(service, server, processId);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -12602,7 +13104,7 @@ LENGTH 7737
     }
 }
 FILE src/NxtUI.Web/Layout/Sidebar.razor
-LENGTH 9370
+LENGTH 9310
 @namespace NxtUI.Web.Layout
 @inject TabService TabService
 @inject EnvironmentSelectorService EnvService
@@ -12689,14 +13191,11 @@ LENGTH 9370
                             OnClick="@(() => Open(TabModel.CreateEnvironmentDashboard(EnvService.SelectedId)))" />
             }
 
-            @if (DtSvc.DevMode)
-            {
             <SidebarNavItem Icon="@Icons.Material.Outlined.Tune"
                             Label="Config"
                             IsOpen="@_drawerOpen"
                             IsActive="@IsTabActive($"dashboard:config:{EnvService.SelectedId}")"
                             OnClick="@(() => Open(TabModel.CreateConfigDashboard(EnvService.SelectedId)))" />
-            }
 
             <SidebarNavItem Icon="@Icons.Material.Outlined.Folder"
                             Label="Files"
@@ -13931,6 +14430,356 @@ LENGTH 155
 @* Catch-all route — MainLayout renders all content via the tab system; this page has no body. *@
 @page "/"
 @page "/{**path}"
+FILE src/NxtUI.Web/Pages/ConfigPage.razor
+LENGTH 14079
+@namespace NxtUI.Web.Pages
+@using NxtUI.Core.Services
+@using NxtUI.Shared
+@inject IEnvConfigService EnvConfigSvc
+@inject ILogViewerService LogViewerSvc
+@inject ErrorNotificationService Notifications
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject DateTimeDisplayService DtSvc
+@inject ThemeService ThemeSvc
+@implements IAsyncDisposable
+
+<div class="bm-page bm-page-fill bm-config-page">
+
+    <div class="bm-batch-toolbar bm-config-edit-toolbar">
+        @if (_editable)
+        {
+            <MudTooltip Text="Undo (Ctrl+Z)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Undo" Size="Size.Small" OnClick="@(() => Cmd("cmUndo"))" />
+            </MudTooltip>
+            <MudTooltip Text="Redo (Ctrl+Y)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Redo" Size="Size.Small" OnClick="@(() => Cmd("cmRedo"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Fold all (Ctrl+Alt+[)">
+                <MudIconButton Icon="@Icons.Material.Outlined.UnfoldLess" Size="Size.Small" OnClick="@(() => Cmd("cmFoldAll"))" />
+            </MudTooltip>
+            <MudTooltip Text="Unfold all (Ctrl+Alt+])">
+                <MudIconButton Icon="@Icons.Material.Outlined.UnfoldMore" Size="Size.Small" OnClick="@(() => Cmd("cmUnfoldAll"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Find / Replace (Ctrl+F)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Search" Size="Size.Small" OnClick="@(() => Cmd("cmFind"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Restore from a previous backup">
+                <MudMenu Icon="@Icons.Material.Outlined.History" Size="Size.Small" Dense="true"
+                         Disabled="@(_backups.Count == 0)"
+                         AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                    @foreach (var b in _backups)
+                    {
+                        var backup = b;
+                        <MudMenuItem OnClick="@(() => RestoreBackupAsync(backup))">
+                            @DtSvc.Format(backup.TakenAtUtc, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+        }
+
+        <MudTooltip Text="Toggle word wrap (Ctrl+Alt+W)">
+            <MudToggleIconButton Toggled="@_wordWrap" ToggledChanged="OnWordWrapToggled"
+                                  Icon="@Icons.Material.Outlined.WrapText" Color="@Color.Default"
+                                  ToggledIcon="@Icons.Material.Outlined.WrapText" ToggledColor="@Color.Primary"
+                                  Size="Size.Small" />
+        </MudTooltip>
+
+        <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+        <ToolbarRefresh Loading="@_loading" OnRefresh="RefreshAsync" TooltipText="Reload (Ctrl+Alt+R)" />
+
+        @if (_dirty)
+        {
+            <span class="bm-muted bm-config-dirty-flag" title="Unsaved changes">● unsaved changes</span>
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="ma-2">@_error</MudAlert>
+    }
+    else if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+
+    <div class="bm-config-editor" style="@(_error is not null ? "display:none" : "")" @ref="_editorRef"></div>
+
+    <div class="bm-batch-toolbar bm-config-footer">
+        <span class="bm-config-path bm-monospace bm-muted" title="@_sourcePath">@(_sourcePath ?? "")</span>
+        @if (_editable)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                       Disabled="@(_loading || _saving)"
+                       StartIcon="@Icons.Material.Outlined.Save"
+                       OnClick="SaveAsync"
+                       title="Save (Ctrl+S)">
+                @(_saving ? "Saving…" : "Save")
+            </MudButton>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Environment { get; set; } = string.Empty;
+
+    private string? _sourcePath;
+    private string  _content = "";
+    private string? _error;
+    private bool    _loading = true;
+    private bool    _saving;
+    private bool    _editable;
+    private bool    _dirty;
+    private bool    _wordWrap;
+    private List<EnvConfigBackup> _backups = [];
+
+    private ElementReference _editorRef;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _appModule;
+    private bool _editorReady;
+    private DotNetObjectReference<ConfigPage>? _selfRef;
+    private const string WordWrapStorageKey = "bm-config-wordwrap";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _editable = EnvConfigSvc.IsEditingEnabled(Environment);
+        ThemeSvc.OnChange += OnAppThemeChanged;
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try
+            {
+                _module    = await JS.InvokeAsync<IJSObjectReference>("import", "./js/text-editor.js?v=6");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+                var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", WordWrapStorageKey);
+                _wordWrap  = stored == "1";
+                StateHasChanged();
+            }
+            catch (Exception ex) { ReportInitFailed(ex); }
+        }
+
+        // Editor mounts once content is loaded and the container div has actually
+        // rendered (it's hidden via display:none while _error is set, so wait for that
+        // to clear too — CodeMirror measures the container on init).
+        if (_module is not null && !_editorReady && !_loading && _error is null)
+        {
+            _editorReady = true;
+            try { await _module.InvokeVoidAsync("init", _editorRef, _content, _sourcePath ?? "", _editable, _selfRef, ThemeSvc.IsDark, _wordWrap); }
+            catch (Exception ex) { ReportInitFailed(ex); }
+        }
+    }
+
+    /// <summary>Invoked from text-editor.js whenever the editor's dirty state changes.</summary>
+    [JSInvokable]
+    public void OnDirtyChanged(bool dirty)
+    {
+        if (_dirty == dirty) return;
+        _dirty = dirty;
+        StateHasChanged();
+    }
+
+    /// <summary>Invoked from text-editor.js's Ctrl+S binding.</summary>
+    [JSInvokable]
+    public Task OnSaveShortcut() => _editable ? SaveAsync() : Task.CompletedTask;
+
+    /// <summary>Invoked from text-editor.js's Ctrl+Alt+R binding.</summary>
+    [JSInvokable]
+    public Task OnReloadShortcut() => RefreshAsync();
+
+    private async Task OnWordWrapToggled(bool enabled)
+    {
+        if (_module is null) return;
+        try { await _module.InvokeVoidAsync("setWordWrap", _editorRef, enabled); }
+        catch (Exception ex) { Notifications.Report($"Failed to toggle word wrap: {ex.Message}", ex, "Config"); }
+    }
+
+    /// <summary>Invoked from text-editor.js whenever word wrap changes (toolbar button or
+    /// the Ctrl+Alt+W shortcut) — keeps the toggle button in sync and persists the choice.</summary>
+    [JSInvokable]
+    public async Task OnWordWrapChanged(bool enabled)
+    {
+        _wordWrap = enabled;
+        StateHasChanged();
+        if (_appModule is not null)
+        {
+            try { await _appModule.InvokeVoidAsync("setLocalStorage", WordWrapStorageKey, enabled ? "1" : "0"); }
+            catch (Exception ex) { Notifications.Report($"Failed to persist word wrap preference: {ex.Message}", ex, "Config"); }
+        }
+    }
+
+    private void OnAppThemeChanged()
+    {
+        if (_module is null) return;
+        _ = InvokeAsync(async () =>
+        {
+            try { await _module.InvokeVoidAsync("setTheme", _editorRef, ThemeSvc.IsDark); }
+            catch (Exception ex) { Notifications.Report($"Failed to update editor theme: {ex.Message}", ex, "Config"); }
+        });
+    }
+
+    private void ReportInitFailed(Exception ex) =>
+        Notifications.Report($"Failed to initialize the config editor: {ex.Message}", ex, "Config");
+
+    private async Task Cmd(string name)
+    {
+        if (_module is null) return;
+        try { await _module.InvokeVoidAsync(name, _editorRef); }
+        catch (Exception ex) { Notifications.Report($"Editor command failed: {ex.Message}", ex, "Config"); }
+    }
+
+    /// <summary>Refresh button — confirms first if there are unsaved edits, since a reload discards them.</summary>
+    private async Task RefreshAsync()
+    {
+        if (_dirty && !await ConfirmDiscardAsync("Reload from disk and discard your unsaved changes?")) return;
+        await LoadAsync();
+    }
+
+    private async Task<bool> ConfirmDiscardAsync(string message)
+    {
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Discard changes?", new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message,     message   },
+            { x => x.ConfirmText, "Discard" },
+        }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var result = await dialog.Result;
+        return result is { Canceled: false };
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error   = null;
+        StateHasChanged();
+
+        try
+        {
+            _sourcePath = EnvConfigSvc.GetSourcePath(Environment);
+            if (_sourcePath is null)
+            {
+                _error = $"Could not resolve the config file path for environment '{Environment}' — check EnvConfig:SourcePathTemplate and the environment's Servers list.";
+                return;
+            }
+
+            var (text, _) = await LogViewerSvc.ReadAllAsync(_sourcePath);
+            _content = text;
+            _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+
+            // A refresh after the editor already mounted should replace its content
+            // (discarding any unsaved edits) rather than being ignored.
+            if (_editorReady && _module is not null)
+                await _module.InvokeVoidAsync("setValue", _editorRef, _content);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Notifications.Report($"Failed to load config file: {ex.Message}", ex, "Config");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RestoreBackupAsync(EnvConfigBackup backup)
+    {
+        if (_module is null) return;
+        if (_dirty && !await ConfirmDiscardAsync("Load this backup into the editor and discard your unsaved changes? (You'll still need to click Save to actually restore it.)")) return;
+
+        try
+        {
+            var (text, _) = await LogViewerSvc.ReadAllAsync(backup.Path);
+            await _module.InvokeVoidAsync("setValue", _editorRef, text);
+            Snackbar.Add("Backup loaded into the editor — click Save to restore it.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Notifications.Report($"Failed to load backup {backup.Path}: {ex.Message}", ex, "Config");
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_module is null || _sourcePath is null) return;
+
+        var content = await _module.InvokeAsync<string>("getValue", _editorRef);
+        var targets = EnvConfigSvc.GetSaveTargets(Environment);
+
+        if (targets.Count > 1)
+        {
+            var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
+                           string.Join("\n", targets.Select(t => $"• {t}"));
+            var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
+            {
+                { x => x.Message,     message },
+                { x => x.ConfirmText, "Save"  },
+            }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result is null or { Canceled: true }) return;
+        }
+
+        _saving = true;
+        StateHasChanged();
+        try
+        {
+            var results = await EnvConfigSvc.SaveAsync(Environment, content);
+            var failed  = results.Where(r => !r.Success).ToList();
+
+            foreach (var f in failed)
+                Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
+
+            if (failed.Count == 0)
+            {
+                Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
+                if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
+                _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+            }
+            else if (failed.Count < results.Count)
+                Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
+            else
+                Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        ThemeSvc.OnChange -= OnAppThemeChanged;
+        if (_module is not null)
+        {
+            try { await _module.InvokeVoidAsync("dispose", _editorRef); } catch { }
+            try { await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+        _selfRef?.Dispose();
+    }
+}
 FILE src/NxtUI.Web/Pages/EnvironmentPage.razor
 LENGTH 17333
 @namespace NxtUI.Web.Pages
@@ -15491,7 +16340,7 @@ LENGTH 17756
     // Static help page — no backing state needed.
 }
 FILE src/NxtUI.Web/Pages/Home.razor
-LENGTH 16409
+LENGTH 16439
 @namespace NxtUI.Web.Pages
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
@@ -15756,7 +16605,7 @@ LENGTH 16409
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, 20, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, UiOpts.Value.HomeRecentRunsCount, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -15982,7 +16831,7 @@ LENGTH 4506
     }
 }
 FILE src/NxtUI.Web/Pages/KafkaDashboard.razor
-LENGTH 28325
+LENGTH 29194
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -16042,6 +16891,13 @@ LENGTH 28325
                    Placeholder="@(_viewMode == KafkaView.Topics ? "Filter topics…" : "Filter consumer groups…")"
                    Class="bm-filter-input"
                    FieldHints="@(_viewMode == KafkaView.Topics ? _topicFieldHints : _groupFieldHints)" />
+
+        @if (_viewMode == KafkaView.Topics)
+        {
+            <MudTooltip Text="Purge topics…">
+                <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" OnClick="OpenPurgeTopicsDialogAsync" />
+            </MudTooltip>
+        }
 
         <ToolbarRefresh Loading="@_loading"
                         OnRefresh="LoadAsync" />
@@ -16531,6 +17387,19 @@ LENGTH 28325
         }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
         var result = await dialog.Result;
         return result is { Canceled: false };
+    }
+
+    private async Task OpenPurgeTopicsDialogAsync()
+    {
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Purge" },
+            { x => x.ButtonColor,    Color.Error },
+            { x => x.ItemLabel,      "Kafka topic" },
+            { x => x.LoadItemsAsync, () => Task.FromResult(_allTopics.Select(t => t.Name).ToList()) },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Purge Kafka topics", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 
     private async Task DeleteTopicAsync(string topicName)
@@ -17643,7 +18512,7 @@ LENGTH 34154
     }
 }
 FILE src/NxtUI.Web/Pages/LogViewer.razor
-LENGTH 23449
+LENGTH 24480
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -17825,6 +18694,8 @@ LENGTH 23449
 
     private int  _fontSize = 13;
     private bool _wordWrap = false;
+    private IJSObjectReference? _appModule;
+    private const string WordWrapStorageKey = "bm-logviewer-wordwrap"; // separate from the Config page editor's own setting
 
     private bool           _isTailing;
     private bool           _tailDesired; // true once a live (non-local) file has been rendered
@@ -17871,6 +18742,17 @@ LENGTH 23449
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            try
+            {
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+                var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", WordWrapStorageKey);
+                _wordWrap = stored == "1";
+            }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to read persisted word-wrap preference"); }
+        }
+
         _rendered = true;
         if (_dirty)
         {
@@ -18139,6 +19021,11 @@ LENGTH 23449
     {
         _wordWrap = val;
         if (_viewport is not null) await _viewport.SetWordWrapAsync(val);
+        if (_appModule is not null)
+        {
+            try { await _appModule.InvokeVoidAsync("setLocalStorage", WordWrapStorageKey, val ? "1" : "0"); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist word-wrap preference"); }
+        }
     }
 
     // ── Share link ────────────────────────────────────────────────────────
@@ -18220,6 +19107,10 @@ LENGTH 23449
         await _cts.CancelAsync();
         _cts.Dispose();
         if (_viewport is not null) await _viewport.DisposeAsync();
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
     }
 }
 FILE src/NxtUI.Web/Pages/LogWorkspace.razor
@@ -19388,7 +20279,7 @@ LENGTH 16626
     }
 }
 FILE src/NxtUI.Web/Pages/MongoDashboard.razor
-LENGTH 11599
+LENGTH 12715
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Models
 @using NxtUI.Core.Services
@@ -19439,6 +20330,10 @@ LENGTH 11599
                    Placeholder="Filter collections…"
                    Class="bm-filter-input"
                    FieldHints="@_fieldHints" />
+
+        <MudTooltip Text="Purge collections…">
+            <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" OnClick="OpenPurgeCollectionsDialogAsync" />
+        </MudTooltip>
 
         <ToolbarRefresh Loading="@_loading"
                         OnRefresh="LoadCollectionsAsync" />
@@ -19635,6 +20530,23 @@ LENGTH 11599
     private void OpenInspector(string collection)
         => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));
 
+    private async Task OpenPurgeCollectionsDialogAsync()
+    {
+        // Loaded fresh (not from _paged, which is server-paginated/possibly filtered) so
+        // the purge dialog's filter always has the full collection list for this DB to
+        // search over, regardless of the page's own current filter/page.
+        var db = _selectedDb;
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Purge" },
+            { x => x.ButtonColor,    Color.Error },
+            { x => x.ItemLabel,      "Mongo collection" },
+            { x => x.LoadItemsAsync, async () => (await MongoSvc.GetCollectionNamesAsync(Environment, db)).ToList() },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Purge Mongo collections", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+    }
+
     private async Task ShowInfoAsync(MongoCollectionSummary col)
     {
         var parameters = new DialogParameters<MongoCollectionInfoDialog>
@@ -19707,7 +20619,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 20337
+LENGTH 24860
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -19721,7 +20633,7 @@ LENGTH 20337
 @inject IOptions<UiSettings> UiOptions
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject ISnackbar Snackbar
-@implements IDisposable
+@implements IAsyncDisposable
 
 @code {
     [Parameter, EditorRequired] public string? RunId { get; set; }
@@ -19769,10 +20681,21 @@ LENGTH 20337
     private double   _sliderValue;   // 0–1000
     private const double SliderSteps = 1000.0;
 
+    // ── Replay playback (auto-advance) ──────────────────────────────────────
+    // Animates the slider from wherever it currently sits to the end. Capped at
+    // PlaybackMaxDurationMs of real wall-clock time for a full 0→SliderSteps sweep —
+    // pausing partway through and resuming later only extends how long it *takes*,
+    // never how far a given resume-to-end stretch travels per second.
+    private const double PlaybackMaxDurationMs = 30_000;
+    private bool _isPlaying;
+    private CancellationTokenSource? _playbackCts;
+
     // ── UI ────────────────────────────────────────────────────────────────
-    // Always starts collapsed — the details strip is opt-in per view, not
-    // remembered across tabs/sessions.
+    // Persisted in localStorage (bm-rundetail-expanded) so it survives across tabs,
+    // sessions, and app restarts — read back in OnAfterRenderAsync's firstRender.
     private bool _detailsExpanded;
+    private IJSObjectReference? _appModule;
+    private const string DetailsExpandedStorageKey = "bm-rundetail-expanded";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -19787,6 +20710,23 @@ LENGTH 20337
         _ = RunTopologyLoopAsync();
 
         await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+            var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", DetailsExpandedStorageKey);
+            var expanded = stored == "1";
+            if (expanded != _detailsExpanded)
+            {
+                _detailsExpanded = expanded;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "Failed to read persisted details-strip state"); }
     }
 
     protected override void OnParametersSet()
@@ -19923,6 +20863,9 @@ LENGTH 20337
 
     private void OnSliderChanged(double value)
     {
+        // A manual drag always wins over an in-progress auto-play.
+        if (_isPlaying) StopPlayback();
+
         _sliderValue = value;
 
         // Snap to LIVE when dragged to/past the right edge.
@@ -19943,12 +20886,69 @@ LENGTH 20337
         DebouncedTopologyCompute();
     }
 
-    private void EnterReplayMode()
+    private void TogglePlayback()
     {
+        if (_isPlaying)
+        {
+            StopPlayback();
+            return;
+        }
         if (_sliderMax <= _sliderMin) return;
-        _sliderValue     = SliderSteps * 0.75;
-        _replayTimestamp = SliderToDateTime(_sliderValue);
-        DebouncedTopologyCompute();
+
+        // Starting fresh from LIVE begins at the very start of the run; resuming from a
+        // paused mid-replay position (or a manually-scrubbed one) continues from there.
+        if (!IsReplay)
+        {
+            _sliderValue     = 0;
+            _replayTimestamp = SliderToDateTime(0);
+            DebouncedTopologyCompute();
+        }
+
+        _isPlaying = true;
+        _playbackCts?.Cancel();
+        _playbackCts?.Dispose();
+        _playbackCts = new CancellationTokenSource();
+        _ = RunPlaybackLoopAsync(_sliderValue, _playbackCts.Token);
+    }
+
+    private void StopPlayback()
+    {
+        _isPlaying = false;
+        _playbackCts?.Cancel();
+    }
+
+    private async Task RunPlaybackLoopAsync(double startValue, CancellationToken ct)
+    {
+        // The 30s budget covers a full 0→SliderSteps sweep; resuming partway through only
+        // animates the remaining fraction, at the same per-step rate, so playback never
+        // speeds up or slows down when paused and resumed.
+        var remainingFraction = 1.0 - (startValue / SliderSteps);
+        var remainingMs = PlaybackMaxDurationMs * remainingFraction;
+        if (remainingMs <= 0) { EnterLiveMode(); _isPlaying = false; await InvokeAsync(StateHasChanged); return; }
+
+        var startWall = DateTime.UtcNow;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var elapsedMs = (DateTime.UtcNow - startWall).TotalMilliseconds;
+                var progress  = Math.Min(1.0, elapsedMs / remainingMs);
+                _sliderValue     = startValue + (SliderSteps - startValue) * progress;
+                _replayTimestamp = SliderToDateTime(_sliderValue);
+                DebouncedTopologyCompute();
+                await InvokeAsync(StateHasChanged);
+
+                if (progress >= 1.0)
+                {
+                    _isPlaying = false;
+                    EnterLiveMode(); // arrived at the end — same data as live, so just go live
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) { /* paused or component disposed */ }
     }
 
     private string FormatSliderTime()
@@ -19970,7 +20970,15 @@ LENGTH 20337
         _                   => Color.Default
     };
 
-    private void ToggleDetailsStrip() => _detailsExpanded = !_detailsExpanded;
+    private async Task ToggleDetailsStrip()
+    {
+        _detailsExpanded = !_detailsExpanded;
+        if (_appModule is not null)
+        {
+            try { await _appModule.InvokeVoidAsync("setLocalStorage", DetailsExpandedStorageKey, _detailsExpanded ? "1" : "0"); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist details-strip state"); }
+        }
+    }
 
     private async Task CancelRunAsync()
     {
@@ -20025,12 +21033,27 @@ LENGTH 20337
         TabService.OpenOrFocus(tab);
     }
 
+    // Cache-only lookup (no filesystem search) for the popover's server-name tooltip —
+    // deliberately lighter weight than OpenInstanceLogFromGraph's click handler, which
+    // does a full fresh search. A cache miss here just means "not discovered yet".
+    private string? ResolveLogPathHint(string service, string server, int processId) =>
+        DiscoverySvc.GetCachedPath(
+            new ServiceStatus { ServiceName = service, HostName = server, ProcessId = processId },
+            Environment);
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _eventService?.Dispose();
         _topologyTimer?.Dispose();
+        _playbackCts?.Cancel();
+        _playbackCts?.Dispose();
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
     }
 
     private static string FormatDuration(TimeSpan ts) =>
@@ -20160,7 +21183,8 @@ LENGTH 20337
            with Blazor's DOM patcher and causes removeChild crashes. *@
         <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
-                     OnOpenInstanceLog="OpenInstanceLogFromGraph" />
+                     OnOpenInstanceLog="OpenInstanceLogFromGraph"
+                     ResolveLogPathHint="ResolveLogPathHint" />
         @if (_loading)
         {
             <div class="bm-graph-overlay"><div class="bm-graph-loading">Loading…</div></div>
@@ -20174,24 +21198,12 @@ LENGTH 20337
     <!-- ── Timeline slider (Step 8) ── -->
     <div class="bm-batch-detail-footer">
         <div class="bm-slider-row">
-            @if (IsReplay)
-            {
-                <MudTooltip Text="Return to live view">
-                    <MudIconButton Icon="@Icons.Material.Outlined.FiberManualRecord"
-                                   Color="Color.Error" Size="Size.Small"
-                                   Class="bm-live-btn"
-                                   OnClick="EnterLiveMode" />
-                </MudTooltip>
-            }
-            else
-            {
-                <MudTooltip Text="Scrub timeline (enter replay mode)">
-                    <MudIconButton Icon="@Icons.Material.Outlined.History"
-                                   Size="Size.Small"
-                                   Class="bm-replay-btn"
-                                   OnClick="EnterReplayMode" />
-                </MudTooltip>
-            }
+            <MudTooltip Text="@(_isPlaying ? "Pause replay" : IsReplay ? "Resume replay" : "Replay run (up to 30s)")">
+                <MudIconButton Icon="@(_isPlaying ? Icons.Material.Filled.Pause : Icons.Material.Filled.PlayArrow)"
+                               Size="Size.Small"
+                               Class="bm-replay-btn"
+                               OnClick="TogglePlayback" />
+            </MudTooltip>
 
             <span class="bm-slider-label bm-muted">@(_sliderMin == default ? "" : DtSvc.Format(_sliderMin, "HH:mm:ss"))</span>
 
@@ -20209,7 +21221,7 @@ LENGTH 20337
     </div>
 </div>
 FILE src/NxtUI.Web/Pages/Runs.razor
-LENGTH 6942
+LENGTH 6736
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
 @inject TabService TabService
@@ -20269,11 +21281,7 @@ LENGTH 6942
     private int _pageSize = 25;
     private Result<List<RunSummary>> _result;
 
-    // Default filter: last 10 days — the query always runs server-side, so this
-    // is the first WHERE clause SQL sees, not a client-side post-filter.
-    private const string DefaultFilterText = "start:>=-10d";
-
-    private string      _filterText       = DefaultFilterText;
+    private string      _filterText       = string.Empty;
     private string?     _filterParseError = null;
     private FilterNode? _filterAst        = null;
 
@@ -20303,7 +21311,7 @@ LENGTH 6942
 
     protected override async Task OnInitializedAsync()
     {
-        ParseFilterText(DefaultFilterText);
+        ParseFilterText(RunsOptions.Value.DefaultFilterText);
         await LoadAsync();
     }
 
@@ -20397,7 +21405,7 @@ LENGTH 6942
     public void Dispose() => _cts.Cancel();
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 35576
+LENGTH 36428
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -20417,6 +21425,7 @@ LENGTH 35576
 @inject IJSRuntime JS
 @inject ILogger<ServicesPage> Logger
 @inject DateTimeDisplayService DtSvc
+@inject IDialogService DialogService
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill">
@@ -20457,6 +21466,10 @@ LENGTH 35576
         </div>
 
         <div class="bm-svc-toolbar-right">
+            <MudTooltip Text="Restart services…">
+                <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt" Size="Size.Small" OnClick="OpenRestartDialogAsync" />
+            </MudTooltip>
+
             <ToolbarRefresh LastUpdated="@_lastUpdated"
                             Loading="@_loading"
                             OnRefresh="RefreshAsync" />
@@ -20655,7 +21668,7 @@ LENGTH 35576
     private int  _page     = 1;
     private int  _pageSize = 25;
     private bool _loading  = false;
-    private string  _filterText       = "updated:>-30m";
+    private string  _filterText       = "";
     private string? _filterParseError = null;
     private string  _groupBy          = "HostName";
     private bool    _graphView        = true;
@@ -20724,6 +21737,7 @@ LENGTH 35576
     {
         _previousIsFocused = IsFocused;
         _stripFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Env);
+        _filterText        = UiOptions.Value.ServicesDefaultFilterText;
 
         DiscoverySvc.OnPathResolved        += OnPathResolved;
         MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;
@@ -21019,6 +22033,18 @@ LENGTH 35576
 
     private void OpenMemoryGraph() =>
         TabService.OpenOrFocus(TabModel.CreateMemoryGraph(Env));
+
+    private async Task OpenRestartDialogAsync()
+    {
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Restart" },
+            { x => x.ItemLabel,      "service" },
+            { x => x.LoadItemsAsync, () => Task.FromResult(_all.Select(s => s.ServiceName).Distinct().ToList()) },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Restart services", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+    }
 
     private void OnGroupByChanged(string value) => _groupBy = value;
 
@@ -21485,7 +22511,7 @@ LENGTH 12866
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 36206
+LENGTH 36298
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -21625,9 +22651,11 @@ LENGTH 36206
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=13");
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=14");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
-                await _tlModule.InvokeVoidAsync("setHoverDelayMs", _instanceKey, Math.Max(0, UiOptions.Value.TimelineHighlightDelayMs));
+                await _tlModule.InvokeVoidAsync("setHoverDelaysMs", _instanceKey,
+                    Math.Max(0, UiOptions.Value.TimelineHighlightDelayMs),
+                    Math.Max(0, UiOptions.Value.TimelinePopupDelayMs));
                 await PushDataAsync();
             }
             catch (Exception ex)
@@ -22830,7 +23858,7 @@ LENGTH 23637
     <link rel="modulepreload" href="js/log-viewer-parser.js?v=8" />
     <link rel="modulepreload" href="js/filter.js?v=3" />
     <link rel="modulepreload" href="js/app.js?v=7" />
-    <link rel="modulepreload" href="js/d3-timeline.js?v=13" />
+    <link rel="modulepreload" href="js/d3-timeline.js?v=14" />
 </body>
 </html>
 FILE src/NxtUI.Web/Pages/_ViewImports.cshtml
@@ -23156,6 +24184,123 @@ public class DateTimeDisplayService
     public string ZoneSuffix => _useUtc ? " UTC" : "";
 
     public event Action? OnChange;
+}
+FILE src/NxtUI.Web/Services/EnvConfigService.cs
+LENGTH 4598
+using Microsoft.Extensions.Options;
+using NxtUI.Core.Configuration;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Web.Services;
+
+public sealed class EnvConfigService(
+    IOptions<EnvConfigSettings> options,
+    IEnvironmentService environmentSvc,
+    ILogger<EnvConfigService> log) : IEnvConfigService
+{
+    private EnvConfigSettings S => options.Value;
+
+    public bool IsEditingEnabled(string env) => S.EditingEnabled && GetSourcePath(env) is not null;
+
+    public string? GetSourcePath(string env)
+    {
+        if (string.IsNullOrWhiteSpace(S.SourcePathTemplate)) return null;
+        var server = environmentSvc.GetServers(env).FirstOrDefault();
+        if (server is null) return null;
+        return Expand(S.SourcePathTemplate, server, env);
+    }
+
+    public IReadOnlyList<string> GetSaveTargets(string env)
+    {
+        var source = GetSourcePath(env);
+        if (source is null) return [];
+
+        var targets = new List<string> { source };
+        if (S.SaveMode == EnvConfigSaveMode.AllServers && !string.IsNullOrWhiteSpace(S.PathTemplate))
+        {
+            foreach (var server in environmentSvc.GetServers(env))
+            {
+                var path = Expand(S.PathTemplate, server, env);
+                if (!targets.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    targets.Add(path);
+            }
+        }
+        return targets;
+    }
+
+    public async Task<IReadOnlyList<EnvConfigSaveResult>> SaveAsync(string env, string content, CancellationToken ct = default)
+    {
+        var source = GetSourcePath(env);
+        if (source is null)
+            return [new EnvConfigSaveResult("(unresolved)", false, "Could not resolve the source config path for this environment.")];
+
+        var results = new List<EnvConfigSaveResult>();
+
+        try
+        {
+            if (File.Exists(source))
+            {
+                var backupPath = $"{source}.{DateTime.Now.ToString(BackupTimestampFormat)}.bak";
+                await Task.Run(() => File.Copy(source, backupPath, overwrite: false), ct);
+                log.LogInformation("envconfig [{Env}]: backed up {Source} -> {Backup}", env, source, backupPath);
+            }
+            await File.WriteAllTextAsync(source, content, ct);
+            results.Add(new EnvConfigSaveResult(source, true, null));
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "envconfig [{Env}]: failed to save source {Source}", env, source);
+            results.Add(new EnvConfigSaveResult(source, false, ex.Message));
+            return results; // source of truth failed — don't propagate a broken save to mirrors
+        }
+
+        if (S.SaveMode == EnvConfigSaveMode.AllServers)
+        {
+            foreach (var target in GetSaveTargets(env).Where(p => !string.Equals(p, source, StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    await File.WriteAllTextAsync(target, content, ct);
+                    results.Add(new EnvConfigSaveResult(target, true, null));
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning(ex, "envconfig [{Env}]: failed to mirror to {Target}", env, target);
+                    results.Add(new EnvConfigSaveResult(target, false, ex.Message));
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private const string BackupTimestampFormat = "yyyyMMdd_HHmmss";
+
+    public IReadOnlyList<EnvConfigBackup> ListBackups(string env)
+    {
+        var source = GetSourcePath(env);
+        if (source is null) return [];
+
+        var dir = Path.GetDirectoryName(source);
+        var fileName = Path.GetFileName(source);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return [];
+
+        var backups = new List<EnvConfigBackup>();
+        foreach (var path in Directory.EnumerateFiles(dir, $"{fileName}.*.bak"))
+        {
+            var stamp = Path.GetFileName(path)[(fileName.Length + 1)..^".bak".Length];
+            if (DateTime.TryParseExact(stamp, BackupTimestampFormat, null,
+                    System.Globalization.DateTimeStyles.AssumeLocal, out var takenLocal))
+            {
+                backups.Add(new EnvConfigBackup(path, takenLocal.ToUniversalTime()));
+            }
+        }
+        return backups.OrderByDescending(b => b.TakenAtUtc).ToList();
+    }
+
+    private static string Expand(string template, string server, string env) =>
+        template.Replace("{server}", server, StringComparison.OrdinalIgnoreCase)
+                 .Replace("{env}", env, StringComparison.OrdinalIgnoreCase);
 }
 FILE src/NxtUI.Web/Services/EnvironmentSelectorService.cs
 LENGTH 1735
@@ -24269,7 +25414,7 @@ public class LogViewerService : ILogViewerService
         new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 16752
+LENGTH 17167
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
@@ -24482,6 +25627,13 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 ["RecordsProcessed"] = "12,345",
                 ["WorkerNode"] = "node-7",
                 ["RequestId"] = Guid.NewGuid().ToString(),
+                ["InitiatedBy"] = "User",
+                ["Priority"] = "High",
+                ["Notes"] = "This is a mock run for demonstration purposes.",
+                ["Tags"] = "demo, test, mock",
+                ["Environment"] = env,
+                ["PipelineVersion"] = "v1.2.3",
+                ["ErrorDetails"] = summary?.Status == RunStatus.Failed ? "Simulated failure for testing." : string.Empty,
             },
         };
         return Task.FromResult(details);
@@ -25267,7 +26419,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 30822
+LENGTH 31191
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
@@ -25295,6 +26447,10 @@ namespace NxtUI.Web.Services;
 ///
 /// If an environment's Kafka topic has no data at all (not yet wired up there), this falls
 /// back entirely to the original continuous file-polling behavior for that environment.
+///
+/// <see cref="LogPathSettings.MetricsSource"/> can restrict this to one source only
+/// (<see cref="MetricsSourceMode.FileSystem"/> or <see cref="MetricsSourceMode.Kafka"/>)
+/// instead of the default <see cref="MetricsSourceMode.Both"/>.
 ///
 /// Polling is paused when an environment has no subscribers, but cached data (file offsets
 /// and sample history) is kept for <c>IdleReleaseMinutes</c> so that re-subscribing resumes
@@ -25392,7 +26548,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
 
             // Start (or resume) the Kafka metrics consumer for this env.
-            if (!_kafkaCts.ContainsKey(env))
+            if (_paths.MetricsSource != MetricsSourceMode.FileSystem && !_kafkaCts.ContainsKey(env))
             {
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
                 _kafkaCts[env] = cts;
@@ -25513,6 +26669,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     {
         if (!HasSubscribers(env)) return;
         if (string.IsNullOrWhiteSpace(_paths.MetricsFileName)) return;
+        if (_paths.MetricsSource == MetricsSourceMode.Kafka) return;
 
         var gate = _envGates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0, ct))
@@ -26896,12 +28053,34 @@ public class TimelineRun(
         return ValueTask.CompletedTask;
     }
 }
+FILE src/NxtUI.Web/Services/WildcardFilter.cs
+LENGTH 681
+using System.Text.RegularExpressions;
+
+namespace NxtUI.Web.Services;
+
+/// <summary>
+/// Turns a user-typed filter pattern into a substring-search regex. Deliberately NOT
+/// anchored with ^...$ — plain text like "auth" behaves like a normal "contains" filter
+/// rather than requiring an exact full-string match. * and ? still work as real
+/// wildcards for callers who want to anchor/constrain further (e.g. "auth*").
+/// </summary>
+public static class WildcardFilter
+{
+    public static Regex ToRegex(string pattern)
+    {
+        var escaped = Regex.Escape(pattern).Replace(@"\*", ".*").Replace(@"\?", ".");
+        return new Regex(escaped, RegexOptions.IgnoreCase);
+    }
+}
 FILE src/NxtUI.Web/Shared/ConfirmDialog.razor
-LENGTH 662
+LENGTH 867
 @namespace NxtUI.Shared
 <MudDialog>
     <DialogContent>
-        <MudText>@Message</MudText>
+        @* pre-line: any \n in Message renders as a real line break (e.g. a bulleted path
+           list) while still collapsing runs of plain whitespace like normal text. *@
+        <MudText Style="white-space:pre-line">@Message</MudText>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => MudDialog.Cancel())">Cancel</MudButton>
@@ -26988,7 +28167,7 @@ LENGTH 875
     };
 }
 FILE src/NxtUI.Web/Shared/TabContent.razor
-LENGTH 2912
+LENGTH 2855
 @namespace NxtUI.Shared
 @* Routes the active tab to its correct page component *@
 
@@ -27035,7 +28214,7 @@ LENGTH 2912
                 @<Batches Environment="@env" Tab="@Tab" />,
 
             TabType.Config =>
-                @<PlaceholderPage Title="Config" Icon="@Icons.Material.Outlined.Tune" Environment="@env" />,
+                @<ConfigPage Environment="@env" />,
 
             TabType.MemoryGraph =>
                 @<MemoryGraph Env="@env" NavigationHint="@Tab.NavigationHint" Tab="@Tab" IsFocused="@Tab.IsActive" />,
@@ -32452,8 +33631,10 @@ public class MockMongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoConnectionFactory.cs
-LENGTH 2132
+LENGTH 4525
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using NxtUI.Core.Configuration;
 
@@ -32494,24 +33675,69 @@ public sealed class MongoConnectionFactory(EnvironmentConfigLoader loader)
     private static MongoClient Build(MongoSettings s)
     {
         var url = new MongoUrl(s.ConnectionString);
-        var opts = MongoClientSettings.FromUrl(url);
 
-        if (!string.IsNullOrWhiteSpace(s.Username) && !string.IsNullOrWhiteSpace(s.Password))
-            opts.Credential = MongoCredential.CreateCredential(
-                url.DatabaseName ?? "admin", s.Username, s.Password);
-
-        if (s.TlsEnabled is true)
+        MongoClientSettings BuildOpts(string? username)
         {
-            opts.UseTls = true;
-            if (!string.IsNullOrWhiteSpace(s.TlsCertificatePath))
+            var opts = MongoClientSettings.FromUrl(url);
+            if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(s.Password))
+                opts.Credential = MongoCredential.CreateCredential(
+                    url.DatabaseName ?? "admin", username, s.Password);
+
+            if (s.TlsEnabled is true)
             {
-                var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(
-                    s.TlsCertificatePath, s.TlsCertificatePassword);
-                opts.SslSettings = new SslSettings { ClientCertificates = [cert] };
+                opts.UseTls = true;
+                if (!string.IsNullOrWhiteSpace(s.TlsCertificatePath))
+                {
+                    var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(
+                        s.TlsCertificatePath, s.TlsCertificatePassword);
+                    opts.SslSettings = new SslSettings { ClientCertificates = [cert] };
+                }
+            }
+            return opts;
+        }
+
+        if (string.IsNullOrWhiteSpace(s.Username) || string.IsNullOrWhiteSpace(s.Password))
+            return new MongoClient(BuildOpts(s.Username));
+
+        // Some deployments register the Mongo user as either all-uppercase or
+        // all-lowercase depending on how it was provisioned, and the configured
+        // username doesn't always match. Try uppercase first, then lowercase,
+        // keeping whichever one actually authenticates. Build() only runs once per
+        // settings fingerprint (GetClient's cache), so the resolved casing is
+        // effectively remembered for the rest of the process's lifetime.
+        var candidates = new[] { s.Username.ToUpperInvariant(), s.Username.ToLowerInvariant() }
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            var client = new MongoClient(BuildOpts(candidates[i]));
+            try
+            {
+                // Bound just this probe, not the client's own settings, so a genuinely
+                // unreachable server doesn't hang here for the driver's full default timeout.
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                client.GetDatabase(url.DatabaseName ?? "admin")
+                    .RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token)
+                    .GetAwaiter().GetResult();
+                return client;
+            }
+            catch when (i < candidates.Length - 1)
+            {
+                // Auth (or any other) failure with this casing — fall through and try the
+                // next one instead of giving up immediately.
+            }
+            catch
+            {
+                // Last candidate also failed (could be a bad username on both casings, or
+                // the server being genuinely unreachable) — return it anyway rather than
+                // throwing here, so callers get the driver's own connection error on first
+                // real use, same as before this fallback existed.
+                return client;
             }
         }
 
-        return new MongoClient(opts);
+        throw new UnreachableException(); // candidates always has >=1 entry
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoHeartbeatService.cs
@@ -33022,7 +34248,7 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
     }
 }
 FILE src/NxtUI.Core/Services/Sql/SqlRunService.cs
-LENGTH 10559
+LENGTH 10525
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33187,8 +34413,7 @@ public class SqlRunService(
                     Type = reader.IsDBNull(2) ? "" : reader.GetString(2),
                     Description = reader.IsDBNull(3) ? "" : reader.GetString(3),
                     Start = DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc),
-                    End = reader.IsDBNull(5) ? null
-                                  : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
+                    End = reader.IsDBNull(5) ? null : DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc),
                 });
             }
 
@@ -33249,7 +34474,7 @@ public class SqlRunService(
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 99547
+LENGTH 101536
 /* ================================================================
    NxtUI — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -36549,6 +37774,57 @@ tr.bm-row-searching td:first-child {
 .bm-term-ok      { color: #86efac; }
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
+
+/* ================================================================
+   CONFIG PAGE
+   ================================================================ */
+
+.bm-config-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+.bm-config-editor {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 8px;
+}
+.bm-config-editor .cm-editor { height: 100%; }
+
+.bm-config-edit-toolbar { gap: 2px; }
+.bm-config-footer { justify-content: flex-start; }
+.bm-config-dirty-flag { margin-left: auto; font-size: 12px; color: var(--mud-palette-warning); }
+
+/* ================================================================
+   RESTART SERVICES DIALOG
+   ================================================================ */
+
+.bm-restart-svc-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+.bm-restart-svc-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    font-size: 13px;
+}
+.bm-restart-svc-row:last-child { border-bottom: none; }
+.bm-restart-svc-host { font-size: 12px; }
+.bm-restart-svc-empty { padding: 12px; text-align: center; font-size: 13px; }
+
+/* ================================================================
+   BULK ACTION DIALOG (restart services / purge Kafka topics / purge Mongo collections)
+   ================================================================ */
+
+.bm-purge-row-ok   { background: color-mix(in srgb, var(--mud-palette-success) 10%, transparent); }
+.bm-purge-row-fail { background: color-mix(in srgb, var(--mud-palette-error) 10%, transparent); }
+.bm-purge-row-clickable { cursor: pointer; }
+.bm-purge-row-clickable:hover { background: color-mix(in srgb, var(--mud-palette-error) 20%, transparent); }
+.bm-purge-progress-label { font-size: 12px; margin-top: 4px; }
+.bm-purge-hint { font-style: italic; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
 LENGTH 7283
 /* ================================================================
@@ -38425,7 +39701,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 45213
+LENGTH 45625
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -39148,7 +40424,7 @@ const D3Graph = (() => {
                 const errored = (i.errorCount ?? 0) > 0;
                 return `<div class="bm-pop-inst${errored ? ' bm-pop-inst-error' : ''}" title="Open logs">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
-                    <span class="bm-pop-srv">${esc(i.server)}</span>
+                    <span class="bm-pop-srv" title="Resolving log path…">${esc(i.server)}</span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
                 </div>`;
             }).join('')
@@ -39176,10 +40452,17 @@ const D3Graph = (() => {
         });
         handle.popover.selectAll('.bm-pop-inst').each(function (_, idx) {
             const inst = instances[idx];
-            d3.select(this).on('click', () => {
+            const row  = d3.select(this);
+            row.on('click', () => {
                 if (handle.dotNetRef)
                     handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0, inst.lastActivity);
             });
+            if (handle.dotNetRef) {
+                handle.dotNetRef
+                    .invokeMethodAsync('RequestInstanceLogPathHint', nodeDatum.id, inst.server, inst.processId ?? 0)
+                    .then(path => row.select('.bm-pop-srv').attr('title', path || 'Log path not discovered yet'))
+                    .catch(() => {});
+            }
         });
         handle.popover
             .on('mouseenter', () => cancelHidePopover(handle))
@@ -40228,7 +41511,7 @@ window.mgLegendResize = function (handleEl, legendEl) {
     });
 };
 FILE src/NxtUI.Web/wwwroot/js/d3-timeline.js
-LENGTH 58065
+LENGTH 58625
 // Batch Monitor — Timeline Tab (Step 10 rev 9 — clean multi-instance rewrite)
 //
 // Each Timeline tab gets an isolated instance via a unique key.
@@ -40493,10 +41776,14 @@ const TIMELINE_ALIASES = {
             hoveredBlockData: null,
             subrowHOverride: null,
             // Delay (ms) before highlighting same-id blocks / showing the tooltip on
-            // hover — see setHoverDelayMs. 0 = immediate. If the pointer leaves the
-            // block before this fires, hoverDelayTimer is cancelled and nothing shows.
-            hoverDelayMs: 0,
-            hoverDelayTimer: null,
+            // hover — see setHoverDelaysMs. Independent timers/delays so one can be
+            // instant while the other is deferred (or vice versa). 0 = immediate. If
+            // the pointer leaves the block before a timer fires, it's cancelled and
+            // that effect never triggers.
+            highlightDelayMs: 0,
+            popupDelayMs: 0,
+            highlightDelayTimer: null,
+            popupDelayTimer: null,
             // Added to each key's hash before picking a PALETTE slot (Ctrl+R reshuffles
             // this) — same key still always gets the same colour for a given seed, only
             // WHICH colour that is changes. Status mode ignores this (fixed semantic colours).
@@ -40618,7 +41905,8 @@ const TIMELINE_ALIASES = {
         s.laneEl?.removeEventListener('wheel', s.wheelMainFn);
         s.resizeObserver?.disconnect();
         clearTimeout(s.cursorTimer);
-        clearTimeout(s.hoverDelayTimer);
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
         try { s.laneSvg.remove(); } catch {}
         try { s.botSvg.remove(); } catch {}
         try { s.tooltip.remove(); } catch {}
@@ -41154,18 +42442,24 @@ const TIMELINE_ALIASES = {
     // ── Block hover ───────────────────────────────────────────────────────
 
     function onBlockEnter(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        const delay = s.hoverDelayMs || 0;
-        if (delay <= 0) {
-            applyHoverHighlight(s, event, d);
-            return;
-        }
-        s.hoverDelayTimer = setTimeout(() => applyHoverHighlight(s, event, d), delay);
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
+
+        const hDelay = s.highlightDelayMs || 0;
+        if (hDelay <= 0) applyHighlight(s, d);
+        else s.highlightDelayTimer = setTimeout(() => applyHighlight(s, d), hDelay);
+
+        if (!s.showTooltip) return;
+        const pDelay = s.popupDelayMs || 0;
+        if (pDelay <= 0) showTooltip(s, event, d);
+        else s.popupDelayTimer = setTimeout(() => showTooltip(s, event, d), pDelay);
     }
 
     function onBlockLeave(s, event, d) {
-        clearTimeout(s.hoverDelayTimer);
-        s.hoverDelayTimer = null;
+        clearTimeout(s.highlightDelayTimer);
+        clearTimeout(s.popupDelayTimer);
+        s.highlightDelayTimer = null;
+        s.popupDelayTimer = null;
         s.hoveredName   = null;
         s.hoveredBlockData = null;
         s.blockL.selectAll('rect.bm-tl-block')
@@ -41174,13 +42468,12 @@ const TIMELINE_ALIASES = {
         hideTooltip(s);
     }
 
-    function applyHoverHighlight(s, event, d) {
+    function applyHighlight(s, d) {
         s.hoveredName  = d.e.name;
         s.hoveredBlockData = d;
         s.blockL.selectAll('rect.bm-tl-block')
             .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12)
             .style('stroke-width', b => b.e.name === s.hoveredName ? '1.5px' : '0.5px');
-        if (s.showTooltip) showTooltip(s, event, d);
     }
 
     // ── Tooltip ───────────────────────────────────────────────────────────
@@ -41496,13 +42789,14 @@ const TIMELINE_ALIASES = {
         if (!show) hideTooltip(s);
     }
 
-    function setHoverDelayMs(key, ms) {
+    function setHoverDelaysMs(key, highlightMs, popupMs) {
         const s = _instances.get(key);
         if (!s) return;
-        s.hoverDelayMs = Math.max(0, ms | 0);
+        s.highlightDelayMs = Math.max(0, highlightMs | 0);
+        s.popupDelayMs     = Math.max(0, popupMs | 0);
     }
 
-export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelayMs };
+export { init, update, resetView, exportCsv, dispose, setVisible, setTooltipVisible, setHoverDelaysMs };
 FILE src/NxtUI.Web/wwwroot/js/filter.js
 LENGTH 21274
 // Batch Monitor — Filter engine (ES module)
@@ -46351,6 +47645,376 @@ LENGTH 223
     "vitest": "^4.1.9"
   }
 }
+FILE src/NxtUI.Web/wwwroot/js/purge-stream.js
+LENGTH 1524
+// purge-stream.js — ES module. Reads the /api/purge-simulate NDJSON response (one JSON
+// object per line, newline-delimited) as it streams in, forwarding each line to Blazor
+// as soon as it arrives rather than waiting for the whole response — that's what lets
+// PurgeDialog show a live progress bar instead of a single end-of-job result.
+async function run(url, body, dotNetRef) {
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let carry = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            carry += value ? decoder.decode(value, { stream: !done }) : '';
+
+            let nl;
+            while ((nl = carry.indexOf('\n')) >= 0) {
+                const line = carry.slice(0, nl).trim();
+                carry = carry.slice(nl + 1);
+                if (line) await dotNetRef.invokeMethodAsync('OnPurgeLine', line);
+            }
+            if (done) break;
+        }
+        if (carry.trim()) await dotNetRef.invokeMethodAsync('OnPurgeLine', carry.trim());
+    } catch (err) {
+        await dotNetRef.invokeMethodAsync('OnPurgeError', String(err?.message ?? err));
+    }
+}
+
+window.bmPurgeStream = { run };
+export default { run };
+export { run };
+FILE src/NxtUI.Web/wwwroot/js/text-editor.js
+LENGTH 17479
+// text-editor.js — ES module wrapping CodeMirror 6 for the Config page (and, later, any
+// other text/code file viewer). CodeMirror ships as many small npm packages with internal
+// cross-package imports rather than one drop-in file — this app has no bundler, so each
+// package is pulled from esm.sh, a CDN built specifically for this scenario.
+//
+// IMPORTANT — do not switch these to jsDelivr's "+esm" endpoint (or mix CDNs): every
+// dependent package (e.g. @codemirror/lang-json) also imports @codemirror/state (and
+// @lezer/highlight, for tagging syntax) internally, and if those imports resolve to a
+// DIFFERENT bundled copy than the ones imported directly below, CodeMirror's extension
+// system — which uses `instanceof` checks internally — throws "Unrecognized extension
+// value ... multiple instances of @codemirror/state are loaded" (or silently fails to
+// match syntax-highlighting tags). esm.sh's `?deps=` query param is what prevents that:
+// it forces every package on this page to resolve these shared packages to the exact
+// same module instance instead of each bundling its own copy.
+//
+// Adding a new language is just one more entry in LANG_LOADERS, with the same `?deps=`
+// tail listing every core package already imported above — that's the whole "pluggable
+// syntax highlighting" story.
+//
+// ── Running offline / on an intranet without access to esm.sh ──────────────────────────
+// All imports below are plain ESM URLs — swap them for local files and nothing else in
+// this module needs to change. To vendor a local copy:
+//   1. On a machine with npm and internet access:
+//        npm init -y
+//        npm install esbuild codemirror @codemirror/state @codemirror/view \
+//            @codemirror/commands @codemirror/language @codemirror/search \
+//            @codemirror/lang-json @codemirror/lang-xml @codemirror/lang-javascript \
+//            @lezer/highlight
+//   2. Bundle ALL of it into ONE file with esbuild (this sidesteps the whole multi-
+//      instance problem above, since everything shares one bundle):
+//        npx esbuild --bundle --format=esm --outfile=wwwroot/js/vendor/codemirror-bundle.js entry.js
+//      where entry.js re-exports everything this file needs, e.g.:
+//        export * from "@codemirror/state";
+//        export * from "@codemirror/view";
+//        export * from "@codemirror/commands";
+//        export * from "@codemirror/language";
+//        export * from "@codemirror/search";
+//        export { tags } from "@lezer/highlight";
+//        export { json } from "@codemirror/lang-json";
+//        export { xml } from "@codemirror/lang-xml";
+//        export { javascript } from "@codemirror/lang-javascript";
+//   3. Copy codemirror-bundle.js into wwwroot/js/vendor/, then replace every import
+//      below (including inside LANG_LOADERS) with `from "./vendor/codemirror-bundle.js"`
+//      — a single shared import source, so the multi-instance problem this file's esm.sh
+//      URLs work around doesn't apply to a local bundle in the first place.
+//   4. Bump the cache-busting ?v= query param wherever text-editor.js itself is
+//      referenced (ConfigPage.razor's JS.InvokeAsync("import", ...) call).
+// No other code in this app needs to change — Blazor only ever calls the functions
+// exported at the bottom of this file.
+import { EditorState, Compartment } from "https://esm.sh/@codemirror/state@6";
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "https://esm.sh/@codemirror/view@6?deps=@codemirror/state@6";
+import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from "https://esm.sh/@codemirror/commands@6?deps=@codemirror/state@6,@codemirror/view@6";
+import { HighlightStyle, syntaxHighlighting, indentOnInput, foldGutter, foldKeymap, codeFolding, unfoldAll, foldable, syntaxTree, foldEffect } from "https://esm.sh/@codemirror/language@6?deps=@codemirror/state@6,@codemirror/view@6,@lezer/highlight@1";
+import { search, searchKeymap, highlightSelectionMatches, openSearchPanel } from "https://esm.sh/@codemirror/search@6?deps=@codemirror/state@6,@codemirror/view@6";
+import { tags as t } from "https://esm.sh/@lezer/highlight@1";
+
+const LANG_DEPS = "deps=@codemirror/state@6,@codemirror/view@6,@codemirror/language@6,@lezer/highlight@1";
+
+// Extension (lowercase, with dot) -> async loader returning a CodeMirror language extension.
+// Anything not listed here (including .txt and .ps1, per product decision — no real
+// PowerShell grammar) falls back to plain text: still gets line numbers/editing/undo,
+// just no keyword coloring.
+const LANG_LOADERS = {
+    '.json': async () => (await import(`https://esm.sh/@codemirror/lang-json@6?${LANG_DEPS}`)).json(),
+    '.xml':  async () => (await import(`https://esm.sh/@codemirror/lang-xml@6?${LANG_DEPS}`)).xml(),
+    '.js':   async () => (await import(`https://esm.sh/@codemirror/lang-javascript@6?${LANG_DEPS}`)).javascript(),
+};
+
+const _views = new WeakMap(); // container -> { view, readOnlyCompartment, styleCompartment, cleanDoc, dotNetRef, isDirty }
+
+// While ANY editor instance is dirty, warn on tab close/refresh (the browser-level
+// safety net — in-app "discard changes?" confirms for Reload/backup-restore are
+// handled by ConfigPage.razor itself via OnDirtyChanged below).
+let _dirtyCount = 0;
+window.addEventListener('beforeunload', (e) => {
+    if (_dirtyCount > 0) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// ── Theming ──────────────────────────────────────────────────────────────────
+// CodeMirror's @codemirror/language `defaultHighlightStyle` is tuned for a WHITE
+// background (its "string"/"attribute" color is a dark maroon-red — fine on white,
+// unreadable on this app's #0E1117 dark background). Defining our own per-theme
+// styles avoids that, and — deliberately, per product feedback — avoids red/maroon
+// tones in the dark palette entirely, since red-on-dark reads poorly regardless of
+// the exact shade.
+function buildTheme(dark) {
+    const bg      = dark ? '#0E1117' : '#FFFFFF';
+    const fg      = dark ? '#E6EDF3' : '#1F2328';
+    const gutterBg= dark ? '#0E1117' : '#FFFFFF';
+    const gutterFg= dark ? '#484F58' : '#8C959F';
+    const activeLn= dark ? '#161B22' : '#F6F8FA';
+    const panelBg = dark ? '#161B22' : '#F6F8FA';
+    const border  = dark ? '#30363D' : '#D0D7DE';
+    const matchBg = dark ? '#3FB95040' : '#2DA04440';
+    const matchSel= dark ? '#3FB95080' : '#2DA04480';
+
+    const theme = EditorView.theme({
+        '&':                    { backgroundColor: bg, color: fg, height: '100%' },
+        '.cm-content':          { caretColor: fg },
+        '.cm-gutters':          { backgroundColor: gutterBg, color: gutterFg, border: 'none' },
+        '.cm-activeLine':       { backgroundColor: activeLn },
+        '.cm-activeLineGutter': { backgroundColor: activeLn },
+        '.cm-scroller':         { fontFamily: 'var(--bm-font-mono, monospace)', fontSize: '13px' },
+        // CodeMirror's built-in search/replace panel (Ctrl+F / Ctrl+H) assumes a light
+        // page background by default — restyle it to match the editor either way.
+        '.cm-panels':           { backgroundColor: panelBg, color: fg },
+        '.cm-panels input':     { backgroundColor: bg, color: fg, border: `1px solid ${border}` },
+        '.cm-panels button':    { backgroundColor: dark ? '#21262D' : '#EAEEF2', color: fg, border: `1px solid ${border}` },
+        '.cm-searchMatch':      { backgroundColor: matchBg },
+        '.cm-searchMatch-selected': { backgroundColor: matchSel },
+        '.cm-foldPlaceholder':  { backgroundColor: dark ? '#21262D' : '#EAEEF2', color: gutterFg, border: `1px solid ${border}` },
+    }, { dark });
+
+    // Colors deliberately avoid red/maroon in the dark palette (see comment above).
+    // Light palette stays closer to convention since red-on-white contrasts fine.
+    const highlight = dark
+        ? HighlightStyle.define([
+            { tag: t.keyword,                          color: '#c297ff' },   // purple
+            { tag: [t.string, t.special(t.string)],    color: '#7ee787' },   // green
+            { tag: t.propertyName,                     color: '#79c0ff' },   // blue (JSON keys)
+            { tag: [t.number, t.bool, t.null],          color: '#f2cc60' },   // gold
+            { tag: t.atom,                              color: '#ffa657' },   // orange
+            { tag: t.comment,                           color: '#8b949e', fontStyle: 'italic' },
+            { tag: [t.operator, t.punctuation, t.bracket], color: '#c9d1d9' },
+            { tag: t.tagName,                            color: '#d2a8ff' },   // light purple (XML tags)
+            { tag: t.attributeName,                      color: '#79c0ff' },
+            { tag: t.invalid,                            color: '#ffa657', textDecoration: 'underline' },
+          ])
+        : HighlightStyle.define([
+            { tag: t.keyword,                          color: '#8250df' },
+            { tag: [t.string, t.special(t.string)],    color: '#0a3069' },
+            { tag: t.propertyName,                     color: '#0550ae' },
+            { tag: [t.number, t.bool, t.null],          color: '#953800' },
+            { tag: t.atom,                              color: '#cf222e' },
+            { tag: t.comment,                           color: '#6e7781', fontStyle: 'italic' },
+            { tag: [t.operator, t.punctuation, t.bracket], color: '#1f2328' },
+            { tag: t.tagName,                            color: '#116329' },
+            { tag: t.attributeName,                      color: '#0550ae' },
+            { tag: t.invalid,                            color: '#cf222e', textDecoration: 'underline' },
+          ]);
+
+    return [theme, syntaxHighlighting(highlight, { fallback: true })];
+}
+
+function extensionOf(fileNameOrPath) {
+    const i = fileNameOrPath.lastIndexOf('.');
+    return i < 0 ? '' : fileNameOrPath.slice(i).toLowerCase();
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────────
+// The built-in @codemirror/language `foldAll` only folds the OUTERMOST foldable range
+// at each position (folding a parent already hides its children, so it doesn't bother
+// descending) — the product ask here is every node folds individually, so unfolding
+// the outer level still shows inner objects/arrays already collapsed. Walk the whole
+// syntax tree and fold every foldable range found, not just the top ones.
+function foldAllDeep(view) {
+    const effects = [];
+    syntaxTree(view.state).iterate({
+        enter: (node) => {
+            const range = foldable(view.state, node.from, node.to);
+            if (range) effects.push(foldEffect.of(range));
+        },
+    });
+    if (effects.length) view.dispatch({ effects });
+    return true;
+}
+
+function unfoldAllCmd(view) { unfoldAll(view); return true; }
+
+function invokeDotNet(view, method) {
+    const entry = [..._views.values()].find(e => e.view === view);
+    entry?.dotNetRef?.invokeMethodAsync(method).catch(() => {});
+    return true;
+}
+
+async function init(container, initialText, fileNameOrPath, editable, dotNetRef, isDark, wordWrap) {
+    dispose(container);
+
+    const langLoader = LANG_LOADERS[extensionOf(fileNameOrPath)];
+    const langExt = langLoader ? await langLoader() : [];
+    const readOnlyCompartment = new Compartment();
+    const styleCompartment = new Compartment();
+    const wrapCompartment = new Compartment();
+    const initial = initialText ?? '';
+
+    const updateListener = EditorView.updateListener.of((update) => {
+        if (!update.docChanged) return;
+        const entry = _views.get(container);
+        if (!entry) return;
+        setDirty(container, entry, entry.view.state.doc.toString() !== entry.cleanDoc);
+    });
+
+    const state = EditorState.create({
+        doc: initial,
+        extensions: [
+            lineNumbers(),
+            foldGutter(),
+            codeFolding(),
+            highlightActiveLine(),
+            highlightSelectionMatches(),
+            history(),
+            indentOnInput(),
+            search(),
+            // Custom bindings first so they win over any coincidentally-overlapping
+            // default from foldKeymap/searchKeymap/defaultKeymap.
+            keymap.of([
+                { key: 'Mod-Alt-[', run: foldAllDeep },
+                { key: 'Mod-Alt-]', run: unfoldAllCmd },
+                { key: 'Mod-s',     run: (v) => invokeDotNet(v, 'OnSaveShortcut') },
+                { key: 'Mod-Alt-r', run: (v) => invokeDotNet(v, 'OnReloadShortcut') },
+                { key: 'Mod-Alt-w', run: (v) => { toggleWrap(container); return true; } },
+                ...foldKeymap, ...searchKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap,
+            ]),
+            wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
+            styleCompartment.of(buildTheme(!!isDark)),
+            langExt,
+            readOnlyCompartment.of(EditorView.editable.of(!!editable)),
+            updateListener,
+        ],
+    });
+
+    const view = new EditorView({ state, parent: container });
+    _views.set(container, { view, readOnlyCompartment, styleCompartment, wrapCompartment, cleanDoc: initial, dotNetRef, isDirty: false, wordWrap: !!wordWrap });
+}
+
+function setDirty(container, entry, dirty) {
+    if (entry.isDirty === dirty) return;
+    entry.isDirty = dirty;
+    _dirtyCount += dirty ? 1 : -1;
+    entry.dotNetRef?.invokeMethodAsync('OnDirtyChanged', dirty).catch(() => {});
+}
+
+function isDirty(container) {
+    return _views.get(container)?.isDirty ?? false;
+}
+
+function getValue(container) {
+    const entry = _views.get(container);
+    return entry ? entry.view.state.doc.toString() : '';
+}
+
+// Replaces the whole document AND resets the "clean" baseline — used when loading a
+// fresh read from disk (Reload) or previewing a backup's content: the user hasn't
+// made any edits relative to what's now on screen, so it should not read as dirty.
+function setValue(container, text) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    const value = text ?? '';
+    entry.view.dispatch({
+        changes: { from: 0, to: entry.view.state.doc.length, insert: value },
+    });
+    entry.cleanDoc = value;
+    setDirty(container, entry, false);
+}
+
+// Marks the CURRENT content as clean without touching the document (used right after a
+// successful Save — the just-typed content is now what's on disk, so it shouldn't keep
+// reading as dirty, but resetting it via setValue would also wipe undo history).
+function markClean(container) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    entry.cleanDoc = entry.view.state.doc.toString();
+    setDirty(container, entry, false);
+}
+
+function setEditable(container, editable) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    entry.view.dispatch({
+        effects: entry.readOnlyCompartment.reconfigure(EditorView.editable.of(!!editable)),
+    });
+}
+
+// Called when the app-wide theme toggle changes, so the editor follows it live
+// instead of staying frozen on whatever theme was active at mount time.
+function setTheme(container, isDark) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    entry.view.dispatch({
+        effects: entry.styleCompartment.reconfigure(buildTheme(!!isDark)),
+    });
+}
+
+function getWordWrap(container) {
+    return _views.get(container)?.wordWrap ?? false;
+}
+
+function setWordWrap(container, enabled) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    entry.wordWrap = !!enabled;
+    entry.view.dispatch({
+        effects: entry.wrapCompartment.reconfigure(entry.wordWrap ? EditorView.lineWrapping : []),
+    });
+    entry.dotNetRef?.invokeMethodAsync('OnWordWrapChanged', entry.wordWrap).catch(() => {});
+}
+
+function toggleWrap(container) {
+    setWordWrap(container, !getWordWrap(container));
+}
+
+// ── Toolbar commands ─────────────────────────────────────────────────────────
+function withView(container, fn) {
+    const entry = _views.get(container);
+    if (entry) fn(entry.view);
+}
+function cmUndo(container)      { withView(container, undo); }
+function cmRedo(container)      { withView(container, redo); }
+function cmFoldAll(container)   { withView(container, foldAllDeep); }
+function cmUnfoldAll(container) { withView(container, unfoldAllCmd); }
+function cmFind(container)      { withView(container, openSearchPanel); }
+function cmToggleWrap(container) { toggleWrap(container); }
+
+function dispose(container) {
+    const entry = _views.get(container);
+    if (!entry) return;
+    if (entry.isDirty) _dirtyCount--;
+    entry.view.destroy();
+    _views.delete(container);
+}
+
+const api = {
+    init, getValue, setValue, markClean, setEditable, setTheme, getWordWrap, setWordWrap, isDirty, dispose,
+    cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind, cmToggleWrap,
+};
+window.bmTextEditor = api;
+export default api;
+export { init, getValue, setValue, markClean, setEditable, setTheme, getWordWrap, setWordWrap, isDirty, dispose, cmUndo, cmRedo, cmFoldAll, cmUnfoldAll, cmFind, cmToggleWrap };
 FILE src/NxtUI.Web/wwwroot/js/vitest.config.js
 LENGTH 127
 import { defineConfig } from 'vitest/config'

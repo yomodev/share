@@ -179,6 +179,8 @@
 
     private int  _fontSize = 13;
     private bool _wordWrap = false;
+    private IJSObjectReference? _appModule;
+    private const string WordWrapStorageKey = "bm-logviewer-wordwrap"; // separate from the Config page editor's own setting
 
     private bool           _isTailing;
     private bool           _tailDesired; // true once a live (non-local) file has been rendered
@@ -225,6 +227,17 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            try
+            {
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+                var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", WordWrapStorageKey);
+                _wordWrap = stored == "1";
+            }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to read persisted word-wrap preference"); }
+        }
+
         _rendered = true;
         if (_dirty)
         {
@@ -493,6 +506,11 @@
     {
         _wordWrap = val;
         if (_viewport is not null) await _viewport.SetWordWrapAsync(val);
+        if (_appModule is not null)
+        {
+            try { await _appModule.InvokeVoidAsync("setLocalStorage", WordWrapStorageKey, val ? "1" : "0"); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist word-wrap preference"); }
+        }
     }
 
     // ── Share link ────────────────────────────────────────────────────────
@@ -574,5 +592,9 @@
         await _cts.CancelAsync();
         _cts.Dispose();
         if (_viewport is not null) await _viewport.DisposeAsync();
+        if (_appModule is not null)
+        {
+            try { await _appModule.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
     }
 }

@@ -58,6 +58,13 @@
                    Class="bm-filter-input"
                    FieldHints="@(_viewMode == KafkaView.Topics ? _topicFieldHints : _groupFieldHints)" />
 
+        @if (_viewMode == KafkaView.Topics)
+        {
+            <MudTooltip Text="Purge topics…">
+                <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" OnClick="OpenPurgeTopicsDialogAsync" />
+            </MudTooltip>
+        }
+
         <ToolbarRefresh Loading="@_loading"
                         OnRefresh="LoadAsync" />
     </div>
@@ -546,6 +553,19 @@
         }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
         var result = await dialog.Result;
         return result is { Canceled: false };
+    }
+
+    private async Task OpenPurgeTopicsDialogAsync()
+    {
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Purge" },
+            { x => x.ButtonColor,    Color.Error },
+            { x => x.ItemLabel,      "Kafka topic" },
+            { x => x.LoadItemsAsync, () => Task.FromResult(_allTopics.Select(t => t.Name).ToList()) },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Purge Kafka topics", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 
     private async Task DeleteTopicAsync(string topicName)

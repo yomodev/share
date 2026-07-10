@@ -49,6 +49,10 @@
                    Class="bm-filter-input"
                    FieldHints="@_fieldHints" />
 
+        <MudTooltip Text="Purge collections…">
+            <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" OnClick="OpenPurgeCollectionsDialogAsync" />
+        </MudTooltip>
+
         <ToolbarRefresh Loading="@_loading"
                         OnRefresh="LoadCollectionsAsync" />
     </div>
@@ -243,6 +247,23 @@
 
     private void OpenInspector(string collection)
         => TabService.OpenOrFocus(TabModel.CreateMongoCollectionInspector(_selectedDb, collection, Environment));
+
+    private async Task OpenPurgeCollectionsDialogAsync()
+    {
+        // Loaded fresh (not from _paged, which is server-paginated/possibly filtered) so
+        // the purge dialog's filter always has the full collection list for this DB to
+        // search over, regardless of the page's own current filter/page.
+        var db = _selectedDb;
+        var parameters = new DialogParameters<BulkActionDialog>
+        {
+            { x => x.ActionVerb,     "Purge" },
+            { x => x.ButtonColor,    Color.Error },
+            { x => x.ItemLabel,      "Mongo collection" },
+            { x => x.LoadItemsAsync, async () => (await MongoSvc.GetCollectionNamesAsync(Environment, db)).ToList() },
+        };
+        await DialogService.ShowAsync<BulkActionDialog>("Purge Mongo collections", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+    }
 
     private async Task ShowInfoAsync(MongoCollectionSummary col)
     {
