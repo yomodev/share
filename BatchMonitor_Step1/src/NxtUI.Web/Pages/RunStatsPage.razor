@@ -12,7 +12,7 @@
 
 <div class="bm-page bm-page-fill">
 
-    <!-- ── Toolbar: view toggle first, filter last (fills remaining space) ─── -->
+    <!-- ── Toolbar: view toggle, envs, group-by, [color toggle], filter (fills), refresh last ─── -->
     <div class="bm-batch-toolbar">
 
         <MudTooltip Text="@(_graphView ? "Table view" : "Graph view")">
@@ -21,16 +21,6 @@
                                  ToggledIcon="@Icons.Material.Outlined.TableRows"
                                  Size="Size.Small" />
         </MudTooltip>
-
-        @if (_graphView)
-        {
-            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Class="bm-runstats-mode-toggle">
-                <MudButton Class="@(_chartMode == "perRun" ? "bm-view-btn-active" : "bm-view-btn-inactive")"
-                           OnClick="@(() => SetChartMode("perRun"))">Per run</MudButton>
-                <MudButton Class="@(_chartMode == "avgPerEnv" ? "bm-view-btn-active" : "bm-view-btn-inactive")"
-                           OnClick="@(() => SetChartMode("avgPerEnv"))">Average per env</MudButton>
-            </MudButtonGroup>
-        }
 
         <MudSelect T="string" Label="Environments"
                    SelectedValues="@_selectedEnvs"
@@ -46,7 +36,32 @@
             }
         </MudSelect>
 
-        <ToolbarRefresh Loading="@_loading" OnRefresh="RefreshAsync" />
+        @if (_graphView)
+        {
+            <MudSelect T="string" Label="Group by"
+                       Value="@_groupBy"
+                       ValueChanged="@SetGroupBy"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       Class="bm-runstats-groupby-select bm-select-fit bm-tl-select-labeled">
+                <MudSelectItem T="string" Value="@("None")">None</MudSelectItem>
+                <MudSelectItem T="string" Value="@("Day")">Day</MudSelectItem>
+                <MudSelectItem T="string" Value="@("Week")">Week</MudSelectItem>
+                <MudSelectItem T="string" Value="@("Month")">Month</MudSelectItem>
+            </MudSelect>
+
+            @if (_groupBy == "None" && _selectedEnvs.Count > 1)
+            {
+                <MudTooltip Text="Color bars by environment instead of status">
+                    <MudToggleIconButton Toggled="_colorByEnv" ToggledChanged="ToggleColorByEnv"
+                                         Icon="@Icons.Material.Outlined.Palette"
+                                         ToggledIcon="@Icons.Material.Outlined.Palette"
+                                         Color="Color.Default" ToggledColor="Color.Primary"
+                                         Size="Size.Small" />
+                </MudTooltip>
+            }
+        }
 
         <FilterBox Value="@_filterText"
                    OnFilterChanged="OnFilterChanged"
@@ -54,6 +69,8 @@
                    Placeholder="Filter runs… (try env:UAT1)"
                    Class="bm-filter-input bm-runstats-filter-fill"
                    FieldHints="@_runFieldHints" />
+
+        <ToolbarRefresh Loading="@_loading" OnRefresh="RefreshAsync" />
     </div>
 
     @if (_loading)
@@ -90,8 +107,9 @@
     [Parameter] public TabModel? Tab { get; set; }
 
     private List<string> _selectedEnvs = [];
-    private bool _graphView = false; // starts in table mode
-    private string _chartMode = "perRun"; // "perRun" | "avgPerEnv"
+    private bool _graphView = true; // starts in graph mode
+    private string _groupBy = "None"; // "None" | "Day" | "Week" | "Month"
+    private bool _colorByEnv = false; // only meaningful when _groupBy == "None"
 
     private bool _loading = true;
     private string? _error;
@@ -149,9 +167,10 @@
 
     protected override async Task OnInitializedAsync()
     {
-        // Default to every configured environment — the whole point of this page is
-        // cross-environment comparison, unlike Runs.razor which is scoped to one.
-        _selectedEnvs = EnvService.Environments.Select(e => e.Id).ToList();
+        // Default to just the currently selected environment — cross-environment comparison
+        // is still one click away via the Environments selector, but opening with everything
+        // selected made the initial fetch/graph noisier than most visits need.
+        _selectedEnvs = [EnvService.SelectedId];
         ParseFilterText(RunsOptions.Value.RunStatsDefaultFilterText);
         await LoadAsync();
     }
@@ -160,7 +179,7 @@
     {
         if (firstRender)
         {
-            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/run-stats-chart.js?v=2"); }
+            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/run-stats-chart.js?v=5"); }
             catch (Exception ex) { Notifications.Report($"Failed to initialize the run stats chart: {ex.Message}", ex, "Run Stats"); }
         }
 
@@ -189,6 +208,9 @@
     private async Task OnEnvsChanged(IReadOnlyCollection<string> envs)
     {
         _selectedEnvs = envs.ToList();
+        // The toggle is hidden once there's only one env — drop back to status coloring so
+        // it doesn't stay silently "on" with no visible control to turn it back off.
+        if (_selectedEnvs.Count <= 1) _colorByEnv = false;
         await LoadAsync();
     }
 
@@ -284,10 +306,16 @@
         TabService.OpenOrFocus(TabModel.CreateRunDetail(b.RunId, b.RunId, env));
     }
 
-    private void SetChartMode(string mode)
+    private void SetGroupBy(string groupBy)
     {
-        if (_chartMode == mode) return;
-        _chartMode = mode;
+        if (_groupBy == groupBy) return;
+        _groupBy = groupBy;
+        _chartDirty = true;
+    }
+
+    private void ToggleColorByEnv(bool value)
+    {
+        _colorByEnv = value;
         _chartDirty = true;
     }
 
@@ -307,7 +335,8 @@
                 durationSeconds = x.Run.Duration.TotalSeconds,
                 status = x.Run.Status.ToString(),
             });
-            await _module.InvokeVoidAsync("render", _chartRef, points, _chartMode);
+            var options = new { groupBy = _groupBy, colorByEnv = _colorByEnv };
+            await _module.InvokeVoidAsync("render", _chartRef, points, options);
         }
         catch (Exception ex)
         {

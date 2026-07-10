@@ -28,4 +28,37 @@ public class RunsSettings
     /// separate request out to every selected environment. Default: "start:&gt;=-24h".
     /// </summary>
     public string RunStatsDefaultFilterText { get; set; } = "start:>=-24h";
+
+    /// <summary>
+    /// How the run-detail flow graph pins pipeline-row ports for ELK's edge routing.
+    /// <c>FixedSide</c> (default): ports are pinned to a side (e.g. EAST) only — ELK can
+    /// reorder them within that side to minimise edge crossings/overlaps, but an arrow
+    /// no longer lands on the exact pixel row it represents. <c>FixedPos</c>: ports are
+    /// pinned to the exact row they represent — arrows always connect to the right row,
+    /// but ELK can't reorder them, so dense diagrams can show more overlapping edges.
+    /// Any other value falls back to FixedSide.
+    /// </summary>
+    public string GraphPortConstraints { get; set; } = "FixedSide";
+
+    /// <summary>
+    /// How the run-detail flow graph draws edges through ELK's computed waypoints.
+    /// <c>Orthogonal</c> (default): horizontal/vertical segments with softly rounded
+    /// corners, matching the routing ELK actually computed (never passes through a
+    /// node interior). <c>Curved</c>: a smooth spline through the same waypoints —
+    /// looser/organic look, but can visually cut closer to node edges between bends.
+    /// Applies regardless of <see cref="GraphPortConstraints"/>. Any other value
+    /// falls back to Orthogonal.
+    /// </summary>
+    public string GraphEdgeStyle { get; set; } = "Orthogonal";
+
+    /// <summary>
+    /// How many seconds since a pipeline's last finished chunk it still counts as
+    /// "recently active" (bright green/blue header and row color in the run-detail
+    /// flow graph) rather than "quiet" (dim green/gray). Measured against the run's
+    /// latest known event timestamp, not wall-clock time — so this applies the same
+    /// way whether watching a run live or scrubbing through it in Replay. Lower it to
+    /// make the graph highlight only the very latest hop; raise it if replay's
+    /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
+    /// </summary>
+    public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
 }

@@ -11,7 +11,7 @@
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<RunsSettings> RunsOpts
-@inject IOptions<UiSettings> UiOpts
+@inject IOptions<HomeSettings> HomeOpts
 @inject ISnackbar Snackbar
 @inject ErrorNotificationService Notifications
 @implements IDisposable
@@ -68,6 +68,12 @@
                     {
                         <span class="bm-infra-dot bm-infra-dot-unknown bm-infra-dot-pulse"></span>
                     }
+                    else if (_kafkaHealth.Brokers.Count == 0)
+                    {
+                        <MudTooltip Text="@ReasonTip(_kafkaHealth.Status, _kafkaHealth.Error)" Placement="Placement.Bottom" Arrow="true">
+                            <span class="bm-infra-dot @DotCss(_kafkaHealth.Status)"></span>
+                        </MudTooltip>
+                    }
                     else
                     {
                         @foreach (var b in _kafkaHealth.Brokers)
@@ -79,9 +85,11 @@
                         }
                     }
                 </div>
-                <span class="bm-infra-label bm-infra-label-@StatusCss(_kafkaHealth?.Status)">
-                    @(_kafkaHealth?.Status.ToString().ToUpper() ?? "…")
-                </span>
+                <MudTooltip Text="@ReasonTip(_kafkaHealth?.Status, _kafkaHealth?.Error)" Placement="Placement.Bottom" Arrow="true">
+                    <span class="bm-infra-label bm-infra-label-@StatusCss(_kafkaHealth?.Status)">
+                        @StatusLabel(_kafkaHealth?.Status)
+                    </span>
+                </MudTooltip>
             </div>
 
             <div class="bm-infra-sep"></div>
@@ -97,8 +105,7 @@
                     }
                     else if (_mongoHealth.Nodes.Count == 0)
                     {
-                        var singleTip = _mongoHealth.Status == HealthStatus.Healthy ? "ping ok" : (_mongoHealth.Error ?? "down");
-                        <MudTooltip Text="@singleTip" Placement="Placement.Bottom" Arrow="true">
+                        <MudTooltip Text="@ReasonTip(_mongoHealth.Status, _mongoHealth.Error)" Placement="Placement.Bottom" Arrow="true">
                             <span class="bm-infra-dot @DotCss(_mongoHealth.Status)"></span>
                         </MudTooltip>
                     }
@@ -114,9 +121,11 @@
                         }
                     }
                 </div>
-                <span class="bm-infra-label bm-infra-label-@StatusCss(_mongoHealth?.Status)">
-                    @(_mongoHealth?.Status.ToString().ToUpper() ?? "…")
-                </span>
+                <MudTooltip Text="@ReasonTip(_mongoHealth?.Status, _mongoHealth?.Error)" Placement="Placement.Bottom" Arrow="true">
+                    <span class="bm-infra-label bm-infra-label-@StatusCss(_mongoHealth?.Status)">
+                        @StatusLabel(_mongoHealth?.Status)
+                    </span>
+                </MudTooltip>
             </div>
 
             <div class="bm-infra-sep"></div>
@@ -132,7 +141,7 @@
 
     </div>
 
-    @if (UiOpts.Value.ShowMemoryDashboard)
+    @if (HomeOpts.Value.ShowMemoryDashboard)
     {
         <!-- ── Memory treemap ────────────────────────────────────────────── -->
         <div class="bm-section-header" style="margin:0;">
@@ -263,7 +272,7 @@
         try
         {
             _recent = await RunService.GetRunsAsync(
-                EnvService.SelectedId, DateTime.UtcNow, UiOpts.Value.HomeRecentRunsCount, ct: _cts.Token);
+                EnvService.SelectedId, DateTime.UtcNow, HomeOpts.Value.RecentRunsCount, ct: _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Logger.LogError(ex, "LoadRunsAsync failed"); }
@@ -360,19 +369,39 @@
 
     private static string StatusCss(HealthStatus? s) => s switch
     {
-        HealthStatus.Healthy  => "healthy",
-        HealthStatus.Degraded => "degraded",
-        HealthStatus.Down     => "down",
-        HealthStatus.Checking => "checking",
-        _                     => "unknown",
+        HealthStatus.Healthy            => "healthy",
+        HealthStatus.Degraded           => "degraded",
+        HealthStatus.DegradedEscalating => "degraded",
+        HealthStatus.Down               => "down",
+        _                                => "down", // null (not loaded yet) reads the same as Down/red
     };
 
     private static string DotCss(HealthStatus s) => s switch
     {
-        HealthStatus.Healthy  => "bm-infra-dot-ok",
-        HealthStatus.Degraded => "bm-infra-dot-warn",
-        HealthStatus.Down     => "bm-infra-dot-err",
-        _                     => "bm-infra-dot-unknown",
+        HealthStatus.Healthy            => "bm-infra-dot-ok",
+        HealthStatus.Degraded           => "bm-infra-dot-warn",
+        HealthStatus.DegradedEscalating => "bm-infra-dot-warn bm-infra-dot-pulse",
+        _                                => "bm-infra-dot-err",
+    };
+
+    // Hover reason shown on both the summary dot and the status label.
+    private static string ReasonTip(HealthStatus? status, string? error) => status switch
+    {
+        HealthStatus.Healthy => "ping ok",
+        null                  => "not checked yet",
+        _                     => error ?? StatusLabel(status),
+    };
+
+    // Short display text for the status label — DegradedEscalating shares Degraded's
+    // wording ("DEGRADED") since the blinking dot is what signals "worse than a one-off
+    // blip"; spelling out the enum name (DEGRADEDESCALATING) would just look like a typo.
+    private static string StatusLabel(HealthStatus? s) => s switch
+    {
+        HealthStatus.Healthy            => "HEALTHY",
+        HealthStatus.Degraded           => "DEGRADED",
+        HealthStatus.DegradedEscalating => "DEGRADED",
+        HealthStatus.Down               => "DOWN",
+        _                                 => "…",
     };
 
     public void Dispose()

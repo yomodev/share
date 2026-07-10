@@ -48,14 +48,6 @@ public class KafkaSettings
     public int MaxFetchMessages { get; set; } = 2_000;
 
     /// <summary>
-    /// Per-environment topic that services publish periodic memory-metrics samples to
-    /// (protobuf-encoded MetricsTracker messages), single partition, low retention.
-    /// ServiceMetricsMonitor tails this live and only falls back to disk-based log
-    /// parsing for history older than the topic's retention window. Default: "metrics".
-    /// </summary>
-    public string MetricsTopicName { get; set; } = "metrics";
-
-    /// <summary>
     /// Fallback retention (ms) a purge restores a topic to if its current retention.ms
     /// couldn't be read back from the broker before the purge started (should be rare —
     /// DescribeConfigs normally returns the effective value even when it's inherited from

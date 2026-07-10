@@ -7,7 +7,7 @@ using System.Collections.Concurrent;
 
 namespace NxtUI.Core.Services;
 
-public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, ILogger<LogPathDiscoveryService> log) : ILogPathDiscoveryService
+public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> options, ILogger<LogPathDiscoveryService> log) : ILogPathDiscoveryService
 {
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();

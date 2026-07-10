@@ -13,7 +13,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     /// Recent-activity window used to decide whether a pipeline is "Active"
     /// (priority 2) vs merely "InProgress" (priority 3). A pipeline counts
     /// as Active if it has had a finish event within this window of the
-    /// latest known event time. Configurable via UiSettings.TopologyRecentActivityWindowSeconds
+    /// latest known event time. Configurable via RunsSettings.TopologyRecentActivityWindowSeconds
     /// — callers should pass that value in; defaults to 15s if omitted (e.g. in tests).
     /// </summary>
     private readonly TimeSpan _recentActivityWindow = recentActivityWindow ?? TimeSpan.FromSeconds(15);

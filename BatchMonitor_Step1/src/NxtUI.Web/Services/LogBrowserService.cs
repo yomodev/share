@@ -14,7 +14,7 @@ namespace NxtUI.Web.Services;
 
 public class LogBrowserService : ILogBrowserService
 {
-    private readonly LogPathSettings _settings;
+    private readonly FileBrowserSettings _settings;
     private readonly IReadOnlyList<CompiledLogFormat> _formats;
     private readonly ILogger<LogBrowserService> _log;
 
@@ -32,7 +32,7 @@ public class LogBrowserService : ILogBrowserService
         string Message,
         string? Caller);
 
-    public LogBrowserService(IOptions<LogPathSettings> settings, IConfiguration config, ILogger<LogBrowserService> log)
+    public LogBrowserService(IOptions<FileBrowserSettings> settings, IConfiguration config, ILogger<LogBrowserService> log)
     {
         _settings = settings.Value;
         _log = log;

@@ -1,11 +1,16 @@
 namespace NxtUI.Core.Configuration;
 
-public class LogPathSettings
+/// <summary>
+/// Settings for locating and browsing per-server log/service folders (Log Browser page,
+/// plus service-folder resolution used by run-detail/services log links). Bound from
+/// appsettings.json "FileBrowser" section.
+/// </summary>
+public class FileBrowserSettings
 {
-    public const string SectionName = "Logs";
+    public const string SectionName = "FileBrowser";
 
     /// <summary>
-    /// Ordered list of UNC path templates for locating per-service metrics folders. Placeholders:
+    /// Ordered list of UNC path templates for locating a service's log/metrics folder. Placeholders:
     ///   {server}  — HostName from heartbeat
     ///   {service} — ServiceName from heartbeat
     ///   {pid}     — ProcessId from heartbeat
@@ -13,30 +18,14 @@ public class LogPathSettings
     ///   {date}    — CreatedDateTime as yyyy-MM-dd
     ///   {date-1}  — CreatedDateTime minus one day as yyyy-MM-dd
     /// A segment may contain * which is expanded via Directory.GetDirectories.
-    /// First template whose path resolves wins.
+    /// First template whose path resolves wins. Example:
+    ///   "\\{server}\Shared\bau\logs\{date}\Services\{service}_{env}\{server}_*_Pid_{pid}"
     /// </summary>
     public List<string> ServiceTemplates { get; set; } = [];
 
     /// <summary>
-    /// Fixed name of the file inside the resolved folder that contains the
-    /// process memory metrics lines (see MetricsLogParser). The folder is unique
-    /// per service/PID, so this filename is constant across services.
-    /// </summary>
-    public string MetricsFileName { get; set; } = string.Empty;
-
-    /// <summary>How often (seconds) to re-read the metrics file for new lines.</summary>
-    public int MetricsIntervalSeconds { get; set; } = 90;
-
-    /// <summary>
-    /// Where memory metrics are pulled from. See <see cref="MetricsSourceMode"/>.
-    /// Default: <see cref="MetricsSourceMode.Both"/> (unchanged historical behavior).
-    /// </summary>
-    public MetricsSourceMode MetricsSource { get; set; } = MetricsSourceMode.Both;
-
-    /// <summary>
     /// UNC path template for the Log Browser's top-level "Root" node, per server.
-    /// Placeholder: {server} — server hostname.
-    /// Example: "\\{server}\Shared"
+    /// Placeholder: {server} — server hostname. Example: "\\{server}\Shared"
     /// </summary>
     public string RootFolder { get; set; } = string.Empty;
 
@@ -48,7 +37,7 @@ public class LogPathSettings
     /// </summary>
     public string StartupFolder { get; set; } = string.Empty;
 
-    /// <summary>Default filename glob for the Log Browser's file list/search (e.g. "*", "*.log").</summary>
+    /// <summary>Default filename glob for the Log Browser's file list/search. Example: "*", "*.log".</summary>
     public string DefaultFileGlob { get; set; } = "*";
 
     /// <summary>
@@ -57,30 +46,20 @@ public class LogPathSettings
     /// </summary>
     public List<string> Servers { get; set; } = [];
 
-    /// <summary>How often (seconds) the Log Browser polls the selected folder and its parent.</summary>
+    /// <summary>How often (seconds) the Log Browser polls the selected folder and its parent. Default: 30.</summary>
     public int FolderScanIntervalSeconds { get; set; } = 30;
-
-    /// <summary>Minimum seconds between two polls of the same folder (throttle on click).</summary>
-    public int FolderScanMinIntervalSeconds { get; set; } = 10;
-
-    /// <summary>
-    /// Minutes of inactivity (no subscribers) after which cached metrics data (file offsets + history)
-    /// is released from memory. During the idle window polling is paused but data is preserved so
-    /// re-subscribing resumes from where it left off without re-reading files from the start.
-    /// </summary>
-    public int IdleReleaseMinutes { get; set; } = 10;
 
     /// <summary>
     /// Caps how many matches a single recursive Log Browser search (Start Search) accumulates
     /// before it stops itself. Without a cap, searching a huge/misconfigured tree can grow the
     /// result list and the render workload without bound for as long as the search keeps running.
+    /// Default: 5000.
     /// </summary>
     public int MaxSearchResults { get; set; } = 5000;
 
     /// <summary>
     /// How the Log Browser reads a file's content when a file is opened. See
-    /// <see cref="LogFileAccessMode"/>. Default: <see cref="LogFileAccessMode.ServerOnly"/>
-    /// (unchanged historical behavior).
+    /// <see cref="LogFileAccessMode"/>. Default: <see cref="LogFileAccessMode.ServerOnly"/>.
     /// </summary>
     public LogFileAccessMode FileAccessMode { get; set; } = LogFileAccessMode.ServerOnly;
 }
@@ -112,30 +91,4 @@ public enum LogFileAccessMode
     /// since <see cref="ClientWithFallback"/>'s fallback can mask a broken client-side path.
     /// </summary>
     ClientOnly,
-}
-
-/// <summary>
-/// Controls where <see cref="ServiceMetricsMonitor"/> (in NxtUI.Web) pulls per-service
-/// memory metrics from.
-/// </summary>
-public enum MetricsSourceMode
-{
-    /// <summary>
-    /// Kafka (live) plus a one-time on-disk backfill for the pre-Kafka-retention gap, and a
-    /// full on-disk fallback for any environment whose Kafka topic has no data at all.
-    /// Unchanged historical behavior.
-    /// </summary>
-    Both,
-
-    /// <summary>
-    /// On-disk metrics log files only — the Kafka metrics consumer and disk backfill never
-    /// run. Use when Kafka metrics publishing isn't wired up, or to rule it out for debugging.
-    /// </summary>
-    FileSystem,
-
-    /// <summary>
-    /// Kafka only, including its one-time disk backfill for the pre-retention gap — but no
-    /// ongoing file-tail polling, even for services/environments where Kafka has no data.
-    /// </summary>
-    Kafka,
 }

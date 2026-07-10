@@ -10,6 +10,7 @@
 @inject ILogger<RunDetail> Logger
 @inject DateTimeDisplayService DtSvc
 @inject IOptions<UiSettings> UiOptions
+@inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject ISnackbar Snackbar
 @implements IAsyncDisposable
@@ -82,7 +83,7 @@
     {
         _previousIsFocused = IsFocused;
         _topologyService   = new TopologyComputationService(
-            TimeSpan.FromSeconds(UiOptions.Value.TopologyRecentActivityWindowSeconds));
+            TimeSpan.FromSeconds(RunsOptions.Value.TopologyRecentActivityWindowSeconds));
         _labelFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Environment);
 
         _topologyTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(TopologyDebounceMs));

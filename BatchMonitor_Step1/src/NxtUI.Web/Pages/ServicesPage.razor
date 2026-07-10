@@ -7,6 +7,7 @@
 @using Microsoft.Extensions.Options
 @using System.Text.RegularExpressions
 @inject IOptions<UiSettings> UiOptions
+@inject IOptions<ServicesPageSettings> ServicesOptions
 @inject IHeartbeatMonitor HeartbeatMonitor
 @inject IHeartbeatService HeartbeatSvc
 @inject ILogPathDiscoveryService DiscoverySvc
@@ -329,7 +330,7 @@
     {
         _previousIsFocused = IsFocused;
         _stripFormatter    = TopologyLabelFormatter.Build(UiOptions.Value.LabelStripWords, Env);
-        _filterText        = UiOptions.Value.ServicesDefaultFilterText;
+        _filterText        = ServicesOptions.Value.DefaultFilterText;
 
         DiscoverySvc.OnPathResolved        += OnPathResolved;
         MetricsMonitor.OnMetricsUpdated    += OnMetricsUpdated;

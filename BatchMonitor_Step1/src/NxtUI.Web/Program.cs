@@ -33,8 +33,11 @@ public class Program
         builder.Services.Configure<HeartbeatSettings>(
             builder.Configuration.GetSection(HeartbeatSettings.SectionName));
 
-        builder.Services.Configure<LogPathSettings>(
-            builder.Configuration.GetSection(LogPathSettings.SectionName));
+        builder.Services.Configure<FileBrowserSettings>(
+            builder.Configuration.GetSection(FileBrowserSettings.SectionName));
+
+        builder.Services.Configure<MetricsSettings>(
+            builder.Configuration.GetSection(MetricsSettings.SectionName));
 
         builder.Services.Configure<TestLogGeneratorSettings>(
             builder.Configuration.GetSection(TestLogGeneratorSettings.SectionName));
@@ -47,6 +50,15 @@ public class Program
 
         builder.Services.Configure<UiSettings>(
             builder.Configuration.GetSection(UiSettings.SectionName));
+
+        builder.Services.Configure<HomeSettings>(
+            builder.Configuration.GetSection(HomeSettings.SectionName));
+
+        builder.Services.Configure<TimelineSettings>(
+            builder.Configuration.GetSection(TimelineSettings.SectionName));
+
+        builder.Services.Configure<ServicesPageSettings>(
+            builder.Configuration.GetSection(ServicesPageSettings.SectionName));
 
         builder.Services.Configure<EnvConfigSettings>(
             builder.Configuration.GetSection(EnvConfigSettings.SectionName));

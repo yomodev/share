@@ -59,7 +59,7 @@ window.bmLogFileAccess = (function () {
 
     // There's no way to hint the native folder picker at a specific starting folder, so
     // the user could grant any ancestor of the true per-server log root: the exact root
-    // itself (Logs:RootFolder with {server} expanded), its parent, or further up.
+    // itself (FileBrowser:RootFolder with {server} expanded), its parent, or further up.
     // rootTemplate is that same config value (e.g. "C:\Temp\logs\{server}"). Expand
     // {server} and split it into segments, then try resolving as if the granted folder
     // were each possible depth along that chain, closest-to-leaf first — this covers

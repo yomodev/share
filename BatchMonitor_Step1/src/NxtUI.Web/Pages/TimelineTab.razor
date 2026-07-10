@@ -7,7 +7,7 @@
 @inject TabService TabService
 @inject NxtUI.Web.Services.EnvironmentSelectorService EnvService
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
-@inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.UiSettings> UiOptions
+@inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.TimelineSettings> TimelineOptions
 @inject DateTimeDisplayService DtSvc
 @inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
@@ -140,8 +140,8 @@
                 _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=14");
                 await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
                 await _tlModule.InvokeVoidAsync("setHoverDelaysMs", _instanceKey,
-                    Math.Max(0, UiOptions.Value.TimelineHighlightDelayMs),
-                    Math.Max(0, UiOptions.Value.TimelinePopupDelayMs));
+                    Math.Max(0, TimelineOptions.Value.HighlightDelayMs),
+                    Math.Max(0, TimelineOptions.Value.PopupDelayMs));
                 await PushDataAsync();
             }
             catch (Exception ex)

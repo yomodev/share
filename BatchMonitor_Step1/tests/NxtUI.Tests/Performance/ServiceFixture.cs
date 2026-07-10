@@ -98,8 +98,8 @@ public sealed class ServiceFixture : IAsyncLifetime
                 ["App:Environments:0:Tier"] = "Development",
                 ["Heartbeats:IntervalSeconds"] = "30",
                 ["Heartbeats:IdleReleaseMinutes"] = "10",
-                ["Logs:MetricsIntervalSeconds"] = "90",
-                ["Logs:IdleReleaseMinutes"] = "10",
+                ["Metrics:IntervalSeconds"] = "90",
+                ["Metrics:IdleReleaseMinutes"] = "10",
                 ["Mongo:ConnectionString"] = "mongodb://localhost:27017",
                 ["Kafka:BootstrapServers"] = "localhost:9092",
             })
@@ -111,7 +111,8 @@ public sealed class ServiceFixture : IAsyncLifetime
         // ── Configuration ─────────────────────────────────────────────────────
         svc.Configure<AppSettings>(config.GetSection(AppSettings.SectionName));
         svc.Configure<HeartbeatSettings>(config.GetSection("Heartbeats"));
-        svc.Configure<LogPathSettings>(config.GetSection(LogPathSettings.SectionName));
+        svc.Configure<FileBrowserSettings>(config.GetSection(FileBrowserSettings.SectionName));
+        svc.Configure<MetricsSettings>(config.GetSection(MetricsSettings.SectionName));
         svc.Configure<MongoSettings>(config.GetSection(MongoSettings.SectionName));
         svc.Configure<KafkaSettings>(config.GetSection(KafkaSettings.SectionName));
 

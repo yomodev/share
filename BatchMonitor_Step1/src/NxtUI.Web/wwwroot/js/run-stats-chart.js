@@ -12,7 +12,13 @@ const STATUS_COLOR = {
     Unknown:    '#8B949E',
 };
 
-const _instances = new WeakMap(); // container -> { svg, tooltip, resizeObserver, points, mode, resizeTimer }
+const _instances = new WeakMap(); // container -> { svg, tooltip, resizeObserver, points, options, resizeTimer }
+
+// Below this, a per-run bar (group-by None) becomes hard to see/click, and — worse —
+// stacking more envs just makes every bar thinner instead of visibly adding more bars
+// (the original bug report). Bars are guaranteed at least this wide; the chart grows
+// wider than its container and scrolls horizontally instead of ever going below it.
+const MIN_RUN_BAR_PX = 6;
 
 function formatDuration(totalSeconds) {
     const s = Math.max(0, Math.round(totalSeconds));
@@ -46,7 +52,58 @@ function hideTooltip(tooltip) {
     tooltip.style.opacity = '0';
 }
 
-function render(container, points, mode) {
+// Bucket key + display label for a point's day ("yyyy-MM-dd"), at the given granularity.
+// Week buckets to their Monday; Month buckets to the 1st. Buckets are ordered by key
+// since all three formats ("yyyy-MM-dd" / week-Monday "yyyy-MM-dd" / "yyyy-MM") sort
+// chronologically as plain strings.
+function bucketOf(day, granularity) {
+    if (granularity === 'Month') return day.slice(0, 7);
+    if (granularity === 'Week') {
+        const d = new Date(`${day}T00:00:00Z`);
+        const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
+        d.setUTCDate(d.getUTCDate() - dow);
+        return d.toISOString().slice(0, 10);
+    }
+    return day; // 'Day' or 'None' (per-run bars still bucket by day for line alignment)
+}
+
+function bucketLabel(key, granularity) {
+    if (granularity === 'Month') return key;
+    if (granularity === 'Week') return `Wk ${key}`;
+    return key;
+}
+
+// Draws a temporary smooth line through one env's per-bucket average duration (from the
+// already-aggregated `bars` array), floating at each bucket's band midpoint like the main
+// average line — shown only while hovering that env's bar, cleared on mouseleave.
+function showEnvAvgLine(layer, bars, env, color, x0, yAxisScale) {
+    const pts = bars
+        .filter(b => b.env === env)
+        .map(b => ({ bucket: b.bucket, avg: b.avgDuration, x: x0(b.bucket) + x0.bandwidth() / 2 }))
+        .sort((a, b) => a.bucket.localeCompare(b.bucket));
+
+    layer.selectAll('*').remove();
+    if (pts.length === 0) return;
+
+    const lineGen = d3.line().x(d => d.x).y(d => yAxisScale(d.avg)).curve(d3.curveMonotoneX);
+
+    layer.append('path')
+        .datum(pts)
+        .attr('class', 'bm-runstats-envline')
+        .attr('fill', 'none')
+        .attr('stroke', color || '#FFFFFF')
+        .attr('d', lineGen);
+
+    layer.selectAll('.bm-runstats-envline-point').data(pts).join('circle')
+        .attr('class', 'bm-runstats-envline-point')
+        .attr('cx', d => d.x)
+        .attr('cy', d => yAxisScale(d.avg))
+        .attr('r', 3)
+        .attr('fill', color || '#FFFFFF');
+}
+
+function render(container, points, options) {
+    const { groupBy = 'None', colorByEnv = false } = options || {};
     const existing = _instances.get(container);
     const resizeObserver = existing?.resizeObserver; // kept alive across re-renders — only dispose() tears it down
     clearTimeout(existing?.resizeTimer);
@@ -56,61 +113,98 @@ function render(container, points, mode) {
             d3.select(container).append('div').attr('class', 'bm-muted bm-runstats-empty').text('No runs match the current filter.');
             // Keep the map entry (with the now-empty points) up to date so a pending/
             // future resize doesn't resurrect stale data from before the filter emptied it.
-            _instances.set(container, { resizeObserver, points: points ?? [], mode });
+            _instances.set(container, { resizeObserver, points: points ?? [], options, mode: null });
         }
         return;
     }
 
-    const width  = Math.max(320, container.clientWidth || 800);
-    const height = Math.max(280, container.clientHeight || 420);
-    const margin = { top: 16, right: 16, bottom: 46, left: 56 };
-    const innerW = width - margin.left - margin.right;
-    const innerH = height - margin.top - margin.bottom;
+    const containerWidth = Math.max(320, container.clientWidth || 800);
+    const height  = Math.max(280, container.clientHeight || 420);
+    const margin  = { top: 16, right: 16, bottom: 46, left: 56 };
+    const innerH  = height - margin.top - margin.bottom;
+    const X0_PAD_INNER = 0.12, X0_PAD_OUTER = 0.04; // tightened per feedback (was 0.25/0.1)
 
-    const days = [...new Set(points.map(p => p.day))].sort();
-    const x0 = d3.scaleBand().domain(days).range([0, innerW]).paddingInner(0.25).paddingOuter(0.1);
+    // Line granularity always follows the bar bucketing (even in 'None' mode, where bars
+    // are per-run but the average line still buckets/floats at day granularity) — this is
+    // what keeps the line's points aligned under the center of whatever band they summarize.
+    const lineGranularity = groupBy === 'None' ? 'Day' : groupBy;
+    for (const p of points) p._bucket = bucketOf(p.day, lineGranularity);
 
-    // viewBox (not fixed pixel width/height) + CSS width:100%/height:100% (see app.css)
-    // is what makes this scale to fill its container instead of overflowing it with
-    // scrollbars — the coordinate system below is still laid out in the measured
-    // width/height, just presented at whatever size the container actually is.
-    const svg = d3.select(container).append('svg')
-        .attr('viewBox', `0 0 ${width} ${height}`)
-        .attr('preserveAspectRatio', 'none')
-        .attr('class', 'bm-runstats-svg');
+    const buckets = [...new Set(points.map(p => p._bucket))].sort();
+    const grouped = groupBy !== 'None';
+
+    // (bucket, env) -> average duration — feeds the hover-triggered per-env average line in
+    // BOTH modes (grouped bars already compute their own via `bars`; ungrouped/None mode has
+    // no per-(bucket,env) aggregate otherwise, since its bars are per-run).
+    const envBucketAvgs = [];
+    for (const [bucket, byEnv] of d3.rollup(points, v => d3.mean(v, d => d.durationSeconds), d => d._bucket, d => d.env))
+        for (const [env, avgDuration] of byEnv)
+            envBucketAvgs.push({ bucket, env, avgDuration });
+
+    // Content-driven width: in ungrouped (None) mode, sub-band width is shared across
+    // every run in a bucket, so a fixed container width means MORE envs/runs = THINNER
+    // bars, not visibly more of them (the reported bug). Compute the minimum total width
+    // needed to keep every per-run bar at least MIN_RUN_BAR_PX wide, and only stretch to
+    // fill the container when the content actually fits — otherwise render at the wider
+    // natural size and let the container (CSS overflow-x:auto) scroll horizontally.
+    let innerW = containerWidth - margin.left - margin.right;
+    if (!grouped && buckets.length > 0) {
+        const maxPerBucket = d3.max([...d3.group(points, p => p._bucket).values()], v => v.length) || 1;
+        const neededBandwidth = maxPerBucket * MIN_RUN_BAR_PX / (1 - 0.08); // 0.08 = x1's own padding
+        const n = buckets.length;
+        const neededInnerW = (neededBandwidth / (1 - X0_PAD_INNER)) * (n - X0_PAD_INNER + 2 * X0_PAD_OUTER);
+        innerW = Math.max(innerW, neededInnerW);
+    }
+    const width = innerW + margin.left + margin.right;
+    const scrolling = width > containerWidth + 0.5; // content wider than the container — scroll, don't stretch
+
+    const x0 = d3.scaleBand().domain(buckets).range([0, innerW]).paddingInner(X0_PAD_INNER).paddingOuter(X0_PAD_OUTER);
+
+    // viewBox (not fixed pixel width/height) + CSS width:100%/height:100% (see app.css) is
+    // what makes this scale to fill its container instead of overflowing it with scrollbars
+    // — but only when the content actually fits. When it doesn't (see above), the svg gets
+    // an explicit pixel width instead and the container scrolls horizontally to it, so bars
+    // never get squeezed below MIN_RUN_BAR_PX just to avoid a scrollbar.
+    const svg = d3.select(container).append('svg').attr('class', 'bm-runstats-svg');
+    if (scrolling) {
+        svg.attr('width', width).attr('height', height)
+           .style('width', `${width}px`).style('height', '100%');
+    } else {
+        svg.attr('viewBox', `0 0 ${width} ${height}`).attr('preserveAspectRatio', 'none');
+    }
     const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
     const tooltip = ensureTooltip(container);
 
     let bars;
     let maxY;
 
-    if (mode === 'avgPerEnv') {
-        // Aggregate by (day, env): average duration, run count, failed count.
+    if (grouped) {
+        // Aggregate by (bucket, env): average duration, run count, failed count.
         const envs = [...new Set(points.map(p => p.env))];
         const envColor = new Map(points.map(p => [p.env, p.envColor]));
-        const grouped = d3.rollup(
+        const rolled = d3.rollup(
             points,
             v => ({
                 avgDuration: d3.mean(v, d => d.durationSeconds),
                 count: v.length,
                 failed: v.filter(d => d.status === 'Failed').length,
             }),
-            d => d.day, d => d.env,
+            d => d._bucket, d => d.env,
         );
 
         bars = [];
-        for (const [day, byEnv] of grouped) {
+        for (const [bucket, byEnv] of rolled) {
             for (const [env, agg] of byEnv) {
-                bars.push({ day, env, ...agg, failRate: agg.count > 0 ? agg.failed / agg.count : 0 });
+                bars.push({ bucket, env, ...agg, failRate: agg.count > 0 ? agg.failed / agg.count : 0 });
             }
         }
         maxY = d3.max(bars, b => b.avgDuration) || 1;
 
-        const x1 = d3.scaleBand().domain(envs).range([0, x0.bandwidth()]).padding(0.15);
+        const x1 = d3.scaleBand().domain(envs).range([0, x0.bandwidth()]).padding(0.12);
         const y = d3.scaleLinear().domain([0, maxY]).nice().range([innerH, 0]);
 
         const barG = g.selectAll('.bm-runstats-bar').data(bars).join('g').attr('class', 'bm-runstats-bar')
-            .attr('transform', d => `translate(${x0(d.day) + x1(d.env)},0)`);
+            .attr('transform', d => `translate(${x0(d.bucket) + x1(d.env)},0)`);
 
         barG.append('rect')
             .attr('y', d => y(d.avgDuration))
@@ -120,7 +214,7 @@ function render(container, points, mode) {
             .attr('rx', 2);
 
         // Failure-rate overlay: a translucent red wash whose opacity scales with the
-        // fraction of that day+env's runs that failed — the bar's height/color already
+        // fraction of that bucket+env's runs that failed — the bar's height/color already
         // carries duration+env, so this is the only channel left for failure rate.
         barG.filter(d => d.failRate > 0).append('rect')
             .attr('y', d => y(d.avgDuration))
@@ -130,12 +224,24 @@ function render(container, points, mode) {
             .attr('opacity', d => d.failRate * 0.65)
             .attr('rx', 2);
 
+        // Env envelope layer for the temporary per-env average line drawn on hover — kept
+        // above the bars/legend but doesn't participate in the bars' own data join.
+        const envLineLayer = g.append('g').attr('class', 'bm-runstats-envline-layer');
+
         barG.style('cursor', 'pointer')
             .on('mousemove', (event, d) => showTooltip(tooltip, container, event,
-                `<strong>${esc(d.env)}</strong> · ${esc(d.day)}<br>` +
+                `<strong>${esc(d.env)}</strong> · ${esc(bucketLabel(d.bucket, groupBy))}<br>` +
                 `avg ${formatDuration(d.avgDuration)} · ${d.count} run${d.count === 1 ? '' : 's'}` +
                 (d.failed > 0 ? `<br><span class="bm-runstats-tt-fail">${d.failed} failed (${Math.round(d.failRate * 100)}%)</span>` : '')))
-            .on('mouseleave', () => hideTooltip(tooltip));
+            .on('mouseleave', () => hideTooltip(tooltip))
+            .on('mouseenter.envfocus', (event, d) => {
+                barG.classed('bm-runstats-bar-dim', b => b.env !== d.env);
+                showEnvAvgLine(envLineLayer, bars, d.env, envColor.get(d.env), x0, yAxisScale);
+            })
+            .on('mouseleave.envfocus', () => {
+                barG.classed('bm-runstats-bar-dim', false);
+                envLineLayer.selectAll('*').remove();
+            });
 
         g.append('g').attr('class', 'bm-runstats-legend')
             .selectAll('.bm-runstats-legend-item').data(envs).join('g')
@@ -147,27 +253,34 @@ function render(container, points, mode) {
             });
     }
     else {
-        // Per-run: one bar per run, grouped by day, colored by status.
+        // Per-run: one bar per run, grouped by day band, colored by status (default) or env (toggle).
         maxY = d3.max(points, p => p.durationSeconds) || 1;
         const y = d3.scaleLinear().domain([0, maxY]).nice().range([innerH, 0]);
 
-        const byDay = d3.group(points, p => p.day);
-        const maxPerDay = d3.max([...byDay.values()], v => v.length) || 1;
-        const x1 = d3.scaleBand().domain(d3.range(maxPerDay)).range([0, x0.bandwidth()]).padding(0.1);
+        const byBucket = d3.group(points, p => p._bucket);
+        const maxPerBucket = d3.max([...byBucket.values()], v => v.length) || 1;
+        const x1 = d3.scaleBand().domain(d3.range(maxPerBucket)).range([0, x0.bandwidth()]).padding(0.08);
 
-        for (const [day, runs] of byDay) runs.sort((a, b) => a.start.localeCompare(b.start));
+        for (const [, runs] of byBucket) runs.sort((a, b) => a.start.localeCompare(b.start));
 
         const barG = g.selectAll('.bm-runstats-bar').data(points).join('g').attr('class', 'bm-runstats-bar')
             .attr('transform', d => {
-                const idx = byDay.get(d.day).indexOf(d);
-                return `translate(${x0(d.day) + x1(idx)},0)`;
+                const idx = byBucket.get(d._bucket).indexOf(d);
+                return `translate(${x0(d._bucket) + x1(idx)},0)`;
             });
+
+        // Env envelope layer for the temporary per-env average line drawn on hover — same
+        // behavior as grouped mode, since every point already carries an env regardless of
+        // whether bars are currently colored by status or by env.
+        const envLineLayer = g.append('g').attr('class', 'bm-runstats-envline-layer');
+        const runEnvColor = new Map(points.map(p => [p.env, p.envColor]));
+        const multiEnv = new Set(points.map(p => p.env)).size > 1;
 
         barG.append('rect')
             .attr('y', d => y(d.durationSeconds))
             .attr('width', x1.bandwidth())
             .attr('height', d => innerH - y(d.durationSeconds))
-            .attr('fill', d => STATUS_COLOR[d.status] || STATUS_COLOR.Unknown)
+            .attr('fill', d => colorByEnv ? (d.envColor || '#546E7A') : (STATUS_COLOR[d.status] || STATUS_COLOR.Unknown))
             .attr('rx', 2)
             .style('cursor', 'pointer')
             .on('mousemove', (event, d) => showTooltip(tooltip, container, event,
@@ -176,25 +289,84 @@ function render(container, points, mode) {
                 `${esc(d.status)} · ${formatDuration(d.durationSeconds)}`))
             .on('mouseleave', () => hideTooltip(tooltip));
 
-        const statuses = [...new Set(points.map(p => p.status))];
-        g.append('g').attr('class', 'bm-runstats-legend')
-            .selectAll('.bm-runstats-legend-item').data(statuses).join('g')
-            .attr('class', 'bm-runstats-legend-item')
-            .attr('transform', (d, i) => `translate(${i * 90},${-margin.top + 2})`)
-            .call(sel => {
-                sel.append('rect').attr('width', 10).attr('height', 10).attr('rx', 2).attr('fill', d => STATUS_COLOR[d] || STATUS_COLOR.Unknown);
-                sel.append('text').attr('x', 14).attr('y', 9).attr('class', 'bm-runstats-legend-text').text(d => d);
-            });
+        if (multiEnv) {
+            barG.style('cursor', 'pointer')
+                .on('mouseenter.envfocus', (event, d) => {
+                    barG.classed('bm-runstats-bar-dim', b => b.env !== d.env);
+                    showEnvAvgLine(envLineLayer, envBucketAvgs, d.env, runEnvColor.get(d.env), x0, yAxisScale);
+                })
+                .on('mouseleave.envfocus', () => {
+                    barG.classed('bm-runstats-bar-dim', false);
+                    envLineLayer.selectAll('*').remove();
+                });
+        }
+
+        if (colorByEnv) {
+            const envs = [...new Set(points.map(p => p.env))];
+            const envColor = new Map(points.map(p => [p.env, p.envColor]));
+            g.append('g').attr('class', 'bm-runstats-legend')
+                .selectAll('.bm-runstats-legend-item').data(envs).join('g')
+                .attr('class', 'bm-runstats-legend-item')
+                .attr('transform', (d, i) => `translate(${i * 90},${-margin.top + 2})`)
+                .call(sel => {
+                    sel.append('rect').attr('width', 10).attr('height', 10).attr('rx', 2).attr('fill', d => envColor.get(d) || '#546E7A');
+                    sel.append('text').attr('x', 14).attr('y', 9).attr('class', 'bm-runstats-legend-text').text(d => d);
+                });
+        } else {
+            const statuses = [...new Set(points.map(p => p.status))];
+            g.append('g').attr('class', 'bm-runstats-legend')
+                .selectAll('.bm-runstats-legend-item').data(statuses).join('g')
+                .attr('class', 'bm-runstats-legend-item')
+                .attr('transform', (d, i) => `translate(${i * 90},${-margin.top + 2})`)
+                .call(sel => {
+                    sel.append('rect').attr('width', 10).attr('height', 10).attr('rx', 2).attr('fill', d => STATUS_COLOR[d] || STATUS_COLOR.Unknown);
+                    sel.append('text').attr('x', 14).attr('y', 9).attr('class', 'bm-runstats-legend-text').text(d => d);
+                });
+        }
     }
 
-    // Axes — shared by both modes.
-    const yAxisScale = d3.scaleLinear().domain([0, maxY]).nice().range([innerH, 0]);
+    // Single combined average-duration line across the whole filtered dataset (not per-env
+    // — the user filters by env if they want one), aggregated at the same granularity as
+    // the bars and plotted "floating" at the horizontal midpoint of each bucket's band.
+    const avgByBucket = d3.rollup(points, v => d3.mean(v, d => d.durationSeconds), d => d._bucket);
+    const linePoints = buckets
+        .filter(b => avgByBucket.has(b))
+        .map(b => ({ bucket: b, avg: avgByBucket.get(b), x: x0(b) + x0.bandwidth() / 2 }));
+
+    // Y-domain must cover both the bars and the average line.
+    const yDomainMax = Math.max(maxY, d3.max(linePoints, d => d.avg) || 0) || 1;
+    const yAxisScale = d3.scaleLinear().domain([0, yDomainMax]).nice().range([innerH, 0]);
+
+    if (linePoints.length > 0) {
+        const lineGen = d3.line()
+            .x(d => d.x)
+            .y(d => yAxisScale(d.avg))
+            .curve(d3.curveMonotoneX);
+
+        g.append('path')
+            .datum(linePoints)
+            .attr('class', 'bm-runstats-avgline')
+            .attr('fill', 'none')
+            .attr('d', lineGen);
+
+        g.selectAll('.bm-runstats-avgpoint').data(linePoints).join('circle')
+            .attr('class', 'bm-runstats-avgpoint')
+            .attr('cx', d => d.x)
+            .attr('cy', d => yAxisScale(d.avg))
+            .attr('r', 3.5)
+            .style('cursor', 'pointer')
+            .on('mousemove', (event, d) => showTooltip(tooltip, container, event,
+                `<strong>Average</strong> · ${esc(bucketLabel(d.bucket, lineGranularity))}<br>${formatDuration(d.avg)}`))
+            .on('mouseleave', () => hideTooltip(tooltip));
+    }
+
+    // Axes.
     g.append('g').attr('class', 'bm-runstats-axis')
         .call(d3.axisLeft(yAxisScale).ticks(6).tickFormat(formatDuration));
 
     g.append('g').attr('class', 'bm-runstats-axis')
         .attr('transform', `translate(0,${innerH})`)
-        .call(d3.axisBottom(x0))
+        .call(d3.axisBottom(x0).tickFormat(d => bucketLabel(d, lineGranularity)))
         .selectAll('text')
         .attr('transform', 'rotate(-30)')
         .style('text-anchor', 'end');
@@ -208,12 +380,12 @@ function render(container, points, mode) {
             const entry = _instances.get(container);
             if (!entry) return;
             clearTimeout(entry.resizeTimer);
-            entry.resizeTimer = setTimeout(() => render(container, entry.points, entry.mode), 120);
+            entry.resizeTimer = setTimeout(() => render(container, entry.points, entry.options), 120);
         });
         ro.observe(container);
     }
 
-    _instances.set(container, { svg, tooltip, resizeObserver: ro, points, mode });
+    _instances.set(container, { svg, tooltip, resizeObserver: ro, points, options });
 }
 
 function esc(s) {

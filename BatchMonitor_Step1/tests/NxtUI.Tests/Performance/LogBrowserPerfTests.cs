@@ -22,7 +22,7 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
     public async Task RootFolderEnumeration_Timing()
     {
         var browser = fix.Services.GetRequiredService<ILogBrowserService>();
-        var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
+        var logPaths = fix.Services.GetRequiredService<IOptions<FileBrowserSettings>>().Value;
         var sw = Stopwatch.StartNew();
 
         var servers = logPaths.Servers;
@@ -58,7 +58,7 @@ public sealed class LogBrowserPerfTests(ServiceFixture fix, ITestOutputHelper ou
     public async Task FileSearch_Timing()
     {
         var browser = fix.Services.GetRequiredService<ILogBrowserService>();
-        var logPaths = fix.Services.GetRequiredService<IOptions<LogPathSettings>>().Value;
+        var logPaths = fix.Services.GetRequiredService<IOptions<FileBrowserSettings>>().Value;
         var sw = Stopwatch.StartNew();
 
         var servers = logPaths.Servers;

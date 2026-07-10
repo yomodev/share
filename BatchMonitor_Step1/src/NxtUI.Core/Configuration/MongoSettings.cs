@@ -26,9 +26,6 @@ public class MongoSettings
     /// <summary>Name of the PerformanceTracker collection within each environment database.</summary>
     public string PerformanceTrackerCollection { get; set; } = "PerformanceTracker";
 
-    /// <summary>Name of the Heartbeats collection within each environment database.</summary>
-    public string? HeartbeatsCollection { get; set; }
-
     // ── Optional credential override ─────────────────────────────────────────
     // Leave blank to use whatever is already in ConnectionString.
     // Set at runtime (e.g. from a secrets manager) to inject credentials

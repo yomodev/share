@@ -13,7 +13,7 @@ namespace NxtUI.Web.Services;
 /// merged together:
 ///
 ///   1. Kafka (primary, live): each environment's own Kafka cluster has a single-partition,
-///      low-retention topic (KafkaSettings.MetricsTopicName, default "metrics") that every
+///      low-retention topic (MetricsSettings.TopicName, default "metrics") that every
 ///      service instance publishes protobuf-encoded MetricsTracker samples to. This is
 ///      tailed continuously from the moment an env gets its first subscriber.
 ///
@@ -26,7 +26,7 @@ namespace NxtUI.Web.Services;
 /// If an environment's Kafka topic has no data at all (not yet wired up there), this falls
 /// back entirely to the original continuous file-polling behavior for that environment.
 ///
-/// <see cref="LogPathSettings.MetricsSource"/> can restrict this to one source only
+/// <see cref="MetricsSettings.Source"/> can restrict this to one source only
 /// (<see cref="MetricsSourceMode.FileSystem"/> or <see cref="MetricsSourceMode.Kafka"/>)
 /// instead of the default <see cref="MetricsSourceMode.Both"/>.
 ///
@@ -44,9 +44,8 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private readonly IHeartbeatMonitor _heartbeatMonitor;
     private readonly ILogPathDiscoveryService _discovery;
-    private readonly LogPathSettings _paths;
+    private readonly MetricsSettings _metrics;
     private readonly IKafkaMonitor _kafka;
-    private readonly KafkaSettings _kafkaSettings;
     private readonly ILogger<ServiceMetricsMonitor> _log;
 
     // Limits simultaneous network file reads to avoid overwhelming the servers.
@@ -69,16 +68,14 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     public ServiceMetricsMonitor(
         IHeartbeatMonitor heartbeatMonitor,
         ILogPathDiscoveryService discovery,
-        IOptions<LogPathSettings> paths,
+        IOptions<MetricsSettings> metrics,
         IKafkaMonitor kafka,
-        IOptions<KafkaSettings> kafkaSettings,
         ILogger<ServiceMetricsMonitor> log)
     {
         _heartbeatMonitor = heartbeatMonitor;
         _discovery = discovery;
-        _paths = paths.Value;
+        _metrics = metrics.Value;
         _kafka = kafka;
-        _kafkaSettings = kafkaSettings.Value;
         _log = log;
 
         // A freshly resolved path means there may be a file to read right away —
@@ -126,7 +123,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
                 _hbSubs[env] = _heartbeatMonitor.Subscribe(env);
 
             // Start (or resume) the Kafka metrics consumer for this env.
-            if (_paths.MetricsSource != MetricsSourceMode.FileSystem && !_kafkaCts.ContainsKey(env))
+            if (_metrics.Source != MetricsSourceMode.FileSystem && !_kafkaCts.ContainsKey(env))
             {
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
                 _kafkaCts[env] = cts;
@@ -191,7 +188,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         _ct = ct;
-        var interval = TimeSpan.FromSeconds(Math.Max(5, _paths.MetricsIntervalSeconds));
+        var interval = TimeSpan.FromSeconds(Math.Max(5, _metrics.IntervalSeconds));
         using var timer = new PeriodicTimer(interval);
         try
         {
@@ -206,7 +203,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private void CleanupIdleEnvs()
     {
-        var idleTimeout = TimeSpan.FromMinutes(_paths.IdleReleaseMinutes);
+        var idleTimeout = TimeSpan.FromMinutes(_metrics.IdleReleaseMinutes);
         var now = DateTime.UtcNow;
 
         List<string> toRelease;
@@ -246,8 +243,8 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private async Task PollEnvAsync(string env, CancellationToken ct)
     {
         if (!HasSubscribers(env)) return;
-        if (string.IsNullOrWhiteSpace(_paths.MetricsFileName)) return;
-        if (_paths.MetricsSource == MetricsSourceMode.Kafka) return;
+        if (string.IsNullOrWhiteSpace(_metrics.FileName)) return;
+        if (_metrics.Source == MetricsSourceMode.Kafka) return;
 
         var gate = _envGates.GetOrAdd(env, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0, ct))
@@ -305,7 +302,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             {
                 var folder = _discovery.GetCachedPath(svc, env);
                 if (folder is null) { _discovery.EnsureDiscovering(svc, env); return; }
-                entry.FilePath = Path.Combine(folder, _paths.MetricsFileName);
+                entry.FilePath = Path.Combine(folder, _metrics.FileName);
             }
 
             var file = entry.FilePath;
@@ -392,7 +389,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
 
     private async Task RunKafkaConsumerAsync(string env, CancellationToken ct)
     {
-        var topic = _kafkaSettings.MetricsTopicName;
+        var topic = _metrics.TopicName;
         if (string.IsNullOrWhiteSpace(topic)) return;
 
         // Seek from the oldest currently-known service's start time instead of the topic's
@@ -589,7 +586,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
     private async Task BackfillFromDiskAsync(
         string env, ServiceStatus svc, Entry entry, DateTime processStartUtc, DateTime kafkaEarliestUtc, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_paths.MetricsFileName))
+        if (string.IsNullOrWhiteSpace(_metrics.FileName))
         {
             lock (entry.Sync) entry.DiskBackfilled = true;
             return;
@@ -602,7 +599,7 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             return; // retry on the next Kafka message for this service, once the path resolves
         }
 
-        var file = Path.Combine(folder, _paths.MetricsFileName);
+        var file = Path.Combine(folder, _metrics.FileName);
 
         await _ioGate.WaitAsync(ct);
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -640,9 +637,15 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             entry.DiskBackfilled = true;
         }
 
+        // This one-time gap-fill runs even under MetricsSourceMode.Kafka (see its doc comment) —
+        // it is NOT the ongoing file-tail poller (that one is gated off entirely in Kafka mode,
+        // see PollEnvAsync). It reads the on-disk metrics log exactly once per service, only to
+        // cover the gap between process start and the earliest sample Kafka's retention still
+        // has; after this, the service is served by Kafka alone.
         _log.LogInformation(
-            "metrics [{Env}]: backfilled {Filled} samples for {Service}@{Host} from disk in {Ms}ms, range [{Start:HH:mm:ss}, {End:HH:mm:ss})",
-            env, filled, svc.ServiceName, svc.HostName, sw.ElapsedMilliseconds, processStartUtc, kafkaEarliestUtc);
+            "metrics [{Env}]: one-time pre-Kafka-retention gap-fill for {Service}@{Host} — read {Filled} sample(s) " +
+            "from its on-disk log in {Ms}ms, covering [{Start:HH:mm:ss}, {End:HH:mm:ss}) before Kafka's retention window",
+            env, svc.ServiceName, svc.HostName, filled, sw.ElapsedMilliseconds, processStartUtc, kafkaEarliestUtc);
     }
 
     /// <summary>Inserts/replaces by timestamp, keeps History sorted ascending, caps at MaxHistory.</summary>

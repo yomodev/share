@@ -127,7 +127,7 @@ const D3Graph = (() => {
     // edges orthogonally in the channels *between* blocks — they never cross a node
     // interior.
     //
-    // Port constraint mode is configurable (UiSettings.GraphPortConstraints, passed
+    // Port constraint mode is configurable (RunsSettings.GraphPortConstraints, passed
     // in via init()'s portConstraints arg — see handle.portConstraints):
     //   FIXED_SIDE (default): ports are pinned to a side only — ELK can reorder them
     //     within that side to minimise crossings, but an arrow no longer lands on the
@@ -289,7 +289,7 @@ const D3Graph = (() => {
 
     // Smooth spline through the same ELK waypoints (start/bends/end) instead of
     // straight orthogonal segments — looser, organic look; the alternative to
-    // roundedOrthPath, picked by UiSettings.GraphEdgeStyle via handle.edgeStyle.
+    // roundedOrthPath, picked by RunsSettings.GraphEdgeStyle via handle.edgeStyle.
     // Applies regardless of port-constraint mode (FIXED_SIDE or FIXED_POS) — this is
     // purely how the path between ELK's computed points is drawn, not how those
     // points/ports were chosen.
@@ -379,7 +379,7 @@ const D3Graph = (() => {
             animState: createState(),
             elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
-            layoutTimer: null, layoutSeq: 0, rafId: null, lastFrameTime: null,
+            layoutTimer: null, layoutSeq: 0, rafId: null, lastFrameTime: null, lastCommitTime: 0,
             userZoomed: false, isVisible: true, disposed: false,
             popoverNodeId: null, popoverPipeline: null, popoverHideTimer: null,
         };
@@ -402,18 +402,32 @@ const D3Graph = (() => {
 
     // ── update / layout ───────────────────────────────────────────────────
 
+    // Throttle, NOT debounce: during continuous streams (live tailing, and especially
+    // replay's ~400ms recompute cadence) update() is called faster than DEBOUNCE_MS apart.
+    // A true debounce (clearTimeout + reset on every call) would keep pushing commitLayout
+    // further into the future on every call and could starve indefinitely for as long as
+    // updates keep arriving under the window — which is exactly what made replay look like
+    // it only re-rendered once or twice over a 30s sweep. A throttle instead runs at a fixed
+    // cadence: at most one commitLayout every DEBOUNCE_MS, always using whatever the latest
+    // pendingTopology is by the time it fires.
     function update(handle, topo) {
         if (!handle || handle.disposed) return;
         handle.pendingTopology = topo;
         if (!handle.currentGraph) { commitLayout(handle); return; }
-        clearTimeout(handle.layoutTimer);
-        handle.layoutTimer = setTimeout(() => commitLayout(handle), DEBOUNCE_MS);
+        if (handle.layoutTimer) return; // a commit is already scheduled — it'll pick up this topology
+        const elapsed = performance.now() - handle.lastCommitTime;
+        const wait = Math.max(0, DEBOUNCE_MS - elapsed);
+        handle.layoutTimer = setTimeout(() => {
+            handle.layoutTimer = null;
+            commitLayout(handle);
+        }, wait);
     }
 
     async function commitLayout(handle) {
         if (handle.disposed || !handle.elk) return;
         const topo = handle.pendingTopology;
         if (!topo) return;
+        handle.lastCommitTime = performance.now();
 
         // ELK layout is async (runs in a worker). Guard against an older layout
         // resolving after a newer one — only the latest sequence wins.

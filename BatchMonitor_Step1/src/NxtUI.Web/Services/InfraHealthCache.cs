@@ -39,13 +39,13 @@ public sealed class InfraHealthCache(
     public KafkaHealth GetKafka(string env)
     {
         lock (_lock)
-            return _kafkaCache.TryGetValue(env, out var h) ? h : new KafkaHealth { Status = HealthStatus.Unknown };
+            return _kafkaCache.TryGetValue(env, out var h) ? h : new KafkaHealth { Error = "not checked yet" };
     }
 
     public MongoHealth GetMongo(string env)
     {
         lock (_lock)
-            return _mongoCache.TryGetValue(env, out var h) ? h : new MongoHealth { Status = HealthStatus.Unknown };
+            return _mongoCache.TryGetValue(env, out var h) ? h : new MongoHealth { Error = "not checked yet" };
     }
 
     /// <summary>Force an immediate poll (both services) for the given environment (e.g. on tab switch).</summary>
@@ -127,6 +127,7 @@ public sealed class InfraHealthCache(
                     IsOnline = b.IsOnline,
                 }).ToList(),
                 CheckedAt = DateTime.UtcNow,
+                Error = onlineBrokers == totalBrokers ? null : $"{totalBrokers - onlineBrokers}/{totalBrokers} broker(s) offline",
             };
         }
         catch (Exception ex)
@@ -140,7 +141,10 @@ public sealed class InfraHealthCache(
     private async Task PollMongoAsync(string env, CancellationToken ct)
     {
         if (!mongoFactory.IsConfigured(env))
+        {
+            lock (_lock) _mongoCache[env] = new MongoHealth { CheckedAt = DateTime.UtcNow, Error = "Mongo not configured for this environment" };
             return;
+        }
 
         using var op = ops.Track($"InfraHealthCache.Mongo({env})");
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -187,10 +191,16 @@ public sealed class InfraHealthCache(
         lock (_lock) streaks[env] = 0;
     }
 
+    // Tiered escalation: 1st failure after a run of successes reads as a plain (steady)
+    // Degraded — "might just be a blip". From the 2nd failure onward, still short of the
+    // threshold, it reads as DegradedEscalating (blinking) — a visible warning that it's
+    // trending toward Down. At/past the threshold it's Down.
     private HealthStatus StatusForFailure(Dictionary<string, int> streaks, string env)
     {
         int count;
         lock (_lock) count = streaks[env] = streaks.GetValueOrDefault(env) + 1;
-        return count >= Math.Max(1, S.ConsecutiveFailuresBeforeDown) ? HealthStatus.Down : HealthStatus.Degraded;
+        var threshold = Math.Max(1, S.ConsecutiveFailuresBeforeDown);
+        if (count >= threshold) return HealthStatus.Down;
+        return count <= 1 ? HealthStatus.Degraded : HealthStatus.DegradedEscalating;
     }
 }

@@ -18,7 +18,8 @@ namespace NxtUI.Web.Services;
 public sealed class TestLogGenerator : BackgroundService
 {
     private readonly TestLogGeneratorSettings _gen;
-    private readonly LogPathSettings _paths;
+    private readonly FileBrowserSettings _paths;
+    private readonly MetricsSettings _metrics;
     private readonly AppSettings _app;
     private readonly IHeartbeatService _heartbeat;
     private readonly ILogger<TestLogGenerator> _log;
@@ -97,13 +98,15 @@ public sealed class TestLogGenerator : BackgroundService
 
     public TestLogGenerator(
         IOptions<TestLogGeneratorSettings> gen,
-        IOptions<LogPathSettings> paths,
+        IOptions<FileBrowserSettings> paths,
+        IOptions<MetricsSettings> metrics,
         IOptions<AppSettings> app,
         IHeartbeatService heartbeat,
         ILogger<TestLogGenerator> log)
     {
         _gen = gen.Value;
         _paths = paths.Value;
+        _metrics = metrics.Value;
         _app = app.Value;
         _heartbeat = heartbeat;
         _log = log;
@@ -136,7 +139,7 @@ public sealed class TestLogGenerator : BackgroundService
     {
         if (_paths.ServiceTemplates.Count == 0)
         {
-            _log.LogWarning("TestLogGenerator: no Logs:ServiceTemplates configured — nothing to generate.");
+            _log.LogWarning("TestLogGenerator: no FileBrowser:ServiceTemplates configured — nothing to generate.");
             return;
         }
 
@@ -158,7 +161,7 @@ public sealed class TestLogGenerator : BackgroundService
     private async Task SeedAsync(CancellationToken ct)
     {
         var template = _paths.ServiceTemplates[Math.Clamp(_gen.TemplateIndex, 0, _paths.ServiceTemplates.Count - 1)];
-        var metricsFile = string.IsNullOrWhiteSpace(_paths.MetricsFileName) ? "Metrics.log" : _paths.MetricsFileName;
+        var metricsFile = string.IsNullOrWhiteSpace(_metrics.FileName) ? "Metrics.log" : _metrics.FileName;
 
         var envs = _gen.Environments.Count > 0
             ? _app.Environments.Where(e => _gen.Environments.Contains(e.Id, StringComparer.OrdinalIgnoreCase)).ToList()

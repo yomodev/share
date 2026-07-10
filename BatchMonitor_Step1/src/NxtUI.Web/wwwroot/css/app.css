@@ -2263,8 +2263,6 @@ html, body {
 .bm-infra-label-healthy  { color: #3FB950; }
 .bm-infra-label-degraded { color: #D29922; }
 .bm-infra-label-down     { color: #F85149; }
-.bm-infra-label-unknown,
-.bm-infra-label-checking { color: var(--mud-palette-text-secondary); }
 
 .bm-infra-time {
     font-size: 11px;
@@ -3355,16 +3353,18 @@ tr.bm-row-searching td:first-child {
    ================================================================ */
 
 .bm-runstats-env-select { width: 220px; flex: none; }
-.bm-runstats-mode-toggle { flex: none; }
+.bm-runstats-groupby-select { width: 130px; flex: none; }
 .bm-runstats-filter-fill { flex: 1; min-width: 160px; }
 
 .bm-runstats-chart {
     flex: 1;
     min-height: 0;
     position: relative;
-    overflow: hidden; /* the svg scales to fill this box (see run-stats-chart.js) — never scrolls */
+    overflow-x: auto;  /* when per-run bars need more room than the container (see MIN_RUN_BAR_PX
+                           in run-stats-chart.js), the svg renders wider and this scrolls to it */
+    overflow-y: hidden;
 }
-.bm-runstats-svg { display: block; width: 100%; height: 100%; }
+.bm-runstats-svg { display: block; width: 100%; height: 100%; } /* overridden inline per-render when scrolling (wider than container) */
 .bm-runstats-axis text { fill: var(--mud-palette-text-secondary); font-size: 11px; }
 .bm-runstats-axis path,
 .bm-runstats-axis line { stroke: var(--mud-palette-lines-default); }
@@ -3388,3 +3388,11 @@ tr.bm-row-searching td:first-child {
 }
 .bm-runstats-tt-fail { color: #F85149; }
 .bm-runstats-empty { padding: 24px; text-align: center; }
+
+.bm-runstats-avgline { stroke: var(--mud-palette-text-primary); stroke-width: 2px; stroke-dasharray: 4 3; opacity: 0.85; }
+.bm-runstats-avgpoint { fill: var(--mud-palette-surface); stroke: var(--mud-palette-text-primary); stroke-width: 2px; }
+.bm-runstats-avgpoint:hover { fill: var(--mud-palette-text-primary); }
+
+.bm-runstats-bar-dim { opacity: 0.25; transition: opacity 0.1s; }
+.bm-runstats-envline { stroke-width: 2px; pointer-events: none; }
+.bm-runstats-envline-point { pointer-events: none; }

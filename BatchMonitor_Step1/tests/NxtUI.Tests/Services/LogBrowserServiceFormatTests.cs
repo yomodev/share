@@ -19,7 +19,7 @@ public sealed class LogBrowserServiceFormatTests : IDisposable
 
     private LogBrowserService CreateService(string[] formats)
     {
-        var settings = new LogPathSettings { RootFolder = _root };
+        var settings = new FileBrowserSettings { RootFolder = _root };
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(formats.Select((f, i) =>
                 new KeyValuePair<string, string?>($"Logs:Formats:{i}", f)))
