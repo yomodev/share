@@ -24,4 +24,29 @@ public class EnvConfigSettings
     /// Placeholders: {server}, {env}.
     /// </summary>
     public string PathTemplate { get; set; } = "";
+
+    /// <summary>
+    /// Whether the Config page allows editing/saving at all. Default: false (read-only) —
+    /// this writes files on potentially every server in an environment, so it's opt-in.
+    /// </summary>
+    public bool EditingEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Where a save is written. See <see cref="EnvConfigSaveMode"/>. Default: SingleLocation.
+    /// </summary>
+    public EnvConfigSaveMode SaveMode { get; set; } = EnvConfigSaveMode.SingleLocation;
+}
+
+/// <summary>Controls where a Config page save is written.</summary>
+public enum EnvConfigSaveMode
+{
+    /// <summary>Only the source-of-truth file (<see cref="EnvConfigSettings.SourcePathTemplate"/>) is written, with a backup.</summary>
+    SingleLocation,
+
+    /// <summary>
+    /// The source file is written (with a backup, same as SingleLocation), then the same
+    /// content is copied to every server's <see cref="EnvConfigSettings.PathTemplate"/>
+    /// path — no backup is taken for those mirror copies.
+    /// </summary>
+    AllServers,
 }

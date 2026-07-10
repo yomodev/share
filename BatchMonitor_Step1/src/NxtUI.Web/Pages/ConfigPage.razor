@@ -1,35 +1,94 @@
 @namespace NxtUI.Web.Pages
-@using NxtUI.Core.Configuration
 @using NxtUI.Core.Services
-@using Microsoft.Extensions.Options
-@inject IOptions<EnvConfigSettings> ConfigOptions
-@inject IEnvironmentService EnvironmentSvc
+@using NxtUI.Shared
+@inject IEnvConfigService EnvConfigSvc
 @inject ILogViewerService LogViewerSvc
 @inject ErrorNotificationService Notifications
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject DateTimeDisplayService DtSvc
+@inject ThemeService ThemeSvc
+@implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-config-page">
 
-    <div class="bm-batch-toolbar">
-        <span class="bm-config-path bm-monospace bm-muted" title="@_sourcePath">@(_sourcePath ?? "")</span>
-        <ToolbarRefresh Loading="@_loading" OnRefresh="LoadAsync" />
+    <div class="bm-batch-toolbar bm-config-edit-toolbar">
+        @if (_editable)
+        {
+            <MudTooltip Text="Undo (Ctrl+Z)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Undo" Size="Size.Small" OnClick="@(() => Cmd("cmUndo"))" />
+            </MudTooltip>
+            <MudTooltip Text="Redo (Ctrl+Y)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Redo" Size="Size.Small" OnClick="@(() => Cmd("cmRedo"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Fold all (Ctrl+Alt+[)">
+                <MudIconButton Icon="@Icons.Material.Outlined.UnfoldLess" Size="Size.Small" OnClick="@(() => Cmd("cmFoldAll"))" />
+            </MudTooltip>
+            <MudTooltip Text="Unfold all (Ctrl+Alt+])">
+                <MudIconButton Icon="@Icons.Material.Outlined.UnfoldMore" Size="Size.Small" OnClick="@(() => Cmd("cmUnfoldAll"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Find / Replace (Ctrl+F)">
+                <MudIconButton Icon="@Icons.Material.Outlined.Search" Size="Size.Small" OnClick="@(() => Cmd("cmFind"))" />
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+            <MudTooltip Text="Restore from a previous backup">
+                <MudMenu Icon="@Icons.Material.Outlined.History" Size="Size.Small" Dense="true"
+                         Disabled="@(_backups.Count == 0)"
+                         AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                    @foreach (var b in _backups)
+                    {
+                        var backup = b;
+                        <MudMenuItem OnClick="@(() => RestoreBackupAsync(backup))">
+                            @DtSvc.Format(backup.TakenAtUtc, "yyyy-MM-dd HH:mm:ss")@DtSvc.ZoneSuffix
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            </MudTooltip>
+
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+        }
+
+        <ToolbarRefresh Loading="@_loading" OnRefresh="RefreshAsync" TooltipText="Reload (Ctrl+Alt+R)" />
+
+        @if (_dirty)
+        {
+            <span class="bm-muted bm-config-dirty-flag" title="Unsaved changes">● unsaved changes</span>
+        }
     </div>
 
-    @if (_loading)
-    {
-        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
-    }
-    else if (_error is not null)
+    @if (_error is not null)
     {
         <MudAlert Severity="Severity.Error" Dense="true" Class="ma-2">@_error</MudAlert>
     }
-    else
+    else if (_loading)
     {
-        @* Interim viewer — a real syntax-highlighted/editable CodeMirror component is the
-           next step for this page (see conversation); this proves out path resolution,
-           read, and the page's place in the tab system first. *@
-        <MudTextField T="string" Value="@_content" ReadOnly="true" Lines="30"
-                      Class="bm-config-textarea bm-monospace" Variant="Variant.Outlined" />
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
     }
+
+    <div class="bm-config-editor" style="@(_error is not null ? "display:none" : "")" @ref="_editorRef"></div>
+
+    <div class="bm-batch-toolbar bm-config-footer">
+        <span class="bm-config-path bm-monospace bm-muted" title="@_sourcePath">@(_sourcePath ?? "")</span>
+        @if (_editable)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                       Disabled="@(_loading || _saving)"
+                       StartIcon="@Icons.Material.Outlined.Save"
+                       OnClick="SaveAsync"
+                       title="Save (Ctrl+S)">
+                @(_saving ? "Saving…" : "Save")
+            </MudButton>
+        }
+    </div>
 </div>
 
 @code {
@@ -39,8 +98,97 @@
     private string  _content = "";
     private string? _error;
     private bool    _loading = true;
+    private bool    _saving;
+    private bool    _editable;
+    private bool    _dirty;
+    private List<EnvConfigBackup> _backups = [];
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private ElementReference _editorRef;
+    private IJSObjectReference? _module;
+    private bool _editorReady;
+    private DotNetObjectReference<ConfigPage>? _selfRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _editable = EnvConfigSvc.IsEditingEnabled(Environment);
+        ThemeSvc.OnChange += OnAppThemeChanged;
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/text-editor.js?v=5"); }
+            catch (Exception ex) { ReportInitFailed(ex); }
+        }
+
+        // Editor mounts once content is loaded and the container div has actually
+        // rendered (it's hidden via display:none while _error is set, so wait for that
+        // to clear too — CodeMirror measures the container on init).
+        if (_module is not null && !_editorReady && !_loading && _error is null)
+        {
+            _editorReady = true;
+            try { await _module.InvokeVoidAsync("init", _editorRef, _content, _sourcePath ?? "", _editable, _selfRef, ThemeSvc.IsDark); }
+            catch (Exception ex) { ReportInitFailed(ex); }
+        }
+    }
+
+    /// <summary>Invoked from text-editor.js whenever the editor's dirty state changes.</summary>
+    [JSInvokable]
+    public void OnDirtyChanged(bool dirty)
+    {
+        if (_dirty == dirty) return;
+        _dirty = dirty;
+        StateHasChanged();
+    }
+
+    /// <summary>Invoked from text-editor.js's Ctrl+S binding.</summary>
+    [JSInvokable]
+    public Task OnSaveShortcut() => _editable ? SaveAsync() : Task.CompletedTask;
+
+    /// <summary>Invoked from text-editor.js's Ctrl+Alt+R binding.</summary>
+    [JSInvokable]
+    public Task OnReloadShortcut() => RefreshAsync();
+
+    private void OnAppThemeChanged()
+    {
+        if (_module is null) return;
+        _ = InvokeAsync(async () =>
+        {
+            try { await _module.InvokeVoidAsync("setTheme", _editorRef, ThemeSvc.IsDark); }
+            catch (Exception ex) { Notifications.Report($"Failed to update editor theme: {ex.Message}", ex, "Config"); }
+        });
+    }
+
+    private void ReportInitFailed(Exception ex) =>
+        Notifications.Report($"Failed to initialize the config editor: {ex.Message}", ex, "Config");
+
+    private async Task Cmd(string name)
+    {
+        if (_module is null) return;
+        try { await _module.InvokeVoidAsync(name, _editorRef); }
+        catch (Exception ex) { Notifications.Report($"Editor command failed: {ex.Message}", ex, "Config"); }
+    }
+
+    /// <summary>Refresh button — confirms first if there are unsaved edits, since a reload discards them.</summary>
+    private async Task RefreshAsync()
+    {
+        if (_dirty && !await ConfirmDiscardAsync("Reload from disk and discard your unsaved changes?")) return;
+        await LoadAsync();
+    }
+
+    private async Task<bool> ConfirmDiscardAsync(string message)
+    {
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Discard changes?", new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message,     message   },
+            { x => x.ConfirmText, "Discard" },
+        }, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var result = await dialog.Result;
+        return result is { Canceled: false };
+    }
 
     private async Task LoadAsync()
     {
@@ -50,23 +198,21 @@
 
         try
         {
-            var template = ConfigOptions.Value.SourcePathTemplate;
-            if (string.IsNullOrWhiteSpace(template))
+            _sourcePath = EnvConfigSvc.GetSourcePath(Environment);
+            if (_sourcePath is null)
             {
-                _error = "EnvConfig:SourcePathTemplate is not configured.";
+                _error = $"Could not resolve the config file path for environment '{Environment}' — check EnvConfig:SourcePathTemplate and the environment's Servers list.";
                 return;
             }
 
-            var servers = EnvironmentSvc.GetServers(Environment);
-            if (servers.Count == 0)
-            {
-                _error = $"No servers configured for environment '{Environment}'.";
-                return;
-            }
-
-            _sourcePath = Expand(template, servers[0], Environment);
             var (text, _) = await LogViewerSvc.ReadAllAsync(_sourcePath);
             _content = text;
+            _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+
+            // A refresh after the editor already mounted should replace its content
+            // (discarding any unsaved edits) rather than being ignored.
+            if (_editorReady && _module is not null)
+                await _module.InvokeVoidAsync("setValue", _editorRef, _content);
         }
         catch (Exception ex)
         {
@@ -80,7 +226,79 @@
         }
     }
 
-    private static string Expand(string template, string server, string env) =>
-        template.Replace("{server}", server, StringComparison.OrdinalIgnoreCase)
-                 .Replace("{env}", env, StringComparison.OrdinalIgnoreCase);
+    private async Task RestoreBackupAsync(EnvConfigBackup backup)
+    {
+        if (_module is null) return;
+        if (_dirty && !await ConfirmDiscardAsync("Load this backup into the editor and discard your unsaved changes? (You'll still need to click Save to actually restore it.)")) return;
+
+        try
+        {
+            var (text, _) = await LogViewerSvc.ReadAllAsync(backup.Path);
+            await _module.InvokeVoidAsync("setValue", _editorRef, text);
+            Snackbar.Add("Backup loaded into the editor — click Save to restore it.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Notifications.Report($"Failed to load backup {backup.Path}: {ex.Message}", ex, "Config");
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_module is null || _sourcePath is null) return;
+
+        var content = await _module.InvokeAsync<string>("getValue", _editorRef);
+        var targets = EnvConfigSvc.GetSaveTargets(Environment);
+
+        if (targets.Count > 1)
+        {
+            var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
+                           string.Join("\n", targets.Select(t => $"• {t}"));
+            var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
+            {
+                { x => x.Message,     message },
+                { x => x.ConfirmText, "Save"  },
+            }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result is null or { Canceled: true }) return;
+        }
+
+        _saving = true;
+        StateHasChanged();
+        try
+        {
+            var results = await EnvConfigSvc.SaveAsync(Environment, content);
+            var failed  = results.Where(r => !r.Success).ToList();
+
+            foreach (var f in failed)
+                Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
+
+            if (failed.Count == 0)
+            {
+                Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
+                if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
+                _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+            }
+            else if (failed.Count < results.Count)
+                Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
+            else
+                Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        ThemeSvc.OnChange -= OnAppThemeChanged;
+        if (_module is not null)
+        {
+            try { await _module.InvokeVoidAsync("dispose", _editorRef); } catch { }
+            try { await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+        _selfRef?.Dispose();
+    }
 }

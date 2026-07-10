@@ -1,7 +1,9 @@
 @namespace NxtUI.Shared
 <MudDialog>
     <DialogContent>
-        <MudText>@Message</MudText>
+        @* pre-line: any \n in Message renders as a real line break (e.g. a bulleted path
+           list) while still collapsing runs of plain whitespace like normal text. *@
+        <MudText Style="white-space:pre-line">@Message</MudText>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => MudDialog.Cancel())">Cancel</MudButton>

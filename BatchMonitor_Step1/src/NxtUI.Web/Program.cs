@@ -151,6 +151,7 @@ public class Program
         builder.Services.AddSingleton<ILogPathDiscoveryService, LogPathDiscoveryService>();
         builder.Services.AddSingleton<ILogBrowserService, LogBrowserService>();
         builder.Services.AddSingleton<ILogViewerService, LogViewerService>();
+        builder.Services.AddSingleton<IEnvConfigService, EnvConfigService>();
         builder.Services.AddSingleton<InfraHealthCache>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<InfraHealthCache>());
         builder.Services.AddHttpClient();

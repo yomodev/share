@@ -3297,3 +3297,21 @@ tr.bm-row-searching td:first-child {
 .bm-term-ok      { color: #86efac; }
 .bm-term-error   { color: #fca5a5; }
 .bm-term-muted   { color: #555; }
+
+/* ================================================================
+   CONFIG PAGE
+   ================================================================ */
+
+.bm-config-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+.bm-config-editor {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 8px;
+}
+.bm-config-editor .cm-editor { height: 100%; }
+
+.bm-config-edit-toolbar { gap: 2px; }
+.bm-config-footer { justify-content: flex-start; }
+.bm-config-dirty-flag { margin-left: auto; font-size: 12px; color: var(--mud-palette-warning); }
