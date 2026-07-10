@@ -55,6 +55,14 @@ public class KafkaSettings
     /// </summary>
     public string MetricsTopicName { get; set; } = "metrics";
 
+    /// <summary>
+    /// Fallback retention (ms) a purge restores a topic to if its current retention.ms
+    /// couldn't be read back from the broker before the purge started (should be rare —
+    /// DescribeConfigs normally returns the effective value even when it's inherited from
+    /// the broker default). Default: 7 days.
+    /// </summary>
+    public long DefaultTopicRetentionMs { get; set; } = 7 * 24 * 60 * 60 * 1000L;
+
     // ── Connection fingerprint ────────────────────────────────────────────────
 
     /// <summary>

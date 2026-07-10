@@ -2243,6 +2243,7 @@ html, body {
 .bm-infra-dot:hover { transform: scale(1.3); }
 
 .bm-infra-dot-ok      { background: #3FB950; box-shadow: 0 0 7px rgba(63,185,80,0.6); }
+.bm-infra-dot-warn    { background: #D29922; box-shadow: 0 0 7px rgba(210,153,34,0.6); }
 .bm-infra-dot-err     { background: #F85149; box-shadow: 0 0 7px rgba(248,81,73,0.6); }
 .bm-infra-dot-unknown { background: var(--mud-palette-text-disabled); }
 .bm-infra-dot-primary { outline: 2px solid rgba(63,185,80,0.5); outline-offset: 2px; }

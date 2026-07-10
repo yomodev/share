@@ -107,6 +107,14 @@
 
     [Parameter] public Color ButtonColor { get; set; } = Color.Warning;
 
+    /// <summary>NDJSON endpoint (relative to the app's base URI) to POST the request to.</summary>
+    [Parameter] public string Endpoint { get; set; } = "api/bulk-action-simulate";
+
+    /// <summary>Builds the request body from the currently filtered item list. Defaults to
+    /// the simulate endpoints' {Action, Kind, Items} shape; real endpoints that need extra
+    /// context (e.g. Mongo's Env/Database) supply their own.</summary>
+    [Parameter] public Func<List<string>, object>? BuildRequestBody { get; set; }
+
     private string Kind(bool titleCase) => titleCase ? char.ToUpper(ItemLabel[0]) + ItemLabel[1..] + "s" : ItemLabel + "s";
 
     private List<string> _allItems = [];
@@ -177,8 +185,8 @@
             _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/purge-stream.js?v=1");
             _selfRef ??= DotNetObjectReference.Create(this);
 
-            var url  = new Uri(new Uri(Nav.BaseUri), "api/bulk-action-simulate");
-            var body = new { Action = ActionVerb, Kind = ItemLabel, Items = _matches };
+            var url  = new Uri(new Uri(Nav.BaseUri), Endpoint);
+            var body = BuildRequestBody?.Invoke(_matches) ?? new { Action = ActionVerb, Kind = ItemLabel, Items = _matches };
             await _module.InvokeVoidAsync("run", url, body, _selfRef);
         }
         catch (Exception ex)

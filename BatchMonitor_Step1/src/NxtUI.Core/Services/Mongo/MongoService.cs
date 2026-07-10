@@ -293,4 +293,31 @@ public class MongoService(MongoConnectionFactory factory, ILogger<MongoService> 
         var db = factory.GetClient(env).GetDatabase(database);
         await db.DropCollectionAsync(collection, ct);
     }
+
+    public async Task<MongoPurgeResult> PurgeCollectionAsync(string env, string database, string collection, CancellationToken ct = default)
+    {
+        log.LogInformation("mongo [{Env}]: purging documents from '{Db}/{Col}'", env, database, collection);
+        var db  = factory.GetClient(env).GetDatabase(database);
+        var col = db.GetCollection<BsonDocument>(collection);
+
+        try
+        {
+            // DeleteMany with an empty filter is the bulk-delete-all operation the driver
+            // exposes — a single wire command, not N individual deletes.
+            var result = await col.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty, ct);
+
+            // Verify rather than trust the delete result: a concurrent writer could insert
+            // new documents in the (tiny) window between the delete and this count, and the
+            // caller specifically wants to know if a collection still has data afterward,
+            // not just whether the delete command itself reported success.
+            var remaining = await col.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: ct);
+
+            return new MongoPurgeResult(collection, remaining == 0, result.DeletedCount, remaining, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogError(ex, "mongo [{Env}]: purge failed for '{Db}/{Col}'", env, database, collection);
+            return new MongoPurgeResult(collection, false, 0, -1, ex.Message);
+        }
+    }
 }

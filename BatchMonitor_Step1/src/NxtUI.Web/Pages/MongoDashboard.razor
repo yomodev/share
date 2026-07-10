@@ -256,10 +256,12 @@
         var db = _selectedDb;
         var parameters = new DialogParameters<BulkActionDialog>
         {
-            { x => x.ActionVerb,     "Purge" },
-            { x => x.ButtonColor,    Color.Error },
-            { x => x.ItemLabel,      "Mongo collection" },
-            { x => x.LoadItemsAsync, async () => (await MongoSvc.GetCollectionNamesAsync(Environment, db)).ToList() },
+            { x => x.ActionVerb,        "Purge" },
+            { x => x.ButtonColor,       Color.Error },
+            { x => x.ItemLabel,         "Mongo collection" },
+            { x => x.LoadItemsAsync,    async () => (await MongoSvc.GetCollectionNamesAsync(Environment, db)).ToList() },
+            { x => x.Endpoint,          "api/mongo/purge" },
+            { x => x.BuildRequestBody,  (List<string> items) => new { Env = Environment, Database = db, Items = items } },
         };
         await DialogService.ShowAsync<BulkActionDialog>("Purge Mongo collections", parameters,
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });

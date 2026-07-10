@@ -60,7 +60,22 @@ public interface IKafkaAdmin
     Task DeleteTopicAsync(string env, string topicName, CancellationToken ct = default);
     Task SetTopicRetentionAsync(string env, string topicName, long retentionMs, CancellationToken ct = default);
     Task DeleteConsumerGroupAsync(string env, string groupId, CancellationToken ct = default);
+
+    /// <summary>Reads a topic's current effective retention.ms, or null if it couldn't be read.</summary>
+    Task<long?> GetTopicRetentionMsAsync(string env, string topicName, CancellationToken ct = default);
+
+    /// <summary>
+    /// "Purges" a topic without deleting it and without needing Delete ACL on it: drops
+    /// retention.ms to a near-zero value (making all current segments eligible for the
+    /// broker's own log cleaner), then restores the topic's original retention.ms. This is
+    /// NOT immediate — actual segment removal happens on the broker's own cleanup schedule
+    /// (log.retention.check.interval.ms), which a client cannot trigger on demand.
+    /// </summary>
+    Task<KafkaPurgeResult> PurgeTopicAsync(string env, string topicName, CancellationToken ct = default);
 }
+
+/// <summary>Result of the (eventual, retention-based) purge of one topic.</summary>
+public sealed record KafkaPurgeResult(string Topic, bool Success, long? RestoredRetentionMs, string? Error);
 
 /// <summary>Combined interface implemented by full Kafka service implementations.</summary>
 public interface IKafkaService : IKafkaMonitor, IKafkaAdmin { }

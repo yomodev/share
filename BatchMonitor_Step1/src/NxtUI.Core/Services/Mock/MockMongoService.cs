@@ -257,6 +257,15 @@ public class MockMongoService : IMongoService
         return Task.CompletedTask;
     }
 
+    public Task<MongoPurgeResult> PurgeCollectionAsync(string env, string database, string collection, CancellationToken ct = default)
+    {
+        var deleted = _collections.TryGetValue(database, out var cols)
+            ? cols.FirstOrDefault(c => c.Name == collection)?.DocumentCount ?? 0
+            : 0;
+        _dropped.Add($"{database}/{collection}"); // reuses the same "no longer has data" tracking DropCollectionAsync uses
+        return Task.FromResult(new MongoPurgeResult(collection, true, deleted, 0, null));
+    }
+
     public Task<(IReadOnlyList<MongoDocument> Documents, long TotalCount)> GetDocumentsAsync(
         string env, string database, string collection,
         string? search, int skip, int limit,

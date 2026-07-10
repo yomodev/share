@@ -3,6 +3,7 @@
 @using NxtUI.Core.Configuration
 @using Microsoft.Extensions.Options
 @inject IRunService RunService
+@inject RunActionsService RunActions
 @inject TabService TabService
 @inject RunEventBroker RunEvents
 @inject IJSRuntime JS
@@ -361,7 +362,14 @@
     private async Task CancelRunAsync()
     {
         if (RunId is null) return;
-        if (await RunService.CancelRunAsync(Environment, RunId)) await LoadAsync();
+        var (ok, message) = await RunActions.CancelRunAsync(Environment, RunId);
+        if (ok)
+        {
+            Snackbar.Add(message, Severity.Warning);
+            await LoadAsync();
+        }
+        else
+            Snackbar.Add($"Could not cancel run: {message}", Severity.Error);
     }
 
     private void OpenTimeline()

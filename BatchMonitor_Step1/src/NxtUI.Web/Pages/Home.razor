@@ -6,6 +6,7 @@
 @inject EnvironmentSelectorService EnvService
 @inject TabService TabService
 @inject IRunService RunService
+@inject RunActionsService RunActions
 @inject InfraHealthCache HealthCache
 @inject ILogger<Home> Logger
 @inject DateTimeDisplayService DtSvc
@@ -98,7 +99,7 @@
                     {
                         var singleTip = _mongoHealth.Status == HealthStatus.Healthy ? "ping ok" : (_mongoHealth.Error ?? "down");
                         <MudTooltip Text="@singleTip" Placement="Placement.Bottom" Arrow="true">
-                            <span class="bm-infra-dot @(_mongoHealth.Status == HealthStatus.Healthy ? "bm-infra-dot-ok" : "bm-infra-dot-err")"></span>
+                            <span class="bm-infra-dot @DotCss(_mongoHealth.Status)"></span>
                         </MudTooltip>
                     }
                     else
@@ -345,14 +346,14 @@
 
     private async Task StopRunAsync(RunSummary b)
     {
-        var ok = await RunService.CancelRunAsync(EnvService.SelectedId, b.RunId, _cts.Token);
+        var (ok, message) = await RunActions.CancelRunAsync(EnvService.SelectedId, b.RunId, _cts.Token);
         if (ok)
         {
-            Snackbar.Add($"Stop requested for {b.RunId}", Severity.Warning);
+            Snackbar.Add(message, Severity.Warning);
             await LoadRunsAsync();
         }
         else
-            Notifications.Report($"Could not stop run {b.RunId}", source: "Home");
+            Notifications.Report($"Could not stop run {b.RunId}: {message}", source: "Home");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -364,6 +365,14 @@
         HealthStatus.Down     => "down",
         HealthStatus.Checking => "checking",
         _                     => "unknown",
+    };
+
+    private static string DotCss(HealthStatus s) => s switch
+    {
+        HealthStatus.Healthy  => "bm-infra-dot-ok",
+        HealthStatus.Degraded => "bm-infra-dot-warn",
+        HealthStatus.Down     => "bm-infra-dot-err",
+        _                     => "bm-infra-dot-unknown",
     };
 
     public void Dispose()

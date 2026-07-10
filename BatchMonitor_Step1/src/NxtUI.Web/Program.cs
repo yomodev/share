@@ -51,6 +51,9 @@ public class Program
         builder.Services.Configure<EnvConfigSettings>(
             builder.Configuration.GetSection(EnvConfigSettings.SectionName));
 
+        builder.Services.Configure<InfraHealthSettings>(
+            builder.Configuration.GetSection(InfraHealthSettings.SectionName));
+
         // ── Per-environment config loader ─────────────────────────────────────
         builder.Services.AddSingleton(new EnvironmentConfigOptions
         {
@@ -180,6 +183,7 @@ public class Program
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<DateTimeDisplayService>();
         builder.Services.AddScoped<ErrorNotificationService>();
+        builder.Services.AddScoped<RunActionsService>();
 
         builder.Services.AddHttpContextAccessor();
 
@@ -286,6 +290,21 @@ public class Program
             return Results.Empty;
         });
 
+        // Placeholder for a real run-cancellation backend — the intended integration point
+        // for whatever orchestrator actually owns run lifecycle. RunActionsService.CancelRunAsync
+        // is the ONE place in the client that calls this (Home.razor/Runs.razor/RunDetail.razor
+        // all go through it now instead of each hitting IRunService.CancelRunAsync directly).
+        app.MapPost("/api/runs/cancel-simulate", (CancelRunRequest req) =>
+        {
+            var ok = Random.Shared.Next(10) > 1; // ~80% success rate, consistent with the other simulate endpoints
+            var message = ok
+                ? $"[SIMULATION] Cancel request accepted for run '{req.RunId}'."
+                : $"[SIMULATION] Cancel request rejected for run '{req.RunId}' — the orchestrator did not accept it.";
+            return ok
+                ? Results.Ok(new { message })
+                : Results.Json(new { message }, statusCode: StatusCodes.Status500InternalServerError);
+        });
+
         // Placeholder for a real bulk-action backend (restart services, purge Kafka
         // topics/Mongo collections, ...) — streams one NDJSON progress line per item as
         // it's "processed" (simulated delay + random ~80% success rate), ending with a
@@ -331,6 +350,110 @@ public class Program
             await response.WriteAsync(summary + "\n", ct);
         });
 
+        // Purges every matching Mongo collection's documents (DeleteMany, not a collection
+        // drop — indexes/options survive) and streams one NDJSON progress line per
+        // collection as it finishes, same wire shape as the other bulk-action endpoints.
+        // Collections are purged with bounded parallelism: MongoDB has no cross-collection
+        // lock contention for this, so running several DeleteMany calls concurrently is a
+        // real win on a purge list with more than a couple of collections — but unbounded
+        // fan-out could still overwhelm the server on a very large list, hence the cap.
+        app.MapPost("/api/mongo/purge", async (HttpResponse response, MongoPurgeRequest req, IMongoAdmin mongoAdmin, CancellationToken ct) =>
+        {
+            response.ContentType = "application/x-ndjson";
+            var items = req.Items ?? [];
+            var successCount = 0;
+            var failCount = 0;
+            using var writeLock = new SemaphoreSlim(1, 1);
+            using var concurrency = new SemaphoreSlim(8, 8);
+
+            async Task PurgeOneAsync(string collection)
+            {
+                await concurrency.WaitAsync(ct);
+                try
+                {
+                    var result = await mongoAdmin.PurgeCollectionAsync(req.Env, req.Database, collection, ct);
+                    if (result.Success) Interlocked.Increment(ref successCount); else Interlocked.Increment(ref failCount);
+
+                    var message = result.Success
+                        ? $"Purged '{collection}' — {result.DeletedCount:N0} document(s) deleted."
+                        : result.Error is not null
+                            ? $"Failed to purge '{collection}': {result.Error}"
+                            : $"Purge left {result.RemainingCount:N0} document(s) still in '{collection}'.";
+
+                    var line = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        item = collection,
+                        success = result.Success,
+                        message,
+                        deletedCount = result.DeletedCount,
+                        remainingCount = result.RemainingCount,
+                    });
+
+                    await writeLock.WaitAsync(ct);
+                    try
+                    {
+                        await response.WriteAsync(line + "\n", ct);
+                        await response.Body.FlushAsync(ct);
+                    }
+                    finally { writeLock.Release(); }
+                }
+                finally { concurrency.Release(); }
+            }
+
+            await Task.WhenAll(items.Select(PurgeOneAsync));
+
+            var summary = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                done = true,
+                total = items.Count,
+                successCount,
+                failCount,
+            });
+            await response.WriteAsync(summary + "\n", ct);
+        });
+
+        // Purges Kafka topics via the temporary-retention-drop approach (see
+        // IKafkaAdmin.PurgeTopicAsync) — not immediate, since actual segment removal is on
+        // the broker's own cleanup schedule, but it's what's available without Delete ACL.
+        // Sequential rather than parallel: each purge already does its own short delay, and
+        // topic config changes go through the same cluster controller regardless, so there's
+        // no real concurrency win here the way there is for independent Mongo collections.
+        app.MapPost("/api/kafka/purge", async (HttpResponse response, KafkaPurgeRequest req, IKafkaAdmin kafkaAdmin, CancellationToken ct) =>
+        {
+            response.ContentType = "application/x-ndjson";
+            var items = req.Items ?? [];
+            var successCount = 0;
+            var failCount = 0;
+
+            foreach (var topic in items)
+            {
+                var result = await kafkaAdmin.PurgeTopicAsync(req.Env, topic, ct);
+                if (result.Success) successCount++; else failCount++;
+
+                var message = result.Success
+                    ? $"Retention on '{topic}' dropped and restored — the broker will remove old segments on its next cleanup cycle (not immediate)."
+                    : $"Failed to purge '{topic}': {result.Error}";
+
+                var line = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    item = topic,
+                    success = result.Success,
+                    message,
+                });
+                await response.WriteAsync(line + "\n", ct);
+                await response.Body.FlushAsync(ct);
+            }
+
+            var summary = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                done = true,
+                total = items.Count,
+                successCount,
+                failCount,
+            });
+            await response.WriteAsync(summary + "\n", ct);
+        });
+
         app.MapFallbackToPage("/{**path}", "/_Host");
 
         app.Run();
@@ -338,3 +461,6 @@ public class Program
 }
 
 public sealed record BulkActionRequest(string Action, string Kind, List<string> Items);
+public sealed record MongoPurgeRequest(string Env, string Database, List<string> Items);
+public sealed record KafkaPurgeRequest(string Env, List<string> Items);
+public sealed record CancelRunRequest(string Env, string RunId);

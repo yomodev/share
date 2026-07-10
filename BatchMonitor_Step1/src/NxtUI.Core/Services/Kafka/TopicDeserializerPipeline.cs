@@ -22,8 +22,11 @@ public sealed class TopicDeserializerPipeline
     private readonly IMessageRegistry _registry;
     private readonly string? _defaultType;
 
-    // Per-topic cache of the last type that successfully parsed a message —
-    // avoids re-trying every candidate on every message once one is known good.
+    // Per-topic cache of the last type that successfully parsed a message — avoids
+    // re-trying every candidate on every message once one is known good. Reset per
+    // viewing/tailing session via ForgetTopic (see its doc comment) rather than kept for
+    // the pipeline's entire (process-lifetime) existence, since a wrong-but-similar
+    // candidate can "succeed" without throwing and would otherwise stay pinned forever.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _resolvedType = new();
 
     public TopicDeserializerPipeline(IOptions<KafkaSettings> settings, IMessageRegistry registry)
@@ -34,6 +37,19 @@ public sealed class TopicDeserializerPipeline
             .Select(r => new Rule(GlobToRegex(r.Pattern), r.Types))
             .ToList();
     }
+
+    /// <summary>
+    /// Clears a topic's cached "known good" resolved type, so the next call to
+    /// <see cref="Deserialize"/> for it starts over from Phase 1 instead of trusting a
+    /// possibly-wrong type resolved in an earlier session. The pipeline itself is a
+    /// process-lifetime singleton (shared connection/registry setup is expensive to
+    /// duplicate per circuit), so without this the cache would otherwise persist a bad
+    /// guess — from a wrong-but-similar candidate that happened to parse without
+    /// throwing — for the rest of the app's uptime. Callers should call this once at the
+    /// start of a new viewing/tailing session for a topic (see KafkaService.TailTopicAsync),
+    /// so each session gets a fresh chance to resolve the correct type.
+    /// </summary>
+    public void ForgetTopic(string topicName) => _resolvedType.TryRemove(topicName, out _);
 
     public (string JsonPayload, string PayloadType) Deserialize(string topicName, byte[] bytes)
     {

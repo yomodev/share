@@ -36,7 +36,19 @@ public interface IMongoReader
 public interface IMongoAdmin
 {
     Task DropCollectionAsync(string env, string database, string collection, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes every document in a collection (DeleteMany with an empty filter — the
+    /// collection itself, its indexes, and its options are left intact, unlike
+    /// <see cref="DropCollectionAsync"/>). Verifies with a post-delete count so the caller
+    /// can tell a collection that still has documents (partial failure, or another writer
+    /// racing the purge) from one that's genuinely empty now.
+    /// </summary>
+    Task<MongoPurgeResult> PurgeCollectionAsync(string env, string database, string collection, CancellationToken ct = default);
 }
+
+/// <summary>Result of purging one collection's documents.</summary>
+public sealed record MongoPurgeResult(string Collection, bool Success, long DeletedCount, long RemainingCount, string? Error);
 
 /// <summary>Combined interface implemented by full Mongo service implementations.</summary>
 public interface IMongoService : IMongoReader, IMongoAdmin { }

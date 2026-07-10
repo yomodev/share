@@ -117,6 +117,15 @@ public class MockKafkaService : IKafkaService
         return Task.CompletedTask;
     }
 
+    public Task<long?> GetTopicRetentionMsAsync(string env, string topicName, CancellationToken ct = default) =>
+        Task.FromResult<long?>(7 * 24 * 60 * 60 * 1000L);
+
+    public Task<KafkaPurgeResult> PurgeTopicAsync(string env, string topicName, CancellationToken ct = default)
+    {
+        _deletedTopics.Add(topicName); // reuses the same "no longer has data" tracking DeleteTopicAsync uses
+        return Task.FromResult(new KafkaPurgeResult(topicName, true, 7 * 24 * 60 * 60 * 1000L, null));
+    }
+
     public Task<IReadOnlyList<KafkaConsumerGroupOverview>> GetAllConsumerGroupsAsync(string env, CancellationToken ct = default)
     {
         // invert _topicGroups: group → list of topics with their lag

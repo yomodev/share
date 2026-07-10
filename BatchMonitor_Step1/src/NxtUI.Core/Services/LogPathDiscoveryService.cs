@@ -33,7 +33,7 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         var added = false;
         _cache.GetOrAdd(key, _ => { added = true; return RunSearchAsync(svc, env, key); });
         if (added)
-            log.LogDebug("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
+            log.LogTrace("discovery [{Env}]: starting search for {Svc}@{Host} pid={Pid}", env, svc.ServiceName, svc.HostName, svc.ProcessId);
     }
 
     public async Task<string?> FindNowAsync(ServiceStatus svc, string env)
@@ -110,13 +110,13 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
 
         if (result is not null)
         {
-            log.LogDebug("discovery [{Env}]: found folder for {Svc}@{Host} -> {Path} in {Ms}ms",
+            log.LogTrace("discovery [{Env}]: found folder for {Svc}@{Host} -> {Path} in {Ms}ms",
                 env, svc.ServiceName, svc.HostName, result, sw.ElapsedMilliseconds);
             OnPathResolved?.Invoke(key);
         }
         else
         {
-            log.LogDebug("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid} after {Ms}ms",
+            log.LogTrace("discovery [{Env}]: no folder found for {Svc}@{Host} pid={Pid} after {Ms}ms",
                 env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
         }
         return result;
@@ -127,7 +127,7 @@ public sealed class LogPathDiscoveryService(IOptions<LogPathSettings> options, I
         foreach (var template in options.Value.ServiceTemplates)
         {
             var expanded = ExpandTemplate(template, svc, env);
-            log.LogDebug("discovery [{Env}]: trying {Expanded}", env, expanded);
+            log.LogTrace("discovery [{Env}]: trying {Expanded}", env, expanded);
             var resolved = ResolveWildcard(expanded);
             if (resolved is not null) return resolved;
         }

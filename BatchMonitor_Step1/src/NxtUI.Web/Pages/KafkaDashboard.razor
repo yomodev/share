@@ -559,10 +559,12 @@
     {
         var parameters = new DialogParameters<BulkActionDialog>
         {
-            { x => x.ActionVerb,     "Purge" },
-            { x => x.ButtonColor,    Color.Error },
-            { x => x.ItemLabel,      "Kafka topic" },
-            { x => x.LoadItemsAsync, () => Task.FromResult(_allTopics.Select(t => t.Name).ToList()) },
+            { x => x.ActionVerb,        "Purge" },
+            { x => x.ButtonColor,       Color.Error },
+            { x => x.ItemLabel,         "Kafka topic" },
+            { x => x.LoadItemsAsync,    () => Task.FromResult(_allTopics.Select(t => t.Name).ToList()) },
+            { x => x.Endpoint,          "api/kafka/purge" },
+            { x => x.BuildRequestBody,  (List<string> items) => new { Env = Environment, Items = items } },
         };
         await DialogService.ShowAsync<BulkActionDialog>("Purge Kafka topics", parameters,
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });

@@ -1,5 +1,6 @@
 @namespace NxtUI.Web.Pages
 @inject IRunService RunService
+@inject RunActionsService RunActions
 @inject TabService TabService
 @inject ISnackbar Snackbar
 @inject ErrorNotificationService Notifications
@@ -168,14 +169,14 @@
 
     private async Task StopRunAsync(RunSummary b)
     {
-        var ok = await RunService.CancelRunAsync(Environment, b.RunId, _cts.Token);
+        var (ok, message) = await RunActions.CancelRunAsync(Environment, b.RunId, _cts.Token);
         if (ok)
         {
-            Snackbar.Add($"Stop requested for {b.RunId}", Severity.Warning);
+            Snackbar.Add(message, Severity.Warning);
             await LoadAsync();
         }
         else
-            Notifications.Report($"Could not stop run {b.RunId}", source: "Runs");
+            Notifications.Report($"Could not stop run {b.RunId}: {message}", source: "Runs");
     }
 
     public void Dispose() => _cts.Cancel();

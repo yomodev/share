@@ -185,6 +185,12 @@ public class KafkaService(
     {
         log.LogDebug("kafka [{Env}]: tailing '{Topic}' directive={@Directive}", env, topicName, directive);
 
+        // A fresh viewing/tailing session starts deserialization over from scratch instead
+        // of trusting a type resolved in some earlier session — see ForgetTopic's doc
+        // comment: the pipeline is a process-lifetime singleton, so without this a bad guess
+        // from days ago (or another session entirely) would stay pinned until app restart.
+        pipeline.ForgetTopic(topicName);
+
         // Every librdkafka call this method makes — GetMetadata, QueryWatermarkOffsets,
         // OffsetsForTimes, Seek, Consume, Close — is SYNCHRONOUS and blocking (there is no
         // async Kafka API). If they ran inline on the caller's thread they would block it;
@@ -517,6 +523,43 @@ public class KafkaService(
             using var admin = BuildAdmin(env);
             await admin.DeleteGroupsAsync([groupId]);
         });
+
+    public Task<long?> GetTopicRetentionMsAsync(string env, string topicName, CancellationToken ct = default) =>
+        OperationLog.RunAsync(log, $"kafka [{env}]: reading retention '{topicName}'", async () =>
+        {
+            using var admin = BuildAdmin(env);
+            var resource = new ConfigResource { Type = ResourceType.Topic, Name = topicName };
+            var results = await admin.DescribeConfigsAsync([resource]);
+            var entries = results.FirstOrDefault()?.Entries;
+            if (entries is not null && entries.TryGetValue("retention.ms", out var entry) && long.TryParse(entry.Value, out var ms))
+                return (long?)ms;
+            return null;
+        });
+
+    public async Task<KafkaPurgeResult> PurgeTopicAsync(string env, string topicName, CancellationToken ct = default)
+    {
+        try
+        {
+            var original = await GetTopicRetentionMsAsync(env, topicName, ct) ?? _global.DefaultTopicRetentionMs;
+
+            // Drop retention to near-zero so the broker's log cleaner treats every existing
+            // segment as eligible for removal on its next pass, then restore the topic's own
+            // retention immediately after — we don't have Delete ACL on the topic (only
+            // AlterConfigs), so this eventual, best-effort approach is what's available.
+            // A short pause between the two gives a fast-cycling cleaner a chance to run
+            // while the low value is in effect, but there's no way to force it synchronously.
+            await SetTopicRetentionAsync(env, topicName, 1000, ct);
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            await SetTopicRetentionAsync(env, topicName, original, ct);
+
+            return new KafkaPurgeResult(topicName, true, original, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogError(ex, "kafka [{Env}]: purge failed for topic '{Topic}'", env, topicName);
+            return new KafkaPurgeResult(topicName, false, null, ex.Message);
+        }
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
