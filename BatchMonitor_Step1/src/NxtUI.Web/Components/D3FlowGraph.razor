@@ -3,6 +3,7 @@
 @using NxtUI.Core.Configuration
 @inject IJSRuntime JS
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
+@inject ILogger<D3FlowGraph> Logger
 @implements IAsyncDisposable
 
 <div class="bm-d3-flow-graph">
@@ -60,7 +61,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=22");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=23");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -72,7 +73,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[D3FlowGraph] init failed: {ex.Message}");
+                Logger.LogError(ex, "D3FlowGraph init failed");
             }
         }
     }
@@ -110,7 +111,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[D3FlowGraph] setVisible failed: {ex.Message}");
+                Logger.LogError(ex, "D3FlowGraph setVisible failed");
             }
         }
 
@@ -130,7 +131,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[D3FlowGraph] update failed: {ex.Message}");
+            Logger.LogError(ex, "D3FlowGraph update failed");
         }
     }
 

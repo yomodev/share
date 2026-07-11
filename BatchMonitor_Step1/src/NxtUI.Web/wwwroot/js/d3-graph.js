@@ -191,13 +191,19 @@ const D3Graph = (() => {
         const tree      = layout && String(layout.shape || '').toLowerCase() === 'tree';
         const dens      = densityScale(layout);
 
-        // Which pipeline rows need an output/input port.
+        // Which pipeline rows need an output/input port. Edges with NO pipeline (declared-
+        // but-not-yet-observed blueprint edges, which connect two SERVICES rather than two
+        // specific pipeline rows) deliberately get no port here — see elkEdges below, where
+        // they attach straight to the node instead. Giving them a port keyed by "" would
+        // create a phantom connection point distinct from every real pipeline row, which is
+        // exactly what made a declared edge look like a stray duplicate arrow alongside the
+        // real per-pipeline one between the same two services.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
         const inPorts  = new Map();
         const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
         for (const e of edges) {
-            addPort(outPorts, e.source, e.sourcePipeline);
-            addPort(inPorts,  e.target, e.targetPipeline);
+            if (e.sourcePipeline) addPort(outPorts, e.source, e.sourcePipeline);
+            if (e.targetPipeline) addPort(inPorts,  e.target, e.targetPipeline);
         }
 
         const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
@@ -234,8 +240,11 @@ const D3Graph = (() => {
 
         const elkEdges = edges.map((e, i) => ({
             id: `e${i}`,
-            sources: [portId(e.source, 'out', e.sourcePipeline)],
-            targets: [portId(e.target, 'in',  e.targetPipeline)],
+            // No pipeline → attach to the node itself (ELK routes it to a sensible point on
+            // the node's boundary automatically), not a per-pipeline port. See the port-
+            // building comment above for why.
+            sources: [e.sourcePipeline ? portId(e.source, 'out', e.sourcePipeline) : e.source],
+            targets: [e.targetPipeline ? portId(e.target, 'in',  e.targetPipeline) : e.target],
         }));
         const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
 
@@ -921,6 +930,14 @@ const D3Graph = (() => {
         // what the two numbers mean and which target pipeline the edge feeds.
         enter.append('title');
 
+        // Wide, invisible "hit" path underneath the visible one — the real edge can be as
+        // thin as 1-2px (edgeW), too small a target to reliably hover; this gives it a much
+        // bigger interactive strip without changing what's actually drawn.
+        enter.append('path').attr('class', 'bm-edge-hit')
+            .attr('fill', 'none')
+            .attr('stroke', 'transparent')
+            .attr('stroke-width', 16);
+
         // stroke must be set as SVG attribute (not CSS) for context-stroke to
         // work on the arrowhead marker.
         enter.append('path').attr('class', 'bm-edge-path')
@@ -936,26 +953,44 @@ const D3Graph = (() => {
         merged.each(function(d) {
             const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data);
-            const path = d3.select(this).select('.bm-edge-path');
+            const el  = d3.select(this);
+            const dAttr = edgePath(handle, d.pts);
+
+            el.select('.bm-edge-hit').attr('d', dAttr);
+
             // Set stroke as attribute so context-stroke on the marker resolves.
-            path.attr('d', edgePath(handle, d.pts))
+            el.select('.bm-edge-path')
+                .attr('d', dAttr)
                 .attr('stroke', col)
                 .attr('stroke-width', w);
 
             // Declared-but-not-yet-observed edges (from the blueprint) render faint.
-            d3.select(this).classed('bm-edge-skeleton',
-                d.data?.isObserved === false && d.data?.isDeclared === true);
+            el.classed('bm-edge-skeleton', d.data?.isObserved === false && d.data?.isDeclared === true);
 
-            d3.select(this).select('title').text(edgeTooltip(d.data));
+            el.select('title').text(edgeTooltip(d.data));
 
             // Place the label near the arrowhead (target end) rather than the
             // geometric middle — a multi-bend path's middle can sit far from the
             // arrow, making it ambiguous which edge the number belongs to.
             const lp = edgeLabelPos(d.pts);
-            d3.select(this).select('.bm-edge-label')
+            el.select('.bm-edge-label')
                 .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
         });
+
+        // Hover: bring the hovered edge to the front and highlight it (thicker, glowing),
+        // dim every other edge — so a dense graph's crossing arrows can be told apart by
+        // tracing one at a time instead of untangling them all at once by eye.
+        merged
+            .on('mouseenter.hover', function() {
+                const hovered = this;
+                d3.select(this).raise().classed('bm-edge-hover', true);
+                handle.eLayer.selectAll('g.bm-edge').classed('bm-edge-dim', function() { return this !== hovered; });
+            })
+            .on('mouseleave.hover', function() {
+                handle.eLayer.selectAll('g.bm-edge').classed('bm-edge-dim', false);
+                d3.select(this).classed('bm-edge-hover', false);
+            });
     }
 
     // An edge's colour should match its SOURCE pipeline row's own colour — not a

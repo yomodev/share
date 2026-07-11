@@ -139,7 +139,32 @@
 .bm-edge-path {
     fill: none;
     stroke-linecap: round;
+    transition: stroke-width 100ms ease, opacity 150ms ease, filter 100ms ease;
 }
+
+/* Wide invisible hit-target beneath the visible path — makes thin edges easy to hover
+   without changing what's actually drawn (see renderEdges in d3-graph.js). */
+.bm-edge-hit {
+    cursor: pointer;
+    pointer-events: stroke;
+}
+
+.bm-edge {
+    transition: opacity 150ms ease;
+}
+/* Hovered edge: thicker + brighter, on top of every other edge/node (via .raise()).
+   brightness (not drop-shadow/currentColor, which doesn't track the SVG `stroke`
+   attribute) — same glow technique already used for node hover below. */
+.bm-edge-hover .bm-edge-path {
+    stroke-width: 4px !important;
+    filter: brightness(1.5);
+}
+.bm-edge-hover .bm-edge-label {
+    font-weight: 800;
+}
+/* Every other edge fades back while one is hovered, so the hovered path reads clearly
+   even in a dense, crossing-heavy graph. */
+.bm-edge-dim { opacity: 0.25; }
 
 .bm-edge-label {
     font-size: 0.75rem;
