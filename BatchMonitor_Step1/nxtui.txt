@@ -1760,7 +1760,7 @@ LENGTH 1071
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 24379
+LENGTH 24445
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -1877,7 +1877,8 @@ public class Program
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(
                 sp.GetRequiredService<RunEventBroker>(),
-                sp.GetRequiredService<IOptions<RunsSettings>>().Value));
+                sp.GetRequiredService<IOptions<RunsSettings>>().Value,
+                sp.GetRequiredService<ILogger<MockRunService>>()));
         // builder.Services.AddSingleton<IRunService>(sp => new MongoRunService(
         //     sp.GetRequiredService<MongoConnectionFactory>(),
         //     sp.GetRequiredService<IOptions<MongoSettings>>(),
@@ -8340,12 +8341,13 @@ LENGTH 10232
     }
 }
 FILE src/NxtUI.Web/Components/D3FlowGraph.razor
-LENGTH 7296
+LENGTH 7287
 @namespace NxtUI.Web.Components
 @using Microsoft.Extensions.Options
 @using NxtUI.Core.Configuration
 @inject IJSRuntime JS
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
+@inject ILogger<D3FlowGraph> Logger
 @implements IAsyncDisposable
 
 <div class="bm-d3-flow-graph">
@@ -8403,7 +8405,7 @@ LENGTH 7296
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=22");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=23");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -8415,7 +8417,7 @@ LENGTH 7296
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[D3FlowGraph] init failed: {ex.Message}");
+                Logger.LogError(ex, "D3FlowGraph init failed");
             }
         }
     }
@@ -8453,7 +8455,7 @@ LENGTH 7296
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[D3FlowGraph] setVisible failed: {ex.Message}");
+                Logger.LogError(ex, "D3FlowGraph setVisible failed");
             }
         }
 
@@ -8473,7 +8475,7 @@ LENGTH 7296
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[D3FlowGraph] update failed: {ex.Message}");
+            Logger.LogError(ex, "D3FlowGraph update failed");
         }
     }
 
@@ -11424,7 +11426,7 @@ LENGTH 155
 @page "/"
 @page "/{**path}"
 FILE src/NxtUI.Web/Pages/ConfigPage.razor
-LENGTH 14079
+LENGTH 14948
 @namespace NxtUI.Web.Pages
 @using NxtUI.Core.Services
 @using NxtUI.Shared
@@ -11714,46 +11716,61 @@ LENGTH 14079
     {
         if (_module is null || _sourcePath is null) return;
 
-        var content = await _module.InvokeAsync<string>("getValue", _editorRef);
-        var targets = EnvConfigSvc.GetSaveTargets(Environment);
-
-        if (targets.Count > 1)
-        {
-            var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
-                           string.Join("\n", targets.Select(t => $"• {t}"));
-            var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
-            {
-                { x => x.Message,     message },
-                { x => x.ConfirmText, "Save"  },
-            }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
-            var result = await dialog.Result;
-            if (result is null or { Canceled: true }) return;
-        }
-
-        _saving = true;
-        StateHasChanged();
         try
         {
-            var results = await EnvConfigSvc.SaveAsync(Environment, content);
-            var failed  = results.Where(r => !r.Success).ToList();
+            // Everything up to and including the confirmation dialog previously ran with no
+            // exception handling at all — an unhandled exception in a Blazor Server event
+            // handler crashes the whole SignalR circuit (site "disconnects") instead of just
+            // failing the click, and nothing here ever reached Notifications.Report, so it
+            // was also invisible wherever errors are normally surfaced. Wrapping the whole
+            // method fixes both.
+            var content = await _module.InvokeAsync<string>("getValue", _editorRef);
+            var targets = EnvConfigSvc.GetSaveTargets(Environment);
 
-            foreach (var f in failed)
-                Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
-
-            if (failed.Count == 0)
+            if (targets.Count > 1)
             {
-                Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
-                if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
-                _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+                var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
+                               string.Join("\n", targets.Select(t => $"• {t}"));
+                var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
+                {
+                    { x => x.Message,     message },
+                    { x => x.ConfirmText, "Save"  },
+                }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+                var result = await dialog.Result;
+                if (result is null or { Canceled: true }) return;
             }
-            else if (failed.Count < results.Count)
-                Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
-            else
-                Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+
+            _saving = true;
+            StateHasChanged();
+            try
+            {
+                var results = await EnvConfigSvc.SaveAsync(Environment, content);
+                var failed  = results.Where(r => !r.Success).ToList();
+
+                foreach (var f in failed)
+                    Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
+
+                if (failed.Count == 0)
+                {
+                    Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
+                    if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
+                    _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+                }
+                else if (failed.Count < results.Count)
+                    Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
+                else
+                    Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+            }
+            finally
+            {
+                _saving = false;
+                StateHasChanged();
+            }
         }
-        finally
+        catch (Exception ex)
         {
             _saving = false;
+            Notifications.Report($"Save failed: {ex.Message}", ex, "Config");
             StateHasChanged();
         }
     }
@@ -17659,7 +17676,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 36275
+LENGTH 36355
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -17676,6 +17693,7 @@ LENGTH 36275
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject TopologyHintLoader HintLoader
+@inject ILogger<PerformanceEventService> EventServiceLogger
 @inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
@@ -17880,7 +17898,7 @@ LENGTH 36275
     {
         if (_details is null || RunId is null) return;
 
-        _eventService = new PerformanceEventService(RunService);
+        _eventService = new PerformanceEventService(RunService, EventServiceLogger);
 
         await _eventService.StartAsync(
             env:            Environment,
@@ -20155,7 +20173,7 @@ LENGTH 12866
     }
 }
 FILE src/NxtUI.Web/Pages/TimelineTab.razor
-LENGTH 36412
+LENGTH 36520
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Filtering
@@ -20168,6 +20186,8 @@ LENGTH 36412
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.TimelineSettings> TimelineOptions
 @inject DateTimeDisplayService DtSvc
 @inject ErrorNotificationService Notifications
+@inject ILogger<NxtUI.Web.Services.TimelineRun> TimelineRunLogger
+@inject ILogger<TimelineTab> Logger
 @implements IAsyncDisposable
 
 @code {
@@ -20304,7 +20324,7 @@ LENGTH 36412
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Timeline] JS init error: {ex.Message}");
+                Logger.LogError(ex, "Timeline JS init error");
             }
         }
         else if (_pendingJsPush && _tlModule is not null)
@@ -20337,7 +20357,8 @@ LENGTH 36412
             else
             {
                 var batch = new TimelineRun(env, runId, RunService, RunEvents,
-                    onUpdated: async () => await DebouncedPushAsync());
+                    onUpdated: async () => await DebouncedPushAsync(),
+                    logger: TimelineRunLogger);
                 await batch.LoadAsync();
                 _runs.Add(batch);
             }
@@ -20413,7 +20434,7 @@ LENGTH 36412
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Timeline] Push error: {ex.Message}");
+            Logger.LogError(ex, "Timeline push error");
         }
     }
 
@@ -20521,7 +20542,7 @@ LENGTH 36412
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Timeline] Import error: {ex.Message}");
+            Logger.LogError(ex, "Timeline CSV import error");
             Notifications.Report($"Failed to import CSV: {ex.Message}", ex, "Timeline");
         }
     }
@@ -23127,7 +23148,9 @@ public class LogViewerService : ILogViewerService
         new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 }
 FILE src/NxtUI.Web/Services/MockRunService.cs
-LENGTH 17167
+LENGTH 17408
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
@@ -23223,6 +23246,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
     private readonly TopologyComputationService _topologyService = new();
     private readonly RunEventBroker? _eventBroker;
     private readonly RunsSettings _runsSettings;
+    private readonly ILogger<MockRunService> _log;
     private readonly CancellationTokenSource _bgCts = new();
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
@@ -23232,10 +23256,11 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null)
+    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null, ILogger<MockRunService>? logger = null)
     {
         _eventBroker = eventBroker;
         _runsSettings = runsSettings ?? new RunsSettings();
+        _log = logger ?? NullLogger<MockRunService>.Instance;
         var rng = new Random(42);
 
         _store = Enumerable.Range(1, 200).Select(i =>
@@ -23448,7 +23473,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Console.WriteLine($"[MockRunService] {ex.Message}"); }
+            catch (Exception ex) { _log.LogError(ex, "Live event simulation loop failed"); }
         }
     }
 
@@ -23546,7 +23571,9 @@ public sealed class OperationTracker
     }
 }
 FILE src/NxtUI.Web/Services/PerformanceEventService.cs
-LENGTH 11131
+LENGTH 11289
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Core.Events;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
@@ -23589,6 +23616,7 @@ public class PerformanceEventService : IDisposable
     private static readonly TimeSpan StatusCheckInterval = TimeSpan.FromSeconds(30);
 
     private readonly IRunService _runService;
+    private readonly ILogger<PerformanceEventService> _log;
     private readonly PerformanceEventStore _eventStore;
     private IEventSource? _eventSource;
     private EventCursor? _cursor;
@@ -23621,9 +23649,10 @@ public class PerformanceEventService : IDisposable
     private volatile bool _isFocused = true;
     private TaskCompletionSource? _focusRegainedSignal;
 
-    public PerformanceEventService(IRunService runService)
+    public PerformanceEventService(IRunService runService, ILogger<PerformanceEventService>? logger = null)
     {
         _runService = runService ?? throw new ArgumentNullException(nameof(runService));
+        _log = logger ?? NullLogger<PerformanceEventService>.Instance;
         _eventStore = new PerformanceEventStore();
     }
 
@@ -23669,11 +23698,11 @@ public class PerformanceEventService : IDisposable
                 _pushSubscription = await eventBroker.SubscribeToRunAsync(
                     env, runId, OnPushEvent, _cts.Token);
                 _pushActive = true;
-                Console.WriteLine($"[EventService] Live push active for {runId}");
+                _log.LogDebug("Live push active for {RunId}", runId);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EventService] Push subscription failed, using polling only: {ex.Message}");
+                _log.LogWarning(ex, "Push subscription failed for {RunId}, using polling only", runId);
             }
         }
 
@@ -23712,7 +23741,7 @@ public class PerformanceEventService : IDisposable
             _ = t.ContinueWith(task =>
             {
                 if (task.Exception is not null)
-                    Console.WriteLine($"[EventService] Poll task error: {task.Exception.GetBaseException().Message}");
+                    _log.LogError(task.Exception.GetBaseException(), "Poll task error");
             }, TaskScheduler.Default);
         }
     }
@@ -23727,10 +23756,10 @@ public class PerformanceEventService : IDisposable
         {
             var count = await PollSourceAsync(runId, ct);
             if (count > 0)
-                Console.WriteLine($"[EventService] Loaded {count} historical events for {runId}");
+                _log.LogDebug("Loaded {Count} historical events for {RunId}", count, runId);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Console.WriteLine($"[EventService] History load error: {ex.Message}"); }
+        catch (Exception ex) { _log.LogError(ex, "History load error for {RunId}", runId); }
     }
 
     /// <summary>Polls <see cref="_eventSource"/> from <see cref="_cursor"/>, bridges the
@@ -23786,13 +23815,13 @@ public class PerformanceEventService : IDisposable
 
                 var count = await PollSourceAsync(runId, ct);
                 if (count > 0)
-                    Console.WriteLine($"[EventService] Poll: {count} events, total={_eventStore.Count}");
+                    _log.LogDebug("Poll: {Count} events, total={Total}", count, _eventStore.Count);
 
                 if (_isRunning && DateTime.UtcNow >= _nextStatusCheck)
                     await CheckRunStatusAsync(env, runId, ct);
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Console.WriteLine($"[EventService] Poll error: {ex.Message}"); }
+            catch (Exception ex) { _log.LogError(ex, "Poll error for {RunId}", runId); }
         }
     }
 
@@ -23809,7 +23838,7 @@ public class PerformanceEventService : IDisposable
                 _pushSubscription = null;
                 _pushActive = false;
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped live push, falling back to slow poll.");
+                _log.LogInformation("Run {RunId} finished (status={Status}) — stopped live push, falling back to slow poll", runId, details.Status);
             }
             else
             {
@@ -23820,7 +23849,7 @@ public class PerformanceEventService : IDisposable
         catch (Exception ex)
         {
             // Transient error — don't flip status on one failed check, just retry next tick.
-            Console.WriteLine($"[EventService] Status check failed for {runId}: {ex.Message}");
+            _log.LogWarning(ex, "Status check failed for {RunId}", runId);
         }
     }
 
@@ -25655,7 +25684,9 @@ public class ThemeService
     };
 }
 FILE src/NxtUI.Web/Services/TimelineRun.cs
-LENGTH 7298
+LENGTH 7480
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -25670,8 +25701,11 @@ public class TimelineRun(
     string runId,
     IRunService runService,
     RunEventBroker eventBroker,
-    Func<Task> onUpdated) : IAsyncDisposable
+    Func<Task> onUpdated,
+    ILogger<TimelineRun>? logger = null) : IAsyncDisposable
 {
+    private readonly ILogger<TimelineRun> _log = logger ?? NullLogger<TimelineRun>.Instance;
+
     public string RunId { get; } = runId;
     public string Env { get; } = env;
     public string Description { get; internal set; } = string.Empty;
@@ -25746,7 +25780,7 @@ public class TimelineRun(
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelineRun] Live push subscription failed for {RunId}: {ex.Message}");
+            _log.LogWarning(ex, "Live push subscription failed for {RunId}", RunId);
         }
     }
 
@@ -25784,7 +25818,7 @@ public class TimelineRun(
                 catch (Exception ex)
                 {
                     // Transient error — don't stop the run on one failed check, just retry next tick.
-                    Console.WriteLine($"[TimelineRun] Status check failed for {RunId}: {ex.Message}");
+                    _log.LogWarning(ex, "Status check failed for {RunId}", RunId);
                 }
             }
         }
@@ -25796,7 +25830,7 @@ public class TimelineRun(
         IsLive = false;
         _pushSub?.Dispose();
         _pushSub = null;
-        Console.WriteLine($"[TimelineRun] Live subscription stopped for {RunId} ({reason})");
+        _log.LogInformation("Live subscription stopped for {RunId} ({Reason})", RunId, reason);
         await onUpdated();
     }
 
@@ -37323,7 +37357,7 @@ tr.bm-row-searching td:first-child {
 .bm-errdlg-msg  { color: #F85149; min-width: 220px; max-width: 480px; word-break: break-word; }
 .bm-errdlg-info { color: var(--mud-palette-text-secondary); max-width: 260px; word-break: break-word; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 8732
+LENGTH 9656
 /* ================================================================
    D3 FLOW GRAPH  (rev 6)
    ================================================================ */
@@ -37465,7 +37499,32 @@ LENGTH 8732
 .bm-edge-path {
     fill: none;
     stroke-linecap: round;
+    transition: stroke-width 100ms ease, opacity 150ms ease, filter 100ms ease;
 }
+
+/* Wide invisible hit-target beneath the visible path — makes thin edges easy to hover
+   without changing what's actually drawn (see renderEdges in d3-graph.js). */
+.bm-edge-hit {
+    cursor: pointer;
+    pointer-events: stroke;
+}
+
+.bm-edge {
+    transition: opacity 150ms ease;
+}
+/* Hovered edge: thicker + brighter, on top of every other edge/node (via .raise()).
+   brightness (not drop-shadow/currentColor, which doesn't track the SVG `stroke`
+   attribute) — same glow technique already used for node hover below. */
+.bm-edge-hover .bm-edge-path {
+    stroke-width: 4px !important;
+    filter: brightness(1.5);
+}
+.bm-edge-hover .bm-edge-label {
+    font-weight: 800;
+}
+/* Every other edge fades back while one is hovered, so the hovered path reads clearly
+   even in a dense, crossing-heavy graph. */
+.bm-edge-dim { opacity: 0.25; }
 
 .bm-edge-label {
     font-size: 0.75rem;
@@ -39240,7 +39299,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 52056
+LENGTH 54225
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -39434,13 +39493,19 @@ const D3Graph = (() => {
         const tree      = layout && String(layout.shape || '').toLowerCase() === 'tree';
         const dens      = densityScale(layout);
 
-        // Which pipeline rows need an output/input port.
+        // Which pipeline rows need an output/input port. Edges with NO pipeline (declared-
+        // but-not-yet-observed blueprint edges, which connect two SERVICES rather than two
+        // specific pipeline rows) deliberately get no port here — see elkEdges below, where
+        // they attach straight to the node instead. Giving them a port keyed by "" would
+        // create a phantom connection point distinct from every real pipeline row, which is
+        // exactly what made a declared edge look like a stray duplicate arrow alongside the
+        // real per-pipeline one between the same two services.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
         const inPorts  = new Map();
         const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
         for (const e of edges) {
-            addPort(outPorts, e.source, e.sourcePipeline);
-            addPort(inPorts,  e.target, e.targetPipeline);
+            if (e.sourcePipeline) addPort(outPorts, e.source, e.sourcePipeline);
+            if (e.targetPipeline) addPort(inPorts,  e.target, e.targetPipeline);
         }
 
         const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
@@ -39477,8 +39542,11 @@ const D3Graph = (() => {
 
         const elkEdges = edges.map((e, i) => ({
             id: `e${i}`,
-            sources: [portId(e.source, 'out', e.sourcePipeline)],
-            targets: [portId(e.target, 'in',  e.targetPipeline)],
+            // No pipeline → attach to the node itself (ELK routes it to a sensible point on
+            // the node's boundary automatically), not a per-pipeline port. See the port-
+            // building comment above for why.
+            sources: [e.sourcePipeline ? portId(e.source, 'out', e.sourcePipeline) : e.source],
+            targets: [e.targetPipeline ? portId(e.target, 'in',  e.targetPipeline) : e.target],
         }));
         const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
 
@@ -40164,6 +40232,14 @@ const D3Graph = (() => {
         // what the two numbers mean and which target pipeline the edge feeds.
         enter.append('title');
 
+        // Wide, invisible "hit" path underneath the visible one — the real edge can be as
+        // thin as 1-2px (edgeW), too small a target to reliably hover; this gives it a much
+        // bigger interactive strip without changing what's actually drawn.
+        enter.append('path').attr('class', 'bm-edge-hit')
+            .attr('fill', 'none')
+            .attr('stroke', 'transparent')
+            .attr('stroke-width', 16);
+
         // stroke must be set as SVG attribute (not CSS) for context-stroke to
         // work on the arrowhead marker.
         enter.append('path').attr('class', 'bm-edge-path')
@@ -40179,26 +40255,44 @@ const D3Graph = (() => {
         merged.each(function(d) {
             const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
             const w   = edgeW(d.data);
-            const path = d3.select(this).select('.bm-edge-path');
+            const el  = d3.select(this);
+            const dAttr = edgePath(handle, d.pts);
+
+            el.select('.bm-edge-hit').attr('d', dAttr);
+
             // Set stroke as attribute so context-stroke on the marker resolves.
-            path.attr('d', edgePath(handle, d.pts))
+            el.select('.bm-edge-path')
+                .attr('d', dAttr)
                 .attr('stroke', col)
                 .attr('stroke-width', w);
 
             // Declared-but-not-yet-observed edges (from the blueprint) render faint.
-            d3.select(this).classed('bm-edge-skeleton',
-                d.data?.isObserved === false && d.data?.isDeclared === true);
+            el.classed('bm-edge-skeleton', d.data?.isObserved === false && d.data?.isDeclared === true);
 
-            d3.select(this).select('title').text(edgeTooltip(d.data));
+            el.select('title').text(edgeTooltip(d.data));
 
             // Place the label near the arrowhead (target end) rather than the
             // geometric middle — a multi-bend path's middle can sit far from the
             // arrow, making it ambiguous which edge the number belongs to.
             const lp = edgeLabelPos(d.pts);
-            d3.select(this).select('.bm-edge-label')
+            el.select('.bm-edge-label')
                 .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
         });
+
+        // Hover: bring the hovered edge to the front and highlight it (thicker, glowing),
+        // dim every other edge — so a dense graph's crossing arrows can be told apart by
+        // tracing one at a time instead of untangling them all at once by eye.
+        merged
+            .on('mouseenter.hover', function() {
+                const hovered = this;
+                d3.select(this).raise().classed('bm-edge-hover', true);
+                handle.eLayer.selectAll('g.bm-edge').classed('bm-edge-dim', function() { return this !== hovered; });
+            })
+            .on('mouseleave.hover', function() {
+                handle.eLayer.selectAll('g.bm-edge').classed('bm-edge-dim', false);
+                d3.select(this).classed('bm-edge-hover', false);
+            });
     }
 
     // An edge's colour should match its SOURCE pipeline row's own colour — not a

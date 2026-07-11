@@ -114,7 +114,8 @@ public class Program
         builder.Services.AddSingleton<IRunService, MockRunService>(sp =>
             new MockRunService(
                 sp.GetRequiredService<RunEventBroker>(),
-                sp.GetRequiredService<IOptions<RunsSettings>>().Value));
+                sp.GetRequiredService<IOptions<RunsSettings>>().Value,
+                sp.GetRequiredService<ILogger<MockRunService>>()));
         // builder.Services.AddSingleton<IRunService>(sp => new MongoRunService(
         //     sp.GetRequiredService<MongoConnectionFactory>(),
         //     sp.GetRequiredService<IOptions<MongoSettings>>(),

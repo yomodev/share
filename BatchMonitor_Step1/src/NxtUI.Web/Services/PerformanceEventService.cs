@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Core.Events;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
@@ -40,6 +42,7 @@ public class PerformanceEventService : IDisposable
     private static readonly TimeSpan StatusCheckInterval = TimeSpan.FromSeconds(30);
 
     private readonly IRunService _runService;
+    private readonly ILogger<PerformanceEventService> _log;
     private readonly PerformanceEventStore _eventStore;
     private IEventSource? _eventSource;
     private EventCursor? _cursor;
@@ -72,9 +75,10 @@ public class PerformanceEventService : IDisposable
     private volatile bool _isFocused = true;
     private TaskCompletionSource? _focusRegainedSignal;
 
-    public PerformanceEventService(IRunService runService)
+    public PerformanceEventService(IRunService runService, ILogger<PerformanceEventService>? logger = null)
     {
         _runService = runService ?? throw new ArgumentNullException(nameof(runService));
+        _log = logger ?? NullLogger<PerformanceEventService>.Instance;
         _eventStore = new PerformanceEventStore();
     }
 
@@ -120,11 +124,11 @@ public class PerformanceEventService : IDisposable
                 _pushSubscription = await eventBroker.SubscribeToRunAsync(
                     env, runId, OnPushEvent, _cts.Token);
                 _pushActive = true;
-                Console.WriteLine($"[EventService] Live push active for {runId}");
+                _log.LogDebug("Live push active for {RunId}", runId);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EventService] Push subscription failed, using polling only: {ex.Message}");
+                _log.LogWarning(ex, "Push subscription failed for {RunId}, using polling only", runId);
             }
         }
 
@@ -163,7 +167,7 @@ public class PerformanceEventService : IDisposable
             _ = t.ContinueWith(task =>
             {
                 if (task.Exception is not null)
-                    Console.WriteLine($"[EventService] Poll task error: {task.Exception.GetBaseException().Message}");
+                    _log.LogError(task.Exception.GetBaseException(), "Poll task error");
             }, TaskScheduler.Default);
         }
     }
@@ -178,10 +182,10 @@ public class PerformanceEventService : IDisposable
         {
             var count = await PollSourceAsync(runId, ct);
             if (count > 0)
-                Console.WriteLine($"[EventService] Loaded {count} historical events for {runId}");
+                _log.LogDebug("Loaded {Count} historical events for {RunId}", count, runId);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Console.WriteLine($"[EventService] History load error: {ex.Message}"); }
+        catch (Exception ex) { _log.LogError(ex, "History load error for {RunId}", runId); }
     }
 
     /// <summary>Polls <see cref="_eventSource"/> from <see cref="_cursor"/>, bridges the
@@ -237,13 +241,13 @@ public class PerformanceEventService : IDisposable
 
                 var count = await PollSourceAsync(runId, ct);
                 if (count > 0)
-                    Console.WriteLine($"[EventService] Poll: {count} events, total={_eventStore.Count}");
+                    _log.LogDebug("Poll: {Count} events, total={Total}", count, _eventStore.Count);
 
                 if (_isRunning && DateTime.UtcNow >= _nextStatusCheck)
                     await CheckRunStatusAsync(env, runId, ct);
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Console.WriteLine($"[EventService] Poll error: {ex.Message}"); }
+            catch (Exception ex) { _log.LogError(ex, "Poll error for {RunId}", runId); }
         }
     }
 
@@ -260,7 +264,7 @@ public class PerformanceEventService : IDisposable
                 _pushSubscription = null;
                 _pushActive = false;
                 _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Run {runId} finished (status={details.Status}) — stopped live push, falling back to slow poll.");
+                _log.LogInformation("Run {RunId} finished (status={Status}) — stopped live push, falling back to slow poll", runId, details.Status);
             }
             else
             {
@@ -271,7 +275,7 @@ public class PerformanceEventService : IDisposable
         catch (Exception ex)
         {
             // Transient error — don't flip status on one failed check, just retry next tick.
-            Console.WriteLine($"[EventService] Status check failed for {runId}: {ex.Message}");
+            _log.LogWarning(ex, "Status check failed for {RunId}", runId);
         }
     }
 

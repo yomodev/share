@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Configuration;
 using NxtUI.Core.Services;
 using NxtUI.Core.Models;
@@ -93,6 +95,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
     private readonly TopologyComputationService _topologyService = new();
     private readonly RunEventBroker? _eventBroker;
     private readonly RunsSettings _runsSettings;
+    private readonly ILogger<MockRunService> _log;
     private readonly CancellationTokenSource _bgCts = new();
 
     // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
@@ -102,10 +105,11 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
     // ── Construction ──────────────────────────────────────────────────────
 
-    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null)
+    public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null, ILogger<MockRunService>? logger = null)
     {
         _eventBroker = eventBroker;
         _runsSettings = runsSettings ?? new RunsSettings();
+        _log = logger ?? NullLogger<MockRunService>.Instance;
         var rng = new Random(42);
 
         _store = Enumerable.Range(1, 200).Select(i =>
@@ -318,7 +322,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Console.WriteLine($"[MockRunService] {ex.Message}"); }
+            catch (Exception ex) { _log.LogError(ex, "Live event simulation loop failed"); }
         }
     }
 

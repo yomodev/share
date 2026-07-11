@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -12,8 +14,11 @@ public class TimelineRun(
     string runId,
     IRunService runService,
     RunEventBroker eventBroker,
-    Func<Task> onUpdated) : IAsyncDisposable
+    Func<Task> onUpdated,
+    ILogger<TimelineRun>? logger = null) : IAsyncDisposable
 {
+    private readonly ILogger<TimelineRun> _log = logger ?? NullLogger<TimelineRun>.Instance;
+
     public string RunId { get; } = runId;
     public string Env { get; } = env;
     public string Description { get; internal set; } = string.Empty;
@@ -88,7 +93,7 @@ public class TimelineRun(
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimelineRun] Live push subscription failed for {RunId}: {ex.Message}");
+            _log.LogWarning(ex, "Live push subscription failed for {RunId}", RunId);
         }
     }
 
@@ -126,7 +131,7 @@ public class TimelineRun(
                 catch (Exception ex)
                 {
                     // Transient error — don't stop the run on one failed check, just retry next tick.
-                    Console.WriteLine($"[TimelineRun] Status check failed for {RunId}: {ex.Message}");
+                    _log.LogWarning(ex, "Status check failed for {RunId}", RunId);
                 }
             }
         }
@@ -138,7 +143,7 @@ public class TimelineRun(
         IsLive = false;
         _pushSub?.Dispose();
         _pushSub = null;
-        Console.WriteLine($"[TimelineRun] Live subscription stopped for {RunId} ({reason})");
+        _log.LogInformation("Live subscription stopped for {RunId} ({Reason})", RunId, reason);
         await onUpdated();
     }
 

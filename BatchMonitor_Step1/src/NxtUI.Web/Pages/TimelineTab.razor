@@ -10,6 +10,8 @@
 @inject Microsoft.Extensions.Options.IOptions<NxtUI.Core.Configuration.TimelineSettings> TimelineOptions
 @inject DateTimeDisplayService DtSvc
 @inject ErrorNotificationService Notifications
+@inject ILogger<NxtUI.Web.Services.TimelineRun> TimelineRunLogger
+@inject ILogger<TimelineTab> Logger
 @implements IAsyncDisposable
 
 @code {
@@ -146,7 +148,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Timeline] JS init error: {ex.Message}");
+                Logger.LogError(ex, "Timeline JS init error");
             }
         }
         else if (_pendingJsPush && _tlModule is not null)
@@ -179,7 +181,8 @@
             else
             {
                 var batch = new TimelineRun(env, runId, RunService, RunEvents,
-                    onUpdated: async () => await DebouncedPushAsync());
+                    onUpdated: async () => await DebouncedPushAsync(),
+                    logger: TimelineRunLogger);
                 await batch.LoadAsync();
                 _runs.Add(batch);
             }
@@ -255,7 +258,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Timeline] Push error: {ex.Message}");
+            Logger.LogError(ex, "Timeline push error");
         }
     }
 
@@ -363,7 +366,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Timeline] Import error: {ex.Message}");
+            Logger.LogError(ex, "Timeline CSV import error");
             Notifications.Report($"Failed to import CSV: {ex.Message}", ex, "Timeline");
         }
     }

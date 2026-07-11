@@ -14,6 +14,7 @@
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject ILogPathDiscoveryService DiscoverySvc
 @inject TopologyHintLoader HintLoader
+@inject ILogger<PerformanceEventService> EventServiceLogger
 @inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
@@ -218,7 +219,7 @@
     {
         if (_details is null || RunId is null) return;
 
-        _eventService = new PerformanceEventService(RunService);
+        _eventService = new PerformanceEventService(RunService, EventServiceLogger);
 
         await _eventService.StartAsync(
             env:            Environment,
