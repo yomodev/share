@@ -138,7 +138,9 @@ public sealed class MongoConnectionFactory(
         // identity ("DOMAIN\user" — DOMAIN discarded, since it's whatever AD domain the
         // process happens to be logged into, not necessarily the Kerberos realm Mongo
         // expects); the realm comes from the configured KerberosDomain instead.
+#pragma warning disable CA1416 // Validate platform compatibility
         var windowsName = WindowsIdentity.GetCurrent().Name;
+#pragma warning restore CA1416 // Validate platform compatibility
         var backslash = windowsName.IndexOf('\\');
         var accountName = backslash >= 0 ? windowsName[(backslash + 1)..] : windowsName;
 

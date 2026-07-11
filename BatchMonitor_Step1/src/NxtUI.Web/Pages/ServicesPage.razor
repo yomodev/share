@@ -486,6 +486,10 @@
         catch (ObjectDisposedException)   { }
         catch (JSDisconnectedException)   { }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DebouncedRenderAsync failed for env {Env}", Env);
+        }
     }
 
     private async Task CopyPathAsync(ServiceStatus svc)

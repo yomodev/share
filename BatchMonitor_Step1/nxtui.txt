@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 6907
+LENGTH 7035
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -85,6 +85,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\07_SessionContext.md = docs\07_SessionContext.md
 		docs\08_FilterSyntax.md = docs\08_FilterSyntax.md
 		docs\09_Features.md = docs\09_Features.md
+		docs\10_DTSX_SQL_Event_Logging.md = docs\10_DTSX_SQL_Event_Logging.md
+		docs\11_Topology_Hints.md = docs\11_Topology_Hints.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
@@ -1562,7 +1564,7 @@ LENGTH 10285
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 9478
+LENGTH 9448
 <?xml version="1.0" encoding="utf-8" ?>
 <nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -1601,7 +1603,7 @@ LENGTH 9478
          messages are also bucketed into a shared file with other related classes.
          Layout: timestamp|loglevel|threadid|message|method. -->
     <target xsi:type="File" name="file"
-            fileName="C:\temp\logs\NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}\${logger:shortName=true}.log"
+            fileName="C:/temp/logs/NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}/${logger:shortName=true}.log"
             layout="${date:format=yyyy-MM-dd HH\:mm\:ss.fff:universalTime=true}|${level:uppercase=true}|${threadid}|${message} ${exception:format=tostring}|${callsite:className=false:methodName=true:fileName=false}"
             keepFileOpen="true"
             concurrentWrites="false"
@@ -1610,8 +1612,8 @@ LENGTH 9478
 
     <!-- Diagnostics monitor: plain-text rolling file, one per day, kept 14 days -->
     <target xsi:type="File" name="diag-file"
-            fileName="${basedir}/logs/diagnostics.log"
-            archiveFileName="${basedir}/logs/diagnostics.{#}.log"
+            fileName="C:/temp/logs/diagnostics.log"
+            archiveFileName="C:/temp/logs/diagnostics.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
             archiveDateFormat="yyyy-MM-dd"
@@ -1623,8 +1625,8 @@ LENGTH 9478
     <!-- Mongo queries (MongoService's LogDebug calls: rendered filters, sort/skip/limit,
          AST -> Mongo translation): plain-text rolling file, one per day, kept 14 days -->
     <target xsi:type="File" name="mongo-file"
-            fileName="${basedir}/logs/mongo-queries.log"
-            archiveFileName="${basedir}/logs/mongo-queries.{#}.log"
+            fileName="C:/temp/logs/mongo-queries.log"
+            archiveFileName="C:/temp/logs/mongo-queries.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
             archiveDateFormat="yyyy-MM-dd"
@@ -1639,8 +1641,8 @@ LENGTH 9478
          errors): plain-text rolling file, one per day, kept 14 days. Check this file first
          when diagnosing whether metrics for an environment are coming from Kafka or disk. -->
     <target xsi:type="File" name="kafka-file"
-            fileName="${basedir}/logs/kafka.log"
-            archiveFileName="${basedir}/logs/kafka.{#}.log"
+            fileName="C:/temp/logs/kafka.log"
+            archiveFileName="C:/temp/logs/kafka.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
             archiveDateFormat="yyyy-MM-dd"
@@ -1652,8 +1654,8 @@ LENGTH 9478
     <!-- SQL (SqlRunService's run-list/run-events queries: start/duration/error via
          OperationLog): plain-text rolling file, one per day, kept 14 days. -->
     <target xsi:type="File" name="sql-file"
-            fileName="${basedir}/logs/sql.log"
-            archiveFileName="${basedir}/logs/sql.{#}.log"
+            fileName="C:/temp/logs/sql.log"
+            archiveFileName="C:/temp/logs/sql.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
             archiveDateFormat="yyyy-MM-dd"
@@ -1666,8 +1668,8 @@ LENGTH 9478
          LogPathDiscoveryService's on-disk folder discovery): plain-text rolling file,
          one per day, kept 14 days. Check this file first for slow file-server searches. -->
     <target xsi:type="File" name="disk-file"
-            fileName="${basedir}/logs/disk-search.log"
-            archiveFileName="${basedir}/logs/disk-search.{#}.log"
+            fileName="C:/temp/logs/disk-search.log"
+            archiveFileName="C:/temp/logs/disk-search.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
             archiveDateFormat="yyyy-MM-dd"
@@ -9847,7 +9849,7 @@ LENGTH 393
     // without the main tab-bar and sidebar chrome.
 }
 FILE src/NxtUI.Web/Layout/MainLayout.razor
-LENGTH 7737
+LENGTH 8038
 @namespace NxtUI.Web.Layout
 @inherits LayoutComponentBase
 @inject ThemeService ThemeService
@@ -9858,6 +9860,7 @@ LENGTH 7737
 @inject IConfiguration Config
 @inject ISnackbar Snackbar
 @inject ErrorNotificationService Notifications
+@inject ILogger<MainLayout> Logger
 @implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
@@ -9968,19 +9971,27 @@ LENGTH 7737
     private void OnTabsChanged()
     {
         var syncingFromUrl = _syncingFromUrl;
-        InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
-            StateHasChanged();
-            var label = TabService.ActiveTab?.Label;
-            var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
-            _ = JS.InvokeVoidAsync("bmSetTitle", title);
-            if (syncingFromUrl) return;
-            if (TabService.ActiveTab?.NoNavigate == true) return;
+            try
+            {
+                StateHasChanged();
+                var label = TabService.ActiveTab?.Label;
+                var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
+                await JS.InvokeVoidAsync("bmSetTitle", title);
+                if (syncingFromUrl) return;
+                if (TabService.ActiveTab?.NoNavigate == true) return;
 
-            var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
-            var currentPath = new Uri(Nav.Uri).AbsolutePath;
-            if (targetUrl != currentPath)
-                Nav.NavigateTo(targetUrl);
+                var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
+                var currentPath = new Uri(Nav.Uri).AbsolutePath;
+                if (targetUrl != currentPath)
+                    Nav.NavigateTo(targetUrl);
+            }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "OnTabsChanged failed");
+            }
         });
     }
 
@@ -16247,7 +16258,7 @@ LENGTH 4161
     }
 }
 FILE src/NxtUI.Web/Pages/MemoryGraph.razor
-LENGTH 22322
+LENGTH 22491
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -16257,6 +16268,7 @@ LENGTH 22322
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
 @inject TabService TabService
+@inject ILogger<MemoryGraph> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-mg-page">
@@ -16547,6 +16559,10 @@ LENGTH 22322
         catch (ObjectDisposedException)    { }
         catch (JSDisconnectedException)    { }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DebouncedRebuildAsync failed for env {Env}", Env);
+        }
     }
 
     private void TogglePaused()
@@ -17632,7 +17648,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 35433
+LENGTH 36275
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -17869,13 +17885,24 @@ LENGTH 35433
 
     private async Task RunTopologyLoopAsync()
     {
-        // WaitForNextTickAsync returns false once the timer is disposed (component
-        // teardown) — ends the loop gracefully with no separate cancellation token needed.
-        while (await _topologyTimer!.WaitForNextTickAsync())
+        try
         {
-            if (!_topologyDirty) continue;
-            _topologyDirty = false;
-            await RecomputeTopologyAsync();
+            // WaitForNextTickAsync returns false once the timer is disposed (component
+            // teardown) — ends the loop gracefully with no separate cancellation token needed.
+            while (await _topologyTimer!.WaitForNextTickAsync())
+            {
+                if (!_topologyDirty) continue;
+                _topologyDirty = false;
+                await RecomputeTopologyAsync();
+            }
+        }
+        catch (ObjectDisposedException) { /* timer disposed mid-tick during teardown */ }
+        catch (Exception ex)
+        {
+            // This loop runs fire-and-forget from OnInitializedAsync — an uncaught exception
+            // here would silently stop all further topology recomputation for the rest of
+            // the tab's lifetime with no log at all.
+            Logger.LogError(ex, "RunTopologyLoopAsync failed");
         }
     }
 
@@ -18052,6 +18079,13 @@ LENGTH 35433
             }
         }
         catch (OperationCanceledException) { /* paused or component disposed */ }
+        catch (Exception ex)
+        {
+            // Fire-and-forget from TogglePlayback — an uncaught exception here would silently
+            // freeze the replay animation with no log and no way for the user to tell why.
+            Logger.LogError(ex, "RunPlaybackLoopAsync failed");
+            _isPlaying = false;
+        }
     }
 
     private string FormatSliderTime()
@@ -18999,7 +19033,7 @@ LENGTH 13865
     }
 }
 FILE src/NxtUI.Web/Pages/ServicesPage.razor
-LENGTH 36481
+LENGTH 36613
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Web.Services
@@ -19488,6 +19522,10 @@ LENGTH 36481
         catch (ObjectDisposedException)   { }
         catch (JSDisconnectedException)   { }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DebouncedRenderAsync failed for env {Env}", Env);
+        }
     }
 
     private async Task CopyPathAsync(ServiceStatus svc)
@@ -24153,7 +24191,7 @@ public sealed class ServerDiagnosticsMonitor(
     }
 }
 FILE src/NxtUI.Web/Services/ServiceMetricsMonitor.cs
-LENGTH 31553
+LENGTH 32457
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
 using NxtUI.Core.Logging;
@@ -24418,6 +24456,15 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             }
             while (_envRerunPending.TryGetValue(env, out var pending) && pending && HasSubscribers(env));
         }
+        catch (OperationCanceledException) { /* shutting down */ }
+        catch (Exception ex)
+        {
+            // This method is invoked both fire-and-forget (OnPathResolved/Subscribe) and
+            // awaited inside ExecuteAsync's Task.WhenAll — an uncaught exception here would
+            // either vanish silently (fire-and-forget) or crash the whole BackgroundService
+            // (WhenAll), stopping metrics polling for every environment, not just this one.
+            _log.LogError(ex, "metrics [{Env}]: poll failed", env);
+        }
         finally
         {
             gate.Release();
@@ -24561,21 +24608,25 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         // briefly for it instead of immediately falling back to Default (effectively "from
         // latest"), which would silently miss messages published between subscribe and the
         // heartbeat poll actually completing.
-        var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
-        var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
-        var directive = oldestStart.HasValue
-            ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
-            : KafkaSeekDirective.Default;
-
-        _log.LogInformation(
-            "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
-            "until the first matching message arrives, this env is served from disk-log polling",
-            env, topic, directive);
-
         var otherTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
+            // Moved inside the try (was previously above it): WaitForHeartbeatAsync is a real
+            // await that can throw/be cancelled, and this whole method runs fire-and-forget
+            // from Subscribe() — an exception escaping here would vanish silently instead of
+            // being logged.
+            var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
+            var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
+            var directive = oldestStart.HasValue
+                ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
+                : KafkaSeekDirective.Default;
+
+            _log.LogInformation(
+                "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
+                "until the first matching message arrives, this env is served from disk-log polling",
+                env, topic, directive);
+
             var first = true;
             var messageCount = 0;
             await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))
@@ -25994,6 +26045,208 @@ LENGTH 2934
 FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
+FILE tests/NxtUI.Tests/Events/FakeEventSink.cs
+LENGTH 1352
+using System.Collections.Concurrent;
+using NxtUI.Core.Events;
+
+namespace NxtUI.Tests.Events;
+
+/// <summary>
+/// Reusable test double for <see cref="IRunEventSink"/> — captures every written event
+/// in order instead of persisting anywhere, so a test (e.g. of <see cref="RunEventReporter"/>
+/// or a future producer) can assert exactly what was emitted without a real SQL table.
+/// </summary>
+public sealed class FakeEventSink : IRunEventSink
+{
+    private readonly ConcurrentQueue<RunEvent> _written = new();
+
+    /// <summary>All events written so far, in the order WriteAsync received them.</summary>
+    public IReadOnlyList<RunEvent> Written => _written.ToArray();
+
+    /// <summary>How many times WriteAsync has been called (as opposed to how many events total).</summary>
+    public int WriteCallCount { get; private set; }
+
+    /// <summary>Set to make the next WriteAsync call throw, to test a producer's error handling.</summary>
+    public Exception? ThrowOnNextWrite { get; set; }
+
+    public Task WriteAsync(IReadOnlyList<RunEvent> events, CancellationToken ct = default)
+    {
+        WriteCallCount++;
+
+        if (ThrowOnNextWrite is { } ex)
+        {
+            ThrowOnNextWrite = null;
+            throw ex;
+        }
+
+        foreach (var e in events)
+            _written.Enqueue(e);
+
+        return Task.CompletedTask;
+    }
+}
+FILE tests/NxtUI.Tests/Events/FakeEventSource.cs
+LENGTH 2455
+using System.Collections.Concurrent;
+using NxtUI.Core.Events;
+
+namespace NxtUI.Tests.Events;
+
+/// <summary>
+/// Reusable test double for <see cref="IEventSource"/>. Events are appended via
+/// <see cref="Enqueue"/> (simulating a source that gains new data over time) and each is
+/// assigned a monotonic sequence number; <see cref="PollAsync"/> returns everything after
+/// the cursor's <see cref="EventCursor.LastId"/>, mirroring the resumable-cursor contract
+/// any real source (SQL log table, SSISDB) implements, without needing real infrastructure.
+///
+/// Not tied to any specific event shape — seed it with whatever RunEvents a test scenario
+/// needs (Connect/Disconnect/Produce/Consume/Process/Error/Info), independent of
+/// PerformanceEventSource's Mongo-specific timestamp-cursor semantics.
+/// </summary>
+public sealed class FakeEventSource(string name = "fake") : IEventSource
+{
+    private readonly ConcurrentQueue<RunEvent> _all = new();
+
+    public string Name => name;
+
+    /// <summary>Total events ever enqueued, regardless of what's been polled.</summary>
+    public int TotalEnqueued => _all.Count;
+
+    /// <summary>How many times <see cref="PollAsync"/> has been called — lets a test assert polling actually happened.</summary>
+    public int PollCount { get; private set; }
+
+    /// <summary>Set to make the next PollAsync call throw, to test a consumer's error handling.</summary>
+    public Exception? ThrowOnNextPoll { get; set; }
+
+    /// <summary>Appends events as if they'd just become available from the underlying source.</summary>
+    public void Enqueue(params RunEvent[] events)
+    {
+        foreach (var e in events)
+            _all.Enqueue(e);
+    }
+
+    public Task<EventBatch> PollAsync(string runId, EventCursor? cursor, CancellationToken ct = default)
+    {
+        PollCount++;
+
+        if (ThrowOnNextPoll is { } ex)
+        {
+            ThrowOnNextPoll = null;
+            throw ex;
+        }
+
+        var lastId = cursor?.LastId ?? 0;
+        var snapshot = _all.ToArray(); // index in the queue IS the sequence id (1-based)
+        var newEvents = new List<RunEvent>();
+        var maxId = lastId;
+
+        for (var i = 0; i < snapshot.Length; i++)
+        {
+            var id = i + 1;
+            if (id <= lastId) continue;
+            newEvents.Add(snapshot[i]);
+            maxId = id;
+        }
+
+        return Task.FromResult(new EventBatch(newEvents, new EventCursor(LastId: maxId)));
+    }
+}
+FILE tests/NxtUI.Tests/Events/FakeEventSourceTests.cs
+LENGTH 3338
+using AwesomeAssertions;
+using NxtUI.Core.Events;
+
+namespace NxtUI.Tests.Events;
+
+/// <summary>Proves FakeEventSource honors the same resumable-cursor contract as a real
+/// IEventSource, so it's safe to hand to other tests (e.g. a future multi-source
+/// aggregator) in place of SqlRunEventSource/SsisDbEventSource/PerformanceEventSource.</summary>
+public class FakeEventSourceTests
+{
+    private static RunEvent Evt(string correlationId) => new()
+    {
+        RunId = "RUN-1",
+        EventId = Guid.NewGuid().ToString("N"),
+        CorrelationId = correlationId,
+        Service = "Loader",
+        Kind = EventKind.Process,
+        TimestampUtc = DateTime.UtcNow,
+    };
+
+    [Fact]
+    public async Task First_poll_with_null_cursor_returns_everything_enqueued_so_far()
+    {
+        var source = new FakeEventSource();
+        source.Enqueue(Evt("a"), Evt("b"));
+
+        var batch = await source.PollAsync("RUN-1", cursor: null, ct: TestContext.Current.CancellationToken);
+
+        batch.Events.Should().HaveCount(2);
+        batch.Cursor.LastId.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Second_poll_only_returns_events_enqueued_after_the_first()
+    {
+        var source = new FakeEventSource();
+        source.Enqueue(Evt("a"));
+        var first = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+
+        source.Enqueue(Evt("b"), Evt("c"));
+        var second = await source.PollAsync("RUN-1", first.Cursor, TestContext.Current.CancellationToken);
+
+        second.Events.Should().HaveCount(2);
+        second.Events.Select(e => e.CorrelationId).Should().Equal("b", "c");
+        second.Cursor.LastId.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Polling_with_no_new_events_returns_an_empty_batch_and_unchanged_cursor()
+    {
+        var source = new FakeEventSource();
+        source.Enqueue(Evt("a"));
+        var first = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+
+        var second = await source.PollAsync("RUN-1", first.Cursor, TestContext.Current.CancellationToken);
+
+        second.Events.Should().BeEmpty();
+        second.Cursor.Should().Be(first.Cursor);
+    }
+
+    [Fact]
+    public async Task PollCount_tracks_how_many_times_it_was_polled()
+    {
+        var source = new FakeEventSource();
+        await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+        await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+
+        source.PollCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ThrowOnNextPoll_throws_once_then_recovers()
+    {
+        var source = new FakeEventSource
+        {
+            ThrowOnNextPoll = new TimeoutException("broker unreachable")
+        };
+
+        var act = async () => await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+        await act.Should().ThrowAsync<TimeoutException>();
+
+        // Second call should succeed — the fault was one-shot.
+        var batch = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
+        batch.Events.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Name_defaults_to_fake_but_can_be_customized()
+    {
+        new FakeEventSource().Name.Should().Be("fake");
+        new FakeEventSource("my-source").Name.Should().Be("my-source");
+    }
+}
 FILE tests/NxtUI.Tests/Events/PerformanceEventBridgeTests.cs
 LENGTH 2902
 using AwesomeAssertions;
@@ -26086,7 +26339,7 @@ public class PerformanceEventBridgeTests
     }
 }
 FILE tests/NxtUI.Tests/Events/PerformanceEventSourceTests.cs
-LENGTH 4261
+LENGTH 4460
 using AwesomeAssertions;
 using NxtUI.Core.Events;
 using NxtUI.Core.Filtering;
@@ -26136,7 +26389,7 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var batch = await source.PollAsync("RUN-1", cursor: null);
+        var batch = await source.PollAsync("RUN-1", cursor: null, ct: TestContext.Current.CancellationToken);
 
         fake.LastFrom.Should().Be(t0);
         batch.Events.Should().ContainSingle();
@@ -26154,10 +26407,10 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var first = await source.PollAsync("RUN-1", null);
+        var first = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
         fake.Events.Add(Evt("chunk2", t0.AddSeconds(10), t0.AddSeconds(12)));
 
-        var second = await source.PollAsync("RUN-1", first.Cursor);
+        var second = await source.PollAsync("RUN-1", first.Cursor, TestContext.Current.CancellationToken);
 
         fake.LastFrom.Should().Be(first.Cursor.LastTimestampUtc);
         second.Events.Should().Contain(e => e.CorrelationId == "chunk2");
@@ -26171,7 +26424,7 @@ public class PerformanceEventSourceTests
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
         var cursorIn = new EventCursor(LastTimestampUtc: t0.AddMinutes(1));
-        var batch = await source.PollAsync("RUN-1", cursorIn);
+        var batch = await source.PollAsync("RUN-1", cursorIn, TestContext.Current.CancellationToken);
 
         batch.Events.Should().BeEmpty();
         batch.Cursor.Should().Be(cursorIn);
@@ -26186,10 +26439,120 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [errored] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var batch = await source.PollAsync("RUN-1", null);
+        var batch = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
 
         batch.Events.Single().Status.Should().Be(EventStatus.Failed);
         batch.Events.Single().Error.Should().Be("boom");
+    }
+}
+FILE tests/NxtUI.Tests/Events/RunEventReporterTests.cs
+LENGTH 4436
+using AwesomeAssertions;
+using NxtUI.Core.Events;
+
+namespace NxtUI.Tests.Events;
+
+/// <summary>Exercises RunEventReporter against FakeEventSink — also doubles as the demo
+/// that the fake pair composes correctly for future producer/aggregator tests.</summary>
+public class RunEventReporterTests
+{
+    [Fact]
+    public async Task ConnectAsync_emits_a_Connect_event_with_no_correlation()
+    {
+        var sink = new FakeEventSink();
+        var reporter = new RunEventReporter(sink, runId: "RUN-1", service: "Loader", server: "srv-01", processId: 42);
+
+        await reporter.ConnectAsync("package started", TestContext.Current.CancellationToken);
+
+        var evt = sink.Written.Should().ContainSingle().Subject;
+        evt.Kind.Should().Be(EventKind.Connect);
+        evt.RunId.Should().Be("RUN-1");
+        evt.Service.Should().Be("Loader");
+        evt.Server.Should().Be("srv-01");
+        evt.ProcessId.Should().Be(42);
+        evt.CorrelationId.Should().BeNull();
+        evt.Info.Should().Be("package started");
+    }
+
+    [Fact]
+    public async Task ProduceAsync_and_ConsumeAsync_carry_target_and_record_count()
+    {
+        var sink = new FakeEventSink();
+        var reporter = new RunEventReporter(sink, "RUN-1", "Extract", pipeline: "DF Extract");
+
+        await reporter.ConsumeAsync(@"\\share\in\cust.csv", correlationId: "BATCH-1", recordCount: 50_000, source: "Flat File Src", ct: TestContext.Current.CancellationToken);
+        await reporter.ProduceAsync("stg.Customer", correlationId: "BATCH-1", recordCount: 50_000, source: "OLE DB Dest", ct: TestContext.Current.CancellationToken);
+
+        sink.Written.Should().HaveCount(2);
+        sink.Written[0].Kind.Should().Be(EventKind.Consume);
+        sink.Written[0].Target.Should().Be(@"\\share\in\cust.csv");
+        sink.Written[0].Pipeline.Should().Be("DF Extract");
+        sink.Written[1].Kind.Should().Be(EventKind.Produce);
+        sink.Written[1].Target.Should().Be("stg.Customer");
+        sink.Written[1].RecordCount.Should().Be(50_000);
+    }
+
+    [Fact]
+    public async Task BeginActivity_emits_one_Process_span_on_dispose_with_start_before_finish()
+    {
+        var sink = new FakeEventSink();
+        var reporter = new RunEventReporter(sink, "RUN-1", "Transform");
+
+        await using (var act = reporter.BeginActivity("DFT Transform", correlationId: "BATCH-1"))
+        {
+            act.RecordCount = 4980;
+        }
+
+        var evt = sink.Written.Should().ContainSingle().Subject;
+        evt.Kind.Should().Be(EventKind.Process);
+        evt.Status.Should().Be(EventStatus.Success);
+        evt.RecordCount.Should().Be(4980);
+        evt.FinishUtc.Should().NotBeNull();
+        evt.FinishUtc!.Value.Should().BeOnOrAfter(evt.TimestampUtc);
+    }
+
+    [Fact]
+    public async Task BeginActivity_Fail_marks_the_span_Failed_with_the_error_message()
+    {
+        var sink = new FakeEventSink();
+        var reporter = new RunEventReporter(sink, "RUN-1", "Load");
+
+        await using (var act = reporter.BeginActivity("DFT Load", correlationId: "BATCH-1", target: "dbo.Customer"))
+        {
+            act.Fail("PK violation on CustomerId=8842");
+        }
+
+        var evt = sink.Written.Should().ContainSingle().Subject;
+        evt.Status.Should().Be(EventStatus.Failed);
+        evt.Error.Should().Be("PK violation on CustomerId=8842");
+        evt.Target.Should().Be("dbo.Customer");
+    }
+
+    [Fact]
+    public async Task ErrorAsync_emits_an_Error_event()
+    {
+        var sink = new FakeEventSink();
+        var reporter = new RunEventReporter(sink, "RUN-1", "Load");
+
+        await reporter.ErrorAsync("boom", correlationId: "BATCH-1", source: "OLE DB Dest", target: "dbo.Customer", TestContext.Current.CancellationToken);
+
+        var evt = sink.Written.Should().ContainSingle().Subject;
+        evt.Kind.Should().Be(EventKind.Error);
+        evt.Status.Should().Be(EventStatus.Failed);
+        evt.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task Sink_throwing_propagates_to_the_caller()
+    {
+        var sink = new FakeEventSink { ThrowOnNextWrite = new InvalidOperationException("db down") };
+        var reporter = new RunEventReporter(sink, "RUN-1", "Loader");
+
+        var act = async () => await reporter.ConnectAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("db down");
+        sink.WriteCallCount.Should().Be(1);
+        sink.Written.Should().BeEmpty();
     }
 }
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
@@ -28270,6 +28633,171 @@ public sealed class KafkaIntegrationTests
             return typeName == acceptType;
         }
         public IReadOnlyCollection<string> RegisteredTypes => [acceptType];
+    }
+}
+FILE tests/NxtUI.Tests/Integration/MongoConnectionFactoryIntegrationTests.cs
+LENGTH 7226
+using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using NxtUI.Core.Configuration;
+using NxtUI.Core.Services;
+using NxtUI.Core.Services.Mongo;
+
+namespace NxtUI.Tests.Integration;
+
+/// <summary>
+/// Integration tests for MongoConnectionFactory against a real MongoDB instance.
+/// Skipped unless RUN_INTEGRATION_TESTS=1. Defaults to mongodb://localhost:27017 (no auth);
+/// override with MONGO_CONNECTION_STRING for a different instance. These exercise the actual
+/// connection-string resolution (global template + per-env {server}/{database}), fingerprint
+/// caching, and timeout behavior — none of which the Performance/*Tests.cs suite touches,
+/// since those run against MockMongoService and never construct a real MongoClient.
+/// </summary>
+[IntegrationTest]
+public sealed class MongoConnectionFactoryIntegrationTests
+{
+    private static string ConnectionString =>
+        Environment.GetEnvironmentVariable("MONGO_CONNECTION_STRING") ?? "mongodb://localhost:27017";
+
+    // Builds a factory with a fresh temp config/ folder so each test's env(s) are isolated.
+    // envServerNames: envId -> ServerName written to that env's config/{env}.json (or null to
+    // omit ServerName entirely, e.g. to test the "template needs {server} but none configured" path).
+    private static MongoConnectionFactory BuildFactory(
+        string? connectionTemplate = null,
+        int? timeoutMs = null,
+        params (string EnvId, string? ServerName, string? DatabaseName)[] envs)
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), $"mongo-conn-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(basePath);
+        foreach (var (envId, serverName, databaseName) in envs)
+        {
+            var body = string.Join(",", new[]
+            {
+                serverName is not null ? $"\"ServerName\":\"{serverName}\"" : null,
+                databaseName is not null ? $"\"DatabaseName\":\"{databaseName}\"" : null,
+            }.Where(s => s is not null));
+            File.WriteAllText(Path.Combine(basePath, $"{envId.ToLowerInvariant()}.json"), $"{{\"Mongo\":{{{body}}}}}");
+        }
+
+        var loader = new EnvironmentConfigLoader(
+            new EnvironmentConfigOptions { BasePath = basePath }, NullLogger<EnvironmentConfigLoader>.Instance);
+
+        var settings = Options.Create(new MongoSettings
+        {
+            ConnectionString = connectionTemplate ?? ConnectionString,
+            DatabasePrefix = "IntegrationTestDb",
+            ConnectionTimeoutMs = timeoutMs ?? 5000,
+            ServerSelectionTimeoutMs = timeoutMs ?? 5000,
+        });
+
+        return new MongoConnectionFactory(loader, settings, NullLogger<MongoConnectionFactory>.Instance);
+    }
+
+    [IntegrationTestFact]
+    public async Task GetClientAsync_ConnectsAndPings()
+    {
+        var factory = BuildFactory(envs: ("test", null, null));
+        var ct = TestContext.Current.CancellationToken;
+
+        var client = await factory.GetClientAsync("test", ct);
+        var result = await client.GetDatabase("admin")
+            .RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: ct);
+
+        result.Should().NotBeNull();
+        result["ok"].ToDouble().Should().Be(1.0);
+    }
+
+    [IntegrationTestFact]
+    public void IsConfigured_True_When_Template_Has_No_Server_Placeholder()
+    {
+        var factory = BuildFactory(envs: ("test", null, null));
+        factory.IsConfigured("test").Should().BeTrue();
+    }
+
+    [IntegrationTestFact]
+    public void IsConfigured_False_When_Template_Needs_Server_But_None_Configured()
+    {
+        var factory = BuildFactory(connectionTemplate: "mongodb://{server}:27017", envs: ("noserver", null, null));
+        factory.IsConfigured("noserver").Should().BeFalse();
+    }
+
+    [IntegrationTestFact]
+    public void IsConfigured_True_When_Server_Placeholder_Resolved_From_EnvConfig()
+    {
+        var factory = BuildFactory(connectionTemplate: "mongodb://{server}:27017", envs: ("withserver", "localhost", null));
+        factory.IsConfigured("withserver").Should().BeTrue();
+    }
+
+    [IntegrationTestFact]
+    public async Task GetClientAsync_SameEnv_ReturnsSameCachedClient()
+    {
+        var factory = BuildFactory(envs: ("test", null, null));
+        var ct = TestContext.Current.CancellationToken;
+
+        var client1 = await factory.GetClientAsync("test", ct);
+        var client2 = await factory.GetClientAsync("test", ct);
+
+        client1.Should().BeSameAs(client2, "same env → same resolved connection string → cached client");
+    }
+
+    [IntegrationTestFact]
+    public async Task GetClientAsync_TwoEnvsResolvingToSameConnectionString_ShareOneClient()
+    {
+        // Both envs' {server} resolves to "localhost" via the template, so they share a
+        // fingerprint even though the per-env config differs (proves fingerprinting is on the
+        // RESOLVED string, not the raw template or env id).
+        var factory = BuildFactory(
+            connectionTemplate: "mongodb://{server}:27017",
+            envs: [("env-a", "localhost", null), ("env-b", "localhost", null)]);
+        var ct = TestContext.Current.CancellationToken;
+
+        var clientA = await factory.GetClientAsync("env-a", ct);
+        var clientB = await factory.GetClientAsync("env-b", ct);
+
+        clientA.Should().BeSameAs(clientB);
+    }
+
+    [IntegrationTestFact]
+    public void GetDatabase_UsesPerEnvDatabaseName_OrFallsBackToPrefixPlusEnvId()
+    {
+        var factory = BuildFactory(envs: [("with-db", null, "CustomDb"), ("without-db", null, null)]);
+
+        factory.GetDatabase("with-db").DatabaseNamespace.DatabaseName.Should().Be("CustomDb");
+        factory.GetDatabase("without-db").DatabaseNamespace.DatabaseName.Should().Be("IntegrationTestDb_without-db");
+    }
+
+    [IntegrationTestFact]
+    public async Task GetClientAsync_UnreachableHost_FailsWithinConfiguredTimeout_NotHanging()
+    {
+        // 10.255.255.1 is a non-routable address commonly used to force a connect timeout
+        // rather than an immediate "connection refused".
+        var factory = BuildFactory(
+            connectionTemplate: "mongodb://10.255.255.1:27017",
+            timeoutMs: 3000,
+            envs: ("unreachable", null, null));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Func<Task> act = async () =>
+        {
+            var client = await factory.GetClientAsync("unreachable", TestContext.Current.CancellationToken);
+            await client.GetDatabase("admin")
+                .RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: TestContext.Current.CancellationToken);
+        };
+
+        await act.Should().ThrowAsync<Exception>();
+        // Generous upper bound — proves it fails on the CONFIGURED timeout (~3s), not the
+        // driver's much longer default.
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15));
+    }
+
+    [IntegrationTestFact]
+    public void MissingConnectionStringTemplate_IsNotConfigured()
+    {
+        var factory = BuildFactory(connectionTemplate: "", envs: ("blank", null, null));
+        factory.IsConfigured("blank").Should().BeFalse();
     }
 }
 FILE tests/NxtUI.Tests/Models/TopologyBlueprintTests.cs
@@ -32337,7 +32865,7 @@ public class MockMongoService : IMongoService
     }
 }
 FILE src/NxtUI.Core/Services/Mongo/MongoConnectionFactory.cs
-LENGTH 10574
+LENGTH 10706
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -32478,7 +33006,9 @@ public sealed class MongoConnectionFactory(
         // identity ("DOMAIN\user" — DOMAIN discarded, since it's whatever AD domain the
         // process happens to be logged into, not necessarily the Kerberos realm Mongo
         // expects); the realm comes from the configured KerberosDomain instead.
+#pragma warning disable CA1416 // Validate platform compatibility
         var windowsName = WindowsIdentity.GetCurrent().Name;
+#pragma warning restore CA1416 // Validate platform compatibility
         var backslash = windowsName.IndexOf('\\');
         var accountName = backslash >= 0 ? windowsName[(backslash + 1)..] : windowsName;
 

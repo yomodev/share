@@ -262,6 +262,15 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
             }
             while (_envRerunPending.TryGetValue(env, out var pending) && pending && HasSubscribers(env));
         }
+        catch (OperationCanceledException) { /* shutting down */ }
+        catch (Exception ex)
+        {
+            // This method is invoked both fire-and-forget (OnPathResolved/Subscribe) and
+            // awaited inside ExecuteAsync's Task.WhenAll — an uncaught exception here would
+            // either vanish silently (fire-and-forget) or crash the whole BackgroundService
+            // (WhenAll), stopping metrics polling for every environment, not just this one.
+            _log.LogError(ex, "metrics [{Env}]: poll failed", env);
+        }
         finally
         {
             gate.Release();
@@ -405,21 +414,25 @@ public sealed class ServiceMetricsMonitor : BackgroundService, IServiceMetricsMo
         // briefly for it instead of immediately falling back to Default (effectively "from
         // latest"), which would silently miss messages published between subscribe and the
         // heartbeat poll actually completing.
-        var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
-        var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
-        var directive = oldestStart.HasValue
-            ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
-            : KafkaSeekDirective.Default;
-
-        _log.LogInformation(
-            "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
-            "until the first matching message arrives, this env is served from disk-log polling",
-            env, topic, directive);
-
         var otherTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
+            // Moved inside the try (was previously above it): WaitForHeartbeatAsync is a real
+            // await that can throw/be cancelled, and this whole method runs fire-and-forget
+            // from Subscribe() — an exception escaping here would vanish silently instead of
+            // being logged.
+            var services = _heartbeatMonitor.GetServices(env) ?? await WaitForHeartbeatAsync(env, ct);
+            var oldestStart = services?.Count > 0 ? services.Min(s => s.CreatedDateTime) : (DateTime?)null;
+            var directive = oldestStart.HasValue
+                ? new KafkaSeekDirective { TimestampFrom = oldestStart.Value }
+                : KafkaSeekDirective.Default;
+
+            _log.LogInformation(
+                "metrics [{Env}]: starting Kafka consumer for topic '{Topic}' (seek={@Directive}) — " +
+                "until the first matching message arrives, this env is served from disk-log polling",
+                env, topic, directive);
+
             var first = true;
             var messageCount = 0;
             await foreach (var msg in _kafka.TailTopicAsync(env, topic, directive, ct, uncapped: true))

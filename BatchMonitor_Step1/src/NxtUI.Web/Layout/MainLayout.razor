@@ -8,6 +8,7 @@
 @inject IConfiguration Config
 @inject ISnackbar Snackbar
 @inject ErrorNotificationService Notifications
+@inject ILogger<MainLayout> Logger
 @implements IAsyncDisposable
 
 <MudThemeProvider Theme="@ThemeService.Theme" IsDarkMode="@ThemeService.IsDark" />
@@ -118,19 +119,27 @@
     private void OnTabsChanged()
     {
         var syncingFromUrl = _syncingFromUrl;
-        InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
-            StateHasChanged();
-            var label = TabService.ActiveTab?.Label;
-            var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
-            _ = JS.InvokeVoidAsync("bmSetTitle", title);
-            if (syncingFromUrl) return;
-            if (TabService.ActiveTab?.NoNavigate == true) return;
+            try
+            {
+                StateHasChanged();
+                var label = TabService.ActiveTab?.Label;
+                var title = string.IsNullOrEmpty(label) ? "NxtUI" : $"NxtUI : {label}";
+                await JS.InvokeVoidAsync("bmSetTitle", title);
+                if (syncingFromUrl) return;
+                if (TabService.ActiveTab?.NoNavigate == true) return;
 
-            var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
-            var currentPath = new Uri(Nav.Uri).AbsolutePath;
-            if (targetUrl != currentPath)
-                Nav.NavigateTo(targetUrl);
+                var targetUrl = TabService.ActiveTab?.GetUrl() ?? HomeUrl();
+                var currentPath = new Uri(Nav.Uri).AbsolutePath;
+                if (targetUrl != currentPath)
+                    Nav.NavigateTo(targetUrl);
+            }
+            catch (JSDisconnectedException) { }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "OnTabsChanged failed");
+            }
         });
     }
 

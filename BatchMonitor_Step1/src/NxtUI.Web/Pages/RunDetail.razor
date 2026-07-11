@@ -234,13 +234,24 @@
 
     private async Task RunTopologyLoopAsync()
     {
-        // WaitForNextTickAsync returns false once the timer is disposed (component
-        // teardown) — ends the loop gracefully with no separate cancellation token needed.
-        while (await _topologyTimer!.WaitForNextTickAsync())
+        try
         {
-            if (!_topologyDirty) continue;
-            _topologyDirty = false;
-            await RecomputeTopologyAsync();
+            // WaitForNextTickAsync returns false once the timer is disposed (component
+            // teardown) — ends the loop gracefully with no separate cancellation token needed.
+            while (await _topologyTimer!.WaitForNextTickAsync())
+            {
+                if (!_topologyDirty) continue;
+                _topologyDirty = false;
+                await RecomputeTopologyAsync();
+            }
+        }
+        catch (ObjectDisposedException) { /* timer disposed mid-tick during teardown */ }
+        catch (Exception ex)
+        {
+            // This loop runs fire-and-forget from OnInitializedAsync — an uncaught exception
+            // here would silently stop all further topology recomputation for the rest of
+            // the tab's lifetime with no log at all.
+            Logger.LogError(ex, "RunTopologyLoopAsync failed");
         }
     }
 
@@ -417,6 +428,13 @@
             }
         }
         catch (OperationCanceledException) { /* paused or component disposed */ }
+        catch (Exception ex)
+        {
+            // Fire-and-forget from TogglePlayback — an uncaught exception here would silently
+            // freeze the replay animation with no log and no way for the user to tell why.
+            Logger.LogError(ex, "RunPlaybackLoopAsync failed");
+            _isPlaying = false;
+        }
     }
 
     private string FormatSliderTime()

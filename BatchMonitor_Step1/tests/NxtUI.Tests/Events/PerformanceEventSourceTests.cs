@@ -47,7 +47,7 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var batch = await source.PollAsync("RUN-1", cursor: null);
+        var batch = await source.PollAsync("RUN-1", cursor: null, ct: TestContext.Current.CancellationToken);
 
         fake.LastFrom.Should().Be(t0);
         batch.Events.Should().ContainSingle();
@@ -65,10 +65,10 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var first = await source.PollAsync("RUN-1", null);
+        var first = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
         fake.Events.Add(Evt("chunk2", t0.AddSeconds(10), t0.AddSeconds(12)));
 
-        var second = await source.PollAsync("RUN-1", first.Cursor);
+        var second = await source.PollAsync("RUN-1", first.Cursor, TestContext.Current.CancellationToken);
 
         fake.LastFrom.Should().Be(first.Cursor.LastTimestampUtc);
         second.Events.Should().Contain(e => e.CorrelationId == "chunk2");
@@ -82,7 +82,7 @@ public class PerformanceEventSourceTests
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
         var cursorIn = new EventCursor(LastTimestampUtc: t0.AddMinutes(1));
-        var batch = await source.PollAsync("RUN-1", cursorIn);
+        var batch = await source.PollAsync("RUN-1", cursorIn, TestContext.Current.CancellationToken);
 
         batch.Events.Should().BeEmpty();
         batch.Cursor.Should().Be(cursorIn);
@@ -97,7 +97,7 @@ public class PerformanceEventSourceTests
         var fake = new FakeRunService { Events = [errored] };
         var source = new PerformanceEventSource(fake, "DEV1", t0);
 
-        var batch = await source.PollAsync("RUN-1", null);
+        var batch = await source.PollAsync("RUN-1", null, TestContext.Current.CancellationToken);
 
         batch.Events.Single().Status.Should().Be(EventStatus.Failed);
         batch.Events.Single().Error.Should().Be("boom");

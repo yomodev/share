@@ -7,6 +7,7 @@
 @inject IServiceMetricsMonitor MetricsMonitor
 @inject IJSRuntime JS
 @inject TabService TabService
+@inject ILogger<MemoryGraph> Logger
 @implements IAsyncDisposable
 
 <div class="bm-page bm-page-fill bm-mg-page">
@@ -297,6 +298,10 @@
         catch (ObjectDisposedException)    { }
         catch (JSDisconnectedException)    { }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DebouncedRebuildAsync failed for env {Env}", Env);
+        }
     }
 
     private void TogglePaused()
