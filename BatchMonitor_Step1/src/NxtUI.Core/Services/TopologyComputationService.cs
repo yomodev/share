@@ -195,6 +195,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     private static void ApplyBlueprint(Topology topology, TopologyBlueprint blueprint, Func<string, string> format)
     {
         topology.Layout = blueprint.Layout;
+        topology.HasBlueprint = true;
 
         var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
 

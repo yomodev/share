@@ -14,9 +14,19 @@ public class Topology
 
     /// <summary>
     /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
-    /// or null when no hint applies — the graph then auto-picks direction by aspect ratio.
+    /// or null when no hint applies (or the matched variant didn't specify one) — the graph
+    /// then auto-picks direction by aspect ratio. Not a reliable signal for whether a blueprint
+    /// was applied at all (a variant can omit Layout) — see <see cref="HasBlueprint"/> for that.
     /// </summary>
     public LayoutHint? Layout { get; set; }
+
+    /// <summary>
+    /// True when a run-type topology blueprint was applied (regardless of whether it declared
+    /// a Layout). Gates "undeclared" (dashed-border) styling in the UI — with no blueprint at
+    /// all, EVERY node would otherwise read as "undeclared" (IsDeclared defaults to false),
+    /// which is wrong: there's no plan to be off of.
+    /// </summary>
+    public bool HasBlueprint { get; set; }
 
     /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }

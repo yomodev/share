@@ -476,6 +476,7 @@ const D3Graph = (() => {
         if (handle.disposed || seq !== handle.layoutSeq) return;
 
         handle.currentGraph = g;
+        handle.hasBlueprint = topo.hasBlueprint === true;
         updateClipPaths(handle, topo);
         renderGroups(handle);  // group bands beneath everything
         renderEdges(handle);   // edges below nodes
@@ -612,10 +613,12 @@ const D3Graph = (() => {
             const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
             const st  = stateClass(d.data.headerState, stillWorking);
             const col = stateColor(d.data.headerState, stillWorking);
-            // Blueprint provenance: undeclared = seen at runtime but not in the blueprint
-            // (dashed "not in blueprint"); skeleton = declared but not yet seen (greyed ghost).
-            const undeclared = d.data.isObserved === true  && d.data.isDeclared === false;
-            const skeleton   = d.data.isObserved === false && d.data.isDeclared === true;
+            // Blueprint provenance — only meaningful when a blueprint actually applies. With no
+            // blueprint at all, IsDeclared defaults to false on every node, which would
+            // otherwise make every node read as "undeclared" (dashed) — there's no plan to be
+            // off of, so both flags are forced off when handle.hasBlueprint is false.
+            const undeclared = handle.hasBlueprint && d.data.isObserved === true  && d.data.isDeclared === false;
+            const skeleton   = handle.hasBlueprint && d.data.isObserved === false && d.data.isDeclared === true;
             const accentCol  = d.data.color || col; // per-node colour override from the hint
             el.classed('bm-node-skeleton', skeleton);
 

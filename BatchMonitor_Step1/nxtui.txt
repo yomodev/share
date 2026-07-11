@@ -5814,7 +5814,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 8987
+LENGTH 9605
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -5831,9 +5831,19 @@ public class Topology
 
     /// <summary>
     /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
-    /// or null when no hint applies — the graph then auto-picks direction by aspect ratio.
+    /// or null when no hint applies (or the matched variant didn't specify one) — the graph
+    /// then auto-picks direction by aspect ratio. Not a reliable signal for whether a blueprint
+    /// was applied at all (a variant can omit Layout) — see <see cref="HasBlueprint"/> for that.
     /// </summary>
     public LayoutHint? Layout { get; set; }
+
+    /// <summary>
+    /// True when a run-type topology blueprint was applied (regardless of whether it declared
+    /// a Layout). Gates "undeclared" (dashed-border) styling in the UI — with no blueprint at
+    /// all, EVERY node would otherwise read as "undeclared" (IsDeclared defaults to false),
+    /// which is wrong: there's no plan to be off of.
+    /// </summary>
+    public bool HasBlueprint { get; set; }
 
     /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
@@ -7216,7 +7226,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 15790
+LENGTH 15828
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -7414,6 +7424,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     private static void ApplyBlueprint(Topology topology, TopologyBlueprint blueprint, Func<string, string> format)
     {
         topology.Layout = blueprint.Layout;
+        topology.HasBlueprint = true;
 
         var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
 
@@ -8392,7 +8403,7 @@ LENGTH 7296
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=21");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=22");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -30617,7 +30628,7 @@ public sealed class LogFormatGrammarContractTests
     }
 }
 FILE tests/NxtUI.Tests/Services/TopologyComputationServiceBlueprintTests.cs
-LENGTH 6875
+LENGTH 8424
 using AwesomeAssertions;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
@@ -30767,6 +30778,7 @@ public class TopologyComputationServiceBlueprintTests
         topo.Nodes.Should().OnlyContain(n => n.HeaderState == PipelineState.NotStarted && !n.IsObserved);
         topo.Layout.Should().NotBeNull();
         topo.Layout!.Shape.Should().Be("tree");
+        topo.HasBlueprint.Should().BeTrue();
     }
 
     [Fact]
@@ -30783,6 +30795,38 @@ public class TopologyComputationServiceBlueprintTests
 
         topo.Layout.Should().BeNull();
         topo.Nodes.Should().ContainSingle(n => n.Id == "Ingester" && !n.IsDeclared);
+    }
+
+    [Fact]
+    public void No_blueprint_sets_HasBlueprint_false_even_though_IsDeclared_defaults_false_on_every_node()
+    {
+        // Regression test: the UI's "undeclared" (dashed border) styling used to be computed
+        // purely from IsObserved && !IsDeclared — which is true for EVERY node when no
+        // blueprint applies at all (IsDeclared just defaults to false), making every service
+        // render dashed with no hint file present. HasBlueprint is the explicit signal the UI
+        // gates on instead, so it must be false here regardless of the nodes' IsDeclared value.
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+            ["e2"] = Evt("chunk2", "Enricher", "field-map", t0, t0.AddSeconds(1)),
+        };
+
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events); // no blueprint passed
+
+        topo.HasBlueprint.Should().BeFalse();
+        topo.Nodes.Should().OnlyContain(n => !n.IsDeclared); // would look "undeclared" if not gated
+    }
+
+    [Fact]
+    public void Blueprint_sets_HasBlueprint_true()
+    {
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(new Dictionary<string, PerformanceEvent>(), blueprint: blueprint);
+
+        topo.HasBlueprint.Should().BeTrue();
     }
 }
 FILE tests/NxtUI.Tests/Services/TopologyHintLoaderTests.cs
@@ -39196,7 +39240,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 51768
+LENGTH 52056
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -39675,6 +39719,7 @@ const D3Graph = (() => {
         if (handle.disposed || seq !== handle.layoutSeq) return;
 
         handle.currentGraph = g;
+        handle.hasBlueprint = topo.hasBlueprint === true;
         updateClipPaths(handle, topo);
         renderGroups(handle);  // group bands beneath everything
         renderEdges(handle);   // edges below nodes
@@ -39811,10 +39856,12 @@ const D3Graph = (() => {
             const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
             const st  = stateClass(d.data.headerState, stillWorking);
             const col = stateColor(d.data.headerState, stillWorking);
-            // Blueprint provenance: undeclared = seen at runtime but not in the blueprint
-            // (dashed "not in blueprint"); skeleton = declared but not yet seen (greyed ghost).
-            const undeclared = d.data.isObserved === true  && d.data.isDeclared === false;
-            const skeleton   = d.data.isObserved === false && d.data.isDeclared === true;
+            // Blueprint provenance — only meaningful when a blueprint actually applies. With no
+            // blueprint at all, IsDeclared defaults to false on every node, which would
+            // otherwise make every node read as "undeclared" (dashed) — there's no plan to be
+            // off of, so both flags are forced off when handle.hasBlueprint is false.
+            const undeclared = handle.hasBlueprint && d.data.isObserved === true  && d.data.isDeclared === false;
+            const skeleton   = handle.hasBlueprint && d.data.isObserved === false && d.data.isDeclared === true;
             const accentCol  = d.data.color || col; // per-node colour override from the hint
             el.classed('bm-node-skeleton', skeleton);
 

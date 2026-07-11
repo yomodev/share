@@ -147,6 +147,7 @@ public class TopologyComputationServiceBlueprintTests
         topo.Nodes.Should().OnlyContain(n => n.HeaderState == PipelineState.NotStarted && !n.IsObserved);
         topo.Layout.Should().NotBeNull();
         topo.Layout!.Shape.Should().Be("tree");
+        topo.HasBlueprint.Should().BeTrue();
     }
 
     [Fact]
@@ -163,5 +164,37 @@ public class TopologyComputationServiceBlueprintTests
 
         topo.Layout.Should().BeNull();
         topo.Nodes.Should().ContainSingle(n => n.Id == "Ingester" && !n.IsDeclared);
+    }
+
+    [Fact]
+    public void No_blueprint_sets_HasBlueprint_false_even_though_IsDeclared_defaults_false_on_every_node()
+    {
+        // Regression test: the UI's "undeclared" (dashed border) styling used to be computed
+        // purely from IsObserved && !IsDeclared — which is true for EVERY node when no
+        // blueprint applies at all (IsDeclared just defaults to false), making every service
+        // render dashed with no hint file present. HasBlueprint is the explicit signal the UI
+        // gates on instead, so it must be false here regardless of the nodes' IsDeclared value.
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+            ["e2"] = Evt("chunk2", "Enricher", "field-map", t0, t0.AddSeconds(1)),
+        };
+
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events); // no blueprint passed
+
+        topo.HasBlueprint.Should().BeFalse();
+        topo.Nodes.Should().OnlyContain(n => !n.IsDeclared); // would look "undeclared" if not gated
+    }
+
+    [Fact]
+    public void Blueprint_sets_HasBlueprint_true()
+    {
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(new Dictionary<string, PerformanceEvent>(), blueprint: blueprint);
+
+        topo.HasBlueprint.Should().BeTrue();
     }
 }
