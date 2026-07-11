@@ -1717,7 +1717,7 @@ LENGTH 9478
 
 </nlog>
 FILE src/NxtUI.Web/NxtUI.Web.csproj
-LENGTH 942
+LENGTH 1071
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -1751,11 +1751,14 @@ LENGTH 942
     <Content Update="config\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Update="config\topology\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
 FILE src/NxtUI.Web/Program.cs
-LENGTH 24318
+LENGTH 24379
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
@@ -1830,6 +1833,7 @@ public class Program
             BasePath = Path.Combine(builder.Environment.ContentRootPath, "config")
         });
         builder.Services.AddSingleton<EnvironmentConfigLoader>();
+        builder.Services.AddSingleton<TopologyHintLoader>();
 
         // ── Connection factories (shared client when settings fingerprint matches) ──
         builder.Services.AddSingleton<KafkaConnectionFactory>();
@@ -5808,7 +5812,7 @@ public class ServiceStatus
     public double? PeakMb { get; set; }
 }
 FILE src/NxtUI.Core/Models/Topology.cs
-LENGTH 7383
+LENGTH 8987
 namespace NxtUI.Core.Models;
 
 using System.Text.Json.Serialization;
@@ -5822,6 +5826,12 @@ public class Topology
 {
     public List<TopologyNode> Nodes { get; set; } = [];
     public List<TopologyEdge> Edges { get; set; } = [];
+
+    /// <summary>
+    /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
+    /// or null when no hint applies — the graph then auto-picks direction by aspect ratio.
+    /// </summary>
+    public LayoutHint? Layout { get; set; }
 
     /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
@@ -5864,6 +5874,29 @@ public class TopologyNode
     /// per the priority table in §8.2.
     /// </summary>
     public PipelineState HeaderState { get; set; } = PipelineState.NotStarted;
+
+    // ── Topology-hint decoration (null/false when no hint applies) ──────────────
+
+    /// <summary>"source" | "sink" | "middle" from the hint — pins layer position (layered layout).</summary>
+    public string? Role { get; set; }
+
+    /// <summary>Cluster label from the hint — same-group nodes are kept adjacent behind a band.</summary>
+    public string? Group { get; set; }
+
+    /// <summary>Header accent colour override (hex) from the hint.</summary>
+    public string? Color { get; set; }
+
+    /// <summary>Tie-break ordering within a layer from the hint (lower first).</summary>
+    public int? Order { get; set; }
+
+    /// <summary>Keep at a fixed spot across re-layouts (hint escape hatch).</summary>
+    public bool Pin { get; set; }
+
+    /// <summary>True when the run-type blueprint declared this service (matched a ServiceHint).</summary>
+    public bool IsDeclared { get; set; }
+
+    /// <summary>True once at least one real event has been seen for this service.</summary>
+    public bool IsObserved { get; set; }
 }
 
 /// <summary>
@@ -5997,6 +6030,210 @@ public class TopologyEdge
 
     /// <summary>Visual state inherited from the source pipeline row (drives edge colour).</summary>
     public PipelineState State { get; set; } = PipelineState.NotStarted;
+
+    /// <summary>True when the run-type blueprint declared this edge.</summary>
+    public bool IsDeclared { get; set; }
+
+    /// <summary>True once at least one chunk has been observed flowing along this edge.</summary>
+    public bool IsObserved { get; set; }
+}
+FILE src/NxtUI.Core/Models/TopologyBlueprint.cs
+LENGTH 3375
+namespace NxtUI.Core.Models;
+
+/// <summary>
+/// A resolved <see cref="TopologyVariant"/> compiled for merging into a computed
+/// <see cref="Topology"/> — the declared services (for skeleton nodes + node decoration),
+/// the declared service→service edges, and the layout. Produced by
+/// <see cref="Compile"/>; consumed by <c>TopologyComputationService</c>.
+/// </summary>
+public sealed class TopologyBlueprint
+{
+    public LayoutHint? Layout { get; init; }
+
+    /// <summary>Declared services in declaration order (order matters: first glob match wins).</summary>
+    public IReadOnlyList<ServiceHint> Services { get; init; } = [];
+
+    /// <summary>Declared edges as (fromService, toService) name pairs — names may be literal or glob.</summary>
+    public IReadOnlyList<(string From, string To)> DeclaredEdges { get; init; } = [];
+
+    /// <summary>
+    /// Picks the variant to use: the first whose <see cref="VariantMatch.AnyService"/> glob
+    /// matches a service seen so far, else <see cref="TopologyHintFile.Default"/>. Returns null
+    /// when nothing matches and there's no default (⇒ no blueprint, pure runtime inference).
+    /// </summary>
+    public static TopologyVariant? SelectVariant(TopologyHintFile file, IEnumerable<string> seenServices)
+    {
+        var seen = seenServices as ICollection<string> ?? seenServices.ToList();
+        foreach (var variant in file.Variants)
+        {
+            var pattern = variant.Match?.AnyService;
+            if (!string.IsNullOrWhiteSpace(pattern) && seen.Any(s => Glob.IsMatch(s, pattern)))
+                return variant;
+        }
+        return file.Default;
+    }
+
+    /// <summary>Compiles a chosen variant into a blueprint, deriving edges from shared publish/subscribe Targets plus any explicit edges.</summary>
+    public static TopologyBlueprint Compile(TopologyVariant variant)
+    {
+        var edges = new List<(string From, string To)>();
+
+        // Derived edges: a producer's publish token == a consumer's subscribe token (exact,
+        // case-insensitive). Globs form a declared edge only when the tokens are string-equal;
+        // otherwise the edge is left for runtime, where globs resolve against concrete targets.
+        foreach (var producer in variant.Services)
+        foreach (var target in producer.Publishes)
+        foreach (var consumer in variant.Services)
+        {
+            if (ReferenceEquals(producer, consumer)) continue;
+            if (consumer.Subscribes.Any(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase)))
+                edges.Add((producer.Name, consumer.Name));
+        }
+
+        // Explicit edges shorthand.
+        foreach (var e in variant.Edges)
+            if (!string.IsNullOrWhiteSpace(e.From) && !string.IsNullOrWhiteSpace(e.To))
+                edges.Add((e.From, e.To));
+
+        return new TopologyBlueprint
+        {
+            Layout = variant.Layout,
+            Services = variant.Services,
+            DeclaredEdges = Dedup(edges),
+        };
+    }
+
+    private static List<(string From, string To)> Dedup(List<(string From, string To)> edges)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<(string, string)>();
+        foreach (var e in edges)
+            if (seen.Add($"{e.From}{e.To}"))
+                result.Add(e);
+        return result;
+    }
+}
+FILE src/NxtUI.Core/Models/TopologyHint.cs
+LENGTH 5112
+using System.Text.RegularExpressions;
+
+namespace NxtUI.Core.Models;
+
+/// <summary>
+/// Optional per-run-type topology blueprint, loaded from <c>config/topology/{runType}.json</c>.
+/// Describes the services a run of this type is expected to involve, how they connect (via
+/// shared publish/subscribe Targets, or explicit edges), and layout preferences. Purely
+/// advisory: the runtime event stream can add services/edges the file didn't mention, and a
+/// declared service that never appears just renders greyed. See docs/11_Topology_Hints.md.
+/// </summary>
+public sealed class TopologyHintFile
+{
+    public string RunType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Layout variants for this run type, tried in order. The first whose <see cref="TopologyVariant.Match"/>
+    /// is satisfied by a service seen in the run wins (and is then locked). If none match,
+    /// <see cref="Default"/> is used.
+    /// </summary>
+    public List<TopologyVariant> Variants { get; set; } = [];
+
+    /// <summary>Fallback variant when no <see cref="Variants"/> entry matches. Optional.</summary>
+    public TopologyVariant? Default { get; set; }
+}
+
+/// <summary>One layout variant: a discriminator, layout prefs, and the declared services/edges.</summary>
+public sealed class TopologyVariant
+{
+    /// <summary>Discriminator; null on the default variant. Matched against services seen so far.</summary>
+    public VariantMatch? Match { get; set; }
+
+    public LayoutHint? Layout { get; set; }
+
+    public List<ServiceHint> Services { get; set; } = [];
+
+    /// <summary>Explicit service→service edges, an alternative to declaring shared publish/subscribe Targets.</summary>
+    public List<EdgeHint> Edges { get; set; } = [];
+}
+
+/// <summary>Variant discriminator — currently "a service matching this glob has been seen".</summary>
+public sealed class VariantMatch
+{
+    /// <summary>Glob (<c>*</c>/<c>?</c>) matched against every service seen in the run so far.</summary>
+    public string? AnyService { get; set; }
+}
+
+/// <summary>Graph-level layout preferences (author-friendly; mapped to ELK by the graph component).</summary>
+public sealed class LayoutHint
+{
+    /// <summary>"horizontal" (→ ELK RIGHT) or "vertical" (→ ELK DOWN). Null = auto (by aspect ratio).</summary>
+    public string? Direction { get; set; }
+
+    /// <summary>"layered" (default, fans back in) or "tree" (branching hierarchy, → ELK mrtree).</summary>
+    public string? Shape { get; set; }
+
+    /// <summary>"compact" | "normal" | "airy" — scales node/edge spacing. Null = normal.</summary>
+    public string? Density { get; set; }
+
+    /// <summary>Prefer straighter edges (ELK NETWORK_SIMPLEX node placement) over tidiest packing.</summary>
+    public bool? StraightenEdges { get; set; }
+}
+
+/// <summary>Per-service declaration + node hints.</summary>
+public sealed class ServiceHint
+{
+    /// <summary>
+    /// Service name or glob. A <b>literal</b> name (no <c>*</c>/<c>?</c>) pre-renders as a
+    /// skeleton node from t=0 (greyed NotStarted); a <b>glob</b> only decorates matching
+    /// runtime nodes (it has no concrete identity to draw before the service appears).
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>"source" | "sink" | "middle" — pins layer position (layered layout only).</summary>
+    public string? Role { get; set; }
+
+    /// <summary>Cluster label — same-group services are kept adjacent behind a shared band.</summary>
+    public string? Group { get; set; }
+
+    /// <summary>Header accent override (hex). State colour still shows via border/intensity.</summary>
+    public string? Color { get; set; }
+
+    /// <summary>Tie-break ordering within a layer (lower first).</summary>
+    public int? Order { get; set; }
+
+    /// <summary>Keep at a fixed spot across re-layouts (escape hatch; fights crossing minimisation).</summary>
+    public bool Pin { get; set; }
+
+    /// <summary>Start folded.</summary>
+    public bool Collapsed { get; set; }
+
+    /// <summary>Targets this service produces to (for edge derivation by shared token).</summary>
+    public List<string> Publishes { get; set; } = [];
+
+    /// <summary>Targets this service consumes from.</summary>
+    public List<string> Subscribes { get; set; } = [];
+
+    public bool IsGlob => Name.Contains('*') || Name.Contains('?');
+}
+
+/// <summary>An explicit declared edge between two service names (may be literal or glob).</summary>
+public sealed class EdgeHint
+{
+    public string From { get; set; } = string.Empty;
+    public string To { get; set; } = string.Empty;
+}
+
+/// <summary>Case-insensitive glob (<c>*</c>=any, <c>?</c>=one) used across topology hint matching.</summary>
+public static class Glob
+{
+    public static bool IsMatch(string input, string pattern)
+    {
+        var sb = new System.Text.StringBuilder("^");
+        foreach (var ch in pattern)
+            sb.Append(ch switch { '*' => ".*", '?' => ".", _ => Regex.Escape(ch.ToString()) });
+        sb.Append('$');
+        return Regex.IsMatch(input ?? string.Empty, sb.ToString(), RegexOptions.IgnoreCase);
+    }
 }
 FILE src/NxtUI.Core/Services/EnvironmentConfigLoader.cs
 LENGTH 2019
@@ -6970,7 +7207,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 11415
+LENGTH 15790
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -7001,13 +7238,18 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     /// </param>
     public Topology ComputeTopology(
         IReadOnlyDictionary<string, PerformanceEvent> eventStore,
-        Func<string, string>? labelFormatter = null)
+        Func<string, string>? labelFormatter = null,
+        TopologyBlueprint? blueprint = null)
     {
         var format = labelFormatter ?? (s => s);
 
         if (eventStore == null || eventStore.Count == 0)
         {
-            return new Topology { TotalChunks = 0, TotalEvents = 0 };
+            // Even with no events, a blueprint still renders its skeleton (declared services
+            // greyed as NotStarted) so the expected flow shows from t=0.
+            var empty = new Topology { TotalChunks = 0, TotalEvents = 0 };
+            if (blueprint is not null) ApplyBlueprint(empty, blueprint, format);
+            return empty;
         }
 
         var topology = new Topology { TotalEvents = eventStore.Count };
@@ -7027,7 +7269,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         {
             if (!nodesByService.TryGetValue(service, out var node))
             {
-                node = new TopologyNode { Id = service, Label = format(service) };
+                node = new TopologyNode { Id = service, Label = format(service), IsObserved = true };
                 nodesByService[service] = node;
             }
 
@@ -7098,6 +7340,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                             SourcePipeline = prevHop.Value.Pipeline,
                             Target = hop.Service,
                             TargetPipeline = hop.Pipeline,
+                            IsObserved = true,
                         };
                         edgesByKey[key] = edge;
                     }
@@ -7150,7 +7393,94 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
             ? Math.Clamp(numerator / denominator, 0.0, 1.0)
             : 0.0;
 
+        if (blueprint is not null) ApplyBlueprint(topology, blueprint, format);
+
         return topology;
+    }
+
+    // ── Blueprint merge (run-type topology hints) ──────────────────────────────
+    // Advisory overlay: decorate observed nodes with hint metadata, add greyed skeleton
+    // nodes/edges for declared-but-unseen services, flag observed-but-undeclared nodes, and
+    // attach the layout. Runtime data always wins on state/counts — this only adds structure.
+    private static void ApplyBlueprint(Topology topology, TopologyBlueprint blueprint, Func<string, string> format)
+    {
+        topology.Layout = blueprint.Layout;
+
+        var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+
+        // 1. Decorate observed nodes with the first matching ServiceHint (declaration order).
+        foreach (var node in topology.Nodes)
+        {
+            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(node.Id, s.Name));
+            if (hint is not null) Decorate(node, hint);
+            // else: observed but undeclared → IsDeclared stays false (dashed border in the UI).
+        }
+
+        // 2. Skeleton nodes for LITERAL declared services never seen (globs have no concrete
+        //    identity to draw before the service appears, so they only decorate — step 1).
+        foreach (var hint in blueprint.Services)
+        {
+            if (hint.IsGlob || nodesById.ContainsKey(hint.Name)) continue;
+            var node = new TopologyNode
+            {
+                Id = hint.Name,
+                Label = format(hint.Name),
+                HeaderState = PipelineState.NotStarted,
+                IsObserved = false,
+            };
+            Decorate(node, hint);
+            topology.Nodes.Add(node);
+            nodesById[node.Id] = node;
+        }
+
+        // 3. Declared edges: mark matching observed edges, or add greyed skeleton edges between
+        //    declared endpoints that resolve to concrete nodes.
+        var existing = new HashSet<string>(
+            topology.Edges.Select(e => $"{e.Source}{e.Target}"), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (from, to) in blueprint.DeclaredEdges)
+        foreach (var src in ResolveNodes(from, nodesById.Keys))
+        foreach (var dst in ResolveNodes(to, nodesById.Keys))
+        {
+            if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase)) continue;
+            var key = $"{src}{dst}";
+            if (existing.Contains(key))
+            {
+                foreach (var e in topology.Edges)
+                    if (string.Equals(e.Source, src, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(e.Target, dst, StringComparison.OrdinalIgnoreCase))
+                        e.IsDeclared = true;
+            }
+            else
+            {
+                topology.Edges.Add(new TopologyEdge
+                {
+                    Source = src, Target = dst,
+                    SourcePipeline = string.Empty, TargetPipeline = string.Empty,
+                    State = PipelineState.NotStarted, IsDeclared = true, IsObserved = false,
+                });
+                existing.Add(key);
+            }
+        }
+    }
+
+    private static void Decorate(TopologyNode node, ServiceHint hint)
+    {
+        node.IsDeclared = true;
+        node.Role = hint.Role;
+        node.Group = hint.Group;
+        node.Color = hint.Color;
+        node.Order = hint.Order;
+        node.Pin = hint.Pin;
+    }
+
+    // A declared endpoint (literal or glob) → the concrete node ids it resolves to.
+    private static IEnumerable<string> ResolveNodes(string nameOrGlob, IEnumerable<string> nodeIds)
+    {
+        var isGlob = nameOrGlob.Contains('*') || nameOrGlob.Contains('?');
+        return isGlob
+            ? nodeIds.Where(id => Glob.IsMatch(id, nameOrGlob))
+            : nodeIds.Where(id => string.Equals(id, nameOrGlob, StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -7225,6 +7555,59 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     /// </summary>
     private static string InferTopicName(string pipeline) =>
         string.IsNullOrWhiteSpace(pipeline) ? string.Empty : pipeline.ToLowerInvariant().Replace(' ', '-') + "-events";
+}
+FILE src/NxtUI.Core/Services/TopologyHintLoader.cs
+LENGTH 1997
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using NxtUI.Core.Models;
+
+namespace NxtUI.Core.Services;
+
+/// <summary>
+/// Loads optional per-run-type topology hints from <c>{BasePath}/topology/{runType}.json</c>
+/// (see <see cref="EnvironmentConfigOptions.BasePath"/>). Files are parsed once and cached
+/// for the process lifetime; a missing/invalid file resolves to null (the graph then falls
+/// back to pure runtime inference — hints are advisory). Lookup key is the run's Type,
+/// lowercased; the flow shape doesn't vary by environment, so this is not env-scoped.
+/// </summary>
+public sealed class TopologyHintLoader(EnvironmentConfigOptions options, ILogger<TopologyHintLoader> log)
+{
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
+    // Cached including the "not found" result (null) so we don't stat the disk on every poll.
+    private readonly ConcurrentDictionary<string, TopologyHintFile?> _cache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Returns the hint file for a run type, or null if none exists / failed to parse.</summary>
+    public TopologyHintFile? Get(string? runType)
+    {
+        if (string.IsNullOrWhiteSpace(runType)) return null;
+        return _cache.GetOrAdd(runType, Load);
+    }
+
+    private TopologyHintFile? Load(string runType)
+    {
+        var path = Path.Combine(options.BasePath, "topology", $"{runType.ToLowerInvariant()}.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<TopologyHintFile>(json, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Failed to load topology hint from {Path}", path);
+            return null;
+        }
+    }
 }
 FILE src/NxtUI.Core/Services/TopologyLabelFormatter.cs
 LENGTH 2252
@@ -8000,7 +8383,7 @@ LENGTH 7296
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=20");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=21");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -17242,7 +17625,7 @@ LENGTH 857
     [Parameter]                 public string Environment { get; set; } = string.Empty;
 }
 FILE src/NxtUI.Web/Pages/RunDetail.razor
-LENGTH 33373
+LENGTH 35433
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
@@ -17258,6 +17641,7 @@ LENGTH 33373
 @inject IOptions<UiSettings> UiOptions
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject ILogPathDiscoveryService DiscoverySvc
+@inject TopologyHintLoader HintLoader
 @inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
@@ -17290,6 +17674,12 @@ LENGTH 33373
     // ── Topology (live and replay) ────────────────────────────────────────
     private Topology? _topology;
     private int _eventCount;
+
+    // ── Run-type topology hint (optional blueprint) ───────────────────────
+    private TopologyHintFile? _hintFile;
+    private TopologyVariant?  _chosenVariant;   // the default or a matched variant (may still switch until locked)
+    private bool              _variantLocked;   // true once a non-default variant matched — never flips after
+    private TopologyBlueprint? _blueprint;      // compiled from _chosenVariant; recompiled only when it changes
 
     // Single shared instance instead of "?? new Topology()" inline in the markup —
     // that allocated a NEW instance every render while _topology was still null
@@ -17436,6 +17826,9 @@ LENGTH 33373
                 if (Tab is not null && !string.IsNullOrWhiteSpace(_details.Type))
                     TabService.RenameTab(Tab.Id, $"{_details.Type} {_details.RunId}");
 
+                // Optional per-run-type topology blueprint (null when no hint file exists).
+                _hintFile = HintLoader.Get(_details.Type);
+
                 await StartEventServiceAsync();
             }
         }
@@ -17479,6 +17872,31 @@ LENGTH 33373
         }
     }
 
+    // Picks (and locks) the variant from the services seen so far, then compiles it to a
+    // blueprint — recompiling only when the chosen variant actually changes. Returns null
+    // when there's no hint file, or no variant matches and there's no default.
+    private TopologyBlueprint? ResolveBlueprint(IEnumerable<PerformanceEvent> events)
+    {
+        if (_hintFile is null) return null;
+
+        if (!_variantLocked)
+        {
+            var seen = events.Select(e => e.Service).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+            var chosen = TopologyBlueprint.SelectVariant(_hintFile, seen);
+
+            if (!ReferenceEquals(chosen, _chosenVariant))
+            {
+                _chosenVariant = chosen;
+                _blueprint = chosen is null ? null : TopologyBlueprint.Compile(chosen);
+            }
+            // A matched (non-default) variant is final — stop re-evaluating on later events.
+            if (chosen is not null && !ReferenceEquals(chosen, _hintFile.Default))
+                _variantLocked = true;
+        }
+
+        return _blueprint;
+    }
+
     private async Task RecomputeTopologyAsync()
     {
         try
@@ -17495,7 +17913,11 @@ LENGTH 33373
                            .ToDictionary(kv => kv.Key, kv => kv.Value)
                 : allEvents;
 
-            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
+            // Variant selection uses the FULL set of services seen (not replay-clamped) —
+            // the blueprint shape shouldn't change as you scrub the replay slider.
+            var blueprint = ResolveBlueprint(allEvents.Values);
+
+            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter, blueprint);
             _eventCount = _eventService.EventCount;
             _errorCount = allEvents.Values.Count(e => e.IsError);
 
@@ -32280,6 +32702,35 @@ public class SqlRunService(
     private static string EscapeLike(string value) =>
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
+FILE src/NxtUI.Web/config/topology/fullload.json
+LENGTH 1370
+{
+  // Sample topology hint for run Type "FullLoad" (see docs/11_Topology_Hints.md).
+  // Advisory: the mock backend assigns services randomly, so you'll also see undeclared
+  // services (dashed border) and the declared-but-unseen ones as greyed skeleton nodes.
+  "runType": "FullLoad",
+  "variants": [
+    {
+      // Locks to this variant the moment any "Ingester…" service is seen.
+      "match": { "anyService": "Ingester*" },
+      "layout": { "direction": "vertical", "shape": "tree", "density": "normal" },
+      "services": [
+        { "name": "Ingester",    "role": "source", "group": "Ingest",    "publishes": ["staged"] },
+        { "name": "Validator",   "role": "middle", "group": "Validate",  "subscribes": ["staged"],    "publishes": ["validated"] },
+        { "name": "Normaliser",  "role": "middle", "group": "Transform", "subscribes": ["validated"], "publishes": ["normalised"] },
+        { "name": "Transformer", "role": "middle", "group": "Transform", "subscribes": ["normalised"],"publishes": ["ready"] },
+        { "name": "Loader",      "role": "sink",   "group": "Persist",   "subscribes": ["ready"], "color": "#A371F7" }
+      ]
+    }
+  ],
+  "default": {
+    "layout": { "direction": "horizontal", "shape": "layered" },
+    "services": [
+      { "name": "Ingester", "role": "source" },
+      { "name": "Loader",   "role": "sink" }
+    ]
+  }
+}
 FILE src/NxtUI.Web/wwwroot/css/app.css
 LENGTH 104566
 /* ================================================================
@@ -35704,7 +36155,7 @@ tr.bm-row-searching td:first-child {
 .bm-errdlg-msg  { color: #F85149; min-width: 220px; max-width: 480px; word-break: break-word; }
 .bm-errdlg-info { color: var(--mud-palette-text-secondary); max-width: 260px; word-break: break-word; }
 FILE src/NxtUI.Web/wwwroot/css/d3-graph.css
-LENGTH 7741
+LENGTH 8732
 /* ================================================================
    D3 FLOW GRAPH  (rev 6)
    ================================================================ */
@@ -35746,6 +36197,36 @@ LENGTH 7741
 /* Hover glow — filter only, no positional change. */
 .bm-node:hover .bm-node-rect {
     filter: brightness(1.35);
+}
+
+/* ── Topology-blueprint provenance ─────────────────────────────────────────
+   Undeclared = seen at runtime but not in the run-type blueprint ("off-plan").
+   Skeleton   = declared in the blueprint but not yet seen ("expected"). */
+.bm-node-rect-undeclared {
+    stroke-dasharray: 5 4;
+}
+.bm-node-skeleton {
+    opacity: 0.5;
+}
+.bm-edge-skeleton {
+    opacity: 0.35;
+}
+
+/* ── Group bands (per-node `group` hint) ──────────────────────────────────── */
+.bm-group-rect {
+    fill: var(--mud-palette-text-primary);
+    fill-opacity: 0.04;
+    stroke: var(--mud-palette-lines-default);
+    stroke-opacity: 0.5;
+    stroke-width: 1px;
+    stroke-dasharray: 3 3;
+}
+.bm-group-label {
+    fill: var(--mud-palette-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 /* Green = fully drained (nothing left in flight), blue = still has work in
@@ -37591,7 +38072,7 @@ export function tick(s, dtMs) {
     };
 }
 FILE src/NxtUI.Web/wwwroot/js/d3-graph.js
-LENGTH 47139
+LENGTH 51768
 // Batch Monitor — D3 flow graph  (rev 4)
 //
 // Fixes in this revision:
@@ -37732,9 +38213,25 @@ const D3Graph = (() => {
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
-    function chooseDir(containerEl) {
+    // Flow direction: an explicit topology-hint layout wins; otherwise auto by aspect ratio.
+    function chooseDir(containerEl, layout) {
+        const d = layout && layout.direction ? String(layout.direction).toLowerCase() : '';
+        if (d === 'horizontal') return 'RIGHT';
+        if (d === 'vertical')   return 'DOWN';
         const r = containerEl.getBoundingClientRect();
         return r.width >= r.height ? 'RIGHT' : 'DOWN';
+    }
+
+    // Node/edge spacing multiplier from the hint's density.
+    function densityScale(layout) {
+        const d = layout && layout.density ? String(layout.density).toLowerCase() : '';
+        return d === 'compact' ? 0.65 : d === 'airy' ? 1.6 : 1;
+    }
+
+    // "source"/"sink" role → ELK layer constraint (layered layout only).
+    function layerConstraint(role) {
+        const r = role ? String(role).toLowerCase() : '';
+        return r === 'source' ? 'FIRST' : r === 'sink' ? 'LAST' : 'NONE';
     }
 
     // Port position along the node's EAST/WEST edge, aligned to the centre of the
@@ -37761,10 +38258,13 @@ const D3Graph = (() => {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        const dir       = chooseDir(handle.containerEl);
+        const layout    = topo.layout || null;
+        const dir       = chooseDir(handle.containerEl, layout);
         const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
         const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
         const fixedPos  = handle.portConstraints === 'FIXED_POS';
+        const tree      = layout && String(layout.shape || '').toLowerCase() === 'tree';
+        const dens      = densityScale(layout);
 
         // Which pipeline rows need an output/input port.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
@@ -37796,8 +38296,15 @@ const D3Graph = (() => {
                 ports.push({ id: portId(n.id, 'in', pipe), ...pos, layoutOptions: { 'elk.port.side': inSide } });
             }
 
-            return { id: n.id, width: w, height: h, ports,
-                     layoutOptions: { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' } };
+            const nodeOpts = { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' };
+            // Per-node hints from the run-type blueprint (layered layout only). role pins the
+            // node to the first/last layer; order biases in-layer placement (lower = earlier).
+            if (!tree) {
+                const lc = layerConstraint(n.role);
+                if (lc !== 'NONE') nodeOpts['elk.layered.layering.layerConstraint'] = lc;
+                if (typeof n.order === 'number') nodeOpts['elk.priority'] = String(-n.order);
+            }
+            return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts };
         });
 
         const elkEdges = edges.map((e, i) => ({
@@ -37813,23 +38320,28 @@ const D3Graph = (() => {
         const cw = handle.containerEl.clientWidth  || 1;
         const ch = handle.containerEl.clientHeight || 1;
 
+        // Blueprint layout hints: "tree" shape → ELK mrtree; density scales spacing;
+        // straightenEdges → NETWORK_SIMPLEX node placement (straighter, less tidy packing).
+        const px = (base) => String(Math.round(base * dens));
         const graph = {
             id: 'root',
             layoutOptions: {
-                'elk.algorithm': 'layered',
+                'elk.algorithm': tree ? 'mrtree' : 'layered',
                 'elk.direction': dir,
                 'elk.edgeRouting': 'ORTHOGONAL',
                 'elk.aspectRatio': String(cw / ch),
-                'elk.layered.spacing.nodeNodeBetweenLayers': '110',
-                'elk.spacing.nodeNode': '56',
+                'elk.layered.spacing.nodeNodeBetweenLayers': px(110),
+                'elk.spacing.nodeNode': px(56),
                 // These two were the tightest settings relative to how many parallel
                 // edges can share a channel between two fixed-position ports — bumped
                 // up first (least invasive: doesn't change where any arrow connects)
                 // before trading away exact per-row port alignment for FIXED_SIDE.
-                'elk.spacing.edgeNode': '34',
-                'elk.spacing.edgeEdge': '28',
-                'elk.layered.spacing.edgeNodeBetweenLayers': '34',
+                'elk.spacing.edgeNode': px(34),
+                'elk.spacing.edgeEdge': px(28),
+                'elk.layered.spacing.edgeNodeBetweenLayers': px(34),
                 'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+                'elk.layered.nodePlacement.strategy':
+                    (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
             },
             children,
@@ -37941,6 +38453,7 @@ const D3Graph = (() => {
             .attr('stroke', 'none');
 
         const root  = svg.append('g').attr('class', 'bm-d3-root');
+        const gLayer = root.append('g').attr('class', 'bm-group-layer'); // behind edges + nodes
         const eLayer = root.append('g').attr('class', 'bm-edge-layer');
         const nLayer = root.append('g').attr('class', 'bm-node-layer');
 
@@ -37967,7 +38480,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
+            containerEl, svg, root, gLayer, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             animState: createState(),
@@ -38039,9 +38552,43 @@ const D3Graph = (() => {
 
         handle.currentGraph = g;
         updateClipPaths(handle, topo);
-        renderEdges(handle);  // edges first — drawn below nodes
+        renderGroups(handle);  // group bands beneath everything
+        renderEdges(handle);   // edges below nodes
         renderNodes(handle);
         if (!handle.userZoomed) fitToView(handle, true);
+    }
+
+    // ── Group bands — a subtle labelled backdrop behind same-`group` nodes ────
+    // v1: a bounding box around the laid-out members (ELK isn't asked to cluster them, so
+    // members can be non-adjacent; the band still communicates the grouping visually).
+    function renderGroups(handle) {
+        const PAD = 14, LABEL_H = 16;
+        const byGroup = new Map();
+        for (const [id, n] of handle.currentGraph.nodes) {
+            const grp = n.data && n.data.group;
+            if (!grp) continue;
+            const hw = (n.width || 0) / 2, hh = (n.height || 0) / 2;
+            const box = byGroup.get(grp) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+            box.x0 = Math.min(box.x0, n.x - hw); box.y0 = Math.min(box.y0, n.y - hh);
+            box.x1 = Math.max(box.x1, n.x + hw); box.y1 = Math.max(box.y1, n.y + hh);
+            byGroup.set(grp, box);
+        }
+
+        const data = [...byGroup.entries()].map(([name, b]) => ({ name, b }));
+        const sel = handle.gLayer.selectAll('g.bm-group').data(data, d => d.name);
+        sel.exit().remove();
+        const enter = sel.enter().append('g').attr('class', 'bm-group');
+        enter.append('rect').attr('class', 'bm-group-rect').attr('rx', 12);
+        enter.append('text').attr('class', 'bm-group-label');
+
+        const merged = enter.merge(sel);
+        merged.select('.bm-group-rect')
+            .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD - LABEL_H)
+            .attr('width', d => (d.b.x1 - d.b.x0) + PAD * 2)
+            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2 + LABEL_H);
+        merged.select('.bm-group-label')
+            .attr('x', d => d.b.x0 - PAD + 10).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .text(d => d.name);
     }
 
     // ── SVG clipPaths — one per node, clips row content to card bounds ────
@@ -38140,6 +38687,12 @@ const D3Graph = (() => {
             const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
             const st  = stateClass(d.data.headerState, stillWorking);
             const col = stateColor(d.data.headerState, stillWorking);
+            // Blueprint provenance: undeclared = seen at runtime but not in the blueprint
+            // (dashed "not in blueprint"); skeleton = declared but not yet seen (greyed ghost).
+            const undeclared = d.data.isObserved === true  && d.data.isDeclared === false;
+            const skeleton   = d.data.isObserved === false && d.data.isDeclared === true;
+            const accentCol  = d.data.color || col; // per-node colour override from the hint
+            el.classed('bm-node-skeleton', skeleton);
 
             // Clip the pipeline-rows group to the card shape so long row names /
             // counts can never spill outside the rounded rectangle. (Previously the
@@ -38155,7 +38708,7 @@ const D3Graph = (() => {
             el.select('.bm-node-rect')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', d.height)
-                .attr('class', `bm-node-rect bm-hdr-${st}`);
+                .attr('class', `bm-node-rect bm-hdr-${st}${undeclared ? ' bm-node-rect-undeclared' : ''}`);
 
             // Header tint — full-width band behind the title, same hue as the border
             // but semi-transparent (fill-opacity, not a separate alpha color) so it
@@ -38166,7 +38719,7 @@ const D3Graph = (() => {
             el.select('.bm-node-accent')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .attr('fill', col).attr('fill-opacity', 0.14)
+                .attr('fill', accentCol).attr('fill-opacity', 0.14)
                 .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-label')
@@ -38460,6 +39013,10 @@ const D3Graph = (() => {
             path.attr('d', edgePath(handle, d.pts))
                 .attr('stroke', col)
                 .attr('stroke-width', w);
+
+            // Declared-but-not-yet-observed edges (from the blueprint) render faint.
+            d3.select(this).classed('bm-edge-skeleton',
+                d.data?.isObserved === false && d.data?.isDeclared === true);
 
             d3.select(this).select('title').text(edgeTooltip(d.data));
 

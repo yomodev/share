@@ -1,6 +1,7 @@
 @namespace NxtUI.Web.Pages
 @using NxtUI.Web.Models
 @using NxtUI.Core.Configuration
+@using NxtUI.Core.Filtering
 @using Microsoft.Extensions.Options
 @inject IRunService RunService
 @inject RunActionsService RunActions
@@ -12,6 +13,7 @@
 @inject IOptions<UiSettings> UiOptions
 @inject IOptions<NxtUI.Configuration.RunsSettings> RunsOptions
 @inject ILogPathDiscoveryService DiscoverySvc
+@inject TopologyHintLoader HintLoader
 @inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
@@ -45,6 +47,12 @@
     private Topology? _topology;
     private int _eventCount;
 
+    // ── Run-type topology hint (optional blueprint) ───────────────────────
+    private TopologyHintFile? _hintFile;
+    private TopologyVariant?  _chosenVariant;   // the default or a matched variant (may still switch until locked)
+    private bool              _variantLocked;   // true once a non-default variant matched — never flips after
+    private TopologyBlueprint? _blueprint;      // compiled from _chosenVariant; recompiled only when it changes
+
     // Single shared instance instead of "?? new Topology()" inline in the markup —
     // that allocated a NEW instance every render while _topology was still null
     // (before the first compute), which defeated D3FlowGraph's reference-equality
@@ -76,6 +84,50 @@
     private bool _detailsExpanded;
     private IJSObjectReference? _appModule;
     private const string DetailsExpandedStorageKey = "bm-rundetail-expanded";
+
+    // ── Errors dialog ─────────────────────────────────────────────────────
+    // Shows every errored event across the run (not replay-clamped — an error is an error
+    // regardless of where the replay slider sits), read straight from the event store and
+    // filtered client-side. The graph's per-pipeline popover opens this pre-filtered.
+    private bool _errorsDialogOpen;
+    private string  _errorsFilterText       = string.Empty;
+    private string? _errorsFilterParseError;
+    private FilterNode? _errorsFilterAst;
+    private List<PerformanceEvent> _filteredErrors = [];
+    // Total errored events in the store — cached per topology recompute so the topbar badge
+    // doesn't scan every event on each render.
+    private int _errorCount;
+
+    private static readonly string[] ErrorSearchableFields =
+        ["Service", "Server", "Pipeline", "Name", "Source", "Info", "Error"];
+
+    private static readonly Dictionary<string, string> ErrorFilterAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["svc"] = "Service",   ["service"] = "Service",
+        ["pipe"] = "Pipeline", ["pipeline"] = "Pipeline",
+        ["srv"] = "Server",    ["server"] = "Server", ["host"] = "Server",
+        ["pid"] = "ProcessId", ["processid"] = "ProcessId",
+        ["src"] = "Source",    ["source"] = "Source",
+        ["chunk"] = "Name",    ["chunkid"] = "Name", ["name"] = "Name",
+        ["info"] = "Info",
+        ["err"] = "Error",     ["error"] = "Error",
+        ["time"] = "Start",    ["start"] = "Start",
+    };
+
+    private static readonly FilterParser ErrorFilterParser = new(ErrorSearchableFields, ErrorFilterAliases);
+
+    private static readonly (string Aliases, string Label)[] _errorFieldHints =
+    [
+        ("svc / service",       "service"),
+        ("host / srv / server", "host / server"),
+        ("pid",                 "process id"),
+        ("pipe / pipeline",     "pipeline"),
+        ("chunk / name",        "chunk"),
+        ("src / source",        "source / handler"),
+        ("info",                "info text"),
+        ("err / error",         "error message"),
+        ("time / start",        "time"),
+    ];
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -146,6 +198,9 @@
                 if (Tab is not null && !string.IsNullOrWhiteSpace(_details.Type))
                     TabService.RenameTab(Tab.Id, $"{_details.Type} {_details.RunId}");
 
+                // Optional per-run-type topology blueprint (null when no hint file exists).
+                _hintFile = HintLoader.Get(_details.Type);
+
                 await StartEventServiceAsync();
             }
         }
@@ -189,6 +244,31 @@
         }
     }
 
+    // Picks (and locks) the variant from the services seen so far, then compiles it to a
+    // blueprint — recompiling only when the chosen variant actually changes. Returns null
+    // when there's no hint file, or no variant matches and there's no default.
+    private TopologyBlueprint? ResolveBlueprint(IEnumerable<PerformanceEvent> events)
+    {
+        if (_hintFile is null) return null;
+
+        if (!_variantLocked)
+        {
+            var seen = events.Select(e => e.Service).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+            var chosen = TopologyBlueprint.SelectVariant(_hintFile, seen);
+
+            if (!ReferenceEquals(chosen, _chosenVariant))
+            {
+                _chosenVariant = chosen;
+                _blueprint = chosen is null ? null : TopologyBlueprint.Compile(chosen);
+            }
+            // A matched (non-default) variant is final — stop re-evaluating on later events.
+            if (chosen is not null && !ReferenceEquals(chosen, _hintFile.Default))
+                _variantLocked = true;
+        }
+
+        return _blueprint;
+    }
+
     private async Task RecomputeTopologyAsync()
     {
         try
@@ -205,10 +285,18 @@
                            .ToDictionary(kv => kv.Key, kv => kv.Value)
                 : allEvents;
 
-            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter);
+            // Variant selection uses the FULL set of services seen (not replay-clamped) —
+            // the blueprint shape shouldn't change as you scrub the replay slider.
+            var blueprint = ResolveBlueprint(allEvents.Values);
+
+            _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter, blueprint);
             _eventCount = _eventService.EventCount;
+            _errorCount = allEvents.Values.Count(e => e.IsError);
 
             UpdateSliderRange(allEvents.Values);
+
+            // Keep the errors dialog live while it's open (new errors can arrive mid-run).
+            if (_errorsDialogOpen) RebuildFilteredErrors();
 
             await InvokeAsync(StateHasChanged);
         }
@@ -420,6 +508,54 @@
         TabService.OpenOrFocus(tab);
     }
 
+    // ── Errors dialog ─────────────────────────────────────────────────────
+
+    // Opened from the topbar icon — shows ALL errors, no pre-filter.
+    private void OpenErrorsDialog()
+    {
+        ParseErrorsFilter(string.Empty);
+        RebuildFilteredErrors();
+        _errorsDialogOpen = true;
+    }
+
+    // Opened from a pipeline-row popover's "errors" button — pre-filtered to that
+    // (service, pipeline); the user can still widen/narrow via the filter box.
+    private void ShowErrorsFromGraph((string Service, string Pipeline) ctx)
+    {
+        var (service, pipeline) = ctx;
+        ParseErrorsFilter($"svc:=\"{service}\" pipe:=\"{pipeline}\"");
+        RebuildFilteredErrors();
+        _errorsDialogOpen = true;
+        StateHasChanged();
+    }
+
+    private void OnErrorsFilterChanged(string text)
+    {
+        ParseErrorsFilter(text);
+        if (_errorsFilterParseError is null) RebuildFilteredErrors();
+    }
+
+    private void ParseErrorsFilter(string text)
+    {
+        _errorsFilterText = text;
+        _errorsFilterParseError = null;
+        FilterNode? node = null;
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            try   { node = ErrorFilterParser.Parse(text, DtSvc.UseUtc); }
+            catch (FilterParseException ex) { _errorsFilterParseError = ex.Message; }
+        }
+        _errorsFilterAst = node;
+    }
+
+    private void RebuildFilteredErrors()
+    {
+        var errors = _eventService?.Events.Values.Where(e => e.IsError) ?? Enumerable.Empty<PerformanceEvent>();
+        if (_errorsFilterAst is not null)
+            errors = errors.Where(e => FilterEvaluator.Evaluate(_errorsFilterAst, e));
+        _filteredErrors = errors.OrderByDescending(e => e.Start).ToList();
+    }
+
     // Cache-only lookup (no filesystem search) for the popover's server-name tooltip —
     // deliberately lighter weight than OpenInstanceLogFromGraph's click handler, which
     // does a full fresh search. A cache miss here just means "not discovered yet".
@@ -502,6 +638,16 @@
         </div>
 
         <div class="bm-detail-topbar-actions">
+            @if (_errorCount > 0)
+            {
+                <MudTooltip Text="@($"Show {_errorCount} error{(_errorCount == 1 ? "" : "s")}")">
+                    <MudBadge Content="@_errorCount" Color="Color.Error" Overlap="true" Max="999">
+                        <MudIconButton Icon="@Icons.Material.Outlined.ErrorOutline" Size="Size.Small"
+                                       Color="Color.Error" OnClick="OpenErrorsDialog" />
+                    </MudBadge>
+                </MudTooltip>
+            }
+
             <MudTooltip Text="Open Timeline">
                 <MudIconButton Icon="@Icons.Material.Outlined.Timeline" Size="Size.Small" OnClick="OpenTimeline" />
             </MudTooltip>
@@ -571,6 +717,7 @@
         <D3FlowGraph Topology="@(_topology ?? EmptyTopology)" IsVisible="@(IsFocused && _topology?.Nodes.Count > 0)"
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
                      OnOpenInstanceLog="OpenInstanceLogFromGraph"
+                     OnShowErrors="ShowErrorsFromGraph"
                      ResolveLogPathHint="ResolveLogPathHint" />
         @if (_loading)
         {
@@ -606,4 +753,69 @@
             <span class="bm-slider-count bm-muted">@_eventCount events</span>
         </div>
     </div>
+
+    <!-- ── Errors dialog ── -->
+    <MudDialog @bind-Visible="_errorsDialogOpen"
+               Options="@(new DialogOptions { MaxWidth = MaxWidth.ExtraLarge, FullWidth = true, CloseButton = true })">
+        <TitleContent>
+            <div class="bm-errdlg-title">
+                <MudIcon Icon="@Icons.Material.Outlined.ErrorOutline" Color="Color.Error" Size="Size.Small" />
+                <MudText Typo="Typo.h6">Errors</MudText>
+                <span class="bm-errdlg-count bm-muted">@_filteredErrors.Count shown@(_errorsFilterAst is not null && _errorCount != _filteredErrors.Count ? $" of {_errorCount}" : "")</span>
+                <FilterBox Value="@_errorsFilterText"
+                           OnFilterChanged="OnErrorsFilterChanged"
+                           ParseError="@_errorsFilterParseError"
+                           Placeholder="Filter errors… (try host:srv-01 or svc:Loader)"
+                           Class="bm-errdlg-filter"
+                           FieldHints="@_errorFieldHints" />
+            </div>
+        </TitleContent>
+        <DialogContent>
+            @if (_filteredErrors.Count == 0)
+            {
+                <div class="bm-errdlg-empty bm-muted">
+                    @(_errorCount == 0 ? "No errors in this run." : "No errors match the current filter.")
+                </div>
+            }
+            else
+            {
+                <div class="bm-errdlg-tablewrap">
+                    <MudSimpleTable Dense="true" Hover="true" Bordered="false" Striped="true" Class="bm-errdlg-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Service</th>
+                                <th>Host</th>
+                                <th>PID</th>
+                                <th>Pipeline</th>
+                                <th>Chunk</th>
+                                <th>Source</th>
+                                <th>Error</th>
+                                <th>Info</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var e in _filteredErrors)
+                            {
+                                <tr>
+                                    <td class="bm-monospace bm-errdlg-nowrap">@DtSvc.Format(e.Start, "yyyy-MM-dd HH:mm:ss")</td>
+                                    <td>@e.Service</td>
+                                    <td>@e.Server</td>
+                                    <td class="bm-monospace">@e.ProcessId</td>
+                                    <td>@e.Pipeline</td>
+                                    <td class="bm-monospace">@e.Name</td>
+                                    <td>@e.Source</td>
+                                    <td class="bm-errdlg-msg">@e.Error</td>
+                                    <td class="bm-errdlg-info">@e.Info</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </div>
+            }
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => _errorsDialogOpen = false)">Close</MudButton>
+        </DialogActions>
+    </MudDialog>
 </div>

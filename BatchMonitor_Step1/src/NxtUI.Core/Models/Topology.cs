@@ -12,6 +12,12 @@ public class Topology
     public List<TopologyNode> Nodes { get; set; } = [];
     public List<TopologyEdge> Edges { get; set; } = [];
 
+    /// <summary>
+    /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
+    /// or null when no hint applies — the graph then auto-picks direction by aspect ratio.
+    /// </summary>
+    public LayoutHint? Layout { get; set; }
+
     /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
 
@@ -53,6 +59,29 @@ public class TopologyNode
     /// per the priority table in §8.2.
     /// </summary>
     public PipelineState HeaderState { get; set; } = PipelineState.NotStarted;
+
+    // ── Topology-hint decoration (null/false when no hint applies) ──────────────
+
+    /// <summary>"source" | "sink" | "middle" from the hint — pins layer position (layered layout).</summary>
+    public string? Role { get; set; }
+
+    /// <summary>Cluster label from the hint — same-group nodes are kept adjacent behind a band.</summary>
+    public string? Group { get; set; }
+
+    /// <summary>Header accent colour override (hex) from the hint.</summary>
+    public string? Color { get; set; }
+
+    /// <summary>Tie-break ordering within a layer from the hint (lower first).</summary>
+    public int? Order { get; set; }
+
+    /// <summary>Keep at a fixed spot across re-layouts (hint escape hatch).</summary>
+    public bool Pin { get; set; }
+
+    /// <summary>True when the run-type blueprint declared this service (matched a ServiceHint).</summary>
+    public bool IsDeclared { get; set; }
+
+    /// <summary>True once at least one real event has been seen for this service.</summary>
+    public bool IsObserved { get; set; }
 }
 
 /// <summary>
@@ -186,4 +215,10 @@ public class TopologyEdge
 
     /// <summary>Visual state inherited from the source pipeline row (drives edge colour).</summary>
     public PipelineState State { get; set; } = PipelineState.NotStarted;
+
+    /// <summary>True when the run-type blueprint declared this edge.</summary>
+    public bool IsDeclared { get; set; }
+
+    /// <summary>True once at least one chunk has been observed flowing along this edge.</summary>
+    public bool IsObserved { get; set; }
 }

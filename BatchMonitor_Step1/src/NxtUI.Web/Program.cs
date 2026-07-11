@@ -72,6 +72,7 @@ public class Program
             BasePath = Path.Combine(builder.Environment.ContentRootPath, "config")
         });
         builder.Services.AddSingleton<EnvironmentConfigLoader>();
+        builder.Services.AddSingleton<TopologyHintLoader>();
 
         // ── Connection factories (shared client when settings fingerprint matches) ──
         builder.Services.AddSingleton<KafkaConnectionFactory>();

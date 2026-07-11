@@ -29,6 +29,10 @@
     /// <summary>Fired when the user clicks an instance row in a pipeline row's popover.</summary>
     [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
+    /// <summary>Fired when the user clicks the "errors" button in a pipeline row's popover —
+    /// opens the run's errors dialog pre-filtered to that (service, pipeline).</summary>
+    [Parameter] public EventCallback<(string Service, string Pipeline)> OnShowErrors { get; set; }
+
     /// <summary>
     /// Resolves the log folder path shown as a tooltip when hovering an instance row's
     /// server name in the popover. Returns null if not (yet) known — a cache-only lookup,
@@ -56,7 +60,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=19");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=21");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -81,6 +85,11 @@
     [JSInvokable]
     public Task RequestOpenInstanceLog(string service, string server, int processId, DateTime lastActivity) =>
         OnOpenInstanceLog.InvokeAsync((service, server, processId, lastActivity));
+
+    /// <summary>Invoked from d3-graph.js when the popover's "errors" button is clicked.</summary>
+    [JSInvokable]
+    public Task RequestShowErrors(string service, string pipeline) =>
+        OnShowErrors.InvokeAsync((service, pipeline));
 
     /// <summary>Invoked from d3-graph.js right after the popover opens, to populate each
     /// instance row's server-name tooltip with its resolved log path (cache-only, no I/O).</summary>

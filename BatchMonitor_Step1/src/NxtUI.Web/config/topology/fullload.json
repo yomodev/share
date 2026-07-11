@@ -1,0 +1,27 @@
+{
+  // Sample topology hint for run Type "FullLoad" (see docs/11_Topology_Hints.md).
+  // Advisory: the mock backend assigns services randomly, so you'll also see undeclared
+  // services (dashed border) and the declared-but-unseen ones as greyed skeleton nodes.
+  "runType": "FullLoad",
+  "variants": [
+    {
+      // Locks to this variant the moment any "Ingester…" service is seen.
+      "match": { "anyService": "Ingester*" },
+      "layout": { "direction": "vertical", "shape": "tree", "density": "normal" },
+      "services": [
+        { "name": "Ingester",    "role": "source", "group": "Ingest",    "publishes": ["staged"] },
+        { "name": "Validator",   "role": "middle", "group": "Validate",  "subscribes": ["staged"],    "publishes": ["validated"] },
+        { "name": "Normaliser",  "role": "middle", "group": "Transform", "subscribes": ["validated"], "publishes": ["normalised"] },
+        { "name": "Transformer", "role": "middle", "group": "Transform", "subscribes": ["normalised"],"publishes": ["ready"] },
+        { "name": "Loader",      "role": "sink",   "group": "Persist",   "subscribes": ["ready"], "color": "#A371F7" }
+      ]
+    }
+  ],
+  "default": {
+    "layout": { "direction": "horizontal", "shape": "layered" },
+    "services": [
+      { "name": "Ingester", "role": "source" },
+      { "name": "Loader",   "role": "sink" }
+    ]
+  }
+}

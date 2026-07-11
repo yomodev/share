@@ -28,13 +28,18 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     /// </param>
     public Topology ComputeTopology(
         IReadOnlyDictionary<string, PerformanceEvent> eventStore,
-        Func<string, string>? labelFormatter = null)
+        Func<string, string>? labelFormatter = null,
+        TopologyBlueprint? blueprint = null)
     {
         var format = labelFormatter ?? (s => s);
 
         if (eventStore == null || eventStore.Count == 0)
         {
-            return new Topology { TotalChunks = 0, TotalEvents = 0 };
+            // Even with no events, a blueprint still renders its skeleton (declared services
+            // greyed as NotStarted) so the expected flow shows from t=0.
+            var empty = new Topology { TotalChunks = 0, TotalEvents = 0 };
+            if (blueprint is not null) ApplyBlueprint(empty, blueprint, format);
+            return empty;
         }
 
         var topology = new Topology { TotalEvents = eventStore.Count };
@@ -54,7 +59,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         {
             if (!nodesByService.TryGetValue(service, out var node))
             {
-                node = new TopologyNode { Id = service, Label = format(service) };
+                node = new TopologyNode { Id = service, Label = format(service), IsObserved = true };
                 nodesByService[service] = node;
             }
 
@@ -125,6 +130,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
                             SourcePipeline = prevHop.Value.Pipeline,
                             Target = hop.Service,
                             TargetPipeline = hop.Pipeline,
+                            IsObserved = true,
                         };
                         edgesByKey[key] = edge;
                     }
@@ -177,7 +183,94 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
             ? Math.Clamp(numerator / denominator, 0.0, 1.0)
             : 0.0;
 
+        if (blueprint is not null) ApplyBlueprint(topology, blueprint, format);
+
         return topology;
+    }
+
+    // ── Blueprint merge (run-type topology hints) ──────────────────────────────
+    // Advisory overlay: decorate observed nodes with hint metadata, add greyed skeleton
+    // nodes/edges for declared-but-unseen services, flag observed-but-undeclared nodes, and
+    // attach the layout. Runtime data always wins on state/counts — this only adds structure.
+    private static void ApplyBlueprint(Topology topology, TopologyBlueprint blueprint, Func<string, string> format)
+    {
+        topology.Layout = blueprint.Layout;
+
+        var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+
+        // 1. Decorate observed nodes with the first matching ServiceHint (declaration order).
+        foreach (var node in topology.Nodes)
+        {
+            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(node.Id, s.Name));
+            if (hint is not null) Decorate(node, hint);
+            // else: observed but undeclared → IsDeclared stays false (dashed border in the UI).
+        }
+
+        // 2. Skeleton nodes for LITERAL declared services never seen (globs have no concrete
+        //    identity to draw before the service appears, so they only decorate — step 1).
+        foreach (var hint in blueprint.Services)
+        {
+            if (hint.IsGlob || nodesById.ContainsKey(hint.Name)) continue;
+            var node = new TopologyNode
+            {
+                Id = hint.Name,
+                Label = format(hint.Name),
+                HeaderState = PipelineState.NotStarted,
+                IsObserved = false,
+            };
+            Decorate(node, hint);
+            topology.Nodes.Add(node);
+            nodesById[node.Id] = node;
+        }
+
+        // 3. Declared edges: mark matching observed edges, or add greyed skeleton edges between
+        //    declared endpoints that resolve to concrete nodes.
+        var existing = new HashSet<string>(
+            topology.Edges.Select(e => $"{e.Source}{e.Target}"), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (from, to) in blueprint.DeclaredEdges)
+        foreach (var src in ResolveNodes(from, nodesById.Keys))
+        foreach (var dst in ResolveNodes(to, nodesById.Keys))
+        {
+            if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase)) continue;
+            var key = $"{src}{dst}";
+            if (existing.Contains(key))
+            {
+                foreach (var e in topology.Edges)
+                    if (string.Equals(e.Source, src, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(e.Target, dst, StringComparison.OrdinalIgnoreCase))
+                        e.IsDeclared = true;
+            }
+            else
+            {
+                topology.Edges.Add(new TopologyEdge
+                {
+                    Source = src, Target = dst,
+                    SourcePipeline = string.Empty, TargetPipeline = string.Empty,
+                    State = PipelineState.NotStarted, IsDeclared = true, IsObserved = false,
+                });
+                existing.Add(key);
+            }
+        }
+    }
+
+    private static void Decorate(TopologyNode node, ServiceHint hint)
+    {
+        node.IsDeclared = true;
+        node.Role = hint.Role;
+        node.Group = hint.Group;
+        node.Color = hint.Color;
+        node.Order = hint.Order;
+        node.Pin = hint.Pin;
+    }
+
+    // A declared endpoint (literal or glob) → the concrete node ids it resolves to.
+    private static IEnumerable<string> ResolveNodes(string nameOrGlob, IEnumerable<string> nodeIds)
+    {
+        var isGlob = nameOrGlob.Contains('*') || nameOrGlob.Contains('?');
+        return isGlob
+            ? nodeIds.Where(id => Glob.IsMatch(id, nameOrGlob))
+            : nodeIds.Where(id => string.Equals(id, nameOrGlob, StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

@@ -41,6 +41,36 @@
     filter: brightness(1.35);
 }
 
+/* ── Topology-blueprint provenance ─────────────────────────────────────────
+   Undeclared = seen at runtime but not in the run-type blueprint ("off-plan").
+   Skeleton   = declared in the blueprint but not yet seen ("expected"). */
+.bm-node-rect-undeclared {
+    stroke-dasharray: 5 4;
+}
+.bm-node-skeleton {
+    opacity: 0.5;
+}
+.bm-edge-skeleton {
+    opacity: 0.35;
+}
+
+/* ── Group bands (per-node `group` hint) ──────────────────────────────────── */
+.bm-group-rect {
+    fill: var(--mud-palette-text-primary);
+    fill-opacity: 0.04;
+    stroke: var(--mud-palette-lines-default);
+    stroke-opacity: 0.5;
+    stroke-width: 1px;
+    stroke-dasharray: 3 3;
+}
+.bm-group-label {
+    fill: var(--mud-palette-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 /* Green = fully drained (nothing left in flight), blue = still has work in
    flight; bright = that happened/is happening recently, dim = true but quiet
    for a while. See stateColor()/stateClass() in d3-graph.js. */
@@ -161,6 +191,18 @@
     transition: opacity 110ms, color 110ms;
 }
 .bm-pop-x:hover { opacity: 1; color: #F85149; }
+
+/* Error pill in the popover header — floats left (margin-right:auto), × stays right. */
+.bm-pop-err {
+    margin-right: auto;
+    background: rgba(248,81,73,0.12);
+    border: 1px solid rgba(248,81,73,0.45);
+    border-radius: 4px; color: #F85149; cursor: pointer;
+    font-size: 0.70rem; font-weight: 600; line-height: 1;
+    padding: 3px 7px; flex-shrink: 0;
+    transition: background 110ms;
+}
+.bm-pop-err:hover { background: rgba(248,81,73,0.22); }
 
 .bm-pop-topic {
     padding: 8px 10px 10px;

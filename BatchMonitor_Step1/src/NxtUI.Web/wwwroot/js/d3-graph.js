@@ -138,9 +138,25 @@ const D3Graph = (() => {
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
-    function chooseDir(containerEl) {
+    // Flow direction: an explicit topology-hint layout wins; otherwise auto by aspect ratio.
+    function chooseDir(containerEl, layout) {
+        const d = layout && layout.direction ? String(layout.direction).toLowerCase() : '';
+        if (d === 'horizontal') return 'RIGHT';
+        if (d === 'vertical')   return 'DOWN';
         const r = containerEl.getBoundingClientRect();
         return r.width >= r.height ? 'RIGHT' : 'DOWN';
+    }
+
+    // Node/edge spacing multiplier from the hint's density.
+    function densityScale(layout) {
+        const d = layout && layout.density ? String(layout.density).toLowerCase() : '';
+        return d === 'compact' ? 0.65 : d === 'airy' ? 1.6 : 1;
+    }
+
+    // "source"/"sink" role → ELK layer constraint (layered layout only).
+    function layerConstraint(role) {
+        const r = role ? String(role).toLowerCase() : '';
+        return r === 'source' ? 'FIRST' : r === 'sink' ? 'LAST' : 'NONE';
     }
 
     // Port position along the node's EAST/WEST edge, aligned to the centre of the
@@ -167,10 +183,13 @@ const D3Graph = (() => {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
-        const dir       = chooseDir(handle.containerEl);
+        const layout    = topo.layout || null;
+        const dir       = chooseDir(handle.containerEl, layout);
         const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
         const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
         const fixedPos  = handle.portConstraints === 'FIXED_POS';
+        const tree      = layout && String(layout.shape || '').toLowerCase() === 'tree';
+        const dens      = densityScale(layout);
 
         // Which pipeline rows need an output/input port.
         const outPorts = new Map(); // nodeId -> Set(pipeline)
@@ -202,8 +221,15 @@ const D3Graph = (() => {
                 ports.push({ id: portId(n.id, 'in', pipe), ...pos, layoutOptions: { 'elk.port.side': inSide } });
             }
 
-            return { id: n.id, width: w, height: h, ports,
-                     layoutOptions: { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' } };
+            const nodeOpts = { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' };
+            // Per-node hints from the run-type blueprint (layered layout only). role pins the
+            // node to the first/last layer; order biases in-layer placement (lower = earlier).
+            if (!tree) {
+                const lc = layerConstraint(n.role);
+                if (lc !== 'NONE') nodeOpts['elk.layered.layering.layerConstraint'] = lc;
+                if (typeof n.order === 'number') nodeOpts['elk.priority'] = String(-n.order);
+            }
+            return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts };
         });
 
         const elkEdges = edges.map((e, i) => ({
@@ -219,23 +245,28 @@ const D3Graph = (() => {
         const cw = handle.containerEl.clientWidth  || 1;
         const ch = handle.containerEl.clientHeight || 1;
 
+        // Blueprint layout hints: "tree" shape → ELK mrtree; density scales spacing;
+        // straightenEdges → NETWORK_SIMPLEX node placement (straighter, less tidy packing).
+        const px = (base) => String(Math.round(base * dens));
         const graph = {
             id: 'root',
             layoutOptions: {
-                'elk.algorithm': 'layered',
+                'elk.algorithm': tree ? 'mrtree' : 'layered',
                 'elk.direction': dir,
                 'elk.edgeRouting': 'ORTHOGONAL',
                 'elk.aspectRatio': String(cw / ch),
-                'elk.layered.spacing.nodeNodeBetweenLayers': '110',
-                'elk.spacing.nodeNode': '56',
+                'elk.layered.spacing.nodeNodeBetweenLayers': px(110),
+                'elk.spacing.nodeNode': px(56),
                 // These two were the tightest settings relative to how many parallel
                 // edges can share a channel between two fixed-position ports — bumped
                 // up first (least invasive: doesn't change where any arrow connects)
                 // before trading away exact per-row port alignment for FIXED_SIDE.
-                'elk.spacing.edgeNode': '34',
-                'elk.spacing.edgeEdge': '28',
-                'elk.layered.spacing.edgeNodeBetweenLayers': '34',
+                'elk.spacing.edgeNode': px(34),
+                'elk.spacing.edgeEdge': px(28),
+                'elk.layered.spacing.edgeNodeBetweenLayers': px(34),
                 'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+                'elk.layered.nodePlacement.strategy':
+                    (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
             },
             children,
@@ -347,6 +378,7 @@ const D3Graph = (() => {
             .attr('stroke', 'none');
 
         const root  = svg.append('g').attr('class', 'bm-d3-root');
+        const gLayer = root.append('g').attr('class', 'bm-group-layer'); // behind edges + nodes
         const eLayer = root.append('g').attr('class', 'bm-edge-layer');
         const nLayer = root.append('g').attr('class', 'bm-node-layer');
 
@@ -373,7 +405,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, eLayer, nLayer, zoom, popover, defs, dotNetRef,
+            containerEl, svg, root, gLayer, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             animState: createState(),
@@ -445,9 +477,43 @@ const D3Graph = (() => {
 
         handle.currentGraph = g;
         updateClipPaths(handle, topo);
-        renderEdges(handle);  // edges first — drawn below nodes
+        renderGroups(handle);  // group bands beneath everything
+        renderEdges(handle);   // edges below nodes
         renderNodes(handle);
         if (!handle.userZoomed) fitToView(handle, true);
+    }
+
+    // ── Group bands — a subtle labelled backdrop behind same-`group` nodes ────
+    // v1: a bounding box around the laid-out members (ELK isn't asked to cluster them, so
+    // members can be non-adjacent; the band still communicates the grouping visually).
+    function renderGroups(handle) {
+        const PAD = 14, LABEL_H = 16;
+        const byGroup = new Map();
+        for (const [id, n] of handle.currentGraph.nodes) {
+            const grp = n.data && n.data.group;
+            if (!grp) continue;
+            const hw = (n.width || 0) / 2, hh = (n.height || 0) / 2;
+            const box = byGroup.get(grp) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+            box.x0 = Math.min(box.x0, n.x - hw); box.y0 = Math.min(box.y0, n.y - hh);
+            box.x1 = Math.max(box.x1, n.x + hw); box.y1 = Math.max(box.y1, n.y + hh);
+            byGroup.set(grp, box);
+        }
+
+        const data = [...byGroup.entries()].map(([name, b]) => ({ name, b }));
+        const sel = handle.gLayer.selectAll('g.bm-group').data(data, d => d.name);
+        sel.exit().remove();
+        const enter = sel.enter().append('g').attr('class', 'bm-group');
+        enter.append('rect').attr('class', 'bm-group-rect').attr('rx', 12);
+        enter.append('text').attr('class', 'bm-group-label');
+
+        const merged = enter.merge(sel);
+        merged.select('.bm-group-rect')
+            .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD - LABEL_H)
+            .attr('width', d => (d.b.x1 - d.b.x0) + PAD * 2)
+            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2 + LABEL_H);
+        merged.select('.bm-group-label')
+            .attr('x', d => d.b.x0 - PAD + 10).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .text(d => d.name);
     }
 
     // ── SVG clipPaths — one per node, clips row content to card bounds ────
@@ -546,6 +612,12 @@ const D3Graph = (() => {
             const stillWorking = (d.data.pipelines || []).some(p => (p.inProgressCount ?? 0) > 0);
             const st  = stateClass(d.data.headerState, stillWorking);
             const col = stateColor(d.data.headerState, stillWorking);
+            // Blueprint provenance: undeclared = seen at runtime but not in the blueprint
+            // (dashed "not in blueprint"); skeleton = declared but not yet seen (greyed ghost).
+            const undeclared = d.data.isObserved === true  && d.data.isDeclared === false;
+            const skeleton   = d.data.isObserved === false && d.data.isDeclared === true;
+            const accentCol  = d.data.color || col; // per-node colour override from the hint
+            el.classed('bm-node-skeleton', skeleton);
 
             // Clip the pipeline-rows group to the card shape so long row names /
             // counts can never spill outside the rounded rectangle. (Previously the
@@ -561,7 +633,7 @@ const D3Graph = (() => {
             el.select('.bm-node-rect')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', d.height)
-                .attr('class', `bm-node-rect bm-hdr-${st}`);
+                .attr('class', `bm-node-rect bm-hdr-${st}${undeclared ? ' bm-node-rect-undeclared' : ''}`);
 
             // Header tint — full-width band behind the title, same hue as the border
             // but semi-transparent (fill-opacity, not a separate alpha color) so it
@@ -572,7 +644,7 @@ const D3Graph = (() => {
             el.select('.bm-node-accent')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .attr('fill', col).attr('fill-opacity', 0.14)
+                .attr('fill', accentCol).attr('fill-opacity', 0.14)
                 .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-label')
@@ -746,8 +818,14 @@ const D3Graph = (() => {
                </div>`
             : '';
 
+        const errorCount = pipeline.errorCount ?? 0;
+        const errHtml = errorCount > 0
+            ? `<button class="bm-pop-err" title="Show ${errorCount} error${errorCount === 1 ? '' : 's'}">⚠&nbsp;${errorCount}</button>`
+            : '';
+
         handle.popover.html(`
             <div class="bm-pop-hdr">
+                ${errHtml}
                 <button class="bm-pop-x">×</button>
             </div>
             ${instHtml}
@@ -757,6 +835,10 @@ const D3Graph = (() => {
         .style('pointer-events', 'auto');
 
         handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
+        handle.popover.select('.bm-pop-err').on('click', () => {
+            if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestShowErrors', nodeDatum.id, pipeline.name);
+            hidePopover(handle);
+        });
         handle.popover.select('.bm-pop-kafka').on('click', () => {
             if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenKafkaTopic', topic);
         });
@@ -856,6 +938,10 @@ const D3Graph = (() => {
             path.attr('d', edgePath(handle, d.pts))
                 .attr('stroke', col)
                 .attr('stroke-width', w);
+
+            // Declared-but-not-yet-observed edges (from the blueprint) render faint.
+            d3.select(this).classed('bm-edge-skeleton',
+                d.data?.isObserved === false && d.data?.isDeclared === true);
 
             d3.select(this).select('title').text(edgeTooltip(d.data));
 

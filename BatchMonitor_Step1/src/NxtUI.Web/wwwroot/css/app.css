@@ -3396,3 +3396,26 @@ tr.bm-row-searching td:first-child {
 .bm-runstats-bar-dim { opacity: 0.25; transition: opacity 0.1s; }
 .bm-runstats-envline { stroke-width: 2px; pointer-events: none; }
 .bm-runstats-envline-point { pointer-events: none; }
+
+/* ================================================================
+   RUN DETAIL — ERRORS DIALOG
+   ================================================================ */
+
+.bm-errdlg-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+.bm-errdlg-count { font-size: 12px; white-space: nowrap; }
+.bm-errdlg-filter { flex: 1; min-width: 180px; margin-left: auto; }
+
+.bm-errdlg-empty { padding: 32px; text-align: center; }
+
+.bm-errdlg-tablewrap { max-height: 60vh; overflow: auto; }
+.bm-errdlg-table { width: 100%; font-size: 12px; }
+.bm-errdlg-table th { position: sticky; top: 0; z-index: 1; background: var(--mud-palette-surface); }
+.bm-errdlg-table td { vertical-align: top; }
+.bm-errdlg-nowrap { white-space: nowrap; }
+.bm-errdlg-msg  { color: #F85149; min-width: 220px; max-width: 480px; word-break: break-word; }
+.bm-errdlg-info { color: var(--mud-palette-text-secondary); max-width: 260px; word-break: break-word; }
