@@ -287,46 +287,61 @@
     {
         if (_module is null || _sourcePath is null) return;
 
-        var content = await _module.InvokeAsync<string>("getValue", _editorRef);
-        var targets = EnvConfigSvc.GetSaveTargets(Environment);
-
-        if (targets.Count > 1)
-        {
-            var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
-                           string.Join("\n", targets.Select(t => $"• {t}"));
-            var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
-            {
-                { x => x.Message,     message },
-                { x => x.ConfirmText, "Save"  },
-            }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
-            var result = await dialog.Result;
-            if (result is null or { Canceled: true }) return;
-        }
-
-        _saving = true;
-        StateHasChanged();
         try
         {
-            var results = await EnvConfigSvc.SaveAsync(Environment, content);
-            var failed  = results.Where(r => !r.Success).ToList();
+            // Everything up to and including the confirmation dialog previously ran with no
+            // exception handling at all — an unhandled exception in a Blazor Server event
+            // handler crashes the whole SignalR circuit (site "disconnects") instead of just
+            // failing the click, and nothing here ever reached Notifications.Report, so it
+            // was also invisible wherever errors are normally surfaced. Wrapping the whole
+            // method fixes both.
+            var content = await _module.InvokeAsync<string>("getValue", _editorRef);
+            var targets = EnvConfigSvc.GetSaveTargets(Environment);
 
-            foreach (var f in failed)
-                Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
-
-            if (failed.Count == 0)
+            if (targets.Count > 1)
             {
-                Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
-                if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
-                _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+                var message = $"This will overwrite the following {targets.Count} file(s) (a timestamped backup of the source copy is taken first):\n\n" +
+                               string.Join("\n", targets.Select(t => $"• {t}"));
+                var dialog = await DialogService.ShowAsync<ConfirmDialog>("Save config to all servers?", new DialogParameters<ConfirmDialog>
+                {
+                    { x => x.Message,     message },
+                    { x => x.ConfirmText, "Save"  },
+                }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+                var result = await dialog.Result;
+                if (result is null or { Canceled: true }) return;
             }
-            else if (failed.Count < results.Count)
-                Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
-            else
-                Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+
+            _saving = true;
+            StateHasChanged();
+            try
+            {
+                var results = await EnvConfigSvc.SaveAsync(Environment, content);
+                var failed  = results.Where(r => !r.Success).ToList();
+
+                foreach (var f in failed)
+                    Notifications.Report($"Failed to save config to {f.Path}: {f.Error}", source: "Config");
+
+                if (failed.Count == 0)
+                {
+                    Snackbar.Add($"Saved to {results.Count} location(s).", Severity.Success);
+                    if (_module is not null) await _module.InvokeVoidAsync("markClean", _editorRef);
+                    _backups = EnvConfigSvc.ListBackups(Environment).ToList();
+                }
+                else if (failed.Count < results.Count)
+                    Snackbar.Add($"Saved to {results.Count - failed.Count}/{results.Count} location(s) — see Settings for failures.", Severity.Warning);
+                else
+                    Snackbar.Add("Save failed on all locations — see Settings for details.", Severity.Error);
+            }
+            finally
+            {
+                _saving = false;
+                StateHasChanged();
+            }
         }
-        finally
+        catch (Exception ex)
         {
             _saving = false;
+            Notifications.Report($"Save failed: {ex.Message}", ex, "Config");
             StateHasChanged();
         }
     }
