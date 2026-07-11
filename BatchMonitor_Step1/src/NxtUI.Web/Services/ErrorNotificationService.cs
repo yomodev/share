@@ -31,7 +31,18 @@ public sealed class ErrorNotificationService
             _history.Add(entry);
             if (_history.Count > MaxHistory) _history.RemoveAt(0);
         }
-        OnError?.Invoke(entry);
+        // Invoke each subscriber individually and swallow exceptions — Report() is itself
+        // often called from inside a catch block (e.g. ConfigPage.SaveAsync), so a throwing
+        // subscriber must never propagate back out here: that would escape the caller's own
+        // catch and crash the circuit exactly while it's trying to report a failure.
+        foreach (var handler in OnError?.GetInvocationList() ?? [])
+        {
+            try
+            {
+                ((Action<ErrorNotificationEntry>)handler).Invoke(entry);
+            }
+            catch { }
+        }
     }
 
     public void Clear()

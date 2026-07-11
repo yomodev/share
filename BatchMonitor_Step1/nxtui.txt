@@ -1564,7 +1564,7 @@ LENGTH 10285
   }
 }
 FILE src/NxtUI.Web/nlog.config
-LENGTH 9448
+LENGTH 9768
 <?xml version="1.0" encoding="utf-8" ?>
 <nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -1625,7 +1625,7 @@ LENGTH 9448
     <!-- Mongo queries (MongoService's LogDebug calls: rendered filters, sort/skip/limit,
          AST -> Mongo translation): plain-text rolling file, one per day, kept 14 days -->
     <target xsi:type="File" name="mongo-file"
-            fileName="C:/temp/logs/mongo-queries.log"
+            fileName="C:/temp/logs/NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}/mongo-queries.log"
             archiveFileName="C:/temp/logs/mongo-queries.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
@@ -1641,7 +1641,7 @@ LENGTH 9448
          errors): plain-text rolling file, one per day, kept 14 days. Check this file first
          when diagnosing whether metrics for an environment are coming from Kafka or disk. -->
     <target xsi:type="File" name="kafka-file"
-            fileName="C:/temp/logs/kafka.log"
+            fileName="C:/temp/logs/NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}/kafka.log"
             archiveFileName="C:/temp/logs/kafka.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
@@ -1654,7 +1654,7 @@ LENGTH 9448
     <!-- SQL (SqlRunService's run-list/run-events queries: start/duration/error via
          OperationLog): plain-text rolling file, one per day, kept 14 days. -->
     <target xsi:type="File" name="sql-file"
-            fileName="C:/temp/logs/sql.log"
+            fileName="C:/temp/logs/NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}/sql.log"
             archiveFileName="C:/temp/logs/sql.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
@@ -1668,7 +1668,7 @@ LENGTH 9448
          LogPathDiscoveryService's on-disk folder discovery): plain-text rolling file,
          one per day, kept 14 days. Check this file first for slow file-server searches. -->
     <target xsi:type="File" name="disk-file"
-            fileName="C:/temp/logs/disk-search.log"
+            fileName="C:/temp/logs/NxtUI_${processinfo:property=StartTime:format=yyyyMMdd_HHmmss}_PID_${processid}/disk-search.log"
             archiveFileName="C:/temp/logs/disk-search.{#}.log"
             archiveEvery="Day"
             archiveNumbering="Date"
@@ -7227,7 +7227,7 @@ public class PerformanceEventStore
     }
 }
 FILE src/NxtUI.Core/Services/TopologyComputationService.cs
-LENGTH 15828
+LENGTH 16780
 using NxtUI.Core.Models;
 
 namespace NxtUI.Core.Services;
@@ -7427,12 +7427,17 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         topology.Layout = blueprint.Layout;
         topology.HasBlueprint = true;
 
+        // Declared names/globs are matched against each node's *stripped* form (the same
+        // env-agnostic display label produced by `format`), never the raw event.Service id.
+        // This lets one literal declared name match the same logical service across every
+        // environment even though the raw id embeds an env-specific token.
         var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+        var strippedSeen = new HashSet<string>(topology.Nodes.Select(n => format(n.Id)), StringComparer.OrdinalIgnoreCase);
 
         // 1. Decorate observed nodes with the first matching ServiceHint (declaration order).
         foreach (var node in topology.Nodes)
         {
-            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(node.Id, s.Name));
+            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(format(node.Id), s.Name));
             if (hint is not null) Decorate(node, hint);
             // else: observed but undeclared → IsDeclared stays false (dashed border in the UI).
         }
@@ -7441,7 +7446,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         //    identity to draw before the service appears, so they only decorate — step 1).
         foreach (var hint in blueprint.Services)
         {
-            if (hint.IsGlob || nodesById.ContainsKey(hint.Name)) continue;
+            if (hint.IsGlob || strippedSeen.Contains(hint.Name)) continue;
             var node = new TopologyNode
             {
                 Id = hint.Name,
@@ -7452,6 +7457,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
             Decorate(node, hint);
             topology.Nodes.Add(node);
             nodesById[node.Id] = node;
+            strippedSeen.Add(hint.Name);
         }
 
         // 3. Declared edges: mark matching observed edges, or add greyed skeleton edges between
@@ -7459,9 +7465,15 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         var existing = new HashSet<string>(
             topology.Edges.Select(e => $"{e.Source}{e.Target}"), StringComparer.OrdinalIgnoreCase);
 
+        // Endpoints are resolved against each node's stripped form too, so edges declared
+        // with env-agnostic names line up with the (possibly env-suffixed) real node ids.
+        var idsByStrippedForm = topology.Nodes
+            .Select(n => n.Id)
+            .ToLookup(id => format(id), StringComparer.OrdinalIgnoreCase);
+
         foreach (var (from, to) in blueprint.DeclaredEdges)
-        foreach (var src in ResolveNodes(from, nodesById.Keys))
-        foreach (var dst in ResolveNodes(to, nodesById.Keys))
+        foreach (var src in ResolveNodes(from, idsByStrippedForm))
+        foreach (var dst in ResolveNodes(to, idsByStrippedForm))
         {
             if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase)) continue;
             var key = $"{src}{dst}";
@@ -7495,13 +7507,14 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         node.Pin = hint.Pin;
     }
 
-    // A declared endpoint (literal or glob) → the concrete node ids it resolves to.
-    private static IEnumerable<string> ResolveNodes(string nameOrGlob, IEnumerable<string> nodeIds)
+    // A declared endpoint (literal or glob) → the concrete node ids it resolves to, matched
+    // against each node's stripped form (ids grouped by that form via idsByStrippedForm).
+    private static IEnumerable<string> ResolveNodes(string nameOrGlob, ILookup<string, string> idsByStrippedForm)
     {
         var isGlob = nameOrGlob.Contains('*') || nameOrGlob.Contains('?');
         return isGlob
-            ? nodeIds.Where(id => Glob.IsMatch(id, nameOrGlob))
-            : nodeIds.Where(id => string.Equals(id, nameOrGlob, StringComparison.OrdinalIgnoreCase));
+            ? idsByStrippedForm.Where(g => Glob.IsMatch(g.Key, nameOrGlob)).SelectMany(g => g)
+            : idsByStrippedForm[nameOrGlob];
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -19900,7 +19913,7 @@ public partial class ServicesPage
     }
 }
 FILE src/NxtUI.Web/Pages/Settings.razor
-LENGTH 12866
+LENGTH 14229
 @namespace NxtUI.Web.Pages
 @implements IAsyncDisposable
 @inject ThemeService ThemeService
@@ -20034,12 +20047,21 @@ LENGTH 12866
                 {
                     <MudTable Items="@_errors" Dense="true" Hover="true" Elevation="0" Class="bm-batch-table">
                         <HeaderContent>
+                            <MudTh Style="width:40px;"></MudTh>
                             <MudTh Style="white-space:nowrap;">Time</MudTh>
                             <MudTh Style="width:110px;">Source</MudTh>
                             <MudTh Style="width:100%;">Message</MudTh>
                             <MudTh Style="width:40px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
+                            <MudTd Style="text-align:center;">
+                                @if (!string.IsNullOrEmpty(context.Detail))
+                                {
+                                    <MudIconButton Icon="@(_expanded.Contains(context) ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => ToggleExpanded(context))" />
+                                }
+                            </MudTd>
                             <MudTd Style="white-space:nowrap;">
                                 <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.TimestampUtc, "HH:mm:ss")</span>
                             </MudTd>
@@ -20057,6 +20079,16 @@ LENGTH 12866
                                 </MudTooltip>
                             </MudTd>
                         </RowTemplate>
+                        <ChildRowContent>
+                            @if (_expanded.Contains(context))
+                            {
+                                <MudTr>
+                                    <MudTd colspan="5" Class="bm-error-detail-cell">
+                                        <pre class="bm-error-detail bm-monospace">@context.Detail</pre>
+                                    </MudTd>
+                                </MudTr>
+                            }
+                        </ChildRowContent>
                     </MudTable>
                 }
             </MudPaper>
@@ -20084,6 +20116,12 @@ LENGTH 12866
     private ThemeMode _mode;
     private IJSObjectReference? _appModule;
     private List<ErrorNotificationEntry> _errors = [];
+    private readonly HashSet<ErrorNotificationEntry> _expanded = [];
+
+    private void ToggleExpanded(ErrorNotificationEntry entry)
+    {
+        if (!_expanded.Remove(entry)) _expanded.Add(entry);
+    }
 
     protected override void OnInitialized()
     {
@@ -22061,7 +22099,7 @@ public sealed class ErrorNotificationHubFilter(
     }
 }
 FILE src/NxtUI.Web/Services/ErrorNotificationService.cs
-LENGTH 1502
+LENGTH 2062
 namespace NxtUI.Web.Services;
 
 /// <summary>One recorded server-side error, shown as a toast and kept in Settings' history list.</summary>
@@ -22095,7 +22133,18 @@ public sealed class ErrorNotificationService
             _history.Add(entry);
             if (_history.Count > MaxHistory) _history.RemoveAt(0);
         }
-        OnError?.Invoke(entry);
+        // Invoke each subscriber individually and swallow exceptions — Report() is itself
+        // often called from inside a catch block (e.g. ConfigPage.SaveAsync), so a throwing
+        // subscriber must never propagate back out here: that would escape the caller's own
+        // catch and crash the circuit exactly while it's trying to report a failure.
+        foreach (var handler in OnError?.GetInvocationList() ?? [])
+        {
+            try
+            {
+                ((Action<ErrorNotificationEntry>)handler).Invoke(entry);
+            }
+            catch { }
+        }
     }
 
     public void Clear()
@@ -33934,7 +33983,7 @@ LENGTH 1370
   }
 }
 FILE src/NxtUI.Web/wwwroot/css/app.css
-LENGTH 104566
+LENGTH 104962
 /* ================================================================
    NxtUI — Application Stylesheet  v2 (Step 2)
    ================================================================ */
@@ -34598,6 +34647,23 @@ html, body {
 
 /* Row actions */
 .bm-batch-table tbody tr { cursor: pointer; }
+
+.bm-error-detail-cell {
+    padding: 0 10px 10px !important;
+    border-bottom: 1px solid var(--mud-palette-divider-light) !important;
+}
+
+.bm-error-detail {
+    margin: 0;
+    padding: 8px 10px;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.75rem;
+    background: var(--mud-palette-background-grey);
+    border-radius: 4px;
+}
 
 .bm-row-actions {
     display: flex;

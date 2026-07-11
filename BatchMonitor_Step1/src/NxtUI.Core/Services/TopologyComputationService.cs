@@ -197,12 +197,17 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         topology.Layout = blueprint.Layout;
         topology.HasBlueprint = true;
 
+        // Declared names/globs are matched against each node's *stripped* form (the same
+        // env-agnostic display label produced by `format`), never the raw event.Service id.
+        // This lets one literal declared name match the same logical service across every
+        // environment even though the raw id embeds an env-specific token.
         var nodesById = topology.Nodes.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+        var strippedSeen = new HashSet<string>(topology.Nodes.Select(n => format(n.Id)), StringComparer.OrdinalIgnoreCase);
 
         // 1. Decorate observed nodes with the first matching ServiceHint (declaration order).
         foreach (var node in topology.Nodes)
         {
-            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(node.Id, s.Name));
+            var hint = blueprint.Services.FirstOrDefault(s => Glob.IsMatch(format(node.Id), s.Name));
             if (hint is not null) Decorate(node, hint);
             // else: observed but undeclared → IsDeclared stays false (dashed border in the UI).
         }
@@ -211,7 +216,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         //    identity to draw before the service appears, so they only decorate — step 1).
         foreach (var hint in blueprint.Services)
         {
-            if (hint.IsGlob || nodesById.ContainsKey(hint.Name)) continue;
+            if (hint.IsGlob || strippedSeen.Contains(hint.Name)) continue;
             var node = new TopologyNode
             {
                 Id = hint.Name,
@@ -222,6 +227,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
             Decorate(node, hint);
             topology.Nodes.Add(node);
             nodesById[node.Id] = node;
+            strippedSeen.Add(hint.Name);
         }
 
         // 3. Declared edges: mark matching observed edges, or add greyed skeleton edges between
@@ -229,9 +235,15 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         var existing = new HashSet<string>(
             topology.Edges.Select(e => $"{e.Source}{e.Target}"), StringComparer.OrdinalIgnoreCase);
 
+        // Endpoints are resolved against each node's stripped form too, so edges declared
+        // with env-agnostic names line up with the (possibly env-suffixed) real node ids.
+        var idsByStrippedForm = topology.Nodes
+            .Select(n => n.Id)
+            .ToLookup(id => format(id), StringComparer.OrdinalIgnoreCase);
+
         foreach (var (from, to) in blueprint.DeclaredEdges)
-        foreach (var src in ResolveNodes(from, nodesById.Keys))
-        foreach (var dst in ResolveNodes(to, nodesById.Keys))
+        foreach (var src in ResolveNodes(from, idsByStrippedForm))
+        foreach (var dst in ResolveNodes(to, idsByStrippedForm))
         {
             if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase)) continue;
             var key = $"{src}{dst}";
@@ -265,13 +277,14 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         node.Pin = hint.Pin;
     }
 
-    // A declared endpoint (literal or glob) → the concrete node ids it resolves to.
-    private static IEnumerable<string> ResolveNodes(string nameOrGlob, IEnumerable<string> nodeIds)
+    // A declared endpoint (literal or glob) → the concrete node ids it resolves to, matched
+    // against each node's stripped form (ids grouped by that form via idsByStrippedForm).
+    private static IEnumerable<string> ResolveNodes(string nameOrGlob, ILookup<string, string> idsByStrippedForm)
     {
         var isGlob = nameOrGlob.Contains('*') || nameOrGlob.Contains('?');
         return isGlob
-            ? nodeIds.Where(id => Glob.IsMatch(id, nameOrGlob))
-            : nodeIds.Where(id => string.Equals(id, nameOrGlob, StringComparison.OrdinalIgnoreCase));
+            ? idsByStrippedForm.Where(g => Glob.IsMatch(g.Key, nameOrGlob)).SelectMany(g => g)
+            : idsByStrippedForm[nameOrGlob];
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

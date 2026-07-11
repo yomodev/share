@@ -131,12 +131,21 @@
                 {
                     <MudTable Items="@_errors" Dense="true" Hover="true" Elevation="0" Class="bm-batch-table">
                         <HeaderContent>
+                            <MudTh Style="width:40px;"></MudTh>
                             <MudTh Style="white-space:nowrap;">Time</MudTh>
                             <MudTh Style="width:110px;">Source</MudTh>
                             <MudTh Style="width:100%;">Message</MudTh>
                             <MudTh Style="width:40px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
+                            <MudTd Style="text-align:center;">
+                                @if (!string.IsNullOrEmpty(context.Detail))
+                                {
+                                    <MudIconButton Icon="@(_expanded.Contains(context) ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => ToggleExpanded(context))" />
+                                }
+                            </MudTd>
                             <MudTd Style="white-space:nowrap;">
                                 <span class="bm-kafka-mono bm-muted">@DtSvc.Format(context.TimestampUtc, "HH:mm:ss")</span>
                             </MudTd>
@@ -154,6 +163,16 @@
                                 </MudTooltip>
                             </MudTd>
                         </RowTemplate>
+                        <ChildRowContent>
+                            @if (_expanded.Contains(context))
+                            {
+                                <MudTr>
+                                    <MudTd colspan="5" Class="bm-error-detail-cell">
+                                        <pre class="bm-error-detail bm-monospace">@context.Detail</pre>
+                                    </MudTd>
+                                </MudTr>
+                            }
+                        </ChildRowContent>
                     </MudTable>
                 }
             </MudPaper>
@@ -181,6 +200,12 @@
     private ThemeMode _mode;
     private IJSObjectReference? _appModule;
     private List<ErrorNotificationEntry> _errors = [];
+    private readonly HashSet<ErrorNotificationEntry> _expanded = [];
+
+    private void ToggleExpanded(ErrorNotificationEntry entry)
+    {
+        if (!_expanded.Remove(entry)) _expanded.Add(entry);
+    }
 
     protected override void OnInitialized()
     {
