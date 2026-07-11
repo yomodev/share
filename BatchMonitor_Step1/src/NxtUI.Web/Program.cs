@@ -87,7 +87,15 @@ public class Program
 
         // ── Blazor + MudBlazor ───────────────────────────────────────────────
         builder.Services.AddRazorPages();
-        builder.Services.AddServerSideBlazor();
+        builder.Services.AddServerSideBlazor().AddHubOptions(options =>
+        {
+            // Default (32 KB) is easily exceeded by JS interop payloads — e.g. ConfigPage's
+            // getValue() returning the full editor content, which for a real config file can
+            // run to 100+ KB. Over the limit, the circuit's SignalR connection is torn down
+            // instead of the call failing cleanly, which looks exactly like "the site
+            // disconnects" on Save with no useful exception on the .NET side.
+            options.MaximumReceiveMessageSize = 10 * 1024 * 1024; // 10 MB
+        });
 
         // register controllers (API endpoints)
         builder.Services.AddControllers();
