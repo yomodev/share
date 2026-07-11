@@ -550,8 +550,19 @@ const D3Graph = (() => {
 
     // ── Nodes ─────────────────────────────────────────────────────────────
 
+    // ELK occasionally returns a child with no (or non-finite) x/y — seen for isolated
+    // nodes (no edges, e.g. a declared-but-never-observed skeleton service) under some
+    // layout/algorithm combinations. translate(NaN, NaN) breaks the whole <g>'s rendering
+    // and spams the console; fall back to the graph origin and warn once per node/render
+    // so a real occurrence is traceable instead of silently corrupting the layout.
+    function safeCoord(d) {
+        if (Number.isFinite(d.x) && Number.isFinite(d.y)) return d;
+        console.warn(`d3-graph: node "${d.id}" has non-finite position (x=${d.x}, y=${d.y}) — falling back to (0,0)`);
+        return { ...d, x: Number.isFinite(d.x) ? d.x : 0, y: Number.isFinite(d.y) ? d.y : 0 };
+    }
+
     function renderNodes(handle) {
-        const data = [...handle.currentGraph.nodes].map(([id, n]) => ({ id, ...n }));
+        const data = [...handle.currentGraph.nodes].map(([id, n]) => safeCoord({ id, ...n }));
 
         const sel = handle.nLayer.selectAll('g.bm-node').data(data, d => d.id);
 
@@ -656,7 +667,7 @@ const D3Graph = (() => {
             el.select('.bm-node-accent')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .attr('fill', accentCol).attr('fill-opacity', 0.14)
+                .attr('fill', accentCol).attr('fill-opacity', 0.6)
                 .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-label')
