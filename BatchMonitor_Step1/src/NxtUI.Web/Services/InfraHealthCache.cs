@@ -49,14 +49,27 @@ public sealed class InfraHealthCache(
     }
 
     /// <summary>Force an immediate poll (both services) for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) =>
-        _ = Task.WhenAll(PollKafkaAsync(env, _ct), PollMongoAsync(env, _ct))
-            .ContinueWith(
-                t => log.LogWarning(t.Exception, "InfraHealthCache: RequestRefresh faulted for {Env}", env),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default)
-            .ContinueWith(_ => RaiseUpdated(env), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+    public void RequestRefresh(string env) => _ = RequestRefreshAsync(env);
+
+    private async Task RequestRefreshAsync(string env)
+    {
+        try
+        {
+            // _ct is the BackgroundService's own lifetime token (set once ExecuteAsync starts) —
+            // a real, cancellable token instead of CancellationToken.None, so a refresh in
+            // flight during shutdown actually observes cancellation instead of running unbounded.
+            await Task.WhenAll(PollKafkaAsync(env, _ct), PollMongoAsync(env, _ct));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "InfraHealthCache: RequestRefresh faulted for {Env}", env);
+        }
+        finally
+        {
+            RaiseUpdated(env);
+        }
+    }
 
     // Kafka and Mongo poll on independent cadences (InfraHealthSettings) — a slow/expensive
     // Mongo ping interval shouldn't force Kafka's, or vice versa.

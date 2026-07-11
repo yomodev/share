@@ -1,3 +1,4 @@
+using NxtUI.Core.Events;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -8,11 +9,20 @@ namespace NxtUI.Web.Services;
 ///
 ///   1. HTTP polling (fallback, always active): loads historical events on
 ///      startup; polls incrementally for completed batches where live push
-///      is not available.
+///      is not available. Goes through a <see cref="PerformanceEventSource"/>
+///      (an <see cref="IEventSource"/>) rather than calling
+///      <see cref="IRunService.GetRunEventsAsync"/> directly — the resume
+///      point is an <see cref="EventCursor"/>, not a raw timestamp, and each
+///      returned <see cref="RunEvent"/> is bridged back into a
+///      <see cref="PerformanceEvent"/> via <see cref="PerformanceEventBridge"/>
+///      before landing in the store below. This is the first live consumer of
+///      the generalized event model — see docs/10 and docs/11.
 ///
 ///   2. Live push (primary for running batches): low-latency event delivery
 ///      via <see cref="RunEventBroker"/>, an in-process pub/sub. When push
 ///      is active, the polling interval is relaxed to a slow fallback rate.
+///      (Push stays on the legacy PerformanceEvent shape — it's a distinct
+///      low-latency channel, not itself an IEventSource.)
 ///
 /// Focus-aware: while the owning tab is unfocused, polling slows to 10 s and
 /// pushed events are still accumulated (the component just won't re-render
@@ -31,6 +41,8 @@ public class PerformanceEventService : IDisposable
 
     private readonly IRunService _runService;
     private readonly PerformanceEventStore _eventStore;
+    private IEventSource? _eventSource;
+    private EventCursor? _cursor;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private Action? _onEventsUpdated;
@@ -93,6 +105,8 @@ public class PerformanceEventService : IDisposable
 
         StopPolling();
 
+        _eventSource = new PerformanceEventSource(_runService, env, startTime);
+        _cursor = null;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // 1. Load full history.
@@ -162,16 +176,36 @@ public class PerformanceEventService : IDisposable
     {
         try
         {
-            var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
-            if (events?.Count > 0)
-            {
-                _eventStore.UpsertEvents(events);
-                _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Loaded {events.Count} historical events for {runId}");
-            }
+            var count = await PollSourceAsync(runId, ct);
+            if (count > 0)
+                Console.WriteLine($"[EventService] Loaded {count} historical events for {runId}");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Console.WriteLine($"[EventService] History load error: {ex.Message}"); }
+    }
+
+    /// <summary>Polls <see cref="_eventSource"/> from <see cref="_cursor"/>, bridges the
+    /// returned RunEvents into PerformanceEvents, upserts them, and advances the cursor.
+    /// Returns how many events were bridged (0 = "nothing new").</summary>
+    private async Task<int> PollSourceAsync(string runId, CancellationToken ct)
+    {
+        if (_eventSource is null) return 0;
+
+        var batch = await _eventSource.PollAsync(runId, _cursor, ct);
+        _cursor = batch.Cursor;
+        if (batch.Events.Count == 0) return 0;
+
+        var mapped = new List<PerformanceEvent>(batch.Events.Count);
+        foreach (var evt in batch.Events)
+        {
+            var pe = PerformanceEventBridge.ToPerformanceEvent(evt);
+            if (pe is not null) mapped.Add(pe);
+        }
+        if (mapped.Count == 0) return 0;
+
+        _eventStore.UpsertEvents(mapped);
+        _onEventsUpdated?.Invoke();
+        return mapped.Count;
     }
 
     private async Task PollLoopAsync(string env, string runId, CancellationToken ct)
@@ -201,14 +235,9 @@ public class PerformanceEventService : IDisposable
 
                 if (ct.IsCancellationRequested) break;
 
-                var from = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
-                var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
-                if (events?.Count > 0)
-                {
-                    _eventStore.UpsertEvents(events);
-                    _onEventsUpdated?.Invoke();
-                    Console.WriteLine($"[EventService] Poll: {events.Count} events, total={_eventStore.Count}");
-                }
+                var count = await PollSourceAsync(runId, ct);
+                if (count > 0)
+                    Console.WriteLine($"[EventService] Poll: {count} events, total={_eventStore.Count}");
 
                 if (_isRunning && DateTime.UtcNow >= _nextStatusCheck)
                     await CheckRunStatusAsync(env, runId, ct);

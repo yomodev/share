@@ -6866,7 +6866,7 @@ public static class JsonPathQueryService
     }
 }
 FILE src/NxtUI.Core/Services/LogPathDiscoveryService.cs
-LENGTH 7292
+LENGTH 7867
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NxtUI.Core.Configuration;
@@ -6881,17 +6881,19 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
+    // key → resolved result, populated once RunSearchAsync completes. GetCachedPath reads
+    // from here instead of the task above — a cache-only lookup should never touch a Task's
+    // .Result even when it's known-completed (that pattern is easy to accidentally copy
+    // somewhere it DOES block; a plain dictionary read can't).
+    private readonly ConcurrentDictionary<string, string?> _resolved = new();
+
     public event Action<string>? OnPathResolved;
 
     public static string CacheKey(ServiceStatus svc, string env) =>
         $"{env}|{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
 
-    public string? GetCachedPath(ServiceStatus svc, string env)
-    {
-        if (_cache.TryGetValue(CacheKey(svc, env), out var task) && task.IsCompletedSuccessfully)
-            return task.Result;
-        return null;
-    }
+    public string? GetCachedPath(ServiceStatus svc, string env) =>
+        _resolved.TryGetValue(CacheKey(svc, env), out var path) ? path : null;
 
     public bool IsSearching(ServiceStatus svc, string env) =>
         _cache.TryGetValue(CacheKey(svc, env), out var task) && !task.IsCompleted;
@@ -6948,6 +6950,7 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
         foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
         {
             if (_cache.TryRemove(key, out _)) removed++;
+            _resolved.TryRemove(key, out _);
         }
         if (removed > 0)
             log.LogDebug("discovery [{Env}]: pruned {Count} stale cache entr{Suffix}", env, removed, removed == 1 ? "y" : "ies");
@@ -6958,6 +6961,8 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
         var prefix = env + "|";
         foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
             _cache.TryRemove(key, out _);
+        foreach (var key in _resolved.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _resolved.TryRemove(key, out _);
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────
@@ -6976,6 +6981,8 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
                 env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
             throw;
         }
+
+        _resolved[key] = result;
 
         if (result is not null)
         {
@@ -22326,7 +22333,7 @@ public interface IHeartbeatMonitor
     event Action<string>? OnServicesUpdated;
 }
 FILE src/NxtUI.Web/Services/InfraHealthCache.cs
-LENGTH 9790
+LENGTH 10074
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using NxtUI.Core.Configuration;
@@ -22378,14 +22385,27 @@ public sealed class InfraHealthCache(
     }
 
     /// <summary>Force an immediate poll (both services) for the given environment (e.g. on tab switch).</summary>
-    public void RequestRefresh(string env) =>
-        _ = Task.WhenAll(PollKafkaAsync(env, _ct), PollMongoAsync(env, _ct))
-            .ContinueWith(
-                t => log.LogWarning(t.Exception, "InfraHealthCache: RequestRefresh faulted for {Env}", env),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default)
-            .ContinueWith(_ => RaiseUpdated(env), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+    public void RequestRefresh(string env) => _ = RequestRefreshAsync(env);
+
+    private async Task RequestRefreshAsync(string env)
+    {
+        try
+        {
+            // _ct is the BackgroundService's own lifetime token (set once ExecuteAsync starts) —
+            // a real, cancellable token instead of CancellationToken.None, so a refresh in
+            // flight during shutdown actually observes cancellation instead of running unbounded.
+            await Task.WhenAll(PollKafkaAsync(env, _ct), PollMongoAsync(env, _ct));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "InfraHealthCache: RequestRefresh faulted for {Env}", env);
+        }
+        finally
+        {
+            RaiseUpdated(env);
+        }
+    }
 
     // Kafka and Mongo poll on independent cadences (InfraHealthSettings) — a slow/expensive
     // Mongo ping interval shouldn't force Kafka's, or vice versa.
@@ -23477,7 +23497,8 @@ public sealed class OperationTracker
     }
 }
 FILE src/NxtUI.Web/Services/PerformanceEventService.cs
-LENGTH 9728
+LENGTH 11131
+using NxtUI.Core.Events;
 using NxtUI.Core.Models;
 using NxtUI.Core.Services;
 
@@ -23488,11 +23509,20 @@ namespace NxtUI.Web.Services;
 ///
 ///   1. HTTP polling (fallback, always active): loads historical events on
 ///      startup; polls incrementally for completed batches where live push
-///      is not available.
+///      is not available. Goes through a <see cref="PerformanceEventSource"/>
+///      (an <see cref="IEventSource"/>) rather than calling
+///      <see cref="IRunService.GetRunEventsAsync"/> directly — the resume
+///      point is an <see cref="EventCursor"/>, not a raw timestamp, and each
+///      returned <see cref="RunEvent"/> is bridged back into a
+///      <see cref="PerformanceEvent"/> via <see cref="PerformanceEventBridge"/>
+///      before landing in the store below. This is the first live consumer of
+///      the generalized event model — see docs/10 and docs/11.
 ///
 ///   2. Live push (primary for running batches): low-latency event delivery
 ///      via <see cref="RunEventBroker"/>, an in-process pub/sub. When push
 ///      is active, the polling interval is relaxed to a slow fallback rate.
+///      (Push stays on the legacy PerformanceEvent shape — it's a distinct
+///      low-latency channel, not itself an IEventSource.)
 ///
 /// Focus-aware: while the owning tab is unfocused, polling slows to 10 s and
 /// pushed events are still accumulated (the component just won't re-render
@@ -23511,6 +23541,8 @@ public class PerformanceEventService : IDisposable
 
     private readonly IRunService _runService;
     private readonly PerformanceEventStore _eventStore;
+    private IEventSource? _eventSource;
+    private EventCursor? _cursor;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private Action? _onEventsUpdated;
@@ -23573,6 +23605,8 @@ public class PerformanceEventService : IDisposable
 
         StopPolling();
 
+        _eventSource = new PerformanceEventSource(_runService, env, startTime);
+        _cursor = null;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // 1. Load full history.
@@ -23642,16 +23676,36 @@ public class PerformanceEventService : IDisposable
     {
         try
         {
-            var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
-            if (events?.Count > 0)
-            {
-                _eventStore.UpsertEvents(events);
-                _onEventsUpdated?.Invoke();
-                Console.WriteLine($"[EventService] Loaded {events.Count} historical events for {runId}");
-            }
+            var count = await PollSourceAsync(runId, ct);
+            if (count > 0)
+                Console.WriteLine($"[EventService] Loaded {count} historical events for {runId}");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Console.WriteLine($"[EventService] History load error: {ex.Message}"); }
+    }
+
+    /// <summary>Polls <see cref="_eventSource"/> from <see cref="_cursor"/>, bridges the
+    /// returned RunEvents into PerformanceEvents, upserts them, and advances the cursor.
+    /// Returns how many events were bridged (0 = "nothing new").</summary>
+    private async Task<int> PollSourceAsync(string runId, CancellationToken ct)
+    {
+        if (_eventSource is null) return 0;
+
+        var batch = await _eventSource.PollAsync(runId, _cursor, ct);
+        _cursor = batch.Cursor;
+        if (batch.Events.Count == 0) return 0;
+
+        var mapped = new List<PerformanceEvent>(batch.Events.Count);
+        foreach (var evt in batch.Events)
+        {
+            var pe = PerformanceEventBridge.ToPerformanceEvent(evt);
+            if (pe is not null) mapped.Add(pe);
+        }
+        if (mapped.Count == 0) return 0;
+
+        _eventStore.UpsertEvents(mapped);
+        _onEventsUpdated?.Invoke();
+        return mapped.Count;
     }
 
     private async Task PollLoopAsync(string env, string runId, CancellationToken ct)
@@ -23681,14 +23735,9 @@ public class PerformanceEventService : IDisposable
 
                 if (ct.IsCancellationRequested) break;
 
-                var from = _eventStore.LastEventTimestamp ?? DateTime.UtcNow.AddMinutes(-10);
-                var events = await _runService.GetRunEventsAsync(env, runId, from, ct);
-                if (events?.Count > 0)
-                {
-                    _eventStore.UpsertEvents(events);
-                    _onEventsUpdated?.Invoke();
-                    Console.WriteLine($"[EventService] Poll: {events.Count} events, total={_eventStore.Count}");
-                }
+                var count = await PollSourceAsync(runId, ct);
+                if (count > 0)
+                    Console.WriteLine($"[EventService] Poll: {count} events, total={_eventStore.Count}");
 
                 if (_isRunning && DateTime.UtcNow >= _nextStatusCheck)
                     await CheckRunStatusAsync(env, runId, ct);
@@ -25945,6 +25994,204 @@ LENGTH 2934
 FILE src/NxtUI.Web/wwwroot/favicon.ico
 LENGTH 29
 <!-- placeholder favicon -->
+FILE tests/NxtUI.Tests/Events/PerformanceEventBridgeTests.cs
+LENGTH 2902
+using AwesomeAssertions;
+using NxtUI.Core.Events;
+
+namespace NxtUI.Tests.Events;
+
+public class PerformanceEventBridgeTests
+{
+    private static RunEvent Base(EventKind kind, string? correlationId = "chunk1") => new()
+    {
+        RunId = "RUN-1",
+        EventId = "evt-1",
+        CorrelationId = correlationId,
+        Service = "Loader",
+        Server = "srv-01",
+        ProcessId = 42,
+        Pipeline = "DF Load",
+        Kind = kind,
+        Source = "OLE DB Dest",
+        TimestampUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        FinishUtc = new DateTime(2026, 1, 1, 0, 0, 5, DateTimeKind.Utc),
+        Status = EventStatus.Success,
+        RecordCount = 100,
+    };
+
+    [Fact]
+    public void Process_event_with_correlation_maps_to_PerformanceEvent()
+    {
+        var pe = PerformanceEventBridge.ToPerformanceEvent(Base(EventKind.Process));
+
+        pe.Should().NotBeNull();
+        pe!.Name.Should().Be("chunk1");
+        pe.Service.Should().Be("Loader");
+        pe.Pipeline.Should().Be("DF Load");
+        pe.Server.Should().Be("srv-01");
+        pe.ProcessId.Should().Be(42);
+        pe.RecordCount.Should().Be(100);
+        pe.Finish.Should().Be(new DateTime(2026, 1, 1, 0, 0, 5, DateTimeKind.Utc));
+        pe.IsDone.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(EventKind.Produce)]
+    [InlineData(EventKind.Consume)]
+    public void Produce_and_consume_events_with_correlation_also_map(EventKind kind)
+    {
+        PerformanceEventBridge.ToPerformanceEvent(Base(kind)).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(EventKind.Connect)]
+    [InlineData(EventKind.Disconnect)]
+    [InlineData(EventKind.Info)]
+    public void Lifecycle_and_annotation_events_do_not_map(EventKind kind)
+    {
+        PerformanceEventBridge.ToPerformanceEvent(Base(kind)).Should().BeNull();
+    }
+
+    [Fact]
+    public void Process_event_without_correlation_id_does_not_map()
+    {
+        PerformanceEventBridge.ToPerformanceEvent(Base(EventKind.Process, correlationId: null)).Should().BeNull();
+    }
+
+    [Fact]
+    public void Error_carries_through_and_marks_the_event_as_errored()
+    {
+        var evt = new RunEvent
+        {
+            RunId = "RUN-1",
+            EventId = "evt-1",
+            CorrelationId = "chunk1",
+            Service = "Loader",
+            Server = "srv-01",
+            ProcessId = 42,
+            Pipeline = "DF Load",
+            Kind = EventKind.Process,
+            Source = "OLE DB Dest",
+            TimestampUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Status = EventStatus.Failed,
+            Error = "PK violation",
+        };
+        var pe = PerformanceEventBridge.ToPerformanceEvent(evt);
+
+        pe.Should().NotBeNull();
+        pe!.Error.Should().Be("PK violation");
+        pe.IsError.Should().BeTrue();
+        pe.IsDone.Should().BeFalse(); // no FinishUtc on this variant
+    }
+}
+FILE tests/NxtUI.Tests/Events/PerformanceEventSourceTests.cs
+LENGTH 4261
+using AwesomeAssertions;
+using NxtUI.Core.Events;
+using NxtUI.Core.Filtering;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Events;
+
+/// <summary>A minimal IRunService stub — only GetRunEventsAsync is exercised by PerformanceEventSource.</summary>
+file sealed class FakeRunService : IRunService
+{
+    public List<PerformanceEvent> Events { get; set; } = [];
+    public DateTime? LastFrom { get; private set; }
+
+    public Task<List<PerformanceEvent>> GetRunEventsAsync(string env, string runId, DateTime from, CancellationToken ct = default)
+    {
+        LastFrom = from;
+        return Task.FromResult(Events.Where(e => (e.LastUpdate == default ? (e.Finish ?? e.Start) : e.LastUpdate) >= from).ToList());
+    }
+
+    public Task<List<RunSummary>> GetRunsAsync(string env, DateTime before, int count, RunFilter? filter = null, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+    public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
+}
+
+public class PerformanceEventSourceTests
+{
+    private static PerformanceEvent Evt(string name, DateTime start, DateTime? finish = null) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Name = name,
+        Service = "Loader",
+        Pipeline = "DF Load",
+        Server = "srv-01",
+        ProcessId = 1,
+        Start = start,
+        Finish = finish,
+        LastUpdate = finish ?? start,
+    };
+
+    [Fact]
+    public async Task First_poll_uses_run_start_and_maps_every_event_as_a_Process_span()
+    {
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
+        var source = new PerformanceEventSource(fake, "DEV1", t0);
+
+        var batch = await source.PollAsync("RUN-1", cursor: null);
+
+        fake.LastFrom.Should().Be(t0);
+        batch.Events.Should().ContainSingle();
+        var e = batch.Events[0];
+        e.Kind.Should().Be(EventKind.Process);
+        e.CorrelationId.Should().Be("chunk1");
+        e.Status.Should().Be(EventStatus.Success);
+        batch.Cursor.LastTimestampUtc.Should().Be(t0.AddSeconds(5));
+    }
+
+    [Fact]
+    public async Task Second_poll_resumes_from_the_returned_cursor()
+    {
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fake = new FakeRunService { Events = [Evt("chunk1", t0, t0.AddSeconds(5))] };
+        var source = new PerformanceEventSource(fake, "DEV1", t0);
+
+        var first = await source.PollAsync("RUN-1", null);
+        fake.Events.Add(Evt("chunk2", t0.AddSeconds(10), t0.AddSeconds(12)));
+
+        var second = await source.PollAsync("RUN-1", first.Cursor);
+
+        fake.LastFrom.Should().Be(first.Cursor.LastTimestampUtc);
+        second.Events.Should().Contain(e => e.CorrelationId == "chunk2");
+    }
+
+    [Fact]
+    public async Task Empty_result_keeps_the_cursor_unchanged()
+    {
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fake = new FakeRunService { Events = [] };
+        var source = new PerformanceEventSource(fake, "DEV1", t0);
+
+        var cursorIn = new EventCursor(LastTimestampUtc: t0.AddMinutes(1));
+        var batch = await source.PollAsync("RUN-1", cursorIn);
+
+        batch.Events.Should().BeEmpty();
+        batch.Cursor.Should().Be(cursorIn);
+    }
+
+    [Fact]
+    public async Task Failed_event_maps_to_Failed_status()
+    {
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var errored = Evt("chunk1", t0, t0.AddSeconds(1));
+        errored.Error = "boom";
+        var fake = new FakeRunService { Events = [errored] };
+        var source = new PerformanceEventSource(fake, "DEV1", t0);
+
+        var batch = await source.PollAsync("RUN-1", null);
+
+        batch.Events.Single().Status.Should().Be(EventStatus.Failed);
+        batch.Events.Single().Error.Should().Be("boom");
+    }
+}
 FILE tests/NxtUI.Tests/Filtering/FilterEvaluatorTests.cs
 LENGTH 14631
 using AwesomeAssertions;
@@ -28025,6 +28272,98 @@ public sealed class KafkaIntegrationTests
         public IReadOnlyCollection<string> RegisteredTypes => [acceptType];
     }
 }
+FILE tests/NxtUI.Tests/Models/TopologyBlueprintTests.cs
+LENGTH 3148
+using AwesomeAssertions;
+using NxtUI.Core.Models;
+
+namespace NxtUI.Tests.Models;
+
+public class TopologyBlueprintTests
+{
+    private static TopologyHintFile SampleFile() => new()
+    {
+        RunType = "FullLoad",
+        Variants =
+        [
+            new TopologyVariant
+            {
+                Match = new VariantMatch { AnyService = "Ingester*" },
+                Layout = new LayoutHint { Direction = "vertical", Shape = "tree" },
+                Services =
+                [
+                    new ServiceHint { Name = "Ingester", Role = "source", Publishes = ["staged"] },
+                    new ServiceHint { Name = "Validator", Role = "middle", Subscribes = ["staged"], Publishes = ["validated"] },
+                    new ServiceHint { Name = "Loader", Role = "sink", Subscribes = ["validated"] },
+                ],
+            },
+        ],
+        Default = new TopologyVariant
+        {
+            Layout = new LayoutHint { Direction = "horizontal" },
+            Services = [new ServiceHint { Name = "Ingester" }],
+        },
+    };
+
+    [Fact]
+    public void SelectVariant_matches_anyService_glob()
+    {
+        var file = SampleFile();
+        var chosen = TopologyBlueprint.SelectVariant(file, ["IngesterA", "Loader"]);
+        chosen.Should().BeSameAs(file.Variants[0]);
+    }
+
+    [Fact]
+    public void SelectVariant_falls_back_to_default_when_nothing_matches()
+    {
+        var file = SampleFile();
+        var chosen = TopologyBlueprint.SelectVariant(file, ["Enricher", "Router"]);
+        chosen.Should().BeSameAs(file.Default);
+    }
+
+    [Fact]
+    public void SelectVariant_returns_null_when_no_match_and_no_default()
+    {
+        var file = new TopologyHintFile { Variants = [new TopologyVariant { Match = new VariantMatch { AnyService = "X*" } }] };
+        TopologyBlueprint.SelectVariant(file, ["Y"]).Should().BeNull();
+    }
+
+    [Fact]
+    public void Compile_derives_edge_from_shared_publish_subscribe_token()
+    {
+        var variant = SampleFile().Variants[0];
+        var bp = TopologyBlueprint.Compile(variant);
+
+        bp.DeclaredEdges.Should().Contain(("Ingester", "Validator"));
+        bp.DeclaredEdges.Should().Contain(("Validator", "Loader"));
+        bp.DeclaredEdges.Should().NotContain(("Ingester", "Loader")); // no shared token
+    }
+
+    [Fact]
+    public void Compile_includes_explicit_edges_and_dedups()
+    {
+        var variant = new TopologyVariant
+        {
+            Services =
+            [
+                new ServiceHint { Name = "A", Publishes = ["t"] },
+                new ServiceHint { Name = "B", Subscribes = ["t"] },
+            ],
+            Edges = [new EdgeHint { From = "A", To = "B" }], // same edge as the derived one
+        };
+
+        var bp = TopologyBlueprint.Compile(variant);
+        bp.DeclaredEdges.Should().ContainSingle(e => e.From == "A" && e.To == "B");
+    }
+
+    [Fact]
+    public void Glob_IsMatch_is_case_insensitive_and_supports_wildcards()
+    {
+        Glob.IsMatch("IngesterA", "ingester*").Should().BeTrue();
+        Glob.IsMatch("Loader", "Ingester*").Should().BeFalse();
+        Glob.IsMatch("A1", "A?").Should().BeTrue();
+    }
+}
 FILE tests/NxtUI.Tests/Performance/ConcurrencyPerfTests.cs
 LENGTH 7532
 using AwesomeAssertions;
@@ -29747,6 +30086,261 @@ public sealed class LogFormatGrammarContractTests
             group.Success.Should().BeTrue($"[{testCase.Name}] field '{field}' did not capture");
             group.Value.Should().Be(expectedValue);
         }
+    }
+}
+FILE tests/NxtUI.Tests/Services/TopologyComputationServiceBlueprintTests.cs
+LENGTH 6875
+using AwesomeAssertions;
+using NxtUI.Core.Models;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Services;
+
+/// <summary>
+/// Covers the topology-hint merge (ApplyBlueprint) — declared vs observed reconciliation,
+/// skeleton nodes/edges, and the empty-store path. Uses Mock-shaped data (same service
+/// names/pipelines as MockRunService) so this doubles as the "does the sample hint actually
+/// do something against the mock" check requested alongside config/topology/fullload.json.
+/// </summary>
+public class TopologyComputationServiceBlueprintTests
+{
+    private static TopologyVariant SampleVariant() => new()
+    {
+        Layout = new LayoutHint { Direction = "vertical", Shape = "tree" },
+        Services =
+        [
+            new ServiceHint { Name = "Ingester", Role = "source", Group = "Ingest", Publishes = ["staged"] },
+            new ServiceHint { Name = "Validator", Role = "middle", Group = "Validate", Subscribes = ["staged"], Publishes = ["validated"] },
+            new ServiceHint { Name = "Loader", Role = "sink", Group = "Persist", Subscribes = ["validated"], Color = "#A371F7" },
+        ],
+    };
+
+    private static PerformanceEvent Evt(string name, string service, string pipeline, DateTime start, DateTime? finish = null) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Name = name,
+        Service = service,
+        Pipeline = pipeline,
+        Server = "srv-01",
+        ProcessId = 1234,
+        Start = start,
+        Finish = finish,
+    };
+
+    [Fact]
+    public void Observed_service_matching_a_hint_is_decorated()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+        };
+
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events, blueprint: blueprint);
+
+        var node = topo.Nodes.Should().ContainSingle(n => n.Id == "Ingester").Subject;
+        node.IsDeclared.Should().BeTrue();
+        node.IsObserved.Should().BeTrue();
+        node.Role.Should().Be("source");
+        node.Group.Should().Be("Ingest");
+    }
+
+    [Fact]
+    public void Declared_service_never_observed_renders_as_greyed_skeleton()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            // Only Ingester appears — Validator/Loader are declared but never seen.
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+        };
+
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events, blueprint: blueprint);
+
+        var loader = topo.Nodes.Should().ContainSingle(n => n.Id == "Loader").Subject;
+        loader.IsDeclared.Should().BeTrue();
+        loader.IsObserved.Should().BeFalse();
+        loader.HeaderState.Should().Be(PipelineState.NotStarted);
+        loader.Color.Should().Be("#A371F7");
+    }
+
+    [Fact]
+    public void Observed_service_not_in_blueprint_is_flagged_undeclared()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            // "Enricher" isn't in SampleVariant's services at all.
+            ["e1"] = Evt("chunk1", "Enricher", "field-map", t0, t0.AddSeconds(1)),
+        };
+
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events, blueprint: blueprint);
+
+        var node = topo.Nodes.Should().ContainSingle(n => n.Id == "Enricher").Subject;
+        node.IsDeclared.Should().BeFalse();
+        node.IsObserved.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Declared_edge_between_two_concrete_nodes_is_added_as_skeleton_when_not_observed()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            // Ingester and Validator both appear, but never on the SAME chunk (Name), so no
+            // real chunk-flow edge is inferred — the declared edge should still show, faint.
+            ["e1"] = Evt("chunkA", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+            ["e2"] = Evt("chunkB", "Validator", "schema-check", t0, t0.AddSeconds(1)),
+        };
+
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events, blueprint: blueprint);
+
+        var edge = topo.Edges.Should().ContainSingle(e => e.Source == "Ingester" && e.Target == "Validator").Subject;
+        edge.IsDeclared.Should().BeTrue();
+        edge.IsObserved.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Declared_edge_actually_observed_is_marked_both_declared_and_observed()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            // Same chunk "chunk1" hops Ingester -> Validator -> a real chunk-flow edge.
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+            ["e2"] = Evt("chunk1", "Validator", "schema-check", t0.AddSeconds(2), t0.AddSeconds(3)),
+        };
+
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events, blueprint: blueprint);
+
+        var edge = topo.Edges.Should().ContainSingle(e => e.Source == "Ingester" && e.Target == "Validator").Subject;
+        edge.IsDeclared.Should().BeTrue();
+        edge.IsObserved.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Empty_event_store_with_blueprint_still_renders_the_full_skeleton()
+    {
+        var blueprint = TopologyBlueprint.Compile(SampleVariant());
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(new Dictionary<string, PerformanceEvent>(), blueprint: blueprint);
+
+        topo.Nodes.Select(n => n.Id).Should().BeEquivalentTo(["Ingester", "Validator", "Loader"]);
+        topo.Nodes.Should().OnlyContain(n => n.HeaderState == PipelineState.NotStarted && !n.IsObserved);
+        topo.Layout.Should().NotBeNull();
+        topo.Layout!.Shape.Should().Be("tree");
+    }
+
+    [Fact]
+    public void No_blueprint_behaves_exactly_as_before()
+    {
+        var t0 = DateTime.UtcNow;
+        var events = new Dictionary<string, PerformanceEvent>
+        {
+            ["e1"] = Evt("chunk1", "Ingester", "csv-ingest", t0, t0.AddSeconds(1)),
+        };
+
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(events);
+
+        topo.Layout.Should().BeNull();
+        topo.Nodes.Should().ContainSingle(n => n.Id == "Ingester" && !n.IsDeclared);
+    }
+}
+FILE tests/NxtUI.Tests/Services/TopologyHintLoaderTests.cs
+LENGTH 3055
+using AwesomeAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using NxtUI.Core.Services;
+
+namespace NxtUI.Tests.Services;
+
+/// <summary>Uses the actual shipped sample (config/topology/fullload.json) as its own fixture —
+/// this doubles as a regression test that the sample stays valid JSON matching the model.</summary>
+public class TopologyHintLoaderTests : IDisposable
+{
+    private readonly string _basePath = Path.Combine(Path.GetTempPath(), "nxtui-topology-tests-" + Guid.NewGuid());
+
+    public TopologyHintLoaderTests()
+    {
+        Directory.CreateDirectory(Path.Combine(_basePath, "topology"));
+    }
+
+    public void Dispose() => Directory.Delete(_basePath, recursive: true);
+
+    private TopologyHintLoader CreateLoader() =>
+        new(new EnvironmentConfigOptions { BasePath = _basePath }, NullLogger<TopologyHintLoader>.Instance);
+
+    [Fact]
+    public void Missing_file_returns_null()
+    {
+        CreateLoader().Get("NoSuchType").Should().BeNull();
+    }
+
+    [Fact]
+    public void Blank_runType_returns_null_without_touching_disk()
+    {
+        CreateLoader().Get(null).Should().BeNull();
+        CreateLoader().Get("  ").Should().BeNull();
+    }
+
+    [Fact]
+    public void Loads_the_shipped_sample_and_lowercases_the_lookup()
+    {
+        var sample = FindShippedSample();
+        File.Copy(sample, Path.Combine(_basePath, "topology", "fullload.json"));
+
+        var loader = CreateLoader();
+        var hint = loader.Get("FullLoad"); // mixed case — file is fullload.json
+
+        hint.Should().NotBeNull();
+        hint!.RunType.Should().Be("FullLoad");
+        hint.Variants.Should().ContainSingle();
+        hint.Variants[0].Match!.AnyService.Should().Be("Ingester*");
+        hint.Variants[0].Services.Should().HaveCount(5);
+        hint.Default.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Invalid_json_logs_and_returns_null_instead_of_throwing()
+    {
+        File.WriteAllText(Path.Combine(_basePath, "topology", "broken.json"), "{ not valid json");
+        CreateLoader().Get("broken").Should().BeNull();
+    }
+
+    [Fact]
+    public void Result_is_cached_after_first_load()
+    {
+        var sample = FindShippedSample();
+        File.Copy(sample, Path.Combine(_basePath, "topology", "fullload.json"));
+        var loader = CreateLoader();
+
+        var first = loader.Get("FullLoad");
+        File.Delete(Path.Combine(_basePath, "topology", "fullload.json")); // prove the second call doesn't re-read
+        var second = loader.Get("FullLoad");
+
+        second.Should().BeSameAs(first);
+    }
+
+    private static string FindShippedSample()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var i = 0; i < 8 && dir is not null; i++, dir = Path.GetDirectoryName(dir))
+        {
+            var candidate = Path.Combine(dir, "src", "NxtUI.Web", "config", "topology", "fullload.json");
+            if (File.Exists(candidate)) return candidate;
+        }
+        throw new FileNotFoundException("Could not locate config/topology/fullload.json relative to the test binary.");
     }
 }
 FILE tests/NxtUI.Tests/Services/TopologyLabelFormatterTests.cs

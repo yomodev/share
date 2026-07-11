@@ -12,17 +12,19 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
     // key → running or completed search task
     private readonly ConcurrentDictionary<string, Task<string?>> _cache = new();
 
+    // key → resolved result, populated once RunSearchAsync completes. GetCachedPath reads
+    // from here instead of the task above — a cache-only lookup should never touch a Task's
+    // .Result even when it's known-completed (that pattern is easy to accidentally copy
+    // somewhere it DOES block; a plain dictionary read can't).
+    private readonly ConcurrentDictionary<string, string?> _resolved = new();
+
     public event Action<string>? OnPathResolved;
 
     public static string CacheKey(ServiceStatus svc, string env) =>
         $"{env}|{svc.HostName}|{svc.ServiceName}|{svc.ProcessId}";
 
-    public string? GetCachedPath(ServiceStatus svc, string env)
-    {
-        if (_cache.TryGetValue(CacheKey(svc, env), out var task) && task.IsCompletedSuccessfully)
-            return task.Result;
-        return null;
-    }
+    public string? GetCachedPath(ServiceStatus svc, string env) =>
+        _resolved.TryGetValue(CacheKey(svc, env), out var path) ? path : null;
 
     public bool IsSearching(ServiceStatus svc, string env) =>
         _cache.TryGetValue(CacheKey(svc, env), out var task) && !task.IsCompleted;
@@ -79,6 +81,7 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
         foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !activeKeys.Contains(k)).ToList())
         {
             if (_cache.TryRemove(key, out _)) removed++;
+            _resolved.TryRemove(key, out _);
         }
         if (removed > 0)
             log.LogDebug("discovery [{Env}]: pruned {Count} stale cache entr{Suffix}", env, removed, removed == 1 ? "y" : "ies");
@@ -89,6 +92,8 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
         var prefix = env + "|";
         foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
             _cache.TryRemove(key, out _);
+        foreach (var key in _resolved.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _resolved.TryRemove(key, out _);
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────
@@ -107,6 +112,8 @@ public sealed class LogPathDiscoveryService(IOptions<FileBrowserSettings> option
                 env, svc.ServiceName, svc.HostName, svc.ProcessId, sw.ElapsedMilliseconds);
             throw;
         }
+
+        _resolved[key] = result;
 
         if (result is not null)
         {
