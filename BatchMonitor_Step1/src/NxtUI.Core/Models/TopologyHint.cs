@@ -36,6 +36,24 @@ public sealed class TopologyVariant
 
     /// <summary>Explicit service→service edges, an alternative to declaring shared publish/subscribe Targets.</summary>
     public List<EdgeHint> Edges { get; set; } = [];
+
+    /// <summary>
+    /// Optional per-group colour, upgrading a <see cref="ServiceHint.Group"/> cluster from
+    /// the default cosmetic band (drawn for ANY shared group tag, no declaration needed) to
+    /// a real bordered box in that colour. A group not listed here keeps the plain band —
+    /// see docs/12_Custom_Layout_And_Nested_Runs.md §6/"Groups: cosmetic band vs. real box".
+    /// </summary>
+    public List<GroupHint> Groups { get; set; } = [];
+}
+
+/// <summary>Upgrades one named <see cref="ServiceHint.Group"/> cluster to a real bordered box
+/// (see <see cref="TopologyVariant.Groups"/>). Always has a border — there's no separate
+/// on/off flag: the border is a more saturated/opaque shade of the same <see cref="Color"/>
+/// used for the box's translucent fill, so declaring a colour is what turns the box on.</summary>
+public sealed class GroupHint
+{
+    public string Name { get; set; } = string.Empty;
+    public string Color { get; set; } = string.Empty;
 }
 
 /// <summary>Variant discriminator — currently "a service matching this glob has been seen".</summary>

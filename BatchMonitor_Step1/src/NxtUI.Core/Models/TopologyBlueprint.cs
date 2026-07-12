@@ -16,6 +16,11 @@ public sealed class TopologyBlueprint
     /// <summary>Declared edges as (fromService, toService) name pairs — names may be literal or glob.</summary>
     public IReadOnlyList<(string From, string To)> DeclaredEdges { get; init; } = [];
 
+    /// <summary>Group name -&gt; colour, for groups upgraded from the default cosmetic band to a
+    /// real bordered box (see <see cref="GroupHint"/>). Case-insensitive keys.</summary>
+    public IReadOnlyDictionary<string, string> GroupColors { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Picks the variant to use: the first whose <see cref="VariantMatch.AnyService"/> glob
     /// matches a service seen so far, else <see cref="TopologyHintFile.Default"/>. Returns null
@@ -55,11 +60,17 @@ public sealed class TopologyBlueprint
             if (!string.IsNullOrWhiteSpace(e.From) && !string.IsNullOrWhiteSpace(e.To))
                 edges.Add((e.From, e.To));
 
+        var groupColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in variant.Groups)
+            if (!string.IsNullOrWhiteSpace(g.Name) && !string.IsNullOrWhiteSpace(g.Color))
+                groupColors[g.Name] = g.Color;
+
         return new TopologyBlueprint
         {
             Layout = variant.Layout,
             Services = variant.Services,
             DeclaredEdges = Dedup(edges),
+            GroupColors = groupColors,
         };
     }
 

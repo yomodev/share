@@ -196,6 +196,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
     {
         topology.Layout = blueprint.Layout;
         topology.HasBlueprint = true;
+        topology.GroupColors = new Dictionary<string, string>(blueprint.GroupColors, StringComparer.OrdinalIgnoreCase);
 
         // Declared names/globs are matched against each node's *stripped* form (the same
         // env-agnostic display label produced by `format`), never the raw event.Service id.

@@ -144,13 +144,18 @@ const D3Graph = (() => {
 
     function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
 
-    // Flow direction: an explicit topology-hint layout wins; otherwise auto by aspect ratio.
-    function chooseDir(containerEl, layout) {
+    // Flow direction: an explicit topology-hint layout always wins; otherwise falls back to
+    // handle.defaultDirection (RunsSettings.GraphDirection — 'RIGHT'/'DOWN' fixed, or 'AUTO'
+    // for the aspect-ratio auto-pick this used to always do).
+    function chooseDir(handle, layout) {
         const d = layout && layout.direction ? String(layout.direction).toLowerCase() : '';
         if (d === 'horizontal') return 'RIGHT';
         if (d === 'vertical')   return 'DOWN';
-        const r = containerEl.getBoundingClientRect();
-        return r.width >= r.height ? 'RIGHT' : 'DOWN';
+        if (handle.defaultDirection === 'AUTO') {
+            const r = handle.containerEl.getBoundingClientRect();
+            return r.width >= r.height ? 'RIGHT' : 'DOWN';
+        }
+        return handle.defaultDirection;
     }
 
     // Node/edge spacing multiplier from the hint's density.
@@ -212,7 +217,7 @@ const D3Graph = (() => {
     // ordering works as a seed — the raw previous coordinate is the simplest one.
     function buildSeedOrder(handle) {
         if (!handle.currentGraph) return undefined;
-        const dir = chooseDir(handle.containerEl, handle.pendingTopology?.layout || null);
+        const dir = chooseDir(handle, handle.pendingTopology?.layout || null);
         const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
         const seedOrder = new Map();
         for (const [id, p] of handle.currentGraph.nodes) {
@@ -251,7 +256,7 @@ const D3Graph = (() => {
         const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
 
         const layout = topo.layout || null;
-        const dir = chooseDir(handle.containerEl, layout);
+        const dir = chooseDir(handle, layout);
         const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
 
         const flowNodes = topo.nodes.map(n => {
@@ -291,7 +296,7 @@ const D3Graph = (() => {
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
         const layout    = topo.layout || null;
-        const dir       = chooseDir(handle.containerEl, layout);
+        const dir       = chooseDir(handle, layout);
         const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
         const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
         const fixedPos  = handle.portConstraints === 'FIXED_POS';
@@ -468,7 +473,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl, dotNetRef, portConstraints, edgeStyle) {
+    function init(containerEl, dotNetRef, portConstraints, edgeStyle, defaultDirection) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -528,6 +533,10 @@ const D3Graph = (() => {
             containerEl, svg, root, gLayer, eLayer, nLayer, crLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
+            // RunsSettings.GraphDirection (Program.cs / D3FlowGraph.razor) — 'RIGHT'/'DOWN'
+            // fixes the default; 'AUTO' keeps the old aspect-ratio auto-pick. A run-type
+            // hint's own layout.direction (see chooseDir) always wins over this either way.
+            defaultDirection: (defaultDirection === 'DOWN' || defaultDirection === 'AUTO') ? defaultDirection : 'RIGHT',
             animState: createState(),
             elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
@@ -705,8 +714,16 @@ const D3Graph = (() => {
     // ── Group bands — a subtle labelled backdrop behind same-`group` nodes ────
     // v1: a bounding box around the laid-out members (ELK isn't asked to cluster them, so
     // members can be non-adjacent; the band still communicates the grouping visually).
+    // Groups: ANY shared `group` tag always gets the default cosmetic band (soft, theme-
+    // coloured, no configuration needed — unchanged from before). A group also listed in
+    // the run-type hint's `groups` block (topo.groupColors, keyed by name) is upgraded to a
+    // real bordered box in that colour instead — always bordered, no separate on/off flag;
+    // declaring a colour IS what turns the box on. Border is the same colour at a much
+    // higher opacity than the fill, so it reads as "this box's own colour," not a generic
+    // outline. See docs/12_Custom_Layout_And_Nested_Runs.md §6.
     function renderGroups(handle) {
         const PAD = 14, LABEL_H = 16;
+        const groupColors = handle.pendingTopology?.groupColors || {};
         const byGroup = new Map();
         for (const [id, n] of handle.currentGraph.nodes) {
             const grp = n.data && n.data.group;
@@ -718,7 +735,7 @@ const D3Graph = (() => {
             byGroup.set(grp, box);
         }
 
-        const data = [...byGroup.entries()].map(([name, b]) => ({ name, b }));
+        const data = [...byGroup.entries()].map(([name, b]) => ({ name, b, color: groupColors[name] || null }));
         const sel = handle.gLayer.selectAll('g.bm-group').data(data, d => d.name);
         sel.exit().remove();
         const enter = sel.enter().append('g').attr('class', 'bm-group');
@@ -726,12 +743,22 @@ const D3Graph = (() => {
         enter.append('text').attr('class', 'bm-group-label');
 
         const merged = enter.merge(sel);
+        merged.classed('bm-group-colored', d => !!d.color);
         merged.select('.bm-group-rect')
             .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD - LABEL_H)
             .attr('width', d => (d.b.x1 - d.b.x0) + PAD * 2)
-            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2 + LABEL_H);
+            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2 + LABEL_H)
+            // .style (not .attr) — a CSS class rule beats an SVG presentation attribute, so
+            // .attr('fill', ...) here would be silently overridden by .bm-group-rect's own
+            // CSS; inline style wins over a class rule without !important.
+            .style('fill', d => d.color || null)
+            .style('fill-opacity', d => d.color ? 0.12 : null)
+            .style('stroke', d => d.color || null)
+            .style('stroke-opacity', d => d.color ? 0.85 : null)
+            .style('stroke-dasharray', d => d.color ? 'none' : null);
         merged.select('.bm-group-label')
             .attr('x', d => d.b.x0 - PAD + 10).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .style('fill', d => d.color || null)
             .text(d => d.name);
     }
 
@@ -1329,7 +1356,7 @@ const D3Graph = (() => {
 const _handles = new Map();
 
 /** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [portConstraints] "FIXED_SIDE" (default) or "FIXED_POS" @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
-export function init(el, key, dotNetRef, portConstraints, edgeStyle) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle)); }
+export function init(el, key, dotNetRef, portConstraints, edgeStyle, defaultDirection) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle, defaultDirection)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */

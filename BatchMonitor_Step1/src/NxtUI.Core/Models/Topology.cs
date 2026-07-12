@@ -21,6 +21,11 @@ public class Topology
     /// </summary>
     public List<RunNode> ChildRuns { get; set; } = [];
 
+    /// <summary>Group name -&gt; colour, for groups upgraded from the default cosmetic band to a
+    /// real bordered box (see <see cref="GroupHint"/> / <see cref="TopologyBlueprint.GroupColors"/>).
+    /// A group with no entry here keeps the plain band. Empty when no blueprint applies.</summary>
+    public Dictionary<string, string> GroupColors { get; set; } = [];
+
     /// <summary>
     /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
     /// or null when no hint applies (or the matched variant didn't specify one) — the graph

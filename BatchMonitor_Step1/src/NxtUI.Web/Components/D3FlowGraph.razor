@@ -66,12 +66,15 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=31");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=33");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
                     ? "CURVED" : "ORTHOGONAL";
-                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef, portConstraints, edgeStyle);
+                var defaultDirection = string.Equals(RunsOptions.Value.GraphDirection, "Vertical", StringComparison.OrdinalIgnoreCase) ? "DOWN"
+                    : string.Equals(RunsOptions.Value.GraphDirection, "Auto", StringComparison.OrdinalIgnoreCase) ? "AUTO"
+                    : "RIGHT";
+                await _module.InvokeVoidAsync("init", _graphRef, GetHandleKey(), _selfRef, portConstraints, edgeStyle, defaultDirection);
                 _previousIsVisible = IsVisible;
                 await _module.InvokeVoidAsync("setVisible", GetHandleKey(), IsVisible);
                 await PushTopologyAsync();

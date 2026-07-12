@@ -197,4 +197,41 @@ public class TopologyComputationServiceBlueprintTests
 
         topo.HasBlueprint.Should().BeTrue();
     }
+
+    [Fact]
+    public void Declared_group_colour_flows_through_to_Topology_GroupColors()
+    {
+        var variant = SampleVariant();
+        variant.Groups = [new GroupHint { Name = "Ingest", Color = "#3FB950" }];
+        var blueprint = TopologyBlueprint.Compile(variant);
+
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(new Dictionary<string, PerformanceEvent>(), blueprint: blueprint);
+
+        topo.GroupColors.Should().ContainKey("Ingest").WhoseValue.Should().Be("#3FB950");
+        // "Validate"/"Persist" are real groups on other services in SampleVariant but were
+        // never listed in variant.Groups — they keep the default cosmetic band (no entry).
+        topo.GroupColors.Should().NotContainKey("Validate");
+    }
+
+    [Fact]
+    public void Group_colour_lookup_is_case_insensitive()
+    {
+        var variant = SampleVariant();
+        variant.Groups = [new GroupHint { Name = "INGEST", Color = "#3FB950" }];
+        var blueprint = TopologyBlueprint.Compile(variant);
+
+        blueprint.GroupColors.Should().ContainKey("Ingest"); // declared as "INGEST"
+    }
+
+    [Fact]
+    public void No_groups_declared_means_empty_GroupColors_not_null()
+    {
+        var blueprint = TopologyBlueprint.Compile(SampleVariant()); // SampleVariant declares no Groups
+        var svc = new TopologyComputationService();
+        var topo = svc.ComputeTopology(new Dictionary<string, PerformanceEvent>(), blueprint: blueprint);
+
+        topo.GroupColors.Should().NotBeNull();
+        topo.GroupColors.Should().BeEmpty();
+    }
 }

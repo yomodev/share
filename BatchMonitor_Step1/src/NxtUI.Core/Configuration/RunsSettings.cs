@@ -52,6 +52,16 @@ public class RunsSettings
     public string GraphEdgeStyle { get; set; } = "Orthogonal";
 
     /// <summary>
+    /// Default flow direction for the run-detail graph when no run-type topology hint
+    /// specifies one (see <c>LayoutHint.Direction</c> in docs/11_Topology_Hints.md — a
+    /// hint's own direction always wins over this). <c>Horizontal</c> (default): left to
+    /// right, matching typical widescreen monitors. <c>Vertical</c>: top to bottom.
+    /// <c>Auto</c>: picks based on the graph panel's own aspect ratio (the old behavior,
+    /// before a fixed default was introduced). Any other value falls back to Horizontal.
+    /// </summary>
+    public string GraphDirection { get; set; } = "Horizontal";
+
+    /// <summary>
     /// How many seconds since a pipeline's last finished chunk it still counts as
     /// "recently active" (bright green/blue header and row color in the run-detail
     /// flow graph) rather than "quiet" (dim green/gray). Measured against the run's

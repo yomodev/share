@@ -71,6 +71,11 @@
     text-transform: uppercase;
 }
 
+/* Declared group (topology hint's "groups" block, a colour set) — a real bordered box
+   instead of the plain dashed band above; colour/opacity come from JS (see renderGroups). */
+.bm-group-colored .bm-group-rect { stroke-width: 2px; }
+.bm-group-colored .bm-group-label { font-weight: 700; }
+
 /* Green = fully drained (nothing left in flight), blue = still has work in
    flight; bright = that happened/is happening recently, dim = true but quiet
    for a while. See stateColor()/stateClass() in d3-graph.js. */
