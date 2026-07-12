@@ -243,31 +243,54 @@ const D3Graph = (() => {
         handle.hasBlueprint = topo.hasBlueprint === true;
     }
 
-    // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
-    // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
-    // Blueprint hints (role/group/order, decorated onto topo nodes by
-    // TopologyComputationService.Decorate) are passed through to the engine's Stage 2
-    // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
-    // (docs/12 §6, not yet implemented) so they're always undefined for now — the engine
-    // already supports them, they're just unreachable from the app until that lands.
-    function runLayoutCustom(handle, topo, seedOrder) {
-        const ids  = new Set(topo.nodes.map(n => n.id));
-        const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
-        const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
+    // ── Expanded child-run boxes: full-fidelity nested nodes ────────────────────────────
+    // An expanded child run (docs/12 §7.4, "in-place expand") is NOT drawn as a lightweight
+    // simplified representation — its real service nodes are merged into the SAME
+    // nodes/edges the main graph renders, at the SAME size, through the SAME buildNode/
+    // updateNode/renderEdges/animation/popover code paths as any top-level service. This is
+    // what makes an expanded child look and behave identically to a top-level one: same
+    // card size, same pipeline rows/colors/animations, same click-to-see-errors popover.
+    //
+    // The one thing that's genuinely different is WHERE that content sits: it's boxed inside
+    // a background rect (renderChildRunBoxes) representing "these nodes belong to run X."
+    // Sizing that box requires knowing its contents' laid-out size BEFORE the outer engine
+    // (ELK or custom) places it — so each expanded child's own sub-layout is always computed
+    // with bm-flow-layout (buildChildRunBoxSpecs), independent of which engine draws the
+    // OUTER graph, then handed to that outer engine as one opaque, pre-sized leaf. After the
+    // outer engine resolves that leaf's position, flattenChildRunBoxes walks back into the
+    // pre-computed sub-layout and merges its real nodes/edges into the final result,
+    // translated into place — recursively, so a grandchild expanded inside an expanded
+    // child works the same way one level deeper.
+    const EXPANDED_HEADER_H = 26, EXPANDED_PAD = 12;
 
-        const layout = topo.layout || null;
-        const dir = chooseDir(handle, layout);
-        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
-
-        const flowNodes = topo.nodes.map(n => {
+    // Builds the plain node/edge list bm-flow-layout needs for ONE topology level (the main
+    // graph, or one expanded child's own topology), plus a side metadata map (bm-flow-layout
+    // itself carries no `data` — see its own module for why) recording, per node id, either
+    // the real TopologyNode or (for a nested expanded child) that child's own recursively-
+    // built box spec.
+    function buildLevelForLayout(handle, topoNodes, topoEdges, childRunEntries, expandedChildren, direction) {
+        const ids = new Set(topoNodes.map(n => n.id));
+        const flowNodes = [];
+        const metaById = new Map();
+        for (const n of topoNodes) {
             n._layoutWidth = computeNodeWidth(handle, n);
-            return {
+            flowNodes.push({
                 id: n.id, width: n._layoutWidth, height: nh(n),
                 role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
-            };
-        });
-        // De-dupe to one edge per (source,target) pair — the custom engine lays out at the
-        // service level, not per-pipeline, in Stage 1.
+            });
+            metaById.set(n.id, { kind: 'node', data: n });
+        }
+
+        for (const entry of (childRunEntries || [])) {
+            const childTopo = expandedChildren ? expandedChildren[entry.runId] : null;
+            if (!childTopo) continue; // collapsed — handled separately by renderChildRuns's row
+            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction);
+            const boxId = `__box_${entry.runId}`;
+            flowNodes.push({ id: boxId, width: spec.width, height: spec.height });
+            metaById.set(boxId, { kind: 'box', spec });
+        }
+
+        const edges = (topoEdges || []).filter(e => ids.has(e.source) && ids.has(e.target));
         const seenPairs = new Set();
         const flowEdges = [];
         for (const e of edges) {
@@ -278,17 +301,89 @@ const D3Graph = (() => {
         }
         const edgeDataByKey = new Map(edges.map(e => [`${e.source}->${e.target}`, e]));
 
-        const result = flowLayout({ nodes: flowNodes, edges: flowEdges, direction }, { seedOrder });
+        return { flowNodes, flowEdges, metaById, edgeDataByKey };
+    }
+
+    // Recursively computes one expanded child's own sub-layout (bottom-up — a box's size
+    // must be known before its own parent can be placed) and returns a spec describing its
+    // box size plus everything flattenChildRunBoxes needs to merge its contents in later.
+    function buildChildRunBoxSpec(handle, childTopo, entry, parentDirection) {
+        const direction = parentDirection; // sub-boxes keep the same flow direction as their parent
+        const built = buildLevelForLayout(
+            handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren, direction);
+        const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
+        return {
+            runId: entry.runId, entry,
+            width: result.width + EXPANDED_PAD * 2,
+            height: result.height + EXPANDED_HEADER_H + EXPANDED_PAD * 2,
+            result, metaById: built.metaById, edgeDataByKey: built.edgeDataByKey,
+        };
+    }
+
+    // After the outer engine (ELK or custom) has resolved a position for every node
+    // including the synthetic `__box_<runId>` leaves, walks the tree merging each box's
+    // pre-computed sub-layout into the final nodes/edges/boxes output, recursively.
+    function flattenChildRunBoxes(rawPositions, metaById, edgeDataByKey, direction, offX, offY, runIdPrefix, outNodes, outEdges, outBoxes) {
+        for (const [id, pos] of rawPositions) {
+            const meta = metaById.get(id);
+            if (!meta) continue;
+            if (meta.kind === 'node') {
+                const outId = runIdPrefix ? `${runIdPrefix}::${id}` : id;
+                outNodes.set(outId, {
+                    x: pos.x + offX, y: pos.y + offY, width: pos.width, height: pos.height,
+                    data: runIdPrefix ? { ...meta.data, _runId: runIdPrefix } : meta.data,
+                });
+            } else {
+                const spec = meta.spec;
+                const boxX = pos.x + offX, boxY = pos.y + offY;
+                outBoxes.push({ runId: spec.runId, entry: spec.entry, x: boxX, y: boxY, width: pos.width, height: pos.height });
+
+                const { minX: subMinX, minY: subMinY } = minBoundsOf(spec.result.nodes);
+                const contentLeft = boxX - pos.width / 2 + EXPANDED_PAD;
+                const contentTop  = boxY - pos.height / 2 + EXPANDED_HEADER_H + EXPANDED_PAD;
+                const nOffX = contentLeft - subMinX;
+                const nOffY = contentTop - subMinY;
+
+                flattenChildRunBoxes(
+                    spec.result.nodes, spec.metaById, spec.edgeDataByKey, direction,
+                    nOffX, nOffY, spec.runId, outNodes, outEdges, outBoxes);
+
+                for (const e of spec.result.edges) {
+                    const outId = `${spec.runId}::${e.id}`;
+                    outEdges.push({
+                        id: outId,
+                        pts: e.points.map(p => ({ x: p.x + nOffX, y: p.y + nOffY })),
+                        data: spec.edgeDataByKey.get(e.id),
+                    });
+                }
+            }
+        }
+    }
+
+    // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
+    // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
+    // Blueprint hints (role/group/order, decorated onto topo nodes by
+    // TopologyComputationService.Decorate) are passed through to the engine's Stage 2
+    // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
+    // (docs/12 §6, not yet implemented) so they're always undefined for now — the engine
+    // already supports them, they're just unreachable from the app until that lands.
+    function runLayoutCustom(handle, topo, seedOrder) {
+        const layout = topo.layout || null;
+        const dir = chooseDir(handle, layout);
+        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
+
+        const built = buildLevelForLayout(handle, topo.nodes, topo.edges, topo.childRuns, topo.expandedChildren, direction);
+        const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, { seedOrder });
 
         const nodes = new Map();
-        for (const [id, p] of result.nodes) {
-            nodes.set(id, { x: p.x, y: p.y, width: p.width, height: p.height, data: nodeById.get(id) });
+        const outEdges = [];
+        const boxes = [];
+        flattenChildRunBoxes(result.nodes, built.metaById, built.edgeDataByKey, direction, 0, 0, null, nodes, outEdges, boxes);
+        for (const e of result.edges) {
+            outEdges.push({ id: e.id, pts: e.points, data: built.edgeDataByKey.get(e.id) });
         }
-        const outEdges = result.edges.map(e => ({
-            id: e.id, pts: e.points, data: edgeDataByKey.get(e.id),
-        }));
 
-        return { nodes, edges: outEdges, width: result.width, height: result.height };
+        return { nodes, edges: outEdges, width: result.width, height: result.height, childRunBoxes: boxes };
     }
 
     async function runLayoutElk(handle, topo) {
@@ -319,6 +414,22 @@ const D3Graph = (() => {
         }
 
         const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
+        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
+
+        // Expanded child-run boxes (docs/12 §7.4): each one's own sub-layout is always
+        // computed with bm-flow-layout regardless of ELK being the outer engine here — ELK
+        // only needs to know its opaque size (a plain leaf, no ports: a child-run box has no
+        // structural edges to anything). See buildChildRunBoxSpec/flattenChildRunBoxes above.
+        const boxMetaById = new Map();
+        const boxChildren = [];
+        for (const entry of (topo.childRuns || [])) {
+            const childTopo = topo.expandedChildren ? topo.expandedChildren[entry.runId] : null;
+            if (!childTopo) continue;
+            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction);
+            const boxId = `__box_${entry.runId}`;
+            boxChildren.push({ id: boxId, width: spec.width, height: spec.height, ports: [], layoutOptions: {} });
+            boxMetaById.set(boxId, { kind: 'box', spec });
+        }
 
         const children = topo.nodes.map(n => {
             // Cached on the node so updateClipPaths reuses the width without re-measuring.
@@ -390,7 +501,7 @@ const D3Graph = (() => {
                     (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
             },
-            children,
+            children: [...children, ...boxChildren],
             edges: elkEdges,
         };
 
@@ -399,22 +510,29 @@ const D3Graph = (() => {
         // Normalise into our render structure. ELK coords have a top-left origin;
         // we store node CENTRE (renderNodes translates to centre, draws from -w/2)
         // and keep edge points in ELK-absolute space (which equals our render space).
-        const nodes = new Map();
+        // res.children includes both real nodes and the synthetic __box_<runId> leaves —
+        // flattenChildRunBoxes tells them apart via metaById and merges each box's own
+        // pre-computed sub-layout in, recursively.
+        const rawPositions = new Map();
         for (const c of (res.children || [])) {
-            nodes.set(c.id, {
-                x: c.x + c.width / 2, y: c.y + c.height / 2,
-                width: c.width, height: c.height,
-                data: nodeById.get(c.id),
-            });
+            rawPositions.set(c.id, { x: c.x + c.width / 2, y: c.y + c.height / 2, width: c.width, height: c.height });
         }
+        const metaById = new Map();
+        for (const n of topo.nodes) metaById.set(n.id, { kind: 'node', data: n });
+        for (const [id, meta] of boxMetaById) metaById.set(id, meta);
 
-        const outEdges = (res.edges || []).map(re => {
+        const nodes = new Map();
+        const outEdges = [];
+        const boxes = [];
+        flattenChildRunBoxes(rawPositions, metaById, edgeDataById, direction, 0, 0, null, nodes, outEdges, boxes);
+
+        for (const re of (res.edges || [])) {
             const s = re.sections?.[0];
             const pts = s ? [s.startPoint, ...(s.bendPoints || []), s.endPoint] : [];
-            return { id: re.id, pts, data: edgeDataById.get(re.id) };
-        });
+            outEdges.push({ id: re.id, pts, data: edgeDataById.get(re.id) });
+        }
 
-        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0 };
+        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0, childRunBoxes: boxes };
     }
 
     // Orthogonal polyline with rounded corners: line to a point `r` before each
@@ -500,11 +618,16 @@ const D3Graph = (() => {
 
         const root  = svg.append('g').attr('class', 'bm-d3-root');
         const gLayer = root.append('g').attr('class', 'bm-group-layer'); // behind edges + nodes
+        // Background+header for EXPANDED child-run boxes (docs/12 §7.4) — behind eLayer/nLayer
+        // so the merged real nodes/edges from an expanded child render on top of it.
+        const cbLayer = root.append('g').attr('class', 'bm-child-box-layer');
         const eLayer = root.append('g').attr('class', 'bm-edge-layer');
         const nLayer = root.append('g').attr('class', 'bm-node-layer');
-        // Child-run blocks (docs/12 §7.4) render in their own layer, below the main service
-        // flow — they're triggered at the RUN level, not by a specific service/pipeline, so
-        // they're never wired into gLayer/eLayer/nLayer's edges.
+        // COLLAPSED child-run blocks (docs/12 §7.4) render in their own layer, below the main
+        // service flow — they're triggered at the RUN level, not by a specific service/
+        // pipeline, so they're never wired into gLayer/eLayer/nLayer's edges. (An EXPANDED
+        // child's content lives in eLayer/nLayer instead, merged with the main graph — see
+        // cbLayer above and buildLevelForLayout/flattenChildRunBoxes.)
         const crLayer = root.append('g').attr('class', 'bm-child-run-layer');
 
         // Popover div.
@@ -530,7 +653,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, gLayer, eLayer, nLayer, crLayer, zoom, popover, defs, dotNetRef,
+            containerEl, svg, root, gLayer, cbLayer, eLayer, nLayer, crLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             // RunsSettings.GraphDirection (Program.cs / D3FlowGraph.razor) — 'RIGHT'/'DOWN'
@@ -590,11 +713,20 @@ const D3Graph = (() => {
     // instability the custom engine exists to fix. Comparing a cheap structural signature
     // lets us skip the whole relayout (and the ELK worker round-trip) on the common case of
     // "same graph shape, new numbers," refreshing only each node/edge's `data` reference.
+    // Recursive: an expanded child's real nodes/edges are merged into the main layout (see
+    // buildLevelForLayout/flattenChildRunBoxes), so toggling expand/collapse — or a
+    // structural change inside an already-expanded child — MUST force a full relayout, not
+    // the stability short-circuit below. Without including expandedChildren here, expanding
+    // a child would never actually compute/position its merged nodes at all.
     function structuralKey(topo) {
         const nodeIds = topo.nodes.map(n => n.id).sort();
         const edgeKeys = topo.edges.map(e => `${e.source}>${e.target}>${e.sourcePipeline || ''}>${e.targetPipeline || ''}`).sort();
         const groups = topo.nodes.map(n => `${n.id}:${n.group || ''}`).sort();
-        return nodeIds.join(',') + '|' + edgeKeys.join(',') + '|' + groups.join(',');
+        const expandedIds = Object.keys(topo.expandedChildren || {}).sort();
+        const expandedNested = expandedIds
+            .map(id => `${id}[${structuralKey(topo.expandedChildren[id])}]`)
+            .join(',');
+        return nodeIds.join(',') + '|' + edgeKeys.join(',') + '|' + groups.join(',') + '|' + expandedNested;
     }
 
     async function commitLayout(handle) {
@@ -616,6 +748,7 @@ const D3Graph = (() => {
             // (below, main-layout branch only) won't auto-adjust to include the taller view —
             // a manual re-fit (the toolbar button) picks it up.
             renderChildRuns(handle);
+            renderChildRunBoxes(handle);
             return;
         }
 
@@ -641,22 +774,19 @@ const D3Graph = (() => {
         renderEdges(handle);   // edges below nodes
         renderNodes(handle);
         renderChildRuns(handle);
+        renderChildRunBoxes(handle);
         if (!handle.userZoomed) fitToView(handle, true);
     }
 
     // ── Child-run blocks (docs/12 §7.4) ─────────────────────────────────────
-    // Collapsed blocks are a fixed-size status+description card. An expanded one (its id
-    // present in topo.expandedChildren — RunDetail.razor's in-place-expand state) is instead
-    // a bigger box containing a lightweight mini sub-flow of that child's own services (laid
-    // out with bm-flow-layout regardless of which engine — ELK or custom — draws the OUTER
-    // graph; see docs/12 §7.4's "always bm-flow-layout for the recursive sub-layout" note)
-    // plus, recursively, that child's OWN child-run row if it has one. Rendered as a raw
-    // rebuild each commit (no D3 key-based enter/update/exit) rather than an animated join —
-    // expand/collapse already changes every box's size, so there's little to gain from
-    // diffing, and it keeps the recursion far simpler.
+    // Collapsed blocks are a small fixed-size status+description card, rendered in their own
+    // row below the main graph (renderChildRuns). An EXPANDED child is no longer drawn here
+    // at all — its real nodes/edges are merged into the main graph's own nodes/edges
+    // (buildLevelForLayout/flattenChildRunBoxes above) and rendered through the exact same
+    // buildNode/updateNode/renderEdges/animation/popover path as any top-level service, at
+    // full size. renderChildRunBoxes (below) only draws the background+header behind that
+    // merged content — the "this belongs to run X" framing, nothing more.
     const CHILD_RUN_WIDTH = 200, CHILD_RUN_HEIGHT = 60, CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
-    const EXPANDED_HEADER_H = 26, EXPANDED_PAD = 12, EXPANDED_ROW_GAP = 10;
-    const MINI_NODE_W = 92, MINI_NODE_H = 30;
 
     function childRunStatusColor(status) {
         switch (String(status || '').toLowerCase()) {
@@ -678,131 +808,78 @@ const D3Graph = (() => {
         return { minX, minY };
     }
 
-    // Builds a plain-data description of one child-run box — collapsed size, or (if
-    // expandedTopo is given) the mini sub-layout + recursively-built nested child blocks and
-    // the resulting bigger box size. Pure/no DOM — renderChildRunBlock draws whatever this
-    // returns. Kept separate so the size (needed to LAY OUT siblings before any of them are
-    // drawn) is known without touching the DOM first.
-    function buildChildRunBlock(entry, expandedTopo) {
-        if (!expandedTopo) {
-            return { entry, expanded: false, width: CHILD_RUN_WIDTH, height: CHILD_RUN_HEIGHT };
-        }
-
-        const ids = new Set(expandedTopo.nodes.map(n => n.id));
-        const miniNodes = expandedTopo.nodes.map(n => ({ id: n.id, width: MINI_NODE_W, height: MINI_NODE_H, role: normalizeRole(n.role) }));
-        const seenPairs = new Set();
-        const miniEdges = [];
-        for (const e of (expandedTopo.edges || [])) {
-            if (!ids.has(e.source) || !ids.has(e.target)) continue;
-            const key = `${e.source}->${e.target}`;
-            if (seenPairs.has(key)) continue;
-            seenPairs.add(key);
-            miniEdges.push({ id: key, source: e.source, target: e.target });
-        }
-        const subResult = flowLayout({ nodes: miniNodes, edges: miniEdges, direction: 'horizontal', layerSpacing: 40, nodeSpacing: 10 });
-
-        const childBlocks = (expandedTopo.childRuns || []).map(childEntry =>
-            buildChildRunBlock(childEntry, expandedTopo.expandedChildren?.[childEntry.runId]));
-        const childRowHeight = childBlocks.length ? Math.max(...childBlocks.map(b => b.height)) : 0;
-        const childRowWidth = childBlocks.reduce((sum, b) => sum + b.width, 0) + Math.max(0, childBlocks.length - 1) * EXPANDED_ROW_GAP;
-
-        const contentWidth = Math.max(subResult.width, childRowWidth, MINI_NODE_W + EXPANDED_PAD * 2);
-        const contentHeight = subResult.height + (childBlocks.length ? EXPANDED_ROW_GAP + childRowHeight : 0);
-
-        return {
-            entry, expanded: true, subResult, childBlocks,
-            width: contentWidth + EXPANDED_PAD * 2,
-            height: EXPANDED_HEADER_H + contentHeight + EXPANDED_PAD * 2,
-        };
-    }
-
-    // Renders one block (collapsed or expanded, recursing into childBlocks) into parentSel,
-    // centered at (cx, cy) in parentSel's own local coordinate space.
-    function renderChildRunBlock(handle, parentSel, block, cx, cy) {
-        const { entry, width: w, height: h } = block;
-        const g = parentSel.append('g')
-            .attr('class', `bm-child-run${block.expanded ? ' bm-child-run-expanded' : ''}`)
-            .attr('transform', `translate(${cx},${cy})`);
-
-        g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
-            .attr('x', -w / 2).attr('y', -h / 2).attr('width', w).attr('height', h)
-            .attr('fill', nodeBg())
-            .attr('stroke', childRunStatusColor(entry.status));
-
-        const openThis = ev => {
-            ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
-            handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
-        };
-
-        if (!block.expanded) {
-            g.append('text').attr('class', 'bm-child-run-desc')
-                .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
-                .text(truncateLabel(entry.description || entry.runId, 22));
-            g.append('text').attr('class', 'bm-child-run-status')
-                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
-                .attr('fill', childRunStatusColor(entry.status))
-                .text(entry.status ?? 'Unknown');
-            g.on('click', openThis);
-            return;
-        }
-
-        // Expanded: header bar (click collapses it back — same RequestOpenChildRun toggle)
-        // + mini sub-flow + this child's own nested child-run row, if it has one.
-        g.append('rect').attr('class', 'bm-child-run-header')
-            .attr('x', -w / 2).attr('y', -h / 2).attr('width', w).attr('height', EXPANDED_HEADER_H)
-            .style('fill', childRunStatusColor(entry.status)).style('fill-opacity', 0.18)
-            .on('click', openThis);
-        g.append('text').attr('class', 'bm-child-run-header-label')
-            .attr('x', -w / 2 + 10).attr('y', -h / 2 + EXPANDED_HEADER_H / 2)
-            .text(`${truncateLabel(entry.description || entry.runId, 26)} — ${entry.status ?? 'Unknown'}`)
-            .on('click', openThis);
-
-        const { minX: subMinX, minY: subMinY } = minBoundsOf(block.subResult.nodes);
-        const subTop = -h / 2 + EXPANDED_HEADER_H + EXPANDED_PAD;
-        const offX = (-w / 2 + EXPANDED_PAD) - subMinX;
-        const offY = subTop - subMinY;
-
-        for (const e of block.subResult.edges) {
-            const pts = e.points.map(p => ({ x: p.x + offX, y: p.y + offY }));
-            g.append('path').attr('class', 'bm-child-mini-edge')
-                .attr('d', roundedOrthPath(pts, 5));
-        }
-        for (const [id, n] of block.subResult.nodes) {
-            const mini = g.append('g').attr('class', 'bm-child-mini-node')
-                .attr('transform', `translate(${n.x + offX},${n.y + offY})`);
-            mini.append('rect').attr('class', 'bm-child-mini-node-bg').attr('rx', 4)
-                .attr('x', -n.width / 2).attr('y', -n.height / 2).attr('width', n.width).attr('height', n.height);
-            mini.append('text').attr('class', 'bm-child-mini-node-label')
-                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 4)
-                .text(truncateLabel(id, 13));
-        }
-
-        if (block.childBlocks.length) {
-            const rowTop = subTop + block.subResult.height + EXPANDED_ROW_GAP;
-            let childCursorX = -w / 2 + EXPANDED_PAD;
-            for (const childBlock of block.childBlocks) {
-                renderChildRunBlock(handle, g, childBlock, childCursorX + childBlock.width / 2, rowTop + childBlock.height / 2);
-                childCursorX += childBlock.width + EXPANDED_ROW_GAP;
-            }
-        }
-    }
-
+    // Only COLLAPSED child runs render here — an expanded one's id is in
+    // handle.pendingTopology.expandedChildren and is skipped: its content is part of the
+    // main graph now (see comment above), drawn by renderNodes/renderEdges instead.
     function renderChildRuns(handle) {
         const childRuns = handle.pendingTopology?.childRuns || [];
         const expandedChildren = handle.pendingTopology?.expandedChildren || {};
         const g = handle.currentGraph;
 
         handle.crLayer.selectAll('*').remove();
-        if (!g || childRuns.length === 0) return;
+        if (!g) return;
+        const collapsed = childRuns.filter(entry => !expandedChildren[entry.runId]);
+        if (collapsed.length === 0) return;
 
-        const blocks = childRuns.map(entry => buildChildRunBlock(entry, expandedChildren[entry.runId]));
-        const totalWidth = blocks.reduce((sum, b) => sum + b.width, 0) + CHILD_RUN_GAP * Math.max(0, blocks.length - 1);
+        const totalWidth = collapsed.length * CHILD_RUN_WIDTH + CHILD_RUN_GAP * Math.max(0, collapsed.length - 1);
         const baseY = g.height + CHILD_RUN_MARGIN;
         let cursorX = (g.width - totalWidth) / 2;
 
-        for (const block of blocks) {
-            renderChildRunBlock(handle, handle.crLayer, block, cursorX + block.width / 2, baseY + block.height / 2);
-            cursorX += block.width + CHILD_RUN_GAP;
+        for (const entry of collapsed) {
+            const cx = cursorX + CHILD_RUN_WIDTH / 2, cy = baseY + CHILD_RUN_HEIGHT / 2;
+            const gEl = handle.crLayer.append('g').attr('class', 'bm-child-run')
+                .attr('transform', `translate(${cx},${cy})`)
+                .on('click', ev => {
+                    ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
+                    handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
+                });
+            gEl.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
+                .attr('x', -CHILD_RUN_WIDTH / 2).attr('y', -CHILD_RUN_HEIGHT / 2)
+                .attr('width', CHILD_RUN_WIDTH).attr('height', CHILD_RUN_HEIGHT)
+                .attr('fill', nodeBg())
+                .attr('stroke', childRunStatusColor(entry.status));
+            gEl.append('text').attr('class', 'bm-child-run-desc')
+                .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
+                .text(truncateLabel(entry.description || entry.runId, 22));
+            gEl.append('text').attr('class', 'bm-child-run-status')
+                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
+                .attr('fill', childRunStatusColor(entry.status))
+                .text(entry.status ?? 'Unknown');
+            cursorX += CHILD_RUN_WIDTH + CHILD_RUN_GAP;
+        }
+    }
+
+    // Background + header for each EXPANDED child-run box (handle.currentGraph.childRunBoxes,
+    // populated by runLayoutCustom/runLayoutElk's flattenChildRunBoxes — one entry per
+    // expanded child at every nesting level, already in final outer coordinates). Drawn in
+    // its own layer behind nLayer/eLayer so the merged real nodes/edges render on top of it.
+    // Clicking the header collapses that run back (same RequestOpenChildRun toggle a
+    // collapsed block's click uses).
+    function renderChildRunBoxes(handle) {
+        handle.cbLayer.selectAll('*').remove();
+        const boxes = handle.currentGraph?.childRunBoxes || [];
+        for (const box of boxes) {
+            const g = handle.cbLayer.append('g').attr('class', 'bm-child-run bm-child-run-expanded')
+                .attr('transform', `translate(${box.x},${box.y})`);
+            g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
+                .attr('x', -box.width / 2).attr('y', -box.height / 2)
+                .attr('width', box.width).attr('height', box.height)
+                .attr('fill', nodeBg())
+                .attr('stroke', childRunStatusColor(box.entry.status));
+
+            const openThis = ev => {
+                ev.stopPropagation();
+                handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', box.runId);
+            };
+            g.append('rect').attr('class', 'bm-child-run-header')
+                .attr('x', -box.width / 2).attr('y', -box.height / 2)
+                .attr('width', box.width).attr('height', EXPANDED_HEADER_H)
+                .style('fill', childRunStatusColor(box.entry.status)).style('fill-opacity', 0.18)
+                .on('click', openThis);
+            g.append('text').attr('class', 'bm-child-run-header-label')
+                .attr('x', -box.width / 2 + 10).attr('y', -box.height / 2 + EXPANDED_HEADER_H / 2)
+                .text(`${truncateLabel(box.entry.description || box.runId, 26)} — ${box.entry.status ?? 'Unknown'}`)
+                .on('click', openThis);
         }
     }
 
@@ -856,7 +933,8 @@ const D3Graph = (() => {
             .style('stroke-opacity', d => d.color ? 0.85 : null)
             .style('stroke-dasharray', d => d.color ? 'none' : null);
         merged.select('.bm-group-label')
-            .attr('x', d => d.b.x0 - PAD + 28).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .attr('x', d => d.b.x0 - PAD + 28).attr('y', d => d.b.y0 - PAD - LABEL_H / 2)
+            .attr('dominant-baseline', 'central')
             .style('fill', d => d.color || null)
             .text(d => d.name);
     }
@@ -1241,9 +1319,20 @@ const D3Graph = (() => {
         .style('opacity', 1)
         .style('pointer-events', 'auto');
 
+        // nodeDatum.id is the (possibly `runId::` prefixed, for a merged expanded-child node
+        // — see flattenChildRunBoxes) globally-unique map key, used above for popover
+        // tracking/positioning. Every call back into Blazor instead needs the RAW service id
+        // (nodeDatum.data.id — TopologyNode.Id, never prefixed) since that's what actually
+        // matches the run's own event data; a prefixed id would break log-path lookups etc.
+        // _runId (undefined for a top-level node) tells RunDetail.razor which run's own event
+        // store to use — only the errors dialog needs it (instance-log/Kafka-topic clicks
+        // already carry everything they need from that node's own real pipeline data).
+        const rawServiceId = nodeDatum.data?.id ?? nodeDatum.id;
+        const ownerRunId = nodeDatum.data?._runId ?? '';
+
         handle.popover.select('.bm-pop-x').on('click', () => hidePopover(handle));
         handle.popover.select('.bm-pop-err').on('click', () => {
-            if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestShowErrors', nodeDatum.id, pipeline.name);
+            if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestShowErrors', rawServiceId, pipeline.name, ownerRunId);
             hidePopover(handle);
         });
         handle.popover.select('.bm-pop-kafka').on('click', () => {
@@ -1254,11 +1343,11 @@ const D3Graph = (() => {
             const row  = d3.select(this);
             row.on('click', () => {
                 if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', nodeDatum.id, inst.server, inst.processId ?? 0, inst.lastActivity);
+                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', rawServiceId, inst.server, inst.processId ?? 0, inst.lastActivity);
             });
             if (handle.dotNetRef) {
                 handle.dotNetRef
-                    .invokeMethodAsync('RequestInstanceLogPathHint', nodeDatum.id, inst.server, inst.processId ?? 0)
+                    .invokeMethodAsync('RequestInstanceLogPathHint', rawServiceId, inst.server, inst.processId ?? 0)
                     .then(path => row.select('.bm-pop-srv').attr('title', path || 'Log path not discovered yet'))
                     .catch(() => {});
             }

@@ -140,24 +140,6 @@
     dominant-baseline: middle;
 }
 
-.bm-child-mini-edge {
-    fill: none;
-    stroke: var(--mud-palette-lines-default);
-    stroke-width: 1.5px;
-    pointer-events: none;
-}
-.bm-child-mini-node-bg {
-    fill: var(--mud-palette-background);
-    stroke: var(--mud-palette-lines-default);
-    stroke-width: 1px;
-}
-.bm-child-mini-node-label {
-    font-size: 0.62rem;
-    font-weight: 500;
-    fill: var(--mud-palette-text-secondary);
-    pointer-events: none;
-}
-
 /* Instance badge — rounded-rect pill, sized to its text in JS (d3-graph.js) */
 .bm-node-badge-bg { fill: #388BFD; opacity: 0.9; }
 .bm-node-badge-text {

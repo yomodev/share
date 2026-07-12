@@ -31,8 +31,11 @@
     [Parameter] public EventCallback<(string Service, string Server, int ProcessId, DateTime LastActivity)> OnOpenInstanceLog { get; set; }
 
     /// <summary>Fired when the user clicks the "errors" button in a pipeline row's popover —
-    /// opens the run's errors dialog pre-filtered to that (service, pipeline).</summary>
-    [Parameter] public EventCallback<(string Service, string Pipeline)> OnShowErrors { get; set; }
+    /// opens the errors dialog pre-filtered to that (service, pipeline). RunId is empty for a
+    /// top-level node (this run's own events); non-empty for a node merged in from an
+    /// expanded child run (docs/12 §7.4), so the errors dialog knows which run's own event
+    /// store to filter instead of always assuming the page's own run.</summary>
+    [Parameter] public EventCallback<(string Service, string Pipeline, string RunId)> OnShowErrors { get; set; }
 
     /// <summary>
     /// Resolves the log folder path shown as a tooltip when hovering an instance row's
@@ -66,7 +69,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=38");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=39");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -97,8 +100,8 @@
 
     /// <summary>Invoked from d3-graph.js when the popover's "errors" button is clicked.</summary>
     [JSInvokable]
-    public Task RequestShowErrors(string service, string pipeline) =>
-        OnShowErrors.InvokeAsync((service, pipeline));
+    public Task RequestShowErrors(string service, string pipeline, string runId) =>
+        OnShowErrors.InvokeAsync((service, pipeline, runId));
 
     /// <summary>Invoked from d3-graph.js right after the popover opens, to populate each
     /// instance row's server-name tooltip with its resolved log path (cache-only, no I/O).</summary>

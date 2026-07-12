@@ -62,6 +62,12 @@
     private readonly HashSet<string> _expandedChildRunIds = [];
     private const int MaxExpandDepth = 5; // matches docs/12 §7.1's "support up to 5 levels"
 
+    // Flat (runId -> that run's own events), populated alongside PopulateExpandedChildrenAsync
+    // regardless of nesting depth, so ShowErrorsFromGraph can filter/display errors for a
+    // node merged in from ANY expanded child (docs/12 §7.4) using that child's own event
+    // store instead of always assuming the page's own run.
+    private readonly Dictionary<string, List<PerformanceEvent>> _expandedChildEvents = [];
+
     // ── Topology (live and replay) ────────────────────────────────────────
     private Topology? _topology;
     private int _eventCount;
@@ -630,6 +636,7 @@
     private async Task PopulateExpandedChildrenAsync(Topology topo, int depth = 0)
     {
         topo.ExpandedChildren.Clear();
+        if (depth == 0) _expandedChildEvents.Clear();
         if (depth >= MaxExpandDepth || _topologyService is null) return;
 
         foreach (var child in topo.ChildRuns)
@@ -641,6 +648,7 @@
                 var childDetails = await RunService.GetRunDetailsAsync(Environment, child.RunId);
                 var childEvents  = await RunService.GetRunEventsAsync(Environment, child.RunId, childDetails.Start);
                 var childStore   = childEvents.ToDictionary(e => e.CompositeKey, e => e);
+                _expandedChildEvents[child.RunId] = childEvents;
 
                 TopologyBlueprint? childBlueprint = null;
                 var childHintFile = HintLoader.Get(childDetails.Type);
@@ -703,16 +711,23 @@
     // Opened from the topbar icon — shows ALL errors, no pre-filter.
     private void OpenErrorsDialog()
     {
+        _errorsSourceRunId = null;
         ParseErrorsFilter(string.Empty);
         RebuildFilteredErrors();
         _errorsDialogOpen = true;
     }
 
     // Opened from a pipeline-row popover's "errors" button — pre-filtered to that
-    // (service, pipeline); the user can still widen/narrow via the filter box.
-    private void ShowErrorsFromGraph((string Service, string Pipeline) ctx)
+    // (service, pipeline); the user can still widen/narrow via the filter box. RunId is
+    // non-empty when the clicked node was merged in from an expanded child run (docs/12
+    // §7.4) — in that case errors are pulled from that child's own cached event list
+    // (_expandedChildEvents) instead of this page's own _eventService.
+    private string? _errorsSourceRunId;
+
+    private void ShowErrorsFromGraph((string Service, string Pipeline, string RunId) ctx)
     {
-        var (service, pipeline) = ctx;
+        var (service, pipeline, runId) = ctx;
+        _errorsSourceRunId = string.IsNullOrEmpty(runId) ? null : runId;
         ParseErrorsFilter($"svc:=\"{service}\" pipe:=\"{pipeline}\"");
         RebuildFilteredErrors();
         _errorsDialogOpen = true;
@@ -740,7 +755,10 @@
 
     private void RebuildFilteredErrors()
     {
-        var errors = _eventService?.Events.Values.Where(e => e.IsError) ?? Enumerable.Empty<PerformanceEvent>();
+        var source = _errorsSourceRunId is not null && _expandedChildEvents.TryGetValue(_errorsSourceRunId, out var childEvents)
+            ? childEvents.AsEnumerable()
+            : _eventService?.Events.Values ?? Enumerable.Empty<PerformanceEvent>();
+        var errors = source.Where(e => e.IsError);
         if (_errorsFilterAst is not null)
             errors = errors.Where(e => FilterEvaluator.Evaluate(_errorsFilterAst, e));
         _filteredErrors = errors.OrderByDescending(e => e.Start).ToList();
