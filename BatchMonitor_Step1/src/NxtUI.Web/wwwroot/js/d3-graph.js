@@ -165,6 +165,13 @@ const D3Graph = (() => {
         return r === 'source' ? 'FIRST' : r === 'sink' ? 'LAST' : 'NONE';
     }
 
+    // Same "source"/"sink" role convention, normalised for bm-flow-layout's role hard-pin
+    // (see pinRoles() in bm-flow-layout/layout.js) — anything else is left undefined.
+    function normalizeRole(role) {
+        const r = role ? String(role).toLowerCase() : '';
+        return r === 'source' || r === 'sink' ? r : undefined;
+    }
+
     // Port position along the node's EAST/WEST edge, aligned to the centre of the
     // owning pipeline row (used when flow direction is RIGHT, FIXED_POS only).
     function portYFromTop(node, pipeline) {
@@ -199,6 +206,11 @@ const D3Graph = (() => {
 
     // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
     // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
+    // Blueprint hints (role/group/order, decorated onto topo nodes by
+    // TopologyComputationService.Decorate) are passed through to the engine's Stage 2
+    // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
+    // (docs/12 §6, not yet implemented) so they're always undefined for now — the engine
+    // already supports them, they're just unreachable from the app until that lands.
     function runLayoutCustom(handle, topo) {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
@@ -210,7 +222,10 @@ const D3Graph = (() => {
 
         const flowNodes = topo.nodes.map(n => {
             n._layoutWidth = computeNodeWidth(handle, n);
-            return { id: n.id, width: n._layoutWidth, height: nh(n) };
+            return {
+                id: n.id, width: n._layoutWidth, height: nh(n),
+                role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
+            };
         });
         // De-dupe to one edge per (source,target) pair — the custom engine lays out at the
         // service level, not per-pipeline, in Stage 1.
