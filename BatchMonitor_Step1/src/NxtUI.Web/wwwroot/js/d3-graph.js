@@ -497,6 +497,10 @@ const D3Graph = (() => {
         const gLayer = root.append('g').attr('class', 'bm-group-layer'); // behind edges + nodes
         const eLayer = root.append('g').attr('class', 'bm-edge-layer');
         const nLayer = root.append('g').attr('class', 'bm-node-layer');
+        // Child-run blocks (docs/12 §7.4) render in their own layer, below the main service
+        // flow — they're triggered at the RUN level, not by a specific service/pipeline, so
+        // they're never wired into gLayer/eLayer/nLayer's edges.
+        const crLayer = root.append('g').attr('class', 'bm-child-run-layer');
 
         // Popover div.
         const popover = d3.select(containerEl).append('div')
@@ -521,7 +525,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, gLayer, eLayer, nLayer, zoom, popover, defs, dotNetRef,
+            containerEl, svg, root, gLayer, eLayer, nLayer, crLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             animState: createState(),
@@ -596,6 +600,13 @@ const D3Graph = (() => {
             renderGroups(handle);
             renderEdges(handle);
             renderNodes(handle);
+            // childRuns isn't part of structuralKey (a new/changed child shouldn't reshuffle
+            // the whole service graph), so it's always re-rendered fresh from the latest
+            // topology regardless of which branch this commit took. Known gap: if a child
+            // appears while the main graph's structure is otherwise unchanged, fitToView
+            // (below, main-layout branch only) won't auto-adjust to include the taller view —
+            // a manual re-fit (the toolbar button) picks it up.
+            renderChildRuns(handle);
             return;
         }
 
@@ -620,7 +631,71 @@ const D3Graph = (() => {
         renderGroups(handle);  // group bands beneath everything
         renderEdges(handle);   // edges below nodes
         renderNodes(handle);
+        renderChildRuns(handle);
         if (!handle.userZoomed) fitToView(handle, true);
+    }
+
+    // ── Child-run blocks (docs/12 §7.4) ─────────────────────────────────────
+    // Collapsed-only for now: status colour + description, no live progress bar (DoneCount/
+    // TotalCount are optional per RunNode and the mock never populates them — see docs/12
+    // §7.3) and no click-to-drill yet (that needs a fetch-on-demand + breadcrumb UI, a
+    // separate piece of work). Rendered as a simple centered row below the main graph.
+    const CHILD_RUN_WIDTH = 200, CHILD_RUN_HEIGHT = 60, CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
+
+    function childRunStatusColor(status) {
+        switch (String(status || '').toLowerCase()) {
+            case 'running':   return STATE_COLOR.activeBlue;
+            case 'completed': return STATE_COLOR.activeGreen;
+            case 'failed':
+            case 'terminated': return STATE_COLOR.errored;
+            default:          return dividerColor(); // Unknown/Purged/NotStarted
+        }
+    }
+
+    function renderChildRuns(handle) {
+        const childRuns = handle.pendingTopology?.childRuns || [];
+        const g = handle.currentGraph;
+
+        if (!g || childRuns.length === 0) {
+            handle.crLayer.selectAll('*').remove();
+            return;
+        }
+
+        const baseY = g.height + CHILD_RUN_MARGIN + CHILD_RUN_HEIGHT / 2;
+        const totalWidth = childRuns.length * CHILD_RUN_WIDTH + (childRuns.length - 1) * CHILD_RUN_GAP;
+        const startX = (g.width - totalWidth) / 2 + CHILD_RUN_WIDTH / 2;
+        const bg = nodeBg();
+
+        const sel = handle.crLayer.selectAll('g.bm-child-run').data(childRuns, d => d.runId);
+        sel.exit().remove();
+
+        const enter = sel.enter().append('g').attr('class', 'bm-child-run');
+        enter.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10);
+        enter.append('text').attr('class', 'bm-child-run-desc');
+        enter.append('text').attr('class', 'bm-child-run-status');
+
+        const merged = enter.merge(sel);
+        merged.attr('transform', (d, i) =>
+            `translate(${startX + i * (CHILD_RUN_WIDTH + CHILD_RUN_GAP)},${baseY})`);
+
+        merged.select('.bm-child-run-bg')
+            .attr('x', -CHILD_RUN_WIDTH / 2).attr('y', -CHILD_RUN_HEIGHT / 2)
+            .attr('width', CHILD_RUN_WIDTH).attr('height', CHILD_RUN_HEIGHT)
+            .attr('fill', bg)
+            .attr('stroke', d => childRunStatusColor(d.status));
+
+        merged.select('.bm-child-run-desc')
+            .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
+            .text(d => truncateLabel(d.description || d.runId, 22));
+
+        merged.select('.bm-child-run-status')
+            .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
+            .attr('fill', d => childRunStatusColor(d.status))
+            .text(d => d.status ?? 'Unknown');
+    }
+
+    function truncateLabel(text, maxLen) {
+        return text.length > maxLen ? text.slice(0, maxLen - 1) + '…' : text;
     }
 
     // ── Group bands — a subtle labelled backdrop behind same-`group` nodes ────

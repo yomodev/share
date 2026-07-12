@@ -302,6 +302,12 @@
             var blueprint = ResolveBlueprint(allEvents.Values);
 
             _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter, blueprint);
+            // Snapshot from the initial GetRunDetailsAsync load (line ~194) — children that
+            // appear DURING the run (an orchestrator spawning them mid-flight) aren't picked
+            // up until _details itself is re-fetched, which this loop doesn't yet do. See
+            // docs/12_Custom_Layout_And_Nested_Runs.md §7.3 — periodic re-fetch is a known
+            // follow-up, not wired yet.
+            _topology.ChildRuns = _details?.Children ?? [];
             _eventCount = _eventService.EventCount;
             _errorCount = allEvents.Values.Count(e => e.IsError);
 

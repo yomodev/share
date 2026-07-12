@@ -96,6 +96,23 @@
     pointer-events: none;
 }
 
+/* Child-run blocks (docs/12 §7.4) — collapsed row below the main service flow. */
+.bm-child-run-bg {
+    stroke-width: 1.5px;
+    transition: stroke 300ms ease;
+}
+.bm-child-run-desc {
+    font-size: 0.8rem;
+    font-weight: 600;
+    fill: var(--mud-palette-text-primary);
+    pointer-events: none;
+}
+.bm-child-run-status {
+    font-size: 0.7rem;
+    font-weight: 500;
+    pointer-events: none;
+}
+
 /* Instance badge — rounded-rect pill, sized to its text in JS (d3-graph.js) */
 .bm-node-badge-bg { fill: #388BFD; opacity: 0.9; }
 .bm-node-badge-text {

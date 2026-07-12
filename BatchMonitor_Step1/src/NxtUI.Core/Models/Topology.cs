@@ -13,6 +13,15 @@ public class Topology
     public List<TopologyEdge> Edges { get; set; } = [];
 
     /// <summary>
+    /// Child runs triggered by this run (see <see cref="RunDetails.Children"/>), rendered as a
+    /// separate cluster of collapsed blocks rather than wired into <see cref="Nodes"/>/
+    /// <see cref="Edges"/> — a child run is triggered at the RUN level, not by a specific
+    /// service/pipeline, so it has no natural edge endpoint in the service flow graph. See
+    /// docs/12_Custom_Layout_And_Nested_Runs.md §7.4.
+    /// </summary>
+    public List<RunNode> ChildRuns { get; set; } = [];
+
+    /// <summary>
     /// Layout preferences from the run-type topology hint (see <see cref="TopologyHintFile"/>),
     /// or null when no hint applies (or the matched variant didn't specify one) — the graph
     /// then auto-picks direction by aspect ratio. Not a reliable signal for whether a blueprint
