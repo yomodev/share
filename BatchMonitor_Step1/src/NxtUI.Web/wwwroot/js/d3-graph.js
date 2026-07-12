@@ -124,6 +124,15 @@ const D3Graph = (() => {
         return Math.max(NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
     }
 
+    // Same idea as computeNodeWidth, sized for a child-run card's header (label + the
+    // expand/collapse badge instead of an instance-count pill) — grows to fit a long run
+    // description instead of clipping it, matching how a real service node's card grows.
+    function computeChildCardWidth(handle, label) {
+        const HEADER_PAD = 14 + CHILD_BADGE_W + 16;
+        const needed = measureText(handle, label, 'bm-node-label') + HEADER_PAD;
+        return Math.max(CHILD_RUN_MIN_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
+    }
+
     // ── Layout (ELK: layered + orthogonal routing) ─────────────────────────────
     //
     // Direction adapts to the container's aspect ratio (wide container → flow left-
@@ -261,7 +270,11 @@ const D3Graph = (() => {
     // pre-computed sub-layout and merges its real nodes/edges into the final result,
     // translated into place — recursively, so a grandchild expanded inside an expanded
     // child works the same way one level deeper.
-    const EXPANDED_HEADER_H = 26, EXPANDED_PAD = 12;
+    // Matches HEADER_HEIGHT (the real service-node header height) — renderChildCardChrome
+    // draws an expanded box's header at that same height, so the reserved space here must
+    // agree or the merged real content would start either overlapping the header or with an
+    // unexplained gap beneath it.
+    const EXPANDED_HEADER_H = HEADER_HEIGHT, EXPANDED_PAD = 12;
 
     // Builds the plain node/edge list bm-flow-layout needs for ONE topology level (the main
     // graph, or one expanded child's own topology), plus a side metadata map (bm-flow-layout
@@ -312,18 +325,23 @@ const D3Graph = (() => {
         const built = buildLevelForLayout(
             handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren, direction);
         const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
+        // The box must be at least wide enough for its own header title (a long run
+        // description shouldn't get clipped just because its content happens to be narrow) —
+        // same "grow to fit text" rule a real service node's card follows.
+        const titleWidth = computeChildCardWidth(handle, entry.description || entry.runId);
         return {
             runId: entry.runId, entry,
-            width: result.width + EXPANDED_PAD * 2,
+            width: Math.max(result.width + EXPANDED_PAD * 2, titleWidth),
             height: result.height + EXPANDED_HEADER_H + EXPANDED_PAD * 2,
             result, metaById: built.metaById, edgeDataByKey: built.edgeDataByKey,
+            groupColors: childTopo.groupColors || {},
         };
     }
 
     // After the outer engine (ELK or custom) has resolved a position for every node
     // including the synthetic `__box_<runId>` leaves, walks the tree merging each box's
     // pre-computed sub-layout into the final nodes/edges/boxes output, recursively.
-    function flattenChildRunBoxes(rawPositions, metaById, edgeDataByKey, direction, offX, offY, runIdPrefix, outNodes, outEdges, outBoxes) {
+    function flattenChildRunBoxes(rawPositions, metaById, edgeDataByKey, direction, offX, offY, runIdPrefix, outNodes, outEdges, outBoxes, outGroupColors) {
         for (const [id, pos] of rawPositions) {
             const meta = metaById.get(id);
             if (!meta) continue;
@@ -337,6 +355,7 @@ const D3Graph = (() => {
                 const spec = meta.spec;
                 const boxX = pos.x + offX, boxY = pos.y + offY;
                 outBoxes.push({ runId: spec.runId, entry: spec.entry, x: boxX, y: boxY, width: pos.width, height: pos.height });
+                if (outGroupColors) outGroupColors.set(spec.runId, spec.groupColors || {});
 
                 const { minX: subMinX, minY: subMinY } = minBoundsOf(spec.result.nodes);
                 const contentLeft = boxX - pos.width / 2 + EXPANDED_PAD;
@@ -346,7 +365,7 @@ const D3Graph = (() => {
 
                 flattenChildRunBoxes(
                     spec.result.nodes, spec.metaById, spec.edgeDataByKey, direction,
-                    nOffX, nOffY, spec.runId, outNodes, outEdges, outBoxes);
+                    nOffX, nOffY, spec.runId, outNodes, outEdges, outBoxes, outGroupColors);
 
                 for (const e of spec.result.edges) {
                     const outId = `${spec.runId}::${e.id}`;
@@ -378,12 +397,13 @@ const D3Graph = (() => {
         const nodes = new Map();
         const outEdges = [];
         const boxes = [];
-        flattenChildRunBoxes(result.nodes, built.metaById, built.edgeDataByKey, direction, 0, 0, null, nodes, outEdges, boxes);
+        const groupColorsByRun = new Map([['', topo.groupColors || {}]]);
+        flattenChildRunBoxes(result.nodes, built.metaById, built.edgeDataByKey, direction, 0, 0, null, nodes, outEdges, boxes, groupColorsByRun);
         for (const e of result.edges) {
             outEdges.push({ id: e.id, pts: e.points, data: built.edgeDataByKey.get(e.id) });
         }
 
-        return { nodes, edges: outEdges, width: result.width, height: result.height, childRunBoxes: boxes };
+        return { nodes, edges: outEdges, width: result.width, height: result.height, childRunBoxes: boxes, groupColorsByRun };
     }
 
     async function runLayoutElk(handle, topo) {
@@ -524,7 +544,8 @@ const D3Graph = (() => {
         const nodes = new Map();
         const outEdges = [];
         const boxes = [];
-        flattenChildRunBoxes(rawPositions, metaById, edgeDataById, direction, 0, 0, null, nodes, outEdges, boxes);
+        const groupColorsByRun = new Map([['', topo.groupColors || {}]]);
+        flattenChildRunBoxes(rawPositions, metaById, edgeDataById, direction, 0, 0, null, nodes, outEdges, boxes, groupColorsByRun);
 
         for (const re of (res.edges || [])) {
             const s = re.sections?.[0];
@@ -532,7 +553,7 @@ const D3Graph = (() => {
             outEdges.push({ id: re.id, pts, data: edgeDataById.get(re.id) });
         }
 
-        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0, childRunBoxes: boxes };
+        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0, childRunBoxes: boxes, groupColorsByRun };
     }
 
     // Orthogonal polyline with rounded corners: line to a point `r` before each
@@ -574,19 +595,29 @@ const D3Graph = (() => {
         return handle.edgeStyle === 'CURVED' ? curvedPath(pts) : roundedOrthPath(pts);
     }
 
-    // A point a short distance back from the arrowhead (last point), offset above
-    // the line, so the label reads clearly next to the arrow it belongs to.
-    function edgeLabelPos(pts) {
+    // A point a short distance forward from the source end, offset above the line, so the
+    // label reads clearly next to the edge it belongs to. Anchored near the SOURCE (not the
+    // target/arrowhead) because several edges converging on one target would otherwise all
+    // sit near the same point and overlap — each edge's own source is where it's most
+    // distinct from its siblings. `siblingIndex`/`siblingCount` (edges sharing this edge's
+    // target) add a small perpendicular stagger for the case where the sources themselves
+    // are also close together (e.g. several sibling pipelines on the same source node).
+    function edgeLabelPos(pts, siblingIndex = 0, siblingCount = 1) {
         if (!pts || pts.length < 2) return { x: 0, y: 0 };
-        const end  = pts[pts.length - 1];
-        const prev = pts[pts.length - 2];
-        const dx = end.x - prev.x, dy = end.y - prev.y;
+        const start = pts[0];
+        const next  = pts[1];
+        const dx = next.x - start.x, dy = next.y - start.y;
         const len = Math.hypot(dx, dy) || 1;
-        const back = Math.min(len * 0.5, 40);
-        // Extra fixed nudge (left/up) on top of the directional back-offset — the label's
-        // bigger font (see .bm-edge-label) made it sit too close to the arrow/edge line,
-        // especially once its bounding box grows for multi-digit counts.
-        return { x: end.x - (dx / len) * back - 6, y: end.y - (dy / len) * back - 11 };
+        const fwd = Math.min(len * 0.5, 40);
+        const ux = dx / len, uy = dy / len;
+        // Perpendicular unit vector, used to fan siblings apart instead of stacking them
+        // directly on top of one another.
+        const px = -uy, py = ux;
+        const stagger = siblingCount > 1 ? (siblingIndex - (siblingCount - 1) / 2) * 14 : 0;
+        return {
+            x: start.x + ux * fwd - 6 + px * stagger,
+            y: start.y + uy * fwd - 11 + py * stagger,
+        };
     }
 
     // ── init ─────────────────────────────────────────────────────────────
@@ -779,14 +810,20 @@ const D3Graph = (() => {
     }
 
     // ── Child-run blocks (docs/12 §7.4) ─────────────────────────────────────
-    // Collapsed blocks are a small fixed-size status+description card, rendered in their own
-    // row below the main graph (renderChildRuns). An EXPANDED child is no longer drawn here
-    // at all — its real nodes/edges are merged into the main graph's own nodes/edges
-    // (buildLevelForLayout/flattenChildRunBoxes above) and rendered through the exact same
-    // buildNode/updateNode/renderEdges/animation/popover path as any top-level service, at
-    // full size. renderChildRunBoxes (below) only draws the background+header behind that
-    // merged content — the "this belongs to run X" framing, nothing more.
-    const CHILD_RUN_WIDTH = 200, CHILD_RUN_HEIGHT = 60, CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
+    // Both the collapsed and the expanded representation are styled as a real service
+    // node's card (header with left-aligned, grow-to-fit title + a right-side expand/
+    // collapse badge) so a child run doesn't read as a visually distinct "lesser" thing —
+    // see renderChildCardChrome. Collapsed additionally draws ONE fake pipeline row (name
+    // replaced by the run's own status, same progress-bar styling) purely to keep the same
+    // silhouette as a real node; an EXPANDED child has no fake row because its real
+    // nodes/edges are merged into the main graph's own nodes/edges (buildLevelForLayout/
+    // flattenChildRunBoxes above) and rendered through the exact same buildNode/updateNode/
+    // renderEdges/animation/popover path as any top-level service, at full size.
+    // renderChildRunBoxes (below) only draws the chrome behind that merged content.
+    const CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
+    const CHILD_RUN_MIN_WIDTH = NODE_WIDTH;
+    const CHILD_RUN_HEIGHT = HEADER_HEIGHT + ROW_HEIGHT; // header + one fake pipeline row
+    const CHILD_BADGE_W = 34, CHILD_BADGE_H = 20;
 
     function childRunStatusColor(status) {
         switch (String(status || '').toLowerCase()) {
@@ -808,6 +845,83 @@ const D3Graph = (() => {
         return { minX, minY };
     }
 
+    // Draws the shared "looks like a real service node" chrome — background/border card,
+    // header accent band, left-aligned title, header divider, and an expand/collapse badge
+    // on the right (in place of a real node's instance-count pill). Returns nothing; callers
+    // add whatever goes below the header (a fake row for collapsed, nothing for expanded —
+    // the real merged nodes sit there instead).
+    function renderChildCardChrome(g, handle, { width, height, status, label, expanded, onToggle }) {
+        const hw = width / 2, hh = height / 2;
+        const statusCol = childRunStatusColor(status);
+
+        g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
+            .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', height)
+            .attr('fill', nodeBg()).attr('stroke', statusCol);
+
+        g.append('rect').attr('class', 'bm-node-accent')
+            .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', HEADER_HEIGHT)
+            .attr('fill', statusCol).attr('fill-opacity', 0.4)
+            .style('cursor', 'pointer').on('click', onToggle);
+
+        g.append('text').attr('class', 'bm-node-label')
+            .attr('x', -hw + 14).attr('y', -hh + HEADER_HEIGHT / 2)
+            .style('cursor', 'pointer').on('click', onToggle)
+            .text(label);
+
+        g.append('line').attr('class', 'bm-node-hdr-div')
+            .attr('x1', -hw).attr('x2', hw)
+            .attr('y1', -hh + HEADER_HEIGHT).attr('y2', -hh + HEADER_HEIGHT)
+            .attr('stroke', dividerColor());
+
+        // Expand/collapse badge — same rounded-pill shape as a real node's instance count,
+        // but showing a chevron for "this card can be toggled" instead of a count.
+        const bx = hw - 10 - CHILD_BADGE_W, by = -hh + HEADER_HEIGHT / 2 - CHILD_BADGE_H / 2;
+        const badge = g.append('g').attr('class', 'bm-node-badge bm-child-card-badge')
+            .style('cursor', 'pointer').on('click', onToggle);
+        badge.append('rect').attr('class', 'bm-node-badge-bg')
+            .attr('x', bx).attr('y', by).attr('width', CHILD_BADGE_W).attr('height', CHILD_BADGE_H)
+            .attr('rx', CHILD_BADGE_H / 2);
+        badge.append('text').attr('class', 'bm-node-badge-text')
+            .attr('text-anchor', 'middle').attr('dy', '0.32em')
+            .attr('x', bx + CHILD_BADGE_W / 2).attr('y', -hh + HEADER_HEIGHT / 2)
+            .text(expanded ? '▾' : '▸');
+    }
+
+    // Draws the one fake pipeline row a COLLAPSED card shows, reusing the exact same
+    // .bm-row-* classes/geometry a real node's pipeline row uses (see renderRows) so a
+    // collapsed child run has the same silhouette as any other service card. The row's
+    // "name" slot shows the run's status instead of a pipeline name; its progress bar
+    // reflects DoneCount/TotalCount when known, or is fully filled once Completed — always
+    // drawn (never hidden) so the card never looks broken/incomplete while Running/Failed.
+    function renderFakePipelineRow(g, width, cardHeight, entry) {
+        const hw = width / 2;
+        const top = -cardHeight / 2 + HEADER_HEIGHT;
+        const textY = top + 20, barY = top + 32;
+        const PAD = 10;
+        const pX = -hw + PAD, pW = width - PAD * 2, pH = 3;
+        const statusCol = childRunStatusColor(entry.status);
+        const done = entry.doneCount ?? 0, total = entry.totalCount ?? 0;
+        const isCompleted = String(entry.status || '').toLowerCase() === 'completed';
+        const frac = isCompleted ? 1 : (total > 0 ? Math.max(0, Math.min(1, done / total)) : 0);
+
+        g.append('line').attr('class', 'bm-row-div')
+            .attr('x1', -hw).attr('x2', hw).attr('y1', top).attr('y2', top)
+            .attr('stroke', dividerColor()).attr('stroke-width', 0.5);
+        g.append('text').attr('class', 'bm-row-name')
+            .attr('x', -hw + PAD).attr('y', textY)
+            .text(entry.status ?? 'Unknown');
+        if (total > 0) {
+            g.append('text').attr('class', 'bm-row-counts')
+                .attr('x', hw - PAD).attr('y', textY).attr('text-anchor', 'end')
+                .text(`${done} / ${total}`);
+        }
+        g.append('rect').attr('class', 'bm-row-track').attr('rx', 2)
+            .attr('x', pX).attr('y', barY).attr('width', pW).attr('height', pH);
+        g.append('rect').attr('class', 'bm-row-fill').attr('rx', 2)
+            .attr('x', pX).attr('y', barY).attr('width', pW * frac).attr('height', pH)
+            .attr('fill', statusCol);
+    }
+
     // Only COLLAPSED child runs render here — an expanded one's id is in
     // handle.pendingTopology.expandedChildren and is skipped: its content is part of the
     // main graph now (see comment above), drawn by renderNodes/renderEdges instead.
@@ -821,65 +935,52 @@ const D3Graph = (() => {
         const collapsed = childRuns.filter(entry => !expandedChildren[entry.runId]);
         if (collapsed.length === 0) return;
 
-        const totalWidth = collapsed.length * CHILD_RUN_WIDTH + CHILD_RUN_GAP * Math.max(0, collapsed.length - 1);
+        const widths = collapsed.map(entry => computeChildCardWidth(handle, entry.description || entry.runId));
+        const totalWidth = widths.reduce((a, w) => a + w, 0) + CHILD_RUN_GAP * Math.max(0, collapsed.length - 1);
         const baseY = g.height + CHILD_RUN_MARGIN;
         let cursorX = (g.width - totalWidth) / 2;
 
-        for (const entry of collapsed) {
-            const cx = cursorX + CHILD_RUN_WIDTH / 2, cy = baseY + CHILD_RUN_HEIGHT / 2;
+        collapsed.forEach((entry, i) => {
+            const width = widths[i];
+            const cx = cursorX + width / 2, cy = baseY + CHILD_RUN_HEIGHT / 2;
+            const onToggle = ev => {
+                ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
+                handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
+            };
             const gEl = handle.crLayer.append('g').attr('class', 'bm-child-run')
                 .attr('transform', `translate(${cx},${cy})`)
-                .on('click', ev => {
-                    ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
-                    handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
-                });
-            gEl.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
-                .attr('x', -CHILD_RUN_WIDTH / 2).attr('y', -CHILD_RUN_HEIGHT / 2)
-                .attr('width', CHILD_RUN_WIDTH).attr('height', CHILD_RUN_HEIGHT)
-                .attr('fill', nodeBg())
-                .attr('stroke', childRunStatusColor(entry.status));
-            gEl.append('text').attr('class', 'bm-child-run-desc')
-                .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
-                .text(truncateLabel(entry.description || entry.runId, 22));
-            gEl.append('text').attr('class', 'bm-child-run-status')
-                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
-                .attr('fill', childRunStatusColor(entry.status))
-                .text(entry.status ?? 'Unknown');
-            cursorX += CHILD_RUN_WIDTH + CHILD_RUN_GAP;
-        }
+                .on('click', onToggle);
+
+            renderChildCardChrome(gEl, handle, {
+                width, height: CHILD_RUN_HEIGHT, status: entry.status,
+                label: truncateLabel(entry.description || entry.runId, 34), expanded: false, onToggle,
+            });
+            renderFakePipelineRow(gEl, width, CHILD_RUN_HEIGHT, entry);
+
+            cursorX += width + CHILD_RUN_GAP;
+        });
     }
 
     // Background + header for each EXPANDED child-run box (handle.currentGraph.childRunBoxes,
     // populated by runLayoutCustom/runLayoutElk's flattenChildRunBoxes — one entry per
     // expanded child at every nesting level, already in final outer coordinates). Drawn in
     // its own layer behind nLayer/eLayer so the merged real nodes/edges render on top of it.
-    // Clicking the header collapses that run back (same RequestOpenChildRun toggle a
-    // collapsed block's click uses).
+    // Clicking the header (or its badge) collapses that run back (same RequestOpenChildRun
+    // toggle a collapsed block's click uses).
     function renderChildRunBoxes(handle) {
         handle.cbLayer.selectAll('*').remove();
         const boxes = handle.currentGraph?.childRunBoxes || [];
         for (const box of boxes) {
             const g = handle.cbLayer.append('g').attr('class', 'bm-child-run bm-child-run-expanded')
                 .attr('transform', `translate(${box.x},${box.y})`);
-            g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
-                .attr('x', -box.width / 2).attr('y', -box.height / 2)
-                .attr('width', box.width).attr('height', box.height)
-                .attr('fill', nodeBg())
-                .attr('stroke', childRunStatusColor(box.entry.status));
-
-            const openThis = ev => {
+            const onToggle = ev => {
                 ev.stopPropagation();
                 handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', box.runId);
             };
-            g.append('rect').attr('class', 'bm-child-run-header')
-                .attr('x', -box.width / 2).attr('y', -box.height / 2)
-                .attr('width', box.width).attr('height', EXPANDED_HEADER_H)
-                .style('fill', childRunStatusColor(box.entry.status)).style('fill-opacity', 0.18)
-                .on('click', openThis);
-            g.append('text').attr('class', 'bm-child-run-header-label')
-                .attr('x', -box.width / 2 + 10).attr('y', -box.height / 2 + EXPANDED_HEADER_H / 2)
-                .text(`${truncateLabel(box.entry.description || box.runId, 26)} — ${box.entry.status ?? 'Unknown'}`)
-                .on('click', openThis);
+            renderChildCardChrome(g, handle, {
+                width: box.width, height: box.height, status: box.entry.status,
+                label: truncateLabel(box.entry.description || box.runId, 40), expanded: true, onToggle,
+            });
         }
     }
 
@@ -897,22 +998,36 @@ const D3Graph = (() => {
     // declaring a colour IS what turns the box on. Border is the same colour at a much
     // higher opacity than the fill, so it reads as "this box's own colour," not a generic
     // outline. See docs/12_Custom_Layout_And_Nested_Runs.md §6.
+    // Gap between the group's border and its label, drawn OUTSIDE (above) the box rather
+    // than crammed into a band along its top edge — see fitToView's GROUP_LABEL_MARGIN,
+    // which reserves canvas space for whichever group ends up nearest the top so this
+    // label is never clipped by the viewport.
+    const GROUP_LABEL_GAP = 8;
+    const GROUP_LABEL_MARGIN = 14 /* PAD */ + GROUP_LABEL_GAP + 14 /* label line height */;
+
     function renderGroups(handle) {
         const PAD = 14, LABEL_H = 16;
-        const groupColors = handle.pendingTopology?.groupColors || {};
+        const groupColorsByRun = handle.currentGraph.groupColorsByRun || new Map([['', handle.pendingTopology?.groupColors || {}]]);
+        // Keyed by (owning run, group name) — a nested child run reusing the same group
+        // name as its parent (or another sibling run) must NOT merge into the same box.
         const byGroup = new Map();
         for (const [id, n] of handle.currentGraph.nodes) {
             const grp = n.data && n.data.group;
             if (!grp) continue;
+            const runId = n.data._runId || '';
+            const key = `${runId} ${grp}`;
             const hw = (n.width || 0) / 2, hh = (n.height || 0) / 2;
-            const box = byGroup.get(grp) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+            const box = byGroup.get(key) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, runId, name: grp };
             box.x0 = Math.min(box.x0, n.x - hw); box.y0 = Math.min(box.y0, n.y - hh);
             box.x1 = Math.max(box.x1, n.x + hw); box.y1 = Math.max(box.y1, n.y + hh);
-            byGroup.set(grp, box);
+            byGroup.set(key, box);
         }
 
-        const data = [...byGroup.entries()].map(([name, b]) => ({ name, b, color: groupColors[name] || null }));
-        const sel = handle.gLayer.selectAll('g.bm-group').data(data, d => d.name);
+        const data = [...byGroup.entries()].map(([key, b]) => {
+            const groupColors = groupColorsByRun.get(b.runId) || {};
+            return { key, name: b.name, b, color: groupColors[b.name] || null };
+        });
+        const sel = handle.gLayer.selectAll('g.bm-group').data(data, d => d.key);
         sel.exit().remove();
         const enter = sel.enter().append('g').attr('class', 'bm-group');
         enter.append('rect').attr('class', 'bm-group-rect').attr('rx', 12);
@@ -921,9 +1036,9 @@ const D3Graph = (() => {
         const merged = enter.merge(sel);
         merged.classed('bm-group-colored', d => !!d.color);
         merged.select('.bm-group-rect')
-            .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD - LABEL_H)
+            .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD)
             .attr('width', d => (d.b.x1 - d.b.x0) + PAD * 2)
-            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2 + LABEL_H)
+            .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2)
             // .style (not .attr) — a CSS class rule beats an SVG presentation attribute, so
             // .attr('fill', ...) here would be silently overridden by .bm-group-rect's own
             // CSS; inline style wins over a class rule without !important.
@@ -932,9 +1047,11 @@ const D3Graph = (() => {
             .style('stroke', d => d.color || null)
             .style('stroke-opacity', d => d.color ? 0.85 : null)
             .style('stroke-dasharray', d => d.color ? 'none' : null);
+        // Sits OUTSIDE the box, just above its top border — not competing with the
+        // border/rounded corner for the same few pixels of vertical space.
         merged.select('.bm-group-label')
-            .attr('x', d => d.b.x0 - PAD + 28).attr('y', d => d.b.y0 - PAD - LABEL_H / 2)
-            .attr('dominant-baseline', 'central')
+            .attr('x', d => d.b.x0 - PAD + 4).attr('y', d => d.b.y0 - PAD - GROUP_LABEL_GAP)
+            .attr('dominant-baseline', 'alphabetic')
             .style('fill', d => d.color || null)
             .text(d => d.name);
     }
@@ -1404,6 +1521,17 @@ const D3Graph = (() => {
     function renderEdges(handle) {
         const data = handle.currentGraph.edges;
 
+        // Several edges can converge on the same target (e.g. a fan-in pipeline) — their
+        // label anchor points (near the shared target) would otherwise coincide and the
+        // text would overlap illegibly. Index each edge among its same-target siblings so
+        // edgeLabelPos can stagger them apart.
+        const targetCounts = new Map();
+        for (const d of data) {
+            const t = d.data?.target ?? d.id;
+            targetCounts.set(t, (targetCounts.get(t) || 0) + 1);
+        }
+        const targetSeen = new Map();
+
         const sel = handle.eLayer.selectAll('g.bm-edge').data(data, d => d.id);
 
         sel.exit().transition().duration(T).style('opacity', 0).remove();
@@ -1440,6 +1568,13 @@ const D3Graph = (() => {
             const el  = d3.select(this);
             const dAttr = edgePath(handle, d.pts);
 
+            // Cached so the per-frame animation loop (renderAnimationFrame, up to 60x/sec
+            // for every edge in the graph) doesn't redo stateColor/edgeStillWorking's
+            // pipeline-array scan or edgeW's log10 on every single frame — these only
+            // change when a layout actually commits, not every animation tick.
+            d._baseColor = col;
+            d._baseWidth = w;
+
             el.select('.bm-edge-hit').attr('d', dAttr);
 
             // Set stroke as attribute so context-stroke on the marker resolves.
@@ -1453,10 +1588,17 @@ const D3Graph = (() => {
 
             el.select('title').text(edgeTooltip(d.data));
 
-            // Place the label near the arrowhead (target end) rather than the
-            // geometric middle — a multi-bend path's middle can sit far from the
-            // arrow, making it ambiguous which edge the number belongs to.
-            const lp = edgeLabelPos(d.pts);
+            // Place the label near the SOURCE end rather than the target — when several
+            // edges converge on the same target (fan-in), their target-end points cluster
+            // together and the labels overlap; staying close to each edge's own (distinct)
+            // source keeps them legibly apart. Edges sharing a target are additionally
+            // staggered by their index among those siblings, in case the sources
+            // themselves are also close together.
+            const t = d.data?.target ?? d.id;
+            const idx = targetSeen.get(t) || 0;
+            targetSeen.set(t, idx + 1);
+            const siblingCount = targetCounts.get(t) || 1;
+            const lp = edgeLabelPos(d.pts, idx, siblingCount);
             el.select('.bm-edge-label')
                 .attr('x', lp.x).attr('y', lp.y)
                 .text(edgeLabel(d.data));
@@ -1511,27 +1653,37 @@ const D3Graph = (() => {
     function renderAnimationFrame(handle, dt, now) {
         if (!handle.currentGraph) return;
 
-        handle.eLayer.selectAll('g.bm-edge').each(function(d) {
+        // Hot loop — runs up to 60x/sec for every edge in the graph (which, with expanded
+        // child runs merged in, can now be several times what a single top-level run has).
+        // Raw DOM access instead of re-wrapping each element in a D3 selection, and the
+        // per-edge base colour/width are read from the cache renderEdges populated at
+        // layout-commit time rather than recomputed here (see d._baseColor/_baseWidth).
+        for (const el of handle.eLayer.node().querySelectorAll('g.bm-edge')) {
+            const d = el.__data__; // D3 stores the bound datum here — avoids a d3.select() wrapper per edge per frame
+            if (!d) continue;
             const s = sampleEdge(handle.animState, d.id, d.data?.doneCount ?? 0, now);
             const r = tick(s, dt);
-            const col = stateColor(d.data?.state, edgeStillWorking(handle, d.data));
-            const w   = edgeW(d.data) + r.thicknessBoost;
+            const col = d._baseColor;
+            const w   = (d._baseWidth ?? 1) + r.thicknessBoost;
 
-            d3.select(this).select('.bm-edge-path')
-                .attr('stroke', col)
-                .attr('stroke-width', w)
-                .style('stroke-dasharray', r.dashArray)
-                .style('stroke-dashoffset', r.dashOffset)
-                .style('opacity', 0.70 + r.brighten * 0.30)
-                .style('filter', r.brighten > 0.05
-                    ? `drop-shadow(0 0 ${(r.brighten * 5).toFixed(1)}px ${col})`
-                    : null);
-        });
+            const path = el.querySelector('.bm-edge-path');
+            if (!path) continue;
+            path.setAttribute('stroke', col);
+            path.setAttribute('stroke-width', w);
+            path.style.strokeDasharray = r.dashArray;
+            path.style.strokeDashoffset = r.dashOffset;
+            path.style.opacity = 0.70 + r.brighten * 0.30;
+            path.style.filter = r.brighten > 0.05
+                ? `drop-shadow(0 0 ${(r.brighten * 5).toFixed(1)}px ${col})`
+                : '';
+        }
 
         // Header pulse for active-state nodes.
         const phase = 0.5 + 0.5 * Math.sin(now / 700);
-        handle.nLayer.selectAll('.bm-node-pulse.bm-pulse-active')
-            .style('opacity', 0.08 + phase * 0.14);
+        const pulseOpacity = 0.08 + phase * 0.14;
+        for (const el of handle.nLayer.node().querySelectorAll('.bm-node-pulse.bm-pulse-active')) {
+            el.style.opacity = pulseOpacity;
+        }
     }
 
     // ── Fit / visible / dispose ────────────────────────────────────────────
@@ -1552,7 +1704,11 @@ const D3Graph = (() => {
             return;
         }
 
-        const gi = { width: g.width, height: g.height };
+        // A group's label is drawn OUTSIDE (above) its box — see renderGroups/
+        // GROUP_LABEL_MARGIN — which can poke above y=0 (the topmost node's own edge)
+        // in graph coordinates. Reserve that extra height here so the label never
+        // gets clipped by the viewport when a group sits in the top row.
+        const gi = { width: g.width, height: g.height + GROUP_LABEL_MARGIN };
         const cw = cw0 || 1;
         const ch = ch0 || 1;
         const pad = 52;
@@ -1560,7 +1716,7 @@ const D3Graph = (() => {
             Math.min((cw - pad * 2) / (gi.width  || 1),
                      (ch - pad * 2) / (gi.height || 1))));
         const tx = (cw - (gi.width  || 0) * scale) / 2;
-        const ty = (ch - (gi.height || 0) * scale) / 2;
+        const ty = (ch - (gi.height || 0) * scale) / 2 + GROUP_LABEL_MARGIN * scale;
         const tr = d3.zoomIdentity.translate(tx, ty).scale(scale);
         if (animate) handle.svg.transition().duration(T).call(handle.zoom.transform, tr);
         else         handle.svg.call(handle.zoom.transform, tr);

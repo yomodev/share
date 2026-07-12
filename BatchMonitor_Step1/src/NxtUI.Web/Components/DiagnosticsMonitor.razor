@@ -22,7 +22,7 @@
         try
         {
             // Importing app.js ensures bmClientDiag is defined before we call it.
-            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+            await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=8");
             _selfRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("bmClientDiag.start", _selfRef);
             Logger.LogInformation("Client diagnostics monitor started");

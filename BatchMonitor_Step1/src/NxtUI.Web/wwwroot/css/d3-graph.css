@@ -108,37 +108,27 @@
     pointer-events: none;
 }
 
-/* Child-run blocks (docs/12 §7.4) — a row below the main service flow. Collapsed: click
-   toggles in-place expand (or opens a new tab, per RunsSettings.ChildRunExpandMode).
-   Expanded: a bigger box with its own mini sub-flow + (recursively) its own child-run row;
-   clicking its header bar collapses it back. */
+/* Child-run blocks (docs/12 §7.4) — styled like a real service node's card (see
+   renderChildCardChrome/renderFakePipelineRow in d3-graph.js, which reuse .bm-node-*/
+   .bm-row-* classes directly) so a child run doesn't read as a visually distinct "lesser"
+   thing. Collapsed: click toggles in-place expand (or opens a new tab, per
+   RunsSettings.ChildRunExpandMode). Expanded: real merged content sits below the header;
+   clicking the header/badge collapses it back. */
 .bm-child-run { cursor: pointer; }
 .bm-child-run:not(.bm-child-run-expanded):hover .bm-child-run-bg { filter: brightness(1.35); }
 .bm-child-run-bg {
     stroke-width: 1.5px;
     transition: stroke 300ms ease, filter 150ms ease;
 }
-.bm-child-run-desc {
-    font-size: 0.8rem;
-    font-weight: 600;
-    fill: var(--mud-palette-text-primary);
-    pointer-events: none;
+/* .bm-node-accent/.bm-node-label are normally decorative-only (pointer-events: none) on a
+   real node's header; a child-run card's header is itself the expand/collapse control, so
+   re-enable hit-testing for those two elements only within a .bm-child-run card. */
+.bm-child-run .bm-node-accent,
+.bm-child-run .bm-node-label {
+    pointer-events: auto;
 }
-.bm-child-run-status {
-    font-size: 0.7rem;
-    font-weight: 500;
-    pointer-events: none;
-}
-
-.bm-child-run-header { cursor: pointer; }
-.bm-child-run-header:hover { filter: brightness(1.3); }
-.bm-child-run-header-label {
-    font-size: 0.72rem;
-    font-weight: 600;
-    fill: var(--mud-palette-text-primary);
-    cursor: pointer;
-    dominant-baseline: middle;
-}
+.bm-child-run .bm-node-accent:hover { filter: brightness(1.3); }
+.bm-child-card-badge:hover .bm-node-badge-bg { filter: brightness(1.2); }
 
 /* Instance badge — rounded-rect pill, sized to its text in JS (d3-graph.js) */
 .bm-node-badge-bg { fill: #388BFD; opacity: 0.9; }

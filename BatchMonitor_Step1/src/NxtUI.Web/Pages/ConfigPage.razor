@@ -135,7 +135,7 @@
             try
             {
                 _module    = await JS.InvokeAsync<IJSObjectReference>("import", "./js/text-editor.js?v=6");
-                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+                _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=8");
                 var stored = await _appModule.InvokeAsync<string?>("getLocalStorage", WordWrapStorageKey);
                 _wordWrap  = stored == "1";
                 StateHasChanged();

@@ -396,7 +396,12 @@ window.bmClientDiag = (function () {
         _lastTickTs   = now;
         const fps     = Math.round(_frameCount / (elapsed / 1000));
         _frameCount   = 0;
-        if (_dotnet) _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), fps);
+        // Reconnecting circuits (see blazor.server.js reconnection UI) briefly leave
+        // _dotnet's underlying connection in a non-Connected state — invokeMethodAsync then
+        // rejects, which without a .catch() surfaces as an uncaught promise rejection in the
+        // console on every tick until the circuit is back. Harmless either way (this is a
+        // best-effort metrics ping), so just swallow it.
+        if (_dotnet) _dotnet.invokeMethodAsync('OnClientMetrics', Math.round(lag), fps).catch(() => {});
     }
 
     function startLongTaskObserver() {
@@ -407,7 +412,7 @@ window.bmClientDiag = (function () {
                     const attr = entry.attribution?.[0];
                     const src  = attr?.name || attr?.containerSrc || 'unknown';
                     if (_dotnet)
-                        _dotnet.invokeMethodAsync('OnLongTask', Math.round(entry.duration), src);
+                        _dotnet.invokeMethodAsync('OnLongTask', Math.round(entry.duration), src).catch(() => {});
                 }
             });
             _observer.observe({ type: 'longtask', buffered: false });

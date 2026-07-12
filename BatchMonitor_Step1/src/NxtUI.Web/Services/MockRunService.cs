@@ -493,6 +493,17 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         var events = new List<PerformanceEvent>();
         var pool = _livePool.TryGetValue(runId, out var existing) ? existing : (_livePool[runId] = new());
 
+        // The demo pool (docs/12 §7 — Ingester -> Validator -> Enricher -> Loader) is a
+        // deliberately clean, fixed-order linear chain (its own topology hint declares
+        // Ingester as "source" and Loader as "sink" with no other wiring). Every OTHER hop
+        // in a chunk here used to pick a service at random regardless of pool, which for the
+        // demo pool could put Loader before Ingester (or any other out-of-order pairing) in
+        // the same chunk — TopologyComputationService derives edges purely from consecutive
+        // per-chunk hop order, so that produced a genuine cycle into "source"/out of "sink",
+        // logged every relayout as bm-flow-layout's role-hint-ignored warning. The generic
+        // pool has no declared order, so it keeps picking randomly.
+        bool isDemoPool = ReferenceEquals(servicePool, DemoServices);
+
         // Spawn 1-2 new chunks, each assigned 4-12 independent processing hops
         // across different service/pipeline/source/server/pid combinations.
         int newChunks = rng.Next(1, 3);
@@ -503,7 +514,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
             var pending = new List<(string, string, string, string, int)>(hops);
             for (int h = 0; h < hops; h++)
             {
-                var svc = servicePool[rng.Next(servicePool.Length)];
+                var svc = isDemoPool ? servicePool[h % servicePool.Length] : servicePool[rng.Next(servicePool.Length)];
                 var pipe = PickPipeline(svc, rng);
                 pending.Add((svc, pipe, PickSource(pipe, rng), PickServer(rng), PickPid(rng)));
             }

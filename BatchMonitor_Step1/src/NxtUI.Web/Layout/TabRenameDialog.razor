@@ -182,7 +182,7 @@
         if (firstRender && _field is not null)
         {
             // Use requestAnimationFrame so focus runs after the dialog open animation.
-            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=7");
+            var appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=8");
             await appModule.InvokeVoidAsync("focusAfterFrame", _fieldRef);
             try { await appModule.DisposeAsync(); }
             catch (JSDisconnectedException) { }
