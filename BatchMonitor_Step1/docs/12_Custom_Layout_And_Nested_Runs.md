@@ -106,10 +106,10 @@ Classic layered (Sugiyama-lite), specialized for our constraints:
 
 ---
 
-## 4. The library (separate project)
+## 4. The library
 
-A **framework-agnostic** package — pure TypeScript, no D3 / Blazor / MudBlazor / SVG
-dependency.
+A **framework-agnostic** module — plain ES2020 JS (no TypeScript, no bundler — matching every
+other file in this folder), no D3 / Blazor / MudBlazor / SVG dependency.
 
 - **Input:** a graph description (nodes with size + hints, edges with endpoints + port/direction
   hints, group declarations, orientation). This is essentially the compiled topology blueprint
@@ -118,12 +118,18 @@ dependency.
   group rects. Nothing about how it's drawn.
 
 Benefits: unit-testable in isolation without a browser (assert crossing counts, group
-containment, constraint satisfaction, stability across updates), reusable, and it keeps the
-D3 component as a thin renderer that just consumes geometry (same seam ELK sits behind today —
-`runLayout` already returns a normalized `{ nodes, edges }`).
+containment, constraint satisfaction, stability across updates), and it keeps the D3 component
+as a thin renderer that just consumes geometry (same seam ELK sits behind today — `runLayout`
+already returns a normalized `{ nodes, edges }`).
 
-Working name: `bm-flow-layout` (final name TBD). It lives beside the app, built/bundled into
-`wwwroot/js`.
+**Not a separate project.** It lives at `src/NxtUI.Web/wwwroot/js/bm-flow-layout/layout.js` — a
+subfolder of the existing `wwwroot/js`, sharing that folder's `package.json`
+(`batchmonitor-js`) and `vitest.config.js` rather than getting its own. This was a deliberate
+call (not the original plan, which envisioned an actual separate project): there's no bundler
+or multi-package JS setup anywhere else in this repo, and introducing one for a ~350-line,
+single-consumer module isn't worth the extra moving parts (a build/copy step, a second
+`package.json` to keep in sync, a slower edit-test loop). Revisit if `bm-flow-layout` ever
+needs to be reused outside this app.
 
 ---
 
@@ -266,8 +272,8 @@ there on real runs, we stop having spent ~2 days, not a rewrite.
 - **Stage 0 — seam.** Extract layout behind a clean interface so ELK and the custom engine are
   swappable. `runLayout` already returns a normalized `{ nodes, edges }`; formalize that as the
   contract. No behavior change; ELK still active.
-- **Stage 1 — base engine (GATE).** New `bm-flow-layout` project: leaves only, single global
-  direction, layer assignment + median ordering + dummy-node routing + coordinate assignment.
+- **Stage 1 — base engine (GATE).** New `bm-flow-layout` module (§4): leaves only, single
+  global direction, layer assignment + median ordering + dummy-node routing + coordinate assignment.
   Render it side-by-side with ELK on real runs; compare. Unit tests for crossing counts and
   determinism. **Decide here whether to continue.**
 - **Stage 2 — hints & groups.** Roles→pinning, groups→hard macro-blocks, directional (soft)
