@@ -71,4 +71,13 @@ public class RunsSettings
     /// timestamp-truncated snapshots make too many pipelines flicker gray. Default: 15.
     /// </summary>
     public int TopologyRecentActivityWindowSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// How clicking a collapsed child-run block (docs/12_Custom_Layout_And_Nested_Runs.md
+    /// §7.4) behaves. <c>InPlace</c> (default): fetches the child's own topology and expands
+    /// it inline as a box within the parent's graph. <c>NewTab</c>: opens the child in its
+    /// own RunDetail tab instead (the simpler original behavior). Any other value falls back
+    /// to InPlace.
+    /// </summary>
+    public string ChildRunExpandMode { get; set; } = "InPlace";
 }

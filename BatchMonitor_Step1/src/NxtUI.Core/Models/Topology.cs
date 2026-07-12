@@ -21,6 +21,17 @@ public class Topology
     /// </summary>
     public List<RunNode> ChildRuns { get; set; } = [];
 
+    /// <summary>
+    /// Child run id -&gt; that child's OWN fully-computed <see cref="Topology"/> (which may in
+    /// turn have its own populated <see cref="ChildRuns"/>/<see cref="ExpandedChildren"/>,
+    /// recursively — RunDetail.razor builds this depth-first for however many levels the
+    /// user has expanded). A <see cref="ChildRuns"/> entry with NO matching key here renders
+    /// as the plain collapsed block; one WITH a matching key renders expanded in place as a
+    /// box containing that child's own service flow. See docs/12 §7.4's "in-place expand"
+    /// (RunsSettings.ChildRunExpandMode).
+    /// </summary>
+    public Dictionary<string, Topology> ExpandedChildren { get; set; } = [];
+
     /// <summary>Group name -&gt; colour, for groups upgraded from the default cosmetic band to a
     /// real bordered box (see <see cref="GroupHint"/> / <see cref="TopologyBlueprint.GroupColors"/>).
     /// A group with no entry here keeps the plain band. Empty when no blueprint applies.</summary>

@@ -54,6 +54,14 @@
     private CancellationTokenSource? _childRunsCts;
     private static readonly TimeSpan ChildRunsRefreshInterval = TimeSpan.FromSeconds(15);
 
+    // ── In-place expand (docs/12 §7.4, RunsSettings.ChildRunExpandMode) ──────────────────
+    // Flat set of every child-run id the user has toggled open, regardless of nesting depth
+    // — PopulateExpandedChildrenAsync walks topo.ChildRuns recursively and checks membership
+    // at every level, so one flat set naturally supports arbitrary depth (capped at
+    // MaxExpandDepth) without tracking "which level is this" separately.
+    private readonly HashSet<string> _expandedChildRunIds = [];
+    private const int MaxExpandDepth = 5; // matches docs/12 §7.1's "support up to 5 levels"
+
     // ── Topology (live and replay) ────────────────────────────────────────
     private Topology? _topology;
     private int _eventCount;
@@ -356,12 +364,14 @@
             var blueprint = ResolveBlueprint(allEvents.Values);
 
             _topology   = _topologyService.ComputeTopology(filtered, _labelFormatter, blueprint);
-            // Snapshot from the initial GetRunDetailsAsync load (line ~194) — children that
-            // appear DURING the run (an orchestrator spawning them mid-flight) aren't picked
-            // up until _details itself is re-fetched, which this loop doesn't yet do. See
-            // docs/12_Custom_Layout_And_Nested_Runs.md §7.3 — periodic re-fetch is a known
-            // follow-up, not wired yet.
+            // _details.Children is kept fresh by RunChildRunsRefreshLoopAsync while the run
+            // is Running (docs/12 §7.3), so this just reflects whatever it last fetched.
             _topology.ChildRuns = _details?.Children ?? [];
+            // In-place expand (docs/12 §7.4): recursively fetch+compute a full Topology for
+            // every currently-expanded child (and its own expanded children, up to
+            // MaxExpandDepth), so the D3 renderer can draw them as boxes instead of plain
+            // collapsed blocks. Best-effort per node — see PopulateExpandedChildrenAsync.
+            await PopulateExpandedChildrenAsync(_topology);
             _eventCount = _eventService.EventCount;
             _errorCount = allEvents.Values.Count(e => e.IsError);
 
@@ -552,15 +562,81 @@
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
-    /// <summary>Invoked when a collapsed child-run block (docs/12 §7.4) is clicked. Opens the
-    /// child run in its own tab — not yet an in-place expand (that needs the recursive-box
-    /// engine wired into the D3 renderer, a separate piece of work).</summary>
+    /// <summary>Invoked when a child-run block (docs/12 §7.4) is clicked — collapsed OR
+    /// expanded, since clicking an expanded box's header toggles it back closed. Dispatches
+    /// on RunsSettings.ChildRunExpandMode: InPlace (default) toggles in-place expand; NewTab
+    /// falls back to the simpler "open in its own tab" behavior.</summary>
+    private Task OnOpenChildRun(string childRunId)
+    {
+        if (string.IsNullOrWhiteSpace(childRunId)) return Task.CompletedTask;
+
+        if (string.Equals(RunsOptions.Value.ChildRunExpandMode, "NewTab", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenChildRunTab(childRunId);
+            return Task.CompletedTask;
+        }
+        return ToggleChildRunExpandAsync(childRunId);
+    }
+
     private void OpenChildRunTab(string childRunId)
     {
-        if (string.IsNullOrWhiteSpace(childRunId)) return;
         var child = _topology?.ChildRuns.FirstOrDefault(c => c.RunId == childRunId);
         var title = string.IsNullOrWhiteSpace(child?.Description) ? childRunId : child.Description;
         TabService.OpenOrFocus(TabModel.CreateRunDetail(childRunId, title, Environment));
+    }
+
+    private async Task ToggleChildRunExpandAsync(string childRunId)
+    {
+        if (!_expandedChildRunIds.Remove(childRunId))
+            _expandedChildRunIds.Add(childRunId);
+
+        // Immediate, not waiting for the next RunTopologyLoopAsync tick — expand/collapse
+        // should feel like a direct response to the click, not a ~400ms-debounced one.
+        await RecomputeTopologyAsync();
+    }
+
+    /// <summary>
+    /// Recursively fetches+computes a full Topology for every currently-expanded child run
+    /// (docs/12 §7.4), so the D3 renderer can draw it as a box instead of a plain collapsed
+    /// block. Depth-first: an expanded child's OWN expanded children are populated before it
+    /// returns, since <see cref="Topology.ExpandedChildren"/> needs to already be nested.
+    /// Best-effort per child — one failing fetch just leaves that child collapsed rather than
+    /// failing the whole topology recompute.
+    /// </summary>
+    private async Task PopulateExpandedChildrenAsync(Topology topo, int depth = 0)
+    {
+        topo.ExpandedChildren.Clear();
+        if (depth >= MaxExpandDepth || _topologyService is null) return;
+
+        foreach (var child in topo.ChildRuns)
+        {
+            if (!_expandedChildRunIds.Contains(child.RunId)) continue;
+
+            try
+            {
+                var childDetails = await RunService.GetRunDetailsAsync(Environment, child.RunId);
+                var childEvents  = await RunService.GetRunEventsAsync(Environment, child.RunId, childDetails.Start);
+                var childStore   = childEvents.ToDictionary(e => e.CompositeKey, e => e);
+
+                TopologyBlueprint? childBlueprint = null;
+                var childHintFile = HintLoader.Get(childDetails.Type);
+                if (childHintFile is not null)
+                {
+                    var seen = childEvents.Select(e => e.Service).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+                    var variant = TopologyBlueprint.SelectVariant(childHintFile, seen);
+                    if (variant is not null) childBlueprint = TopologyBlueprint.Compile(variant);
+                }
+
+                var childTopo = _topologyService.ComputeTopology(childStore, _labelFormatter, childBlueprint);
+                childTopo.ChildRuns = childDetails.Children;
+                await PopulateExpandedChildrenAsync(childTopo, depth + 1);
+                topo.ExpandedChildren[child.RunId] = childTopo;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to expand child run {ChildRunId}", child.RunId);
+            }
+        }
     }
 
     private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId, DateTime LastActivity) info)
@@ -810,7 +886,7 @@
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
                      OnOpenInstanceLog="OpenInstanceLogFromGraph"
                      OnShowErrors="ShowErrorsFromGraph"
-                     OnOpenChildRun="OpenChildRunTab"
+                     OnOpenChildRun="OnOpenChildRun"
                      ResolveLogPathHint="ResolveLogPathHint" />
         @if (_loading)
         {

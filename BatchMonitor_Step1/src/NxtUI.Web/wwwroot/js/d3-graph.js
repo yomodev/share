@@ -645,11 +645,18 @@ const D3Graph = (() => {
     }
 
     // ── Child-run blocks (docs/12 §7.4) ─────────────────────────────────────
-    // Collapsed-only for now: status colour + description, no live progress bar (DoneCount/
-    // TotalCount are optional per RunNode and the mock never populates them — see docs/12
-    // §7.3) and no click-to-drill yet (that needs a fetch-on-demand + breadcrumb UI, a
-    // separate piece of work). Rendered as a simple centered row below the main graph.
+    // Collapsed blocks are a fixed-size status+description card. An expanded one (its id
+    // present in topo.expandedChildren — RunDetail.razor's in-place-expand state) is instead
+    // a bigger box containing a lightweight mini sub-flow of that child's own services (laid
+    // out with bm-flow-layout regardless of which engine — ELK or custom — draws the OUTER
+    // graph; see docs/12 §7.4's "always bm-flow-layout for the recursive sub-layout" note)
+    // plus, recursively, that child's OWN child-run row if it has one. Rendered as a raw
+    // rebuild each commit (no D3 key-based enter/update/exit) rather than an animated join —
+    // expand/collapse already changes every box's size, so there's little to gain from
+    // diffing, and it keeps the recursion far simpler.
     const CHILD_RUN_WIDTH = 200, CHILD_RUN_HEIGHT = 60, CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
+    const EXPANDED_HEADER_H = 26, EXPANDED_PAD = 12, EXPANDED_ROW_GAP = 10;
+    const MINI_NODE_W = 92, MINI_NODE_H = 30;
 
     function childRunStatusColor(status) {
         switch (String(status || '').toLowerCase()) {
@@ -661,50 +668,142 @@ const D3Graph = (() => {
         }
     }
 
-    function renderChildRuns(handle) {
-        const childRuns = handle.pendingTopology?.childRuns || [];
-        const g = handle.currentGraph;
+    function minBoundsOf(nodesMap) {
+        let minX = Infinity, minY = Infinity;
+        for (const [, n] of nodesMap) {
+            minX = Math.min(minX, n.x - n.width / 2);
+            minY = Math.min(minY, n.y - n.height / 2);
+        }
+        if (!Number.isFinite(minX)) { minX = minY = 0; }
+        return { minX, minY };
+    }
 
-        if (!g || childRuns.length === 0) {
-            handle.crLayer.selectAll('*').remove();
+    // Builds a plain-data description of one child-run box — collapsed size, or (if
+    // expandedTopo is given) the mini sub-layout + recursively-built nested child blocks and
+    // the resulting bigger box size. Pure/no DOM — renderChildRunBlock draws whatever this
+    // returns. Kept separate so the size (needed to LAY OUT siblings before any of them are
+    // drawn) is known without touching the DOM first.
+    function buildChildRunBlock(entry, expandedTopo) {
+        if (!expandedTopo) {
+            return { entry, expanded: false, width: CHILD_RUN_WIDTH, height: CHILD_RUN_HEIGHT };
+        }
+
+        const ids = new Set(expandedTopo.nodes.map(n => n.id));
+        const miniNodes = expandedTopo.nodes.map(n => ({ id: n.id, width: MINI_NODE_W, height: MINI_NODE_H, role: normalizeRole(n.role) }));
+        const seenPairs = new Set();
+        const miniEdges = [];
+        for (const e of (expandedTopo.edges || [])) {
+            if (!ids.has(e.source) || !ids.has(e.target)) continue;
+            const key = `${e.source}->${e.target}`;
+            if (seenPairs.has(key)) continue;
+            seenPairs.add(key);
+            miniEdges.push({ id: key, source: e.source, target: e.target });
+        }
+        const subResult = flowLayout({ nodes: miniNodes, edges: miniEdges, direction: 'horizontal', layerSpacing: 40, nodeSpacing: 10 });
+
+        const childBlocks = (expandedTopo.childRuns || []).map(childEntry =>
+            buildChildRunBlock(childEntry, expandedTopo.expandedChildren?.[childEntry.runId]));
+        const childRowHeight = childBlocks.length ? Math.max(...childBlocks.map(b => b.height)) : 0;
+        const childRowWidth = childBlocks.reduce((sum, b) => sum + b.width, 0) + Math.max(0, childBlocks.length - 1) * EXPANDED_ROW_GAP;
+
+        const contentWidth = Math.max(subResult.width, childRowWidth, MINI_NODE_W + EXPANDED_PAD * 2);
+        const contentHeight = subResult.height + (childBlocks.length ? EXPANDED_ROW_GAP + childRowHeight : 0);
+
+        return {
+            entry, expanded: true, subResult, childBlocks,
+            width: contentWidth + EXPANDED_PAD * 2,
+            height: EXPANDED_HEADER_H + contentHeight + EXPANDED_PAD * 2,
+        };
+    }
+
+    // Renders one block (collapsed or expanded, recursing into childBlocks) into parentSel,
+    // centered at (cx, cy) in parentSel's own local coordinate space.
+    function renderChildRunBlock(handle, parentSel, block, cx, cy) {
+        const { entry, width: w, height: h } = block;
+        const g = parentSel.append('g')
+            .attr('class', `bm-child-run${block.expanded ? ' bm-child-run-expanded' : ''}`)
+            .attr('transform', `translate(${cx},${cy})`);
+
+        g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
+            .attr('x', -w / 2).attr('y', -h / 2).attr('width', w).attr('height', h)
+            .attr('fill', nodeBg())
+            .attr('stroke', childRunStatusColor(entry.status));
+
+        const openThis = ev => {
+            ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
+            handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
+        };
+
+        if (!block.expanded) {
+            g.append('text').attr('class', 'bm-child-run-desc')
+                .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
+                .text(truncateLabel(entry.description || entry.runId, 22));
+            g.append('text').attr('class', 'bm-child-run-status')
+                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
+                .attr('fill', childRunStatusColor(entry.status))
+                .text(entry.status ?? 'Unknown');
+            g.on('click', openThis);
             return;
         }
 
-        const baseY = g.height + CHILD_RUN_MARGIN + CHILD_RUN_HEIGHT / 2;
-        const totalWidth = childRuns.length * CHILD_RUN_WIDTH + (childRuns.length - 1) * CHILD_RUN_GAP;
-        const startX = (g.width - totalWidth) / 2 + CHILD_RUN_WIDTH / 2;
-        const bg = nodeBg();
+        // Expanded: header bar (click collapses it back — same RequestOpenChildRun toggle)
+        // + mini sub-flow + this child's own nested child-run row, if it has one.
+        g.append('rect').attr('class', 'bm-child-run-header')
+            .attr('x', -w / 2).attr('y', -h / 2).attr('width', w).attr('height', EXPANDED_HEADER_H)
+            .style('fill', childRunStatusColor(entry.status)).style('fill-opacity', 0.18)
+            .on('click', openThis);
+        g.append('text').attr('class', 'bm-child-run-header-label')
+            .attr('x', -w / 2 + 10).attr('y', -h / 2 + EXPANDED_HEADER_H / 2)
+            .text(`${truncateLabel(entry.description || entry.runId, 26)} — ${entry.status ?? 'Unknown'}`)
+            .on('click', openThis);
 
-        const sel = handle.crLayer.selectAll('g.bm-child-run').data(childRuns, d => d.runId);
-        sel.exit().remove();
+        const { minX: subMinX, minY: subMinY } = minBoundsOf(block.subResult.nodes);
+        const subTop = -h / 2 + EXPANDED_HEADER_H + EXPANDED_PAD;
+        const offX = (-w / 2 + EXPANDED_PAD) - subMinX;
+        const offY = subTop - subMinY;
 
-        const enter = sel.enter().append('g').attr('class', 'bm-child-run')
-            .on('click', (ev, d) => {
-                ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
-                if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenChildRun', d.runId);
-            });
-        enter.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10);
-        enter.append('text').attr('class', 'bm-child-run-desc');
-        enter.append('text').attr('class', 'bm-child-run-status');
+        for (const e of block.subResult.edges) {
+            const pts = e.points.map(p => ({ x: p.x + offX, y: p.y + offY }));
+            g.append('path').attr('class', 'bm-child-mini-edge')
+                .attr('d', roundedOrthPath(pts, 5));
+        }
+        for (const [id, n] of block.subResult.nodes) {
+            const mini = g.append('g').attr('class', 'bm-child-mini-node')
+                .attr('transform', `translate(${n.x + offX},${n.y + offY})`);
+            mini.append('rect').attr('class', 'bm-child-mini-node-bg').attr('rx', 4)
+                .attr('x', -n.width / 2).attr('y', -n.height / 2).attr('width', n.width).attr('height', n.height);
+            mini.append('text').attr('class', 'bm-child-mini-node-label')
+                .attr('text-anchor', 'middle').attr('x', 0).attr('y', 4)
+                .text(truncateLabel(id, 13));
+        }
 
-        const merged = enter.merge(sel);
-        merged.attr('transform', (d, i) =>
-            `translate(${startX + i * (CHILD_RUN_WIDTH + CHILD_RUN_GAP)},${baseY})`);
+        if (block.childBlocks.length) {
+            const rowTop = subTop + block.subResult.height + EXPANDED_ROW_GAP;
+            let childCursorX = -w / 2 + EXPANDED_PAD;
+            for (const childBlock of block.childBlocks) {
+                renderChildRunBlock(handle, g, childBlock, childCursorX + childBlock.width / 2, rowTop + childBlock.height / 2);
+                childCursorX += childBlock.width + EXPANDED_ROW_GAP;
+            }
+        }
+    }
 
-        merged.select('.bm-child-run-bg')
-            .attr('x', -CHILD_RUN_WIDTH / 2).attr('y', -CHILD_RUN_HEIGHT / 2)
-            .attr('width', CHILD_RUN_WIDTH).attr('height', CHILD_RUN_HEIGHT)
-            .attr('fill', bg)
-            .attr('stroke', d => childRunStatusColor(d.status));
+    function renderChildRuns(handle) {
+        const childRuns = handle.pendingTopology?.childRuns || [];
+        const expandedChildren = handle.pendingTopology?.expandedChildren || {};
+        const g = handle.currentGraph;
 
-        merged.select('.bm-child-run-desc')
-            .attr('text-anchor', 'middle').attr('x', 0).attr('y', -6)
-            .text(d => truncateLabel(d.description || d.runId, 22));
+        handle.crLayer.selectAll('*').remove();
+        if (!g || childRuns.length === 0) return;
 
-        merged.select('.bm-child-run-status')
-            .attr('text-anchor', 'middle').attr('x', 0).attr('y', 14)
-            .attr('fill', d => childRunStatusColor(d.status))
-            .text(d => d.status ?? 'Unknown');
+        const blocks = childRuns.map(entry => buildChildRunBlock(entry, expandedChildren[entry.runId]));
+        const totalWidth = blocks.reduce((sum, b) => sum + b.width, 0) + CHILD_RUN_GAP * Math.max(0, blocks.length - 1);
+        const baseY = g.height + CHILD_RUN_MARGIN;
+        let cursorX = (g.width - totalWidth) / 2;
+
+        for (const block of blocks) {
+            renderChildRunBlock(handle, handle.crLayer, block, cursorX + block.width / 2, baseY + block.height / 2);
+            cursorX += block.width + CHILD_RUN_GAP;
+        }
     }
 
     function truncateLabel(text, maxLen) {
