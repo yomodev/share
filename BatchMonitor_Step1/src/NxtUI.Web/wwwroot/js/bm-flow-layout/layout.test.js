@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { layout } from './layout.js';
 
 function node(id, width = 200, height = 80) { return { id, width, height }; }
@@ -144,5 +144,109 @@ describe('vertical direction', () => {
             direction: 'vertical',
         });
         expect(result.nodes.get('B').y).toBeGreaterThan(result.nodes.get('A').y);
+    });
+});
+
+describe('role hard-pin', () => {
+    it('pins a true source (no incoming edges) to layer 0 even if longest-path would place it later', () => {
+        const nodes = [node('A'), node('B'), node('C')];
+        nodes[2].role = 'source'; // C has no incoming edges — safe to pin
+        const result = layout({
+            nodes,
+            edges: [edge('A', 'B')],
+        });
+        expect(result.nodes.get('C').layer).toBe(0);
+    });
+
+    it('pins a true sink (no outgoing edges) to the last layer', () => {
+        const nodes = [node('A'), node('B'), node('C'), node('D')];
+        nodes[1].role = 'sink'; // B has no outgoing edges — safe to pin
+        const result = layout({
+            nodes,
+            edges: [edge('A', 'C'), edge('C', 'D')],
+        });
+        expect(result.nodes.get('B').layer).toBe(result.nodes.get('D').layer);
+    });
+
+    it('ignores (and warns on) a role hint that would violate the node\'s own edges', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const nodes = [node('A'), node('B')];
+        nodes[1].role = 'source'; // B HAS an incoming edge from A — cannot honor
+        const result = layout({ nodes, edges: [edge('A', 'B')] });
+
+        expect(result.nodes.get('B').layer).toBe(1); // unchanged from natural longest-path layer
+        expect(result.warnings.some(w => w.includes('role "source"'))).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
+    });
+});
+
+describe('groups as hard macro-blocks', () => {
+    it('keeps grouped nodes contiguous within a layer even against pull toward non-members', () => {
+        // Layer 1 has G1, X, G2 (G1/G2 share group "grp"); each has a layer-0 predecessor
+        // positioned so the naive per-node median would interleave X between G1 and G2.
+        const nodes = [
+            node('P1'), node('P2'), node('P3'),
+            node('G1'), node('X'), node('G2'),
+        ];
+        nodes.find(n => n.id === 'G1').group = 'grp';
+        nodes.find(n => n.id === 'G2').group = 'grp';
+
+        const result = layout({
+            nodes,
+            edges: [edge('P1', 'G1'), edge('P2', 'X'), edge('P3', 'G2')],
+            direction: 'horizontal',
+        });
+
+        const g1y = result.nodes.get('G1').y;
+        const xy = result.nodes.get('X').y;
+        const g2y = result.nodes.get('G2').y;
+        const groupMin = Math.min(g1y, g2y), groupMax = Math.max(g1y, g2y);
+        // X must be OUTSIDE the group's span, not sandwiched between G1 and G2.
+        expect(xy < groupMin || xy > groupMax).toBe(true);
+    });
+});
+
+describe('directional soft hints', () => {
+    it('places a successor "below" its sibling when hinted via its own placement', () => {
+        const nodes = [node('A'), node('B'), node('C')];
+        nodes.find(n => n.id === 'B').placement = { side: 'below' };
+        const result = layout({ nodes, edges: [edge('A', 'B'), edge('A', 'C')] });
+        expect(result.nodes.get('B').y).toBeGreaterThan(result.nodes.get('C').y);
+    });
+
+    it('a successor\'s own placement hint overrides its predecessor\'s placeSuccessor (child wins)', () => {
+        const nodes = [node('A'), node('B'), node('C')];
+        nodes.find(n => n.id === 'A').placeSuccessor = { side: 'below' }; // parent says: B below C
+        nodes.find(n => n.id === 'B').placement = { side: 'above' };      // child insists: I'm above
+        const result = layout({ nodes, edges: [edge('A', 'B'), edge('A', 'C')] });
+        expect(result.nodes.get('B').y).toBeLessThan(result.nodes.get('C').y);
+    });
+
+    it('drops and warns on an orthogonal hint (left/right in a horizontal flow)', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const nodes = [node('A'), node('B')];
+        nodes.find(n => n.id === 'B').placement = { side: 'left' }; // meaningless when horizontal
+        const result = layout({ nodes, edges: [edge('A', 'B')], direction: 'horizontal' });
+
+        expect(result.warnings.some(w => w.includes('not applicable to a horizontal flow'))).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
+    });
+
+    it('resolves conflicting placeSuccessor hints from two predecessors via order, and warns', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const nodes = [node('P1'), node('P2'), node('Shared')];
+        const p1 = nodes.find(n => n.id === 'P1'); p1.placeSuccessor = { side: 'below' }; p1.order = 5;
+        const p2 = nodes.find(n => n.id === 'P2'); p2.placeSuccessor = { side: 'above' }; p2.order = 1;
+        const result = layout({
+            nodes,
+            edges: [edge('P1', 'Shared'), edge('P2', 'Shared')],
+        });
+
+        expect(result.warnings.some(w => w.includes('Conflicting placement hints'))).toBe(true);
+        // P2 has the lower order (1 < 5), so its hint ("above") should win.
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
     });
 });

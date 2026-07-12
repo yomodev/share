@@ -12,14 +12,34 @@
 // output is pure geometry (positioned nodes, edge polylines). See layout() below.
 //
 // Stage 1 scope (see docs/12): leaves only, single global direction, layer assignment +
-// median ordering + dummy-node routing + coordinate assignment. Hints/groups/recursion
-// are Stage 2+.
+// median ordering + dummy-node routing + coordinate assignment.
+//
+// Stage 2 scope (this revision): hard constraints (role pinning, groups as contiguous
+// macro-blocks) and soft constraints (directional left/right/above/below placement hints,
+// child-overrides-parent precedence, order/priority tiebreak, warnings for anything
+// unsatisfiable — see docs/12 §3 "Constraint precedence"). Recursive sub-flows for
+// per-node orientation, external/arriveFrom, and per-edge port hints are NOT yet
+// implemented — still Stage 2b/3 per the doc's build plan.
 
 /**
  * @typedef {Object} LayoutNode
  * @property {string} id
  * @property {number} width
  * @property {number} height
+ * @property {'source'|'sink'} [role] - hard: pin to the first/last layer (only when the
+ *        node genuinely has no incoming/outgoing structural edges — otherwise ignored
+ *        with a warning, since forcing it would violate the DAG's own edges).
+ * @property {string} [group] - hard: nodes sharing a group are kept as a contiguous run
+ *        within each layer they appear in — no non-member node can be ordered between them.
+ * @property {number} [order] - tiebreak priority (lower = earlier/first); also used to
+ *        resolve conflicting directional hints from multiple predecessors.
+ * @property {{side:'left'|'right'|'above'|'below'}} [placement] - soft: this node's own
+ *        preferred placement relative to its predecessor. Authored by the node itself;
+ *        wins over any `placeSuccessor` hint offered by a predecessor (child-overrides-
+ *        parent — see docs/12 §3).
+ * @property {{side:'left'|'right'|'above'|'below'}} [placeSuccessor] - soft: where this
+ *        node would like its successor(s) placed. Loses to the successor's own
+ *        `placement` if it declares one.
  *
  * @typedef {Object} LayoutEdge
  * @property {string} source
@@ -51,23 +71,26 @@ const ORDERING_PASSES = 4;
  *   nodes: Map<string, {x:number, y:number, width:number, height:number, layer:number}>,
  *   edges: Array<{id:string, source:string, target:string, points:{x:number,y:number}[], isBackEdge:boolean}>,
  *   width: number, height: number,
+ *   warnings: string[],
  * }}
  */
 export function layout(input, opts = {}) {
     const direction = input.direction === 'vertical' ? 'vertical' : 'horizontal';
     const layerSpacing = input.layerSpacing ?? DEFAULT_LAYER_SPACING;
     const nodeSpacing = input.nodeSpacing ?? DEFAULT_NODE_SPACING;
+    const warnings = [];
 
     const nodesById = new Map(input.nodes.map(n => [n.id, n]));
 
     const { structuralEdges, backEdges } = splitBackEdges(input.edges, nodesById);
 
     const layerOf = assignLayers(input.nodes, structuralEdges);
+    pinRoles(input.nodes, layerOf, structuralEdges, warnings);
 
     const { layers, dummies, edgeChains } = buildDummyChains(
         input.nodes, structuralEdges, layerOf, layerSpacing, nodeSpacing);
 
-    orderLayers(layers, edgeChains, opts.seedOrder);
+    orderLayers(layers, edgeChains, nodesById, direction, opts.seedOrder, warnings);
 
     const positioned = assignCoordinates(
         layers, nodesById, dummies, layerOf, direction, layerSpacing, nodeSpacing);
@@ -103,7 +126,40 @@ export function layout(input, opts = {}) {
     const realNodes = new Map();
     for (const n of input.nodes) realNodes.set(n.id, positioned.get(n.id));
 
-    return { nodes: realNodes, edges: edgesOut, width: maxX + layerSpacing / 2, height: maxY + nodeSpacing };
+    for (const w of warnings) console.warn(`bm-flow-layout: ${w}`);
+
+    return {
+        nodes: realNodes, edges: edgesOut,
+        width: maxX + layerSpacing / 2, height: maxY + nodeSpacing,
+        warnings,
+    };
+}
+
+// ── Hard constraint: role pinning ──────────────────────────────────────────────────────
+// Only applied when it can't violate the DAG's own edges: a "source" is pinned to layer 0
+// only if it truly has no incoming structural edge; a "sink" to the last layer only if it
+// truly has no outgoing one. Otherwise the hint is dropped with a warning rather than
+// silently producing an inconsistent layer assignment.
+function pinRoles(nodes, layerOf, structuralEdges, warnings) {
+    const hasIncoming = new Set(structuralEdges.map(e => e.target));
+    const hasOutgoing = new Set(structuralEdges.map(e => e.source));
+    const maxLayer = Math.max(0, ...[...layerOf.values()]);
+
+    for (const n of nodes) {
+        if (n.role === 'source') {
+            if (hasIncoming.has(n.id)) {
+                warnings.push(`Node "${n.id}" has role "source" but also has incoming edges — role hint ignored.`);
+                continue;
+            }
+            layerOf.set(n.id, 0);
+        } else if (n.role === 'sink') {
+            if (hasOutgoing.has(n.id)) {
+                warnings.push(`Node "${n.id}" has role "sink" but also has outgoing edges — role hint ignored.`);
+                continue;
+            }
+            layerOf.set(n.id, maxLayer);
+        }
+    }
 }
 
 function edgeKey(e) { return `${e.source}->${e.target}`; }
@@ -189,7 +245,14 @@ function buildDummyChains(nodes, structuralEdges, layerOf, layerSpacing, nodeSpa
 // reordering a layer by the average cross-axis position of its neighbors in the
 // already-ordered adjacent layer. Cheap and good enough at our graph sizes (<=50 nodes plus
 // dummies) — see docs/12 §1 for why full crossing-minimization quality doesn't matter here.
-function orderLayers(layers, edgeChains, seedOrder) {
+//
+// Stage 2 additions, applied on top of the same median pass:
+//   - HARD groups: nodes sharing a `group` are sorted as one clustered unit (by the
+//     group's average median) so no non-member can land between them within a layer.
+//   - SOFT directional hints: a node with an effective placement hint relative to a
+//     predecessor in the adjacent layer gets its median pulled strongly toward that side,
+//     rather than the plain neighbor median — see collectDirectionalHints().
+function orderLayers(layers, edgeChains, nodesById, direction, seedOrder, warnings) {
     // Initial order: seedOrder bias (stability, Stage 3) falls back to declaration order.
     for (const layer of layers) {
         if (seedOrder) {
@@ -198,11 +261,14 @@ function orderLayers(layers, edgeChains, seedOrder) {
     }
 
     const neighborsOf = buildNeighborIndex(edgeChains);
+    const hints = collectDirectionalHints(edgeChains, nodesById, direction, warnings);
     const indexInLayer = () => {
         const idx = new Map();
         layers.forEach((layer, li) => layer.forEach((n, i) => idx.set(n.id, { li, i })));
         return idx;
     };
+
+    const HINT_BIAS = 1000; // large enough to dominate same-layer neighbor medians
 
     for (let pass = 0; pass < ORDERING_PASSES; pass++) {
         const forward = pass % 2 === 0;
@@ -216,6 +282,12 @@ function orderLayers(layers, edgeChains, seedOrder) {
             if (adjLi < 0 || adjLi >= layers.length) continue;
             const layer = layers[li];
             const medians = layer.map(n => {
+                const hint = hints.get(n.id);
+                if (hint && positions.get(hint.pred)?.li === adjLi) {
+                    const predPos = positions.get(hint.pred).i;
+                    const towardHigher = hint.side === 'below' || hint.side === 'right';
+                    return { node: n, median: predPos + (towardHigher ? HINT_BIAS : -HINT_BIAS) };
+                }
                 const neigh = (neighborsOf.get(n.id) ?? []).filter(id => positions.get(id)?.li === adjLi);
                 if (neigh.length === 0) return { node: n, median: positions.get(n.id).i };
                 const idxs = neigh.map(id => positions.get(id).i).sort((a, b) => a - b);
@@ -225,11 +297,109 @@ function orderLayers(layers, edgeChains, seedOrder) {
                     : (idxs[mid - 1] + idxs[mid]) / 2;
                 return { node: n, median };
             });
-            medians.sort((a, b) => a.median - b.median);
-            layers[li] = medians.map(m => m.node);
-            medians.forEach((m, i) => positions.set(m.node.id, { li, i }));
+
+            layers[li] = clusterByGroup(medians, nodesById);
+            layers[li].forEach((n, i) => positions.set(n.id, { li, i }));
         }
     }
+}
+
+// HARD constraint: sorts a layer's (node, median) entries so that every group's members
+// end up contiguous — nothing outside the group can be ordered between them. A group's
+// position is driven by the average median of its members; members within the group are
+// then ordered among themselves by their own median (falls back to `order`/declaration).
+function clusterByGroup(medianEntries, nodesById) {
+    const groupOf = id => nodesById.get(id)?.group;
+
+    const clusters = new Map(); // group name -> entries[]
+    const singles = [];
+    for (const entry of medianEntries) {
+        const g = groupOf(entry.node.id);
+        if (!g) { singles.push({ key: entry.median, items: [entry] }); continue; }
+        if (!clusters.has(g)) clusters.set(g, []);
+        clusters.get(g).push(entry);
+    }
+    const grouped = [...clusters.entries()].map(([g, items]) => ({
+        key: items.reduce((sum, e) => sum + e.median, 0) / items.length,
+        items,
+    }));
+
+    const units = [...singles, ...grouped].sort((a, b) => a.key - b.key);
+
+    const result = [];
+    for (const unit of units) {
+        const ordered = unit.items.slice().sort((a, b) =>
+            a.median - b.median || (nodesById.get(a.node.id)?.order ?? 0) - (nodesById.get(b.node.id)?.order ?? 0));
+        for (const e of ordered) result.push(e.node);
+    }
+    return result;
+}
+
+// ── Soft constraint: directional placement hints ───────────────────────────────────────
+// Resolves, for every direct (non-dummy) structural edge pred->succ, the "effective" hint
+// governing succ's placement relative to pred: succ's own `placement` always wins over
+// pred's `placeSuccessor` (child-overrides-parent, docs/12 §3). When multiple predecessors
+// offer conflicting placeSuccessor hints for the same succ (and it has no self hint), the
+// predecessor with the lower `order` wins; the conflict is logged.
+//
+// Only applies to edges that span exactly one layer (no intervening dummy nodes) — a hint
+// about "place my successor to the left" is a direct, local relationship; long edges have
+// no single adjacent-layer predecessor to bias against, so they're left to the neighbor
+// median alone (documented Stage 2 limitation, not silently wrong).
+function collectDirectionalHints(edgeChains, nodesById, direction, warnings) {
+    const chosen = new Map(); // succ id -> { side, pred, authoredBySelf }
+
+    for (const chain of edgeChains.values()) {
+        if (chain.length !== 2) continue;
+        const [pred, succ] = chain;
+        const predNode = nodesById.get(pred);
+        const succNode = nodesById.get(succ);
+        if (!predNode || !succNode) continue;
+
+        const selfHint = succNode.placement;
+        const parentHint = predNode.placeSuccessor;
+        const rawHint = selfHint ?? parentHint;
+        if (!rawHint) continue;
+
+        const side = normalizeSide(rawHint.side, direction, warnings, succ);
+        if (side == null) continue;
+
+        const existing = chosen.get(succ);
+        if (!existing) {
+            chosen.set(succ, { side, pred, authoredBySelf: !!selfHint });
+        } else if (selfHint && !existing.authoredBySelf) {
+            chosen.set(succ, { side, pred, authoredBySelf: true });
+        } else if (!selfHint && !existing.authoredBySelf && existing.side !== side) {
+            const orderExisting = nodesById.get(existing.pred)?.order ?? 0;
+            const orderNew = predNode.order ?? 0;
+            const winner = orderNew < orderExisting ? { side, pred } : existing;
+            warnings.push(
+                `Conflicting placement hints for "${succ}" from predecessors "${existing.pred}" ` +
+                `(${existing.side}) and "${pred}" (${side}) — using "${winner.pred}" (lower order wins).`);
+            chosen.set(succ, { ...winner, authoredBySelf: false });
+        }
+        // else: two self hints on the same node is structurally impossible (one `placement`
+        // per node), and a later parent hint never overrides an already-chosen self hint.
+    }
+    return chosen;
+}
+
+// A hint is only meaningful on the CROSS axis: "above/below" bias order within a
+// horizontal flow's layers; "left/right" bias order within a vertical flow's layers. The
+// orthogonal pair has no meaning (the successor's position along the FLOW axis is already
+// fixed by its layer) — dropped with a warning rather than silently ignored.
+function normalizeSide(side, direction, warnings, nodeId) {
+    const validForHorizontal = side === 'above' || side === 'below';
+    const validForVertical = side === 'left' || side === 'right';
+    if (direction === 'horizontal' && !validForHorizontal) {
+        warnings.push(`Directional hint "${side}" on "${nodeId}" is not applicable to a horizontal flow — ignored.`);
+        return null;
+    }
+    if (direction === 'vertical' && !validForVertical) {
+        warnings.push(`Directional hint "${side}" on "${nodeId}" is not applicable to a vertical flow — ignored.`);
+        return null;
+    }
+    return side;
 }
 
 function buildNeighborIndex(edgeChains) {
