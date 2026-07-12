@@ -26,9 +26,17 @@ public interface IRunService
     Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default);
 
     /// <summary>
-    /// Returns detailed metadata for a batch.
+    /// Returns detailed metadata for a batch, including its immediate child runs (if any —
+    /// see <see cref="RunDetails.Children"/>) as lightweight summaries, never full detail.
     /// </summary>
-    Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default);
+    /// <param name="childDepth">
+    /// How many levels of nested children to populate in one call (1 = immediate children
+    /// only, the default — keeps payloads small and bounded at every level of a deep tree).
+    /// A caller doing "expand all" can request more; each level still only carries
+    /// <see cref="RunNode"/> summaries, never full <see cref="RunDetails"/>. See
+    /// docs/12_Custom_Layout_And_Nested_Runs.md §7.3.
+    /// </param>
+    Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default, int childDepth = 1);
 
     /// <summary>
     /// Returns lean performance events for a batch from a given timestamp onwards.

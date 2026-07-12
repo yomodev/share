@@ -173,7 +173,7 @@ public class SqlRunService(
     public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default) =>
         throw new NotImplementedException("SQL cancellation not implemented — adapt to your domain.");
 
-    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) =>
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default, int childDepth = 1) =>
         throw new NotImplementedException("Run details not available from this SQL service.");
 
     public Task<List<PerformanceEvent>> GetRunEventsAsync(

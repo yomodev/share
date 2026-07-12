@@ -196,7 +196,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         return Task.FromResult(false);
     }
 
-    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default)
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default, int childDepth = 1)
     {
         var summary = _store.FirstOrDefault(b => b.RunId == runId);
         var details = new RunDetails
@@ -222,8 +222,42 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 ["PipelineVersion"] = "v1.2.3",
                 ["ErrorDetails"] = summary?.Status == RunStatus.Failed ? "Simulated failure for testing." : string.Empty,
             },
+            Children = childDepth >= 1 ? BuildMockChildren(runId) : new List<RunNode>(),
         };
         return Task.FromResult(details);
+    }
+
+    /// <summary>
+    /// Demo-only nested-run simulation (docs/12_Custom_Layout_And_Nested_Runs.md §7): every
+    /// 4th run (deterministic on RunId hash, so the same run always looks the same across
+    /// calls — no real orchestrator exists in the mock) gets 2 synthesized children, picked
+    /// from other entries already in `_store` so they're independently drillable via the same
+    /// GetRunDetailsAsync. DoneCount/TotalCount are left null (RunSummary carries no counts) —
+    /// matches the design's "optional, status is enough" decision. childDepth > 1 (fetching
+    /// grandchildren in the same call) is NOT implemented here yet; RunNode is intentionally
+    /// a flat summary with no nested Children of its own (see RunNode's own doc comment), so
+    /// a real deeper fetch means the caller drilling in and calling this again per level.
+    /// </summary>
+    private List<RunNode> BuildMockChildren(string runId)
+    {
+        if (string.IsNullOrEmpty(runId) || _store.Count < 3) return new List<RunNode>();
+        if (Math.Abs(runId.GetHashCode()) % 4 != 0) return new List<RunNode>();
+
+        var selfIndex = _store.FindIndex(b => b.RunId == runId);
+        var baseIndex = selfIndex >= 0 ? selfIndex : Math.Abs(runId.GetHashCode()) % _store.Count;
+
+        return Enumerable.Range(1, 2)
+            .Select(offset => _store[(baseIndex + offset) % _store.Count])
+            .Where(child => child.RunId != runId)
+            .Select(child => new RunNode
+            {
+                RunId = child.RunId,
+                Description = child.Description,
+                Status = child.Status,
+                Start = child.Start,
+                End = child.End,
+            })
+            .ToList();
     }
 
     public Task<List<PerformanceEvent>> GetRunEventsAsync(

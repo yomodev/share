@@ -21,7 +21,7 @@ file sealed class FakeRunService : IRunService
     public Task<List<RunSummary>> GetRunsAsync(string env, DateTime before, int count, RunFilter? filter = null, CancellationToken ct = default) =>
         throw new NotImplementedException();
     public Task<bool> CancelRunAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default, int childDepth = 1) => throw new NotImplementedException();
     public Task<Topology> GetRunTopologyAsync(string env, string runId, CancellationToken ct = default) => throw new NotImplementedException();
 }
 

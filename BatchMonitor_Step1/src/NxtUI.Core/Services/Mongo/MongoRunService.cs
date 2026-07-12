@@ -86,7 +86,7 @@ public class MongoRunService : IRunService
         return true;
     }
 
-    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default)
+    public Task<RunDetails> GetRunDetailsAsync(string env, string runId, CancellationToken ct = default, int childDepth = 1)
     {
         // Return deterministic static details for demo
         var details = new RunDetails
