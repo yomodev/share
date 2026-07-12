@@ -312,7 +312,9 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         {
             var events = new List<PerformanceEvent>();
             var duration = (batch.End ?? batch.Start.AddMinutes(30)) - batch.Start;
-            int chunks = rng.Next(200, 400);
+            // Was rng.Next(200, 400) * 3-10 hops (avg ~2100 events/run) — cut to ~1/3 so
+            // Runs/Timeline aren't pushing huge payloads for a mock backend.
+            int chunks = rng.Next(65, 135);
 
             for (int ci = 0; ci < chunks; ci++)
             {

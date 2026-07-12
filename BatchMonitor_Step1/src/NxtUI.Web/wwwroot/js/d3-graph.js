@@ -856,7 +856,7 @@ const D3Graph = (() => {
             .style('stroke-opacity', d => d.color ? 0.85 : null)
             .style('stroke-dasharray', d => d.color ? 'none' : null);
         merged.select('.bm-group-label')
-            .attr('x', d => d.b.x0 - PAD + 10).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .attr('x', d => d.b.x0 - PAD + 18).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
             .style('fill', d => d.color || null)
             .text(d => d.name);
     }
@@ -945,15 +945,24 @@ const D3Graph = (() => {
                 // same CSS property; the attribute is just the lowest-priority style origin)
                 // — this is exactly the "strobo/jump" this file's own comment above .bm-node
                 // warns about from an earlier attempt. Including the node's own translate(x,y)
-                // in the SAME CSS transform string (unitless — SVG user units, not px) avoids
-                // it: this fully takes over from the attribute instead of fighting it. No
-                // transform-origin override needed either — every child shape is already
-                // drawn symmetric around this group's own local (0,0), which is the default
-                // SVG transform-origin, so `scale()` here already scales around the node's
-                // visual center for free.
+                // in the SAME CSS transform string avoids it: this fully takes over from the
+                // attribute instead of fighting it. No transform-origin override needed either
+                // — every child shape is already drawn symmetric around this group's own local
+                // (0,0), which is the default SVG transform-origin, so `scale()` here already
+                // scales around the node's visual center for free.
+                //
+                // `px` is REQUIRED here even though the SVG transform ATTRIBUTE accepts bare
+                // unitless numbers — the CSS transform PROPERTY does not: translate(x, y) with
+                // no unit is invalid CSS syntax, and the browser silently drops the entire
+                // declaration (no console error, nothing happens). This was the actual bug
+                // behind "zoom-on-hover does nothing" — confirmed by hand: `transform:
+                // translate(50, 50)` is silently rejected, `transform: translate(50px, 50px)`
+                // isn't. Since this SVG has no viewBox scaling (width/height are 100%, 1:1 with
+                // the container), `px` here maps directly to the same user-unit coordinate
+                // space the attribute-based translate already uses.
                 d3.select(this).raise()
                     .classed('bm-node-hover-zoom', true)
-                    .style('transform', `translate(${d.x}, ${d.y}) scale(${scale})`);
+                    .style('transform', `translate(${d.x}px, ${d.y}px) scale(${scale})`);
             })
             .on('mouseleave.zoom', function () {
                 // Clearing the CSS transform reverts control to the attribute, which the
