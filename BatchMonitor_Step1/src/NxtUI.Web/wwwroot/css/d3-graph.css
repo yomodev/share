@@ -96,10 +96,14 @@
     pointer-events: none;
 }
 
-/* Child-run blocks (docs/12 §7.4) — collapsed row below the main service flow. */
+/* Child-run blocks (docs/12 §7.4) — collapsed row below the main service flow. Clicking one
+   opens that run in a new tab (RunDetail.razor's OpenChildRunTab) — not yet an in-place
+   expand, see docs/12 §7.4 for that follow-up. */
+.bm-child-run { cursor: pointer; }
+.bm-child-run:hover .bm-child-run-bg { filter: brightness(1.35); }
 .bm-child-run-bg {
     stroke-width: 1.5px;
-    transition: stroke 300ms ease;
+    transition: stroke 300ms ease, filter 150ms ease;
 }
 .bm-child-run-desc {
     font-size: 0.8rem;

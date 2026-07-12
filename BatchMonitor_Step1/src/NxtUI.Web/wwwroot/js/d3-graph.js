@@ -669,7 +669,11 @@ const D3Graph = (() => {
         const sel = handle.crLayer.selectAll('g.bm-child-run').data(childRuns, d => d.runId);
         sel.exit().remove();
 
-        const enter = sel.enter().append('g').attr('class', 'bm-child-run');
+        const enter = sel.enter().append('g').attr('class', 'bm-child-run')
+            .on('click', (ev, d) => {
+                ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
+                if (handle.dotNetRef) handle.dotNetRef.invokeMethodAsync('RequestOpenChildRun', d.runId);
+            });
         enter.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10);
         enter.append('text').attr('class', 'bm-child-run-desc');
         enter.append('text').attr('class', 'bm-child-run-status');

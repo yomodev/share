@@ -498,6 +498,17 @@
         TabService.OpenOrFocus(TabModel.CreateKafkaTopicInspector(topic, Environment));
     }
 
+    /// <summary>Invoked when a collapsed child-run block (docs/12 §7.4) is clicked. Opens the
+    /// child run in its own tab — not yet an in-place expand (that needs the recursive-box
+    /// engine wired into the D3 renderer, a separate piece of work).</summary>
+    private void OpenChildRunTab(string childRunId)
+    {
+        if (string.IsNullOrWhiteSpace(childRunId)) return;
+        var child = _topology?.ChildRuns.FirstOrDefault(c => c.RunId == childRunId);
+        var title = string.IsNullOrWhiteSpace(child?.Description) ? childRunId : child.Description;
+        TabService.OpenOrFocus(TabModel.CreateRunDetail(childRunId, title, Environment));
+    }
+
     private async Task OpenInstanceLogFromGraph((string Service, string Server, int ProcessId, DateTime LastActivity) info)
     {
         var (service, server, processId, lastActivity) = info;
@@ -743,6 +754,7 @@
                      OnOpenKafkaTopic="OpenKafkaTopicFromGraph"
                      OnOpenInstanceLog="OpenInstanceLogFromGraph"
                      OnShowErrors="ShowErrorsFromGraph"
+                     OnOpenChildRun="OpenChildRunTab"
                      ResolveLogPathHint="ResolveLogPathHint" />
         @if (_loading)
         {

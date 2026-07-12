@@ -41,6 +41,11 @@
     /// </summary>
     [Parameter] public Func<string, string, int, string?>? ResolveLogPathHint { get; set; }
 
+    /// <summary>Fired when the user clicks a collapsed child-run block (docs/12 §7.4).
+    /// Currently opens the child run in a new tab, not an in-place expand — see the doc's
+    /// note there for that follow-up.</summary>
+    [Parameter] public EventCallback<string> OnOpenChildRun { get; set; }
+
     private ElementReference _graphRef;
     private IJSObjectReference? _module;
     private bool _previousIsVisible = true;
@@ -61,7 +66,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=30");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=31");
                 var portConstraints = string.Equals(RunsOptions.Value.GraphPortConstraints, "FixedPos", StringComparison.OrdinalIgnoreCase)
                     ? "FIXED_POS" : "FIXED_SIDE";
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
@@ -97,6 +102,10 @@
     [JSInvokable]
     public string? RequestInstanceLogPathHint(string service, string server, int processId) =>
         ResolveLogPathHint?.Invoke(service, server, processId);
+
+    /// <summary>Invoked from d3-graph.js when a collapsed child-run block is clicked.</summary>
+    [JSInvokable]
+    public Task RequestOpenChildRun(string runId) => OnOpenChildRun.InvokeAsync(runId);
 
     protected override async Task OnParametersSetAsync()
     {
