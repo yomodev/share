@@ -1,0 +1,34 @@
+{
+  // Example topology hint for run Type "NestedDemo" (the deliberately-crafted nested-run
+  // demo family in MockRunService.GenerateDemoNestedRuns — RUN-DEMO-ROOT and its children/
+  // grandchild). See docs/12_Custom_Layout_And_Nested_Runs.md §6/§7.
+  //
+  // Demonstrates the "groups" colour/border schema: "Stage1" is listed below with a colour,
+  // so Ingester+Validator render as a real bordered/tinted box. "Stage2" (Enricher+Loader)
+  // is NOT listed, so it keeps the default plain dashed band — no extra config needed for
+  // that case, which is the point of the example: declaring a colour is what turns a group
+  // into a real box; everything else just gets the free cosmetic clustering it always got.
+  "runType": "NestedDemo",
+  "variants": [
+    {
+      "match": { "anyService": "Ingester*" },
+      "layout": { "direction": "horizontal", "shape": "layered" },
+      "services": [
+        { "name": "Ingester",  "role": "source", "group": "Stage1", "publishes": ["ingest-out"] },
+        { "name": "Validator", "role": "middle", "group": "Stage1", "subscribes": ["ingest-out"], "publishes": ["validate-out"] },
+        { "name": "Enricher",  "role": "middle", "group": "Stage2", "subscribes": ["validate-out"], "publishes": ["enrich-out"] },
+        { "name": "Loader",    "role": "sink",   "group": "Stage2", "subscribes": ["enrich-out"] }
+      ],
+      "groups": [
+        { "name": "Stage1", "color": "#3FB950" }
+      ]
+    }
+  ],
+  "default": {
+    "layout": { "direction": "horizontal", "shape": "layered" },
+    "services": [
+      { "name": "Ingester", "role": "source" },
+      { "name": "Loader",   "role": "sink" }
+    ]
+  }
+}

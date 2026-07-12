@@ -135,6 +135,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         }).OrderByDescending(b => b.Start).ToList();
 
         GenerateMockEvents(rng);
+        GenerateDemoNestedRuns();
 
         if (_eventBroker is not null)
             _ = SimulateLivePushAsync(_bgCts.Token);
@@ -240,7 +241,34 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
     /// </summary>
     private List<RunNode> BuildMockChildren(string runId)
     {
-        if (string.IsNullOrEmpty(runId) || _store.Count < 3) return new List<RunNode>();
+        if (string.IsNullOrEmpty(runId)) return new List<RunNode>();
+
+        // The deliberately-crafted demo family (GenerateDemoNestedRuns) always wins over the
+        // generic hash-based simulation below — it needs an EXACT, stable hierarchy 3 levels
+        // deep, not a pseudo-random pick from the unrelated 200-run pool.
+        if (DemoChildren.TryGetValue(runId, out var demoChildIds))
+        {
+            return demoChildIds
+                .Select(id => _store.FirstOrDefault(b => b.RunId == id))
+                .Where(child => child is not null)
+                .Select(child => new RunNode
+                {
+                    RunId = child!.RunId,
+                    Description = child.Description,
+                    Status = child.Status,
+                    Start = child.Start,
+                    End = child.End,
+                })
+                .ToList();
+        }
+
+        // A demo run not itself a DemoChildren key (a leaf, e.g. RUN-DEMO-CHILD-B) must never
+        // fall through to the generic simulation below — its RunId hash could coincidentally
+        // pass the "% 4 == 0" check and pick up phantom children from the unrelated 200-run
+        // pool, which is exactly the bug this guard caught in testing.
+        if (runId.StartsWith("RUN-DEMO-", StringComparison.Ordinal)) return new List<RunNode>();
+
+        if (_store.Count < 3) return new List<RunNode>();
         if (Math.Abs(runId.GetHashCode()) % 4 != 0) return new List<RunNode>();
 
         var selfIndex = _store.FindIndex(b => b.RunId == runId);
@@ -326,6 +354,94 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
             _eventsByRunId[batch.RunId] = events.OrderBy(e => e.Start).ToList();
         }
+    }
+
+    // ── Deliberately-crafted nested-run demo ────────────────────────────────
+    // A small, clean 4-service linear pipeline (Ingester -> Validator -> Enricher -> Loader,
+    // every chunk visiting all four in that fixed order) nested exactly 3 levels deep, so the
+    // hierarchy and edges are predictable and easy to read — unlike the generic pool above,
+    // which picks random services per hop and is only meant to look like "a lot of activity,"
+    // not to be a legible example. Each run is capped well under 1000 events. See
+    // docs/12_Custom_Layout_And_Nested_Runs.md §7 and config/topology/nesteddemo.json, which
+    // demonstrates the "groups" colour/border schema against these same 4 services.
+    private static readonly string[] DemoServices = { "Ingester", "Validator", "Enricher", "Loader" };
+    private const int DemoChunkCount = 180; // * 4 services = 720 events/run, comfortably < 1000
+
+    private static readonly Dictionary<string, string[]> DemoChildren = new()
+    {
+        ["RUN-DEMO-ROOT"]    = new[] { "RUN-DEMO-CHILD-A", "RUN-DEMO-CHILD-B" },
+        ["RUN-DEMO-CHILD-A"] = new[] { "RUN-DEMO-GRANDCHILD-A1" },
+    };
+
+    private void GenerateDemoNestedRuns()
+    {
+        var now = DateTime.UtcNow;
+        // Status variety is deliberate: Running (root) exercises the live child-polling loop
+        // (RunDetail.razor's RunChildRunsRefreshLoopAsync); Completed/Failed/Running across
+        // the rest show every child-run-block colour in one demo.
+        AddDemoRun("RUN-DEMO-ROOT",          "NestedDemo — root",              RunStatus.Running,   now.AddMinutes(-20), null,                seed: 1001);
+        AddDemoRun("RUN-DEMO-CHILD-A",       "NestedDemo — child A",           RunStatus.Completed, now.AddMinutes(-18), now.AddMinutes(-9),  seed: 1002);
+        AddDemoRun("RUN-DEMO-CHILD-B",       "NestedDemo — child B",           RunStatus.Failed,    now.AddMinutes(-17), now.AddMinutes(-12), seed: 1003);
+        AddDemoRun("RUN-DEMO-GRANDCHILD-A1", "NestedDemo — grandchild A.1",    RunStatus.Running,   now.AddMinutes(-10), null,                seed: 1004);
+    }
+
+    private void AddDemoRun(string runId, string description, RunStatus status, DateTime start, DateTime? end, int seed)
+    {
+        _store.Insert(0, new RunSummary
+        {
+            RunId = runId,
+            Description = description,
+            Type = "NestedDemo",
+            Status = status,
+            Start = start,
+            End = end,
+        });
+        _eventsByRunId[runId] = GenerateDemoEvents(start, end, status, seed);
+    }
+
+    private static List<PerformanceEvent> GenerateDemoEvents(DateTime start, DateTime? end, RunStatus status, int seed)
+    {
+        var rng = new Random(seed); // per-run seed so the demo is stable across restarts
+        var events = new List<PerformanceEvent>();
+        var duration = (end ?? start.AddMinutes(9)) - start;
+
+        for (int ci = 0; ci < DemoChunkCount; ci++)
+        {
+            var chunkId = $"CHK-{ci:D4}";
+            var t = start + TimeSpan.FromSeconds(rng.Next(0, Math.Max(1, (int)duration.TotalSeconds)));
+
+            for (int h = 0; h < DemoServices.Length; h++)
+            {
+                var svc = DemoServices[h];
+                var pipeline = PickPipeline(svc, rng);
+                var src = PickSource(pipeline, rng);
+                var server = PickServer(rng);
+                var pid = PickPid(rng);
+                var dur = rng.Next(1, 20);
+                var isLastHop = h == DemoServices.Length - 1;
+                var isInProg = status == RunStatus.Running && isLastHop && rng.Next(0, 100) < 15;
+                var isError = status == RunStatus.Failed && isLastHop && rng.Next(0, 100) < 30;
+
+                events.Add(new PerformanceEvent
+                {
+                    Name = chunkId,
+                    Service = svc,
+                    Pipeline = pipeline,
+                    Source = src,
+                    Server = server,
+                    ProcessId = pid,
+                    Start = t,
+                    Finish = isInProg ? null : t.AddSeconds(dur),
+                    Error = isError ? "Processing error: schema mismatch" : null,
+                    RecordCount = rng.Next(10, 500),
+                    LastUpdate = isInProg ? t : t.AddSeconds(dur),
+                });
+
+                t = t.AddSeconds(dur + rng.Next(1, 5)); // next hop starts after this one finishes
+            }
+        }
+
+        return events.OrderBy(e => e.Start).ToList();
     }
 
     // ── Live push simulation ──────────────────────────────────────────────

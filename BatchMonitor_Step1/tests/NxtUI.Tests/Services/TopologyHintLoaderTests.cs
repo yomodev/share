@@ -71,14 +71,31 @@ public class TopologyHintLoaderTests : IDisposable
         second.Should().BeSameAs(first);
     }
 
-    private static string FindShippedSample()
+    [Fact]
+    public void Loads_the_nested_demo_sample_with_its_groups_block()
+    {
+        var sample = FindShippedSample("nesteddemo.json");
+        File.Copy(sample, Path.Combine(_basePath, "topology", "nesteddemo.json"));
+
+        var hint = CreateLoader().Get("NestedDemo");
+
+        hint.Should().NotBeNull();
+        hint!.Variants.Should().ContainSingle();
+        var variant = hint.Variants[0];
+        variant.Services.Should().HaveCount(4);
+        variant.Groups.Should().ContainSingle(g => g.Name == "Stage1" && g.Color == "#3FB950");
+        // "Stage2" (Enricher/Loader) is deliberately NOT in Groups — it keeps the default band.
+        variant.Groups.Should().NotContain(g => g.Name == "Stage2");
+    }
+
+    private static string FindShippedSample(string fileName = "fullload.json")
     {
         var dir = AppContext.BaseDirectory;
         for (var i = 0; i < 8 && dir is not null; i++, dir = Path.GetDirectoryName(dir))
         {
-            var candidate = Path.Combine(dir, "src", "NxtUI.Web", "config", "topology", "fullload.json");
+            var candidate = Path.Combine(dir, "src", "NxtUI.Web", "config", "topology", fileName);
             if (File.Exists(candidate)) return candidate;
         }
-        throw new FileNotFoundException("Could not locate config/topology/fullload.json relative to the test binary.");
+        throw new FileNotFoundException($"Could not locate config/topology/{fileName} relative to the test binary.");
     }
 }

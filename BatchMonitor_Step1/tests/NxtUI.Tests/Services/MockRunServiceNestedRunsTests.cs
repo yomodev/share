@@ -69,6 +69,59 @@ public class MockRunServiceNestedRunsTests
         details.Children.Should().BeEmpty();
     }
 
+    // ── Deliberately-crafted demo family (RUN-DEMO-ROOT etc., 3 levels deep) ─────────────
+
+    [Fact]
+    public async Task Demo_root_has_exactly_its_two_named_children()
+    {
+        var svc = new MockRunService();
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT");
+
+        details.Children.Select(c => c.RunId).Should()
+            .BeEquivalentTo(["RUN-DEMO-CHILD-A", "RUN-DEMO-CHILD-B"]);
+    }
+
+    [Fact]
+    public async Task Demo_child_a_has_exactly_one_grandchild_completing_the_3rd_level()
+    {
+        var svc = new MockRunService();
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-A");
+
+        details.Children.Select(c => c.RunId).Should().BeEquivalentTo(["RUN-DEMO-GRANDCHILD-A1"]);
+    }
+
+    [Fact]
+    public async Task Demo_leaf_runs_have_no_children()
+    {
+        var svc = new MockRunService();
+
+        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-B")).Children.Should().BeEmpty();
+        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-GRANDCHILD-A1")).Children.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("RUN-DEMO-ROOT")]
+    [InlineData("RUN-DEMO-CHILD-A")]
+    [InlineData("RUN-DEMO-CHILD-B")]
+    [InlineData("RUN-DEMO-GRANDCHILD-A1")]
+    public async Task Every_demo_run_has_well_under_1000_events(string runId)
+    {
+        var svc = new MockRunService();
+        var events = await svc.GetRunEventsAsync("dev1", runId, DateTime.MinValue);
+
+        events.Should().NotBeEmpty();
+        events.Count.Should().BeLessThan(1000);
+    }
+
+    [Fact]
+    public async Task Demo_root_type_is_NestedDemo_so_nesteddemo_json_actually_applies()
+    {
+        var svc = new MockRunService();
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT");
+
+        details.Type.Should().Be("NestedDemo");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static string FindRunIdWithChildren(MockRunService svc)
