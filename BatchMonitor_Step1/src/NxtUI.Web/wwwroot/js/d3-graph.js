@@ -822,7 +822,47 @@ const D3Graph = (() => {
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('opacity', 1);
 
+        attachHoverZoom(merged, handle);
         updateNode(merged, handle);
+    }
+
+    // Hovering a node scales IT UP (via CSS transform, layered on top of its own SVG
+    // translate — they compose, scaling around the node's own center) so its text stays
+    // readable when the whole graph is fit-to-view at a small scale. The scale factor is
+    // inversely proportional to the CURRENT zoom level (read from the live d3-zoom
+    // transform, not a fixed bump), so a node hovered while zoomed way out gets a much
+    // bigger boost than one hovered at/near 1:1 — capped so it never gets absurd either way.
+    const HOVER_ZOOM_TARGET = 1.7; // ~= the on-screen scale a hovered node aims for
+    const HOVER_ZOOM_MAX = 3.5;
+
+    function attachHoverZoom(merged, handle) {
+        merged
+            .on('mouseenter.zoom', function (ev, d) {
+                const k = d3.zoomTransform(handle.svg.node()).k || 1;
+                const scale = Math.min(HOVER_ZOOM_MAX, Math.max(1, HOVER_ZOOM_TARGET / k));
+                if (scale <= 1.01) return; // already big enough at this zoom level — no-op
+                // A CSS `transform` on an SVG element REPLACES the `transform` presentation
+                // attribute outright rather than composing with it (per spec, both are the
+                // same CSS property; the attribute is just the lowest-priority style origin)
+                // — this is exactly the "strobo/jump" this file's own comment above .bm-node
+                // warns about from an earlier attempt. Including the node's own translate(x,y)
+                // in the SAME CSS transform string (unitless — SVG user units, not px) avoids
+                // it: this fully takes over from the attribute instead of fighting it. No
+                // transform-origin override needed either — every child shape is already
+                // drawn symmetric around this group's own local (0,0), which is the default
+                // SVG transform-origin, so `scale()` here already scales around the node's
+                // visual center for free.
+                d3.select(this).raise()
+                    .classed('bm-node-hover-zoom', true)
+                    .style('transform', `translate(${d.x}, ${d.y}) scale(${scale})`);
+            })
+            .on('mouseleave.zoom', function () {
+                // Clearing the CSS transform reverts control to the attribute, which the
+                // ongoing position transitions keep current — safe even if a relayout moved
+                // this node while it was hovered. The class comes off too so it's not left
+                // transitioning the NEXT unrelated attribute-driven position change.
+                d3.select(this).classed('bm-node-hover-zoom', false).style('transform', null);
+            });
     }
 
     function buildNode(enter, handle) {

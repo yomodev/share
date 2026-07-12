@@ -26,10 +26,17 @@
 
 /* ── Nodes ────────────────────────────────────────────────────────── */
 
-/* No CSS transform on hover — it conflicts with D3's translate transform
-   attribute and causes the strobo/jump effect. Instead we use a subtle
-   filter on the border rect only. */
 .bm-node { cursor: default; }
+
+/* Zoom-on-hover (attachHoverZoom in d3-graph.js) DOES use a CSS transform on hover now —
+   it includes the node's own translate(x,y) in the same transform string rather than
+   fighting the position attribute, which is what caused the earlier strobo/jump attempt
+   this comment used to warn against. The transition is scoped to THIS class only (added/
+   removed alongside the hover style, not left on .bm-node permanently) so it never fights
+   D3's own JS-driven easeCubicInOut transitions on the plain position attribute updates —
+   those aren't CSS transitions and have no class to key off, so this can't double-animate
+   them the way a blanket `.bm-node { transition: transform }` would have. */
+.bm-node-hover-zoom { transition: transform 140ms ease; }
 
 .bm-node-rect {
     fill: none;
