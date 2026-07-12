@@ -14,12 +14,19 @@
 // Stage 1 scope (see docs/12): leaves only, single global direction, layer assignment +
 // median ordering + dummy-node routing + coordinate assignment.
 //
-// Stage 2 scope (this revision): hard constraints (role pinning, groups as contiguous
-// macro-blocks) and soft constraints (directional left/right/above/below placement hints,
-// child-overrides-parent precedence, order/priority tiebreak, warnings for anything
-// unsatisfiable — see docs/12 §3 "Constraint precedence"). Recursive sub-flows for
-// per-node orientation, external/arriveFrom, and per-edge port hints are NOT yet
-// implemented — still Stage 2b/3 per the doc's build plan.
+// Stage 2 scope: hard constraints (role pinning, groups as contiguous macro-blocks) and
+// soft constraints (directional left/right/above/below placement hints, child-overrides-
+// parent precedence, order/priority tiebreak, warnings for anything unsatisfiable — see
+// docs/12 §3 "Constraint precedence").
+//
+// Stage 2b scope (this revision): the RECURSIVE BOX (docs/12 §2) — a node may declare a
+// `subGraph`, laid out with its own (possibly different) direction BEFORE the parent, so
+// its resulting size becomes that node's box size in the parent layout. After the parent
+// positions the box, the sub-layout's own node/edge geometry is translated into the
+// parent's coordinate space and attached to the parent node's output record. This is the
+// single primitive behind three different asks in docs/12: a group as a rigid macro-block,
+// a per-service orientation change ("go vertical here"), and a nested run's expanded view.
+// external/arriveFrom and per-edge port hints are still not implemented.
 
 /**
  * @typedef {Object} LayoutNode
@@ -40,6 +47,12 @@
  * @property {{side:'left'|'right'|'above'|'below'}} [placeSuccessor] - soft: where this
  *        node would like its successor(s) placed. Loses to the successor's own
  *        `placement` if it declares one.
+ * @property {LayoutInput} [subGraph] - Stage 2b: makes this node a recursive box. Its own
+ *        `width`/`height` are ignored (ADDED to, actually never set) — the box is sized to
+ *        fit the sub-layout plus `subGraph.padding` (default DEFAULT_SUBGRAPH_PADDING) on
+ *        every side. `subGraph.direction` defaults to the PARENT's direction (same-
+ *        direction flow embedded in a box) but may differ (a vertical sub-flow inside a
+ *        horizontal parent, etc.).
  *
  * @typedef {Object} LayoutEdge
  * @property {string} source
@@ -56,6 +69,7 @@
 
 const DEFAULT_LAYER_SPACING = 110;
 const DEFAULT_NODE_SPACING = 56;
+const DEFAULT_SUBGRAPH_PADDING = 24;
 const ORDERING_PASSES = 4;
 
 /**
@@ -68,11 +82,14 @@ const ORDERING_PASSES = 4;
  * @param {Map<string, number>} [opts.seedOrder] - node id -> previous within-layer index,
  *        used to bias ordering toward minimal movement across relayouts (Stage 3).
  * @returns {{
- *   nodes: Map<string, {x:number, y:number, width:number, height:number, layer:number}>,
+ *   nodes: Map<string, {x:number, y:number, width:number, height:number, layer:number,
+ *     subGraph?: {nodes: Map<string,object>, edges: Array<object>, width:number, height:number}}>,
  *   edges: Array<{id:string, source:string, target:string, points:{x:number,y:number}[], isBackEdge:boolean}>,
  *   width: number, height: number,
  *   warnings: string[],
  * }}
+ * A node's `subGraph` (Stage 2b), when present, is already translated into THIS layout's
+ * coordinate space — render it directly, no further offsetting needed.
  */
 export function layout(input, opts = {}) {
     const direction = input.direction === 'vertical' ? 'vertical' : 'horizontal';
@@ -80,15 +97,37 @@ export function layout(input, opts = {}) {
     const nodeSpacing = input.nodeSpacing ?? DEFAULT_NODE_SPACING;
     const warnings = [];
 
-    const nodesById = new Map(input.nodes.map(n => [n.id, n]));
+    // Stage 2b recursive boxes: resolve every node's subGraph FIRST (bottom-up — a box's
+    // size must be known before ITS parent can be laid out), synthesizing width/height for
+    // that node from the sub-layout's own result. The real input.nodes objects are never
+    // mutated; a shallow-cloned "effective" node (with width/height filled in) is what the
+    // rest of this function actually lays out.
+    const subResults = new Map(); // node id -> { result, padding }
+    const effectiveNodes = input.nodes.map(n => {
+        if (!n.subGraph) return n;
+        const padding = n.subGraph.padding ?? DEFAULT_SUBGRAPH_PADDING;
+        const subDirection = n.subGraph.direction ?? direction;
+        const subResult = layout(
+            { ...n.subGraph, direction: subDirection },
+            { seedOrder: opts.subSeedOrder?.get(n.id) });
+        subResults.set(n.id, { result: subResult, padding });
+        for (const w of subResult.warnings) warnings.push(`[${n.id}] ${w}`);
+        return {
+            ...n,
+            width: Math.max(n.width || 0, subResult.width + padding * 2),
+            height: Math.max(n.height || 0, subResult.height + padding * 2),
+        };
+    });
+
+    const nodesById = new Map(effectiveNodes.map(n => [n.id, n]));
 
     const { structuralEdges, backEdges } = splitBackEdges(input.edges, nodesById);
 
-    const layerOf = assignLayers(input.nodes, structuralEdges);
-    pinRoles(input.nodes, layerOf, structuralEdges, warnings);
+    const layerOf = assignLayers(effectiveNodes, structuralEdges);
+    pinRoles(effectiveNodes, layerOf, structuralEdges, warnings);
 
     const { layers, dummies, edgeChains } = buildDummyChains(
-        input.nodes, structuralEdges, layerOf, layerSpacing, nodeSpacing);
+        effectiveNodes, structuralEdges, layerOf, layerSpacing, nodeSpacing);
 
     orderLayers(layers, edgeChains, nodesById, direction, opts.seedOrder, warnings);
 
@@ -116,21 +155,60 @@ export function layout(input, opts = {}) {
         });
     }
 
-    let maxX = 0, maxY = 0;
+    // The cross axis is centered around 0 independently PER LAYER (see assignCoordinates),
+    // so nodes routinely have negative coordinates — the true bounding box needs both the
+    // min and max extent, not just the positive side, or it silently underestimates whenever
+    // a layer isn't one-sided (this is what recursive boxes' "stay within bounds" invariant
+    // depends on: box.width/height must be the box's REAL full extent).
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of positioned.values()) {
+        minX = Math.min(minX, p.x - p.width / 2);
         maxX = Math.max(maxX, p.x + p.width / 2);
+        minY = Math.min(minY, p.y - p.height / 2);
         maxY = Math.max(maxY, p.y + p.height / 2);
     }
+    if (!Number.isFinite(minX)) { minX = maxX = minY = maxY = 0; }
 
     // Only expose real (non-dummy) nodes to callers.
     const realNodes = new Map();
-    for (const n of input.nodes) realNodes.set(n.id, positioned.get(n.id));
+    for (const n of effectiveNodes) realNodes.set(n.id, positioned.get(n.id));
+
+    // Stage 2b: translate each resolved subGraph's own geometry into this box's final
+    // position and attach it — the sub-layout was computed in its own (0,0)-centered
+    // coordinate space, so the offset is simply this box's final center minus its own
+    // half-size plus the padding.
+    for (const [id, { result: sub, padding }] of subResults) {
+        const box = realNodes.get(id);
+
+        // The sub-layout's own coordinate system isn't necessarily centered/symmetric (the
+        // cross axis centers PER LAYER independently — see assignCoordinates), so the
+        // translation offset must anchor on its actual min bound, not assume symmetry with
+        // width/2. This is exactly the bug the "stays within bounds" test caught.
+        let subMinX = Infinity, subMinY = Infinity;
+        for (const [, sp] of sub.nodes) {
+            subMinX = Math.min(subMinX, sp.x - sp.width / 2);
+            subMinY = Math.min(subMinY, sp.y - sp.height / 2);
+        }
+        if (!Number.isFinite(subMinX)) { subMinX = subMinY = 0; }
+
+        const offsetX = box.x - box.width / 2 + padding - subMinX;
+        const offsetY = box.y - box.height / 2 + padding - subMinY;
+
+        const subNodes = new Map();
+        for (const [sid, sp] of sub.nodes) {
+            subNodes.set(sid, { ...sp, x: sp.x + offsetX, y: sp.y + offsetY });
+        }
+        const subEdges = sub.edges.map(e => ({
+            ...e, points: e.points.map(p => ({ x: p.x + offsetX, y: p.y + offsetY })),
+        }));
+        box.subGraph = { nodes: subNodes, edges: subEdges, width: sub.width, height: sub.height };
+    }
 
     for (const w of warnings) console.warn(`bm-flow-layout: ${w}`);
 
     return {
         nodes: realNodes, edges: edgesOut,
-        width: maxX + layerSpacing / 2, height: maxY + nodeSpacing,
+        width: (maxX - minX) + layerSpacing / 2, height: (maxY - minY) + nodeSpacing,
         warnings,
     };
 }

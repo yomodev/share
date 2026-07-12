@@ -250,3 +250,84 @@ describe('directional soft hints', () => {
         warnSpy.mockRestore();
     });
 });
+
+describe('recursive boxes (subGraph)', () => {
+    it('sizes a box to fit its sub-layout plus padding', () => {
+        const nodes = [node('Outer1'), node('Box'), node('Outer2')];
+        const box = nodes.find(n => n.id === 'Box');
+        box.width = 0; box.height = 0; // no explicit size — must come entirely from subGraph
+        box.subGraph = {
+            nodes: [node('Inner1'), node('Inner2')],
+            edges: [edge('Inner1', 'Inner2')],
+            padding: 20,
+        };
+        const result = layout({ nodes, edges: [edge('Outer1', 'Box'), edge('Box', 'Outer2')] });
+
+        const inner = layout(box.subGraph);
+        expect(result.nodes.get('Box').width).toBeCloseTo(inner.width + 40, 5);
+        expect(result.nodes.get('Box').height).toBeCloseTo(inner.height + 40, 5);
+    });
+
+    it('places the box at the top level like any other node while embedding sub-geometry', () => {
+        const nodes = [node('A'), node('Box'), node('C')];
+        nodes.find(n => n.id === 'Box').subGraph = {
+            nodes: [node('Inner1'), node('Inner2')],
+            edges: [edge('Inner1', 'Inner2')],
+        };
+        const result = layout({ nodes, edges: [edge('A', 'Box'), edge('Box', 'C')] });
+
+        expect(result.nodes.get('A').layer).toBe(0);
+        expect(result.nodes.get('Box').layer).toBe(1);
+        expect(result.nodes.get('C').layer).toBe(2);
+        expect(result.nodes.get('Box').subGraph).toBeDefined();
+        expect(result.nodes.get('Box').subGraph.nodes.size).toBe(2);
+    });
+
+    it('keeps every inner node strictly within the box\'s outer bounds', () => {
+        const nodes = [node('A'), node('Box'), node('C')];
+        nodes.find(n => n.id === 'Box').subGraph = {
+            nodes: [node('Inner1'), node('Inner2'), node('Inner3')],
+            edges: [edge('Inner1', 'Inner2'), edge('Inner1', 'Inner3')],
+            padding: 20,
+        };
+        const result = layout({ nodes, edges: [edge('A', 'Box'), edge('Box', 'C')] });
+
+        const box = result.nodes.get('Box');
+        const left = box.x - box.width / 2, right = box.x + box.width / 2;
+        const top = box.y - box.height / 2, bottom = box.y + box.height / 2;
+
+        for (const [, inner] of box.subGraph.nodes) {
+            expect(inner.x - inner.width / 2).toBeGreaterThanOrEqual(left);
+            expect(inner.x + inner.width / 2).toBeLessThanOrEqual(right);
+            expect(inner.y - inner.height / 2).toBeGreaterThanOrEqual(top);
+            expect(inner.y + inner.height / 2).toBeLessThanOrEqual(bottom);
+        }
+    });
+
+    it('lets a box use a different internal direction than its parent', () => {
+        const nodes = [node('A'), node('Box'), node('C')];
+        nodes.find(n => n.id === 'Box').subGraph = {
+            nodes: [node('Inner1'), node('Inner2')],
+            edges: [edge('Inner1', 'Inner2')],
+            direction: 'vertical', // parent flow is horizontal (the default)
+        };
+        const result = layout({ nodes, edges: [edge('A', 'Box'), edge('Box', 'C')] });
+
+        const inner1 = result.nodes.get('Box').subGraph.nodes.get('Inner1');
+        const inner2 = result.nodes.get('Box').subGraph.nodes.get('Inner2');
+        expect(inner2.y).toBeGreaterThan(inner1.y); // vertical sub-flow: stacks in y, not x
+    });
+
+    it('propagates a nested warning with the box id prefixed', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const nodes = [node('A'), node('Box')];
+        const inner = [node('Inner1'), node('Inner2')];
+        inner.find(n => n.id === 'Inner2').placement = { side: 'left' }; // orthogonal in horizontal flow
+        nodes.find(n => n.id === 'Box').subGraph = { nodes: inner, edges: [edge('Inner1', 'Inner2')] };
+
+        const result = layout({ nodes, edges: [edge('A', 'Box')] });
+
+        expect(result.warnings.some(w => w.startsWith('[Box] ') && w.includes('not applicable'))).toBe(true);
+        warnSpy.mockRestore();
+    });
+});
