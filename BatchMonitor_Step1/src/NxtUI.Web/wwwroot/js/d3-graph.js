@@ -856,7 +856,7 @@ const D3Graph = (() => {
             .style('stroke-opacity', d => d.color ? 0.85 : null)
             .style('stroke-dasharray', d => d.color ? 'none' : null);
         merged.select('.bm-group-label')
-            .attr('x', d => d.b.x0 - PAD + 18).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
+            .attr('x', d => d.b.x0 - PAD + 28).attr('y', d => d.b.y0 - PAD - LABEL_H / 2 + 1)
             .style('fill', d => d.color || null)
             .text(d => d.name);
     }
@@ -931,8 +931,8 @@ const D3Graph = (() => {
     // inversely proportional to the CURRENT zoom level (read from the live d3-zoom
     // transform, not a fixed bump), so a node hovered while zoomed way out gets a much
     // bigger boost than one hovered at/near 1:1 — capped so it never gets absurd either way.
-    const HOVER_ZOOM_TARGET = 1.7; // ~= the on-screen scale a hovered node aims for
-    const HOVER_ZOOM_MAX = 3.5;
+    const HOVER_ZOOM_TARGET = 1.15; // ~= the on-screen scale a hovered node aims for
+    const HOVER_ZOOM_MAX = 1.9; // was 1.7/3.5 — reported as ~2x stronger than expected
 
     function attachHoverZoom(merged, handle) {
         merged
@@ -1235,7 +1235,7 @@ const D3Graph = (() => {
                 ${errHtml}
                 <button class="bm-pop-x">×</button>
             </div>
-            ${instHtml}
+            <div class="bm-pop-instances">${instHtml}</div>
             ${topicHtml}
         `)
         .style('opacity', 1)

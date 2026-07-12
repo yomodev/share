@@ -306,6 +306,13 @@
 }
 .bm-pop-kafka:hover { background: rgba(56,139,253,0.12); }
 
+/* Scrolls when there are many instances, so header (bm-pop-hdr, above) and footer
+   (bm-pop-topic, below) stay put instead of the whole popover growing unbounded. */
+.bm-pop-instances {
+    max-height: 260px;
+    overflow-y: auto;
+}
+
 .bm-pop-inst {
     display: flex; align-items: center; gap: 8px;
     padding: 4px 10px;
