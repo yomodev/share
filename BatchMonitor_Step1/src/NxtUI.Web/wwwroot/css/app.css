@@ -1070,7 +1070,8 @@ html, body {
 .bm-lb-filter-toolbar .mud-input-root,
 .bm-lb-tree-panel    .mud-input-root,
 .bm-tl-controls      .mud-input-root,
-.bm-tl-dialog-controls .mud-input-root { font-size: 14px !important; }
+.bm-tl-dialog-controls .mud-input-root,
+.bm-jsonpath-bar      .mud-input-root { font-size: 14px !important; }
 
 /* height only for text inputs — selects are excluded so the global
    .mud-select.mud-input-root rule controls their height/centering */
@@ -1079,7 +1080,8 @@ html, body {
 .bm-lb-filter-toolbar .mud-input-root:not(.mud-select),
 .bm-lb-tree-panel    .mud-input-root:not(.mud-select),
 .bm-tl-controls      .mud-input-root:not(.mud-select),
-.bm-tl-dialog-controls .mud-input-root:not(.mud-select) {
+.bm-tl-dialog-controls .mud-input-root:not(.mud-select),
+.bm-jsonpath-bar      .mud-input-root:not(.mud-select) {
     min-height: 32px !important;
     height: 32px !important;
 }
@@ -1088,7 +1090,8 @@ html, body {
 .bm-lb-filter-toolbar .mud-input-slot,
 .bm-lb-tree-panel    .mud-input-slot,
 .bm-tl-controls      .mud-input-slot,
-.bm-tl-dialog-controls .mud-input-slot {
+.bm-tl-dialog-controls .mud-input-slot,
+.bm-jsonpath-bar      .mud-input-slot {
     min-height: 32px !important;
     height: 32px !important;
     padding-top: 2px !important;
@@ -1099,7 +1102,8 @@ html, body {
 .bm-lb-filter-toolbar input,
 .bm-lb-tree-panel    input,
 .bm-tl-controls      input,
-.bm-tl-dialog-controls input {
+.bm-tl-dialog-controls input,
+.bm-jsonpath-bar      input {
     font-size: 14px !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
@@ -1110,12 +1114,14 @@ html, body {
 .bm-lb-tree-panel    .mud-input-adornment .mud-icon-root,
 .bm-tl-controls      .mud-input-adornment .mud-icon-root,
 .bm-tl-dialog-controls .mud-input-adornment .mud-icon-root,
+.bm-jsonpath-bar      .mud-input-adornment .mud-icon-root,
 .bm-batch-toolbar    .mud-input-adornment .mud-button-root,
 .bm-svc-toolbar-left .mud-input-adornment .mud-button-root,
 .bm-lb-filter-toolbar .mud-input-adornment .mud-button-root,
 .bm-lb-tree-panel    .mud-input-adornment .mud-button-root,
 .bm-tl-controls      .mud-input-adornment .mud-button-root,
-.bm-tl-dialog-controls .mud-input-adornment .mud-button-root {
+.bm-tl-dialog-controls .mud-input-adornment .mud-button-root,
+.bm-jsonpath-bar      .mud-input-adornment .mud-button-root {
     font-size: 16px !important;
     width: 20px !important;
     height: 20px !important;
