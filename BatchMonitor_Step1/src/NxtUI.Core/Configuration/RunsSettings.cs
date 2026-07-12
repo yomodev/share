@@ -80,4 +80,16 @@ public class RunsSettings
     /// to InPlace.
     /// </summary>
     public string ChildRunExpandMode { get; set; } = "InPlace";
+
+    /// <summary>
+    /// Whether a run's immediate child runs (docs/12_Custom_Layout_And_Nested_Runs.md §7.4)
+    /// start expanded when first discovered, instead of collapsed. Default: <c>false</c>.
+    /// Overridable per run-type via the topology hint file's own
+    /// <c>expandChildrenByDefault</c> (see <c>TopologyVariant.ExpandChildrenByDefault</c>) —
+    /// the hint's value always wins over this when the hint sets one. Deliberately NOT
+    /// recursive: only the immediate children of the run being viewed get this treatment: a
+    /// newly-expanded child's OWN children still start collapsed and need a manual click,
+    /// regardless of this setting.
+    /// </summary>
+    public bool ExpandChildRunsByDefault { get; set; }
 }

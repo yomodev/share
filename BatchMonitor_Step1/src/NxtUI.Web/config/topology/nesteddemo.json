@@ -8,11 +8,17 @@
   // is NOT listed, so it keeps the default plain dashed band — no extra config needed for
   // that case, which is the point of the example: declaring a colour is what turns a group
   // into a real box; everything else just gets the free cosmetic clustering it always got.
+  //
+  // Also demonstrates expandChildrenByDefault: true here overrides
+  // RunsSettings.ExpandChildRunsByDefault (app-wide default is false) so RUN-DEMO-ROOT's
+  // children start expanded when you open it, without changing the setting for every other
+  // run type.
   "runType": "NestedDemo",
   "variants": [
     {
       "match": { "anyService": "Ingester*" },
       "layout": { "direction": "horizontal", "shape": "layered" },
+      "expandChildrenByDefault": true,
       "services": [
         { "name": "Ingester",  "role": "source", "group": "Stage1", "publishes": ["ingest-out"] },
         { "name": "Validator", "role": "middle", "group": "Stage1", "subscribes": ["ingest-out"], "publishes": ["validate-out"] },

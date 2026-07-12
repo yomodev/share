@@ -44,6 +44,14 @@ public sealed class TopologyVariant
     /// see docs/12_Custom_Layout_And_Nested_Runs.md §6/"Groups: cosmetic band vs. real box".
     /// </summary>
     public List<GroupHint> Groups { get; set; } = [];
+
+    /// <summary>
+    /// Per-run-type override of <c>RunsSettings.ExpandChildRunsByDefault</c> — whether this
+    /// run type's immediate child runs start expanded when discovered. Null (default):
+    /// inherit the app-wide setting. Set explicitly to override it either way for this run
+    /// type specifically. See docs/12_Custom_Layout_And_Nested_Runs.md §7.4.
+    /// </summary>
+    public bool? ExpandChildrenByDefault { get; set; }
 }
 
 /// <summary>Upgrades one named <see cref="ServiceHint.Group"/> cluster to a real bordered box

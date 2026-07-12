@@ -84,6 +84,7 @@ public class TopologyHintLoaderTests : IDisposable
         var variant = hint.Variants[0];
         variant.Services.Should().HaveCount(4);
         variant.Groups.Should().ContainSingle(g => g.Name == "Stage1" && g.Color == "#3FB950");
+        variant.ExpandChildrenByDefault.Should().Be(true);
         // "Stage2" (Enricher/Loader) is deliberately NOT in Groups — it keeps the default band.
         variant.Groups.Should().NotContain(g => g.Name == "Stage2");
     }

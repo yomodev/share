@@ -72,6 +72,11 @@
     private bool              _variantLocked;   // true once a non-default variant matched — never flips after
     private TopologyBlueprint? _blueprint;      // compiled from _chosenVariant; recompiled only when it changes
 
+    // Applied once, the first time this run's own Children actually appear — see
+    // ApplyDefaultExpandOnce. Not recursive: only THIS run's immediate children get the
+    // default; an expanded child's own children still start collapsed regardless.
+    private bool _appliedDefaultExpand;
+
     // Single shared instance instead of "?? new Topology()" inline in the markup —
     // that allocated a NEW instance every render while _topology was still null
     // (before the first compute), which defeated D3FlowGraph's reference-equality
@@ -318,6 +323,24 @@
         catch (OperationCanceledException) { }
     }
 
+    // Populates _expandedChildRunIds with every child seen the FIRST time this run's own
+    // Children actually appear (docs/12 §7.4). Effective setting: the current _chosenVariant's
+    // own ExpandChildrenByDefault if it sets one, else the app-wide RunsSettings default.
+    // Deliberately not recursive — only applied here, to THIS run's own topology, never to an
+    // expanded child's nested topology (see PopulateExpandedChildrenAsync, which never calls
+    // this), so a newly-expanded child's own children still start collapsed regardless.
+    private void ApplyDefaultExpandOnce()
+    {
+        if (_appliedDefaultExpand || _topology is null || _topology.ChildRuns.Count == 0) return;
+
+        var effective = _chosenVariant?.ExpandChildrenByDefault ?? RunsOptions.Value.ExpandChildRunsByDefault;
+        if (effective)
+            foreach (var child in _topology.ChildRuns)
+                _expandedChildRunIds.Add(child.RunId);
+
+        _appliedDefaultExpand = true;
+    }
+
     // Picks (and locks) the variant from the services seen so far, then compiles it to a
     // blueprint — recompiling only when the chosen variant actually changes. Returns null
     // when there's no hint file, or no variant matches and there's no default.
@@ -367,6 +390,7 @@
             // _details.Children is kept fresh by RunChildRunsRefreshLoopAsync while the run
             // is Running (docs/12 §7.3), so this just reflects whatever it last fetched.
             _topology.ChildRuns = _details?.Children ?? [];
+            ApplyDefaultExpandOnce();
             // In-place expand (docs/12 §7.4): recursively fetch+compute a full Topology for
             // every currently-expanded child (and its own expanded children, up to
             // MaxExpandDepth), so the D3 renderer can draw them as boxes instead of plain

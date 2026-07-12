@@ -98,9 +98,13 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
     private readonly ILogger<MockRunService> _log;
     private readonly CancellationTokenSource _bgCts = new();
 
-    // Live pool: chunkId → pending (svc, pipeline, src, server, pid) tuples not yet fired.
-    // Each tuple represents an independent service instance that will process this chunk.
-    private readonly Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, int Pid)>>
+    // Live pool: runId -> chunkId -> pending (svc, pipeline, src, server, pid) tuples not yet
+    // fired. Scoped per run (not a single flat dict across every Running batch) — it used to
+    // be flat, which meant firing pending hops for one batch's iteration could dequeue and
+    // emit events that were enqueued moments earlier for a DIFFERENT batch in the same tick,
+    // attributing them to the wrong run entirely. Each tuple represents an independent
+    // service instance that will process this chunk.
+    private readonly Dictionary<string, Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, int Pid)>>>
         _livePool = new();
 
     // ── Construction ──────────────────────────────────────────────────────
@@ -462,8 +466,14 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 foreach (var batch in _store.Where(b => b.Status == RunStatus.Running))
                 {
                     var env = "DEV1";
+                    // Demo runs (docs/12_Custom_Layout_And_Nested_Runs.md §7) stay on their
+                    // own clean 4-service chain — they used to draw from the generic pool
+                    // like every other run, which meant a long-running demo session slowly
+                    // filled with unrelated services and got messier over time.
+                    var servicePool = batch.RunId.StartsWith("RUN-DEMO-", StringComparison.Ordinal)
+                        ? DemoServices : Services;
 
-                    foreach (var evt in GenerateLiveEvents(ref chunkCounter, rng))
+                    foreach (var evt in GenerateLiveEvents(batch.RunId, servicePool, ref chunkCounter, rng))
                     {
                         if (!_eventsByRunId.ContainsKey(batch.RunId))
                             _eventsByRunId[batch.RunId] = new();
@@ -478,9 +488,10 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         }
     }
 
-    private List<PerformanceEvent> GenerateLiveEvents(ref int counter, Random rng)
+    private List<PerformanceEvent> GenerateLiveEvents(string runId, string[] servicePool, ref int counter, Random rng)
     {
         var events = new List<PerformanceEvent>();
+        var pool = _livePool.TryGetValue(runId, out var existing) ? existing : (_livePool[runId] = new());
 
         // Spawn 1-2 new chunks, each assigned 4-12 independent processing hops
         // across different service/pipeline/source/server/pid combinations.
@@ -492,17 +503,17 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
             var pending = new List<(string, string, string, string, int)>(hops);
             for (int h = 0; h < hops; h++)
             {
-                var svc = PickService(rng);
+                var svc = servicePool[rng.Next(servicePool.Length)];
                 var pipe = PickPipeline(svc, rng);
                 pending.Add((svc, pipe, PickSource(pipe, rng), PickServer(rng), PickPid(rng)));
             }
-            _livePool[chunkId] = pending;
+            pool[chunkId] = pending;
         }
 
         // Each tick, each in-flight chunk independently reports 0-3 of its
         // pending hops as new immutable events (fixed start + finish).
         var done = new List<string>();
-        foreach (var (chunkId, hops) in _livePool)
+        foreach (var (chunkId, hops) in pool)
         {
             int toFire = Math.Min(hops.Count, rng.Next(0, 4));
             for (int f = 0; f < toFire; f++)
@@ -531,7 +542,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
             }
             if (hops.Count == 0) done.Add(chunkId);
         }
-        foreach (var id in done) _livePool.Remove(id);
+        foreach (var id in done) pool.Remove(id);
 
         return events;
     }
