@@ -11,6 +11,7 @@
 //  - Edges: paint-order ensures labels are readable on both themes.
 
 import { createState, sampleEdge, tick } from './d3-animation.js';
+import { layout as flowLayout } from './bm-flow-layout/layout.js';
 
 const D3Graph = (() => {
 
@@ -47,7 +48,8 @@ const D3Graph = (() => {
         completed:   'rgba(63,185,80,0.55)',
         inprogress:  'rgba(56,139,253,0.55)',
         idle:        '#8B949E',
-        notstarted:  'rgba(139,148,158,0.22)',
+        // notstarted intentionally omitted — stateColor() returns dividerColor() for it
+        // instead, so it stays theme-aware (dark vs light) like the header's own style.
     };
 
     function sk(s) { return String(s || 'notstarted').toLowerCase(); }
@@ -58,7 +60,11 @@ const D3Graph = (() => {
     function stateColor(s, stillWorking) {
         const st = sk(s);
         if (st === 'active') return stillWorking ? STATE_COLOR.activeBlue : STATE_COLOR.activeGreen;
-        return STATE_COLOR[st] || STATE_COLOR.notstarted;
+        // "notstarted" mirrors the header's own theme-aware divider colour (see
+        // .bm-hdr-notstarted in d3-graph.css) instead of a fixed dark-theme-tuned
+        // translucent gray, which read as almost invisible on the light theme.
+        if (st === 'notstarted') return dividerColor();
+        return STATE_COLOR[st] || dividerColor();
     }
 
     // CSS class suffix — same disambiguation as stateColor(), for styles that
@@ -179,7 +185,59 @@ const D3Graph = (() => {
         return i >= 0 ? (i + 1) * width / (n + 1) : width / 2;
     }
 
+    // Stage 0 seam (docs/12_Custom_Layout_And_Nested_Runs.md): both engines are called with
+    // the same (handle, topo) input and must return the same { nodes, edges, width, height }
+    // shape (nodes: Map<id, {x,y,width,height,data}>, edges: [{id, pts, data}]). Selecting
+    // handle.layoutEngine = 'custom' (default 'elk') is a comparison-only toggle for the
+    // Stage 1 go/no-go evaluation — not exposed in any UI yet, and the custom path is Stage 1
+    // scope only (no ports/pipeline-level edges, no groups, no hints beyond role/order).
     async function runLayout(handle, topo) {
+        return handle.layoutEngine === 'custom'
+            ? runLayoutCustom(handle, topo)
+            : runLayoutElk(handle, topo);
+    }
+
+    // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
+    // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
+    function runLayoutCustom(handle, topo) {
+        const ids  = new Set(topo.nodes.map(n => n.id));
+        const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
+        const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
+
+        const layout = topo.layout || null;
+        const dir = chooseDir(handle.containerEl, layout);
+        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
+
+        const flowNodes = topo.nodes.map(n => {
+            n._layoutWidth = computeNodeWidth(handle, n);
+            return { id: n.id, width: n._layoutWidth, height: nh(n) };
+        });
+        // De-dupe to one edge per (source,target) pair — the custom engine lays out at the
+        // service level, not per-pipeline, in Stage 1.
+        const seenPairs = new Set();
+        const flowEdges = [];
+        for (const e of edges) {
+            const key = `${e.source}->${e.target}`;
+            if (seenPairs.has(key)) continue;
+            seenPairs.add(key);
+            flowEdges.push({ id: key, source: e.source, target: e.target });
+        }
+        const edgeDataByKey = new Map(edges.map(e => [`${e.source}->${e.target}`, e]));
+
+        const result = flowLayout({ nodes: flowNodes, edges: flowEdges, direction });
+
+        const nodes = new Map();
+        for (const [id, p] of result.nodes) {
+            nodes.set(id, { x: p.x, y: p.y, width: p.width, height: p.height, data: nodeById.get(id) });
+        }
+        const outEdges = result.edges.map(e => ({
+            id: e.id, pts: e.points, data: edgeDataByKey.get(e.id),
+        }));
+
+        return { nodes, edges: outEdges, width: result.width, height: result.height };
+    }
+
+    async function runLayoutElk(handle, topo) {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
@@ -667,7 +725,7 @@ const D3Graph = (() => {
             el.select('.bm-node-accent')
                 .attr('x', -hw).attr('y', -hh)
                 .attr('width', d.width).attr('height', HEADER_HEIGHT)
-                .attr('fill', accentCol).attr('fill-opacity', 0.6)
+                .attr('fill', accentCol).attr('fill-opacity', 0.4)
                 .attr('clip-path', `url(#bm-clip-${d.id})`);
 
             el.select('.bm-node-label')
