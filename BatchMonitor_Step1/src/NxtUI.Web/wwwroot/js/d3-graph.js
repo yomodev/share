@@ -198,10 +198,44 @@ const D3Graph = (() => {
     // handle.layoutEngine = 'custom' (default 'elk') is a comparison-only toggle for the
     // Stage 1 go/no-go evaluation — not exposed in any UI yet, and the custom path is Stage 1
     // scope only (no ports/pipeline-level edges, no groups, no hints beyond role/order).
-    async function runLayout(handle, topo) {
+    // `seedOrder` (Stage 3 stability) is only meaningful to the custom engine — ELK has no
+    // such hook and re-solves from scratch regardless.
+    async function runLayout(handle, topo, seedOrder) {
         return handle.layoutEngine === 'custom'
-            ? runLayoutCustom(handle, topo)
+            ? runLayoutCustom(handle, topo, seedOrder)
             : runLayoutElk(handle, topo);
+    }
+
+    // Derives a Stage 3 seedOrder (docs/12 §5) from the PREVIOUS layout's own cross-axis
+    // coordinates, biasing the next relayout toward minimal movement instead of a fresh
+    // reshuffle when the graph's structure actually does change. Any consistent numeric
+    // ordering works as a seed — the raw previous coordinate is the simplest one.
+    function buildSeedOrder(handle) {
+        if (!handle.currentGraph) return undefined;
+        const dir = chooseDir(handle.containerEl, handle.pendingTopology?.layout || null);
+        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
+        const seedOrder = new Map();
+        for (const [id, p] of handle.currentGraph.nodes) {
+            seedOrder.set(id, direction === 'horizontal' ? p.y : p.x);
+        }
+        return seedOrder;
+    }
+
+    // Refreshes each existing node/edge's `data` reference from the latest topology without
+    // touching position — used when structuralKey() finds the graph's shape unchanged, so a
+    // pure counts/state/colour update never reshuffles the layout (Stage 3 stability).
+    function refreshDataInPlace(handle, topo) {
+        const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
+        for (const [id, n] of handle.currentGraph.nodes) {
+            if (nodeById.has(id)) n.data = nodeById.get(id);
+        }
+        const edgeByKey = new Map(topo.edges.map(e =>
+            [`${e.source}>${e.target}>${e.sourcePipeline || ''}>${e.targetPipeline || ''}`, e]));
+        for (const e of handle.currentGraph.edges) {
+            const key = `${e.data?.source}>${e.data?.target}>${e.data?.sourcePipeline || ''}>${e.data?.targetPipeline || ''}`;
+            if (edgeByKey.has(key)) e.data = edgeByKey.get(key);
+        }
+        handle.hasBlueprint = topo.hasBlueprint === true;
     }
 
     // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
@@ -211,7 +245,7 @@ const D3Graph = (() => {
     // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
     // (docs/12 §6, not yet implemented) so they're always undefined for now — the engine
     // already supports them, they're just unreachable from the app until that lands.
-    function runLayoutCustom(handle, topo) {
+    function runLayoutCustom(handle, topo, seedOrder) {
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
         const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
@@ -239,7 +273,7 @@ const D3Graph = (() => {
         }
         const edgeDataByKey = new Map(edges.map(e => [`${e.source}->${e.target}`, e]));
 
-        const result = flowLayout({ nodes: flowNodes, edges: flowEdges, direction });
+        const result = flowLayout({ nodes: flowNodes, edges: flowEdges, direction }, { seedOrder });
 
         const nodes = new Map();
         for (const [id, p] of result.nodes) {
@@ -537,11 +571,33 @@ const D3Graph = (() => {
         }, wait);
     }
 
+    // Stage 3 stability (docs/12 §5): a pure data update (counts/state/colour changed, but
+    // no node/edge/group actually added or removed) should never reshuffle positions — ELK
+    // re-solves from scratch every commit and WILL reshuffle even then, which is exactly the
+    // instability the custom engine exists to fix. Comparing a cheap structural signature
+    // lets us skip the whole relayout (and the ELK worker round-trip) on the common case of
+    // "same graph shape, new numbers," refreshing only each node/edge's `data` reference.
+    function structuralKey(topo) {
+        const nodeIds = topo.nodes.map(n => n.id).sort();
+        const edgeKeys = topo.edges.map(e => `${e.source}>${e.target}>${e.sourcePipeline || ''}>${e.targetPipeline || ''}`).sort();
+        const groups = topo.nodes.map(n => `${n.id}:${n.group || ''}`).sort();
+        return nodeIds.join(',') + '|' + edgeKeys.join(',') + '|' + groups.join(',');
+    }
+
     async function commitLayout(handle) {
         if (handle.disposed || !handle.elk) return;
         const topo = handle.pendingTopology;
         if (!topo) return;
         handle.lastCommitTime = performance.now();
+
+        const newKey = structuralKey(topo);
+        if (handle.currentGraph && newKey === handle.lastStructuralKey) {
+            refreshDataInPlace(handle, topo);
+            renderGroups(handle);
+            renderEdges(handle);
+            renderNodes(handle);
+            return;
+        }
 
         // ELK layout is async (runs in a worker). Guard against an older layout
         // resolving after a newer one — only the latest sequence wins.
@@ -550,13 +606,14 @@ const D3Graph = (() => {
         try {
             // runLayout also caches each node's dynamic width as _layoutWidth — clip
             // paths reuse that below without re-measuring text a second time.
-            g = await runLayout(handle, topo);
+            g = await runLayout(handle, topo, buildSeedOrder(handle));
         } catch (err) {
             console.error('[D3Graph] ELK layout failed', err);
             return;
         }
         if (handle.disposed || seq !== handle.layoutSeq) return;
 
+        handle.lastStructuralKey = newKey;
         handle.currentGraph = g;
         handle.hasBlueprint = topo.hasBlueprint === true;
         updateClipPaths(handle, topo);
