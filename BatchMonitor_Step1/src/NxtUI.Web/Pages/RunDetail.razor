@@ -44,6 +44,16 @@
     private PeriodicTimer? _topologyTimer;
     private const int TopologyDebounceMs = 400;
 
+    // ── Child runs (docs/12 §7.3) ────────────────────────────────────────
+    // _details.Children is otherwise only ever populated once, at the initial
+    // GetRunDetailsAsync in LoadAsync — an orchestrator can spawn new children DURING the
+    // run, so while it's still Running this loop periodically re-fetches just to pick those
+    // up, flagging _topologyDirty so the existing RecomputeTopologyAsync (which already
+    // copies _details.Children into _topology.ChildRuns) naturally re-renders them. No
+    // separate JS/D3 plumbing needed.
+    private CancellationTokenSource? _childRunsCts;
+    private static readonly TimeSpan ChildRunsRefreshInterval = TimeSpan.FromSeconds(15);
+
     // ── Topology (live and replay) ────────────────────────────────────────
     private Topology? _topology;
     private int _eventCount;
@@ -203,6 +213,14 @@
                 _hintFile = HintLoader.Get(_details.Type);
 
                 await StartEventServiceAsync();
+
+                if (_details.Status == RunStatus.Running)
+                {
+                    _childRunsCts?.Cancel();
+                    _childRunsCts?.Dispose();
+                    _childRunsCts = new CancellationTokenSource();
+                    _ = RunChildRunsRefreshLoopAsync(_childRunsCts.Token);
+                }
             }
         }
         catch { _details = null; }
@@ -254,6 +272,42 @@
             // the tab's lifetime with no log at all.
             Logger.LogError(ex, "RunTopologyLoopAsync failed");
         }
+    }
+
+    // Periodically re-fetches RunDetails while the run is Running, purely to pick up new
+    // Children (docs/12 §7.3) — stops once the run is no longer Running (a finished run's
+    // child list is final; no point continuing to poll for it).
+    private async Task RunChildRunsRefreshLoopAsync(CancellationToken ct)
+    {
+        if (RunId is null) return;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(ChildRunsRefreshInterval, ct);
+                if (ct.IsCancellationRequested) break;
+
+                try
+                {
+                    var fresh = await RunService.GetRunDetailsAsync(Environment, RunId, ct);
+                    if (_details is null) break;
+
+                    _details.Children = fresh.Children;
+                    if (fresh.Status != RunStatus.Running) _details.Status = fresh.Status;
+
+                    _topologyDirty = true;
+                    if (fresh.Status != RunStatus.Running) break;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Transient error — don't stop showing already-known children over one
+                    // failed refresh, just retry next tick.
+                    Logger.LogWarning(ex, "Child-run refresh failed for {RunId}", RunId);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     // Picks (and locks) the variant from the services seen so far, then compiles it to a
@@ -608,6 +662,8 @@
         _topologyTimer?.Dispose();
         _playbackCts?.Cancel();
         _playbackCts?.Dispose();
+        _childRunsCts?.Cancel();
+        _childRunsCts?.Dispose();
         if (_appModule is not null)
         {
             try { await _appModule.DisposeAsync(); }
