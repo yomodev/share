@@ -98,6 +98,7 @@ Per-node (`services[]`):
 | `color` | hex | header accent tint (state still shown via border) |
 | `order` | int (lower first) | in-layer placement bias (ELK priority — approximate) |
 | `pin` | bool | *reserved* in v1 (proper pinning needs persisted positions) |
+| `pinX` / `pinY` | number | explicit position hint (**ELK only** — `RunsSettings.GraphLayoutEngine = "Elk"`, the default). Best-effort: ELK still avoids overlaps and keeps edges sensible, so a pinned node can shift somewhat from the exact value. Set either/both; an unset axis follows ELK's normal automatic layout. Switches the whole graph into ELK's interactive layering/crossing-minimization strategies whenever at least one node sets either — expect to iterate on the value by looking at the rendered result. |
 | `collapsed` | bool | *reserved* in v1 |
 
 ## Reconciliation (runtime vs blueprint)

@@ -549,8 +549,15 @@ const D3Graph = (() => {
                 if (lc !== 'NONE') nodeOpts['elk.layered.layering.layerConstraint'] = lc;
                 if (typeof n.order === 'number') nodeOpts['elk.priority'] = String(-n.order);
             }
-            return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts };
+            // PinX/PinY (ServiceHint.PinX/PinY) — a best-effort explicit-position hint, only
+            // meaningful when the graph as a whole switches into ELK's interactive strategies
+            // (see anyPinned below); an x/y here with no such switch is simply ignored by ELK.
+            const pos = {};
+            if (typeof n.pinX === 'number') pos.x = n.pinX;
+            if (typeof n.pinY === 'number') pos.y = n.pinY;
+            return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts, ...pos };
         });
+        const anyPinned = topo.nodes.some(n => typeof n.pinX === 'number' || typeof n.pinY === 'number');
 
         // Content-based id (source/target service+pipeline), NOT an array index — the
         // `edges` array's order can shift between successive topology recomputes (a new
@@ -595,10 +602,17 @@ const D3Graph = (() => {
                 'elk.spacing.edgeNode': px(34),
                 'elk.spacing.edgeEdge': px(28),
                 'elk.layered.spacing.edgeNodeBetweenLayers': px(34),
-                'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-                'elk.layered.nodePlacement.strategy':
-                    (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
+                'elk.layered.crossingMinimization.strategy': anyPinned ? 'INTERACTIVE' : 'LAYER_SWEEP',
+                'elk.layered.nodePlacement.strategy': anyPinned ? 'INTERACTIVE'
+                    : (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
+                // Only switched on when ServiceHint.PinX/PinY gave at least one node an
+                // explicit position (anyPinned, computed above alongside `children`) — ELK's
+                // interactive layering derives each node's LAYER from its given x (and
+                // in-layer order from y) instead of the normal automatic longest-path
+                // assignment + crossing-minimization sweep. Unpinned nodes simply have no x/y
+                // to derive from, so they fall back to ELK's own placement for that axis.
+                ...(anyPinned ? { 'elk.layered.layering.strategy': 'INTERACTIVE' } : {}),
             },
             children: [...children, ...boxChildren],
             edges: elkEdges,

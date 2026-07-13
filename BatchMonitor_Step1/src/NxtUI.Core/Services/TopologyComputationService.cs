@@ -276,6 +276,8 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         node.Color = hint.Color;
         node.Order = hint.Order;
         node.Pin = hint.Pin;
+        node.PinX = hint.PinX;
+        node.PinY = hint.PinY;
     }
 
     // A declared endpoint (literal or glob) → the concrete node ids it resolves to, matched

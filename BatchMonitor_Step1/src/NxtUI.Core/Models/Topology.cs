@@ -121,6 +121,19 @@ public class TopologyNode
     /// <summary>Keep at a fixed spot across re-layouts (hint escape hatch).</summary>
     public bool Pin { get; set; }
 
+    /// <summary>
+    /// Explicit position hint (ELK layout only — see docs/12_Custom_Layout_And_Nested_Runs.md),
+    /// same coordinate space/scale ELK itself lays the graph out in. Best-effort: passed to
+    /// ELK's interactive layering/crossing-minimization strategies as a strong bias, not a
+    /// hard pixel guarantee — ELK still avoids node overlaps and respects the graph's actual
+    /// edges, so a pinned node can still move somewhat from the exact requested spot. Null
+    /// (default, either coordinate unset) leaves that axis to ELK's normal automatic layout.
+    /// </summary>
+    public double? PinX { get; set; }
+
+    /// <summary>See <see cref="PinX"/>.</summary>
+    public double? PinY { get; set; }
+
     /// <summary>True when the run-type blueprint declared this service (matched a ServiceHint).</summary>
     public bool IsDeclared { get; set; }
 
