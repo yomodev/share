@@ -396,6 +396,9 @@
             // _details.Children is kept fresh by RunChildRunsRefreshLoopAsync while the run
             // is Running (docs/12 §7.3), so this just reflects whatever it last fetched.
             _topology.ChildRuns = _details?.Children ?? [];
+            // This run's own chosen variant can override RunsOptions.Value.ChildRunBoxColor —
+            // governs how THIS run's own (immediate) child-run boxes get drawn.
+            _topology.ChildRunBoxColor = _chosenVariant?.ChildRunBoxColor ?? RunsOptions.Value.ChildRunBoxColor;
             ApplyDefaultExpandOnce();
             // In-place expand (docs/12 §7.4): recursively fetch+compute a full Topology for
             // every currently-expanded child (and its own expanded children, up to
@@ -673,16 +676,22 @@
                     .ToDictionary(e => e.CompositeKey, e => e);
 
                 TopologyBlueprint? childBlueprint = null;
+                TopologyVariant? childVariant = null;
                 var childHintFile = HintLoader.Get(childDetails.Type);
                 if (childHintFile is not null)
                 {
                     var seen = childEvents.Select(e => e.Service).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
-                    var variant = TopologyBlueprint.SelectVariant(childHintFile, seen);
-                    if (variant is not null) childBlueprint = TopologyBlueprint.Compile(variant);
+                    childVariant = TopologyBlueprint.SelectVariant(childHintFile, seen);
+                    if (childVariant is not null) childBlueprint = TopologyBlueprint.Compile(childVariant);
                 }
 
                 var childTopo = _topologyService.ComputeTopology(childStore, _labelFormatter, childBlueprint);
                 childTopo.ChildRuns = childDetails.Children;
+                // See RecomputeTopologyAsync — same resolution, but scoped to THIS child's own
+                // chosen variant (a child run can be a different run type than its parent, with
+                // its own override), since this color governs how ITS OWN child-run boxes (one
+                // level deeper) get drawn, not how the box FOR this child itself is drawn.
+                childTopo.ChildRunBoxColor = childVariant?.ChildRunBoxColor ?? RunsOptions.Value.ChildRunBoxColor;
                 await PopulateExpandedChildrenAsync(childTopo, depth + 1);
                 topo.ExpandedChildren[child.RunId] = childTopo;
             }

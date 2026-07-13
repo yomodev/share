@@ -80,6 +80,17 @@
         await InvokeAsync(StateHasChanged);
     }
 
+    /// <summary>Forces a fresh fetch/repaint right now instead of waiting for the JS side's
+    /// own polling interval — stop+start re-injects the loading spinner and re-subscribes,
+    /// same as a first load. Called from Home.razor's refresh button.</summary>
+    public async Task RefreshNowAsync()
+    {
+        if (!_started) return;
+        try { await JS.InvokeVoidAsync("homeMemoryTreemap.stop", _ref); } catch (Exception) { }
+        _selfRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("homeMemoryTreemap.start", _ref, Env, null, _selfRef, _selfRef);
+    }
+
     [JSInvokable]
     public void NotifyFirstPaint() => _ = OnFirstPaint.InvokeAsync();
 

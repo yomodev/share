@@ -281,7 +281,7 @@ const D3Graph = (() => {
     // itself carries no `data` — see its own module for why) recording, per node id, either
     // the real TopologyNode or (for a nested expanded child) that child's own recursively-
     // built box spec.
-    function buildLevelForLayout(handle, topoNodes, topoEdges, childRunEntries, expandedChildren, direction) {
+    function buildLevelForLayout(handle, topoNodes, topoEdges, childRunEntries, expandedChildren, direction, boxColor) {
         const ids = new Set(topoNodes.map(n => n.id));
         const flowNodes = [];
         const metaById = new Map();
@@ -297,7 +297,10 @@ const D3Graph = (() => {
         for (const entry of (childRunEntries || [])) {
             const childTopo = expandedChildren ? expandedChildren[entry.runId] : null;
             if (!childTopo) continue; // collapsed — handled separately by renderChildRuns's row
-            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction);
+            // `boxColor` is THIS level's own resolved color (RunsSettings.ChildRunBoxColor,
+            // topology-hint-overridable) — the box drawn for `entry` belongs to and is
+            // colored by ITS OWN parent (this level), not by the child's own topology.
+            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, boxColor);
             const boxId = `__box_${entry.runId}`;
             flowNodes.push({ id: boxId, width: spec.width, height: spec.height });
             metaById.set(boxId, { kind: 'box', spec });
@@ -320,10 +323,14 @@ const D3Graph = (() => {
     // Recursively computes one expanded child's own sub-layout (bottom-up — a box's size
     // must be known before its own parent can be placed) and returns a spec describing its
     // box size plus everything flattenChildRunBoxes needs to merge its contents in later.
-    function buildChildRunBoxSpec(handle, childTopo, entry, parentDirection) {
+    function buildChildRunBoxSpec(handle, childTopo, entry, parentDirection, boxColor) {
         const direction = parentDirection; // sub-boxes keep the same flow direction as their parent
+        // One level deeper: THIS child's own boxes (for ITS children, i.e. grandchildren of
+        // the outer level) are colored by childTopo's own resolved color, not `boxColor`
+        // (which belongs to the level that owns `entry`, i.e. this box itself).
         const built = buildLevelForLayout(
-            handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren, direction);
+            handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren,
+            direction, childTopo.childRunBoxColor);
         const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
         // The box must be at least wide enough for its own header title (a long run
         // description shouldn't get clipped just because its content happens to be narrow) —
@@ -335,6 +342,7 @@ const D3Graph = (() => {
             height: result.height + EXPANDED_HEADER_H + EXPANDED_PAD * 2,
             result, metaById: built.metaById, edgeDataByKey: built.edgeDataByKey,
             groupColors: childTopo.groupColors || {},
+            boxColor,
         };
     }
 
@@ -354,7 +362,7 @@ const D3Graph = (() => {
             } else {
                 const spec = meta.spec;
                 const boxX = pos.x + offX, boxY = pos.y + offY;
-                outBoxes.push({ runId: spec.runId, entry: spec.entry, x: boxX, y: boxY, width: pos.width, height: pos.height });
+                outBoxes.push({ runId: spec.runId, entry: spec.entry, x: boxX, y: boxY, width: pos.width, height: pos.height, boxColor: spec.boxColor });
                 if (outGroupColors) outGroupColors.set(spec.runId, spec.groupColors || {});
 
                 const { minX: subMinX, minY: subMinY } = minBoundsOf(spec.result.nodes);
@@ -391,7 +399,7 @@ const D3Graph = (() => {
         const dir = chooseDir(handle, layout);
         const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
 
-        const built = buildLevelForLayout(handle, topo.nodes, topo.edges, topo.childRuns, topo.expandedChildren, direction);
+        const built = buildLevelForLayout(handle, topo.nodes, topo.edges, topo.childRuns, topo.expandedChildren, direction, topo.childRunBoxColor);
         const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, { seedOrder });
 
         const nodes = new Map();
@@ -445,7 +453,7 @@ const D3Graph = (() => {
         for (const entry of (topo.childRuns || [])) {
             const childTopo = topo.expandedChildren ? topo.expandedChildren[entry.runId] : null;
             if (!childTopo) continue;
-            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction);
+            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, topo.childRunBoxColor);
             const boxId = `__box_${entry.runId}`;
             boxChildren.push({ id: boxId, width: spec.width, height: spec.height, ports: [], layoutOptions: {} });
             boxMetaById.set(boxId, { kind: 'box', spec });
@@ -904,13 +912,20 @@ const D3Graph = (() => {
     // on the right (in place of a real node's instance-count pill). Returns nothing; callers
     // add whatever goes below the header (a fake row for collapsed, nothing for expanded —
     // the real merged nodes sit there instead).
-    function renderChildCardChrome(g, handle, { id, width, height, status, label, expanded, onToggle }) {
+    function renderChildCardChrome(g, handle, { id, width, height, status, label, expanded, onToggle, boxColor }) {
         const hw = width / 2, hh = height / 2;
-        const statusCol = childRunStatusColor(status);
+        // RunsSettings.ChildRunBoxColor (topology-hint-overridable) gives every child-run
+        // box/card the SAME chrome color regardless of status — a deliberate visual cue that
+        // "this is a nested run," distinct from a same-colored top-level service — instead of
+        // the original behavior of deriving it from the child's own Running/Completed/Failed
+        // status. Falls back to the status color when unset (default, unchanged behavior).
+        // The fake pipeline row's own progress bar (renderFakePipelineRow) still always uses
+        // the real status color — this only affects the card's identity chrome.
+        const chromeCol = boxColor || childRunStatusColor(status);
 
         g.append('rect').attr('class', 'bm-child-run-bg').attr('rx', 10)
             .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', height)
-            .attr('fill', nodeBg()).attr('stroke', statusCol);
+            .attr('fill', nodeBg()).attr('stroke', chromeCol);
 
         // Real nodes clip their header accent band to the card's own rounded-corner shape
         // (updateClipPaths/bm-clip-<id>) so it never pokes square corners out past the
@@ -918,7 +933,7 @@ const D3Graph = (() => {
         // header (registerChildCardClip, called by each caller before this).
         g.append('rect').attr('class', 'bm-node-accent')
             .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', HEADER_HEIGHT)
-            .attr('fill', statusCol).attr('fill-opacity', 0.4)
+            .attr('fill', chromeCol).attr('fill-opacity', 0.4)
             .attr('clip-path', `url(#bm-clip-${id})`)
             .style('cursor', 'pointer').on('click', onToggle);
 
@@ -1038,6 +1053,7 @@ const D3Graph = (() => {
             renderChildCardChrome(gEl, handle, {
                 id: clipId, width, height: CHILD_RUN_HEIGHT, status: entry.status,
                 label: truncateLabel(entry.description || entry.runId, 34), expanded: false, onToggle,
+                boxColor: handle.pendingTopology?.childRunBoxColor,
             });
             renderFakePipelineRow(gEl, width, CHILD_RUN_HEIGHT, entry);
 
@@ -1068,6 +1084,7 @@ const D3Graph = (() => {
             renderChildCardChrome(g, handle, {
                 id: clipId, width: box.width, height: box.height, status: box.entry.status,
                 label: truncateLabel(box.entry.description || box.runId, 40), expanded: true, onToggle,
+                boxColor: box.boxColor,
             });
         }
     }

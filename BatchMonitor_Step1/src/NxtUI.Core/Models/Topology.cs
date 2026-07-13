@@ -53,6 +53,15 @@ public class Topology
     /// </summary>
     public bool HasBlueprint { get; set; }
 
+    /// <summary>
+    /// Border/background accent color for a child-run box/card (RunsSettings.ChildRunBoxColor,
+    /// overridable per run-type via TopologyVariant.ChildRunBoxColor — see RunDetail.razor's
+    /// RecomputeTopologyAsync, which is where the effective value gets resolved and copied
+    /// here since RunsSettings/the chosen variant both live outside Core). Null (default):
+    /// the graph derives each child box's color from that child run's own status instead.
+    /// </summary>
+    public string? ChildRunBoxColor { get; set; }
+
     /// <summary>Total unique names seen so far.</summary>
     public int TotalChunks { get; set; }
 

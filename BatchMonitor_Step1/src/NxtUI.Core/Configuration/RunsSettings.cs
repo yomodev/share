@@ -92,4 +92,17 @@ public class RunsSettings
     /// regardless of this setting.
     /// </summary>
     public bool ExpandChildRunsByDefault { get; set; }
+
+    /// <summary>
+    /// Border/background accent color for an expanded or collapsed child-run box/card
+    /// (docs/12_Custom_Layout_And_Nested_Runs.md §7.4), as a CSS color string (e.g.
+    /// "#8957E5" or "rgba(137,87,229,0.8)"). Default: <c>null</c>, which keeps the original
+    /// behavior of deriving the box's color from the child run's own status (Running/
+    /// Completed/Failed/Unknown). Set this to give every child-run box a single distinct
+    /// look regardless of status, so it reads as "this is a nested run" at a glance rather
+    /// than blending in with a same-colored top-level service. Overridable per run-type via
+    /// the topology hint file's own <c>childRunBoxColor</c> (see
+    /// <c>TopologyVariant.ChildRunBoxColor</c>) — the hint's value always wins when set.
+    /// </summary>
+    public string? ChildRunBoxColor { get; set; }
 }

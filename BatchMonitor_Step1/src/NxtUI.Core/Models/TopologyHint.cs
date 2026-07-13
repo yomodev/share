@@ -52,6 +52,15 @@ public sealed class TopologyVariant
     /// type specifically. See docs/12_Custom_Layout_And_Nested_Runs.md §7.4.
     /// </summary>
     public bool? ExpandChildrenByDefault { get; set; }
+
+    /// <summary>
+    /// Per-run-type override of <c>RunsSettings.ChildRunBoxColor</c> — the border/background
+    /// accent color for this run type's own child-run boxes/cards, as a CSS color string.
+    /// Null (default): inherit the app-wide setting (which itself may be null, keeping the
+    /// original status-derived color). Set explicitly to override it either way for this run
+    /// type specifically. See docs/12_Custom_Layout_And_Nested_Runs.md §7.4.
+    /// </summary>
+    public string? ChildRunBoxColor { get; set; }
 }
 
 /// <summary>Upgrades one named <see cref="ServiceHint.Group"/> cluster to a real bordered box

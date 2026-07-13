@@ -12,6 +12,8 @@
 @inject ErrorNotificationService Notifications
 @inject ILogger<NxtUI.Web.Services.TimelineRun> TimelineRunLogger
 @inject ILogger<TimelineTab> Logger
+@inject ILogPathDiscoveryService DiscoverySvc
+@inject ISnackbar Snackbar
 @implements IAsyncDisposable
 
 @code {
@@ -98,6 +100,7 @@
     private ElementReference _importWrapRef;
     private IJSObjectReference? _tlModule;
     private IJSObjectReference? _appModule;
+    private DotNetObjectReference<TimelineTab>? _selfRef;
     private CancellationTokenSource? _renderDebounce;
     private const int RenderDebounceMs = 300;
 
@@ -139,8 +142,9 @@
             try
             {
                 _appModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/app.js?v=8");
-                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=15");
-                await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions());
+                _tlModule  = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-timeline.js?v=16");
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await _tlModule.InvokeVoidAsync("init", _instanceKey, _canvasRef, _bottomRef, GetOptions(), _selfRef);
                 await _tlModule.InvokeVoidAsync("setHoverDelaysMs", _instanceKey,
                     Math.Max(0, TimelineOptions.Value.HighlightDelayMs),
                     Math.Max(0, TimelineOptions.Value.PopupDelayMs));
@@ -577,10 +581,45 @@
     private bool IsAlreadyLoaded(RunSummary b) =>
         _runs.Any(x => x.RunId == b.RunId && x.Env == _dialogEnv);
 
+    // ── Instance log (double-click a block) ─────────────────────────────────
+    // Same discovery/open pattern as RunDetail.razor's OpenInstanceLogFromGraph — every
+    // timeline event already carries its own service/server/PID (see PushDataAsync's
+    // payload), so a double-clicked block has everything needed to resolve its log folder.
+    [JSInvokable]
+    public async Task RequestOpenInstanceLog(string service, string server, int processId, double lastActivityEpochMs)
+    {
+        if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
+
+        var svc = new ServiceStatus
+        {
+            ServiceName = service,
+            HostName = server,
+            ProcessId = processId,
+            // The day/time THIS instance was active, not "now" — the log folder is dated
+            // by when the instance actually ran.
+            UpdatedDateTime = DateTimeOffset.FromUnixTimeMilliseconds((long)lastActivityEpochMs).UtcDateTime,
+        };
+
+        var path = await DiscoverySvc.FindNowAsync(svc, Environment)
+            ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
+
+        if (path is null)
+        {
+            Snackbar.Add("Log path not found", Severity.Warning);
+            return;
+        }
+
+        var tab = TabModel.CreateFilesDashboard(Environment);
+        tab.NavigationHint = path;
+        TabService.OpenOrFocus(tab);
+    }
+
     // ── Dispose ───────────────────────────────────────────────────────────
 
     public async ValueTask DisposeAsync()
     {
+        _selfRef?.Dispose();
+
         _renderDebounce?.Cancel();
         _renderDebounce?.Dispose();
 

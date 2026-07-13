@@ -156,8 +156,12 @@
                 }
                 <MudText Typo="Typo.subtitle2" Class="bm-section-title">Services</MudText>
             </div>
+            <MudTooltip Text="Refresh services">
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
+                               Disabled="@(!_mapReady)" OnClick="RefreshServicesAsync" />
+            </MudTooltip>
         </div>
-        <HomeMemoryTreemap Env="@EnvService.SelectedId" Visible="@IsVisible"
+        <HomeMemoryTreemap @ref="_treemapRef" Env="@EnvService.SelectedId" Visible="@IsVisible"
                             OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
     }
 
@@ -174,6 +178,10 @@
             }
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
         </div>
+        <MudTooltip Text="Refresh recent runs">
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
+                           Disabled="@_runsLoading" OnClick="@(() => LoadRunsAsync())" />
+        </MudTooltip>
     </div>
 
     <MudPaper Elevation="0" Class="bm-mini-summary">
@@ -214,6 +222,9 @@
     private bool _mapReady;
     private bool _runsReady;
     private bool _runsLoading;
+    private HomeMemoryTreemap? _treemapRef;
+
+    private Task RefreshServicesAsync() => _treemapRef?.RefreshNowAsync() ?? Task.CompletedTask;
 
     protected override async Task OnInitializedAsync()
     {

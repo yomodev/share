@@ -86,11 +86,11 @@ const TIMELINE_ALIASES = {
 
     // ── Public API ─────────────────────────────────────────────────────────
 
-    function init(key, laneEl, bottomEl, options) {
+    function init(key, laneEl, bottomEl, options, dotnetRef) {
         // Dispose any existing instance for this key.
         if (_instances.has(key)) disposeInstance(_instances.get(key));
 
-        const s = createInstance(laneEl, bottomEl, options);
+        const s = createInstance(laneEl, bottomEl, options, dotnetRef);
         _instances.set(key, s);
         onResize(s);
         requestAnimationFrame(() => { if (!s.disposed) onResize(s); });
@@ -210,7 +210,7 @@ const TIMELINE_ALIASES = {
 
     // ── Instance creation ─────────────────────────────────────────────────
 
-    function createInstance(laneEl, bottomEl, options) {
+    function createInstance(laneEl, bottomEl, options, dotnetRef) {
         // Lane SVG.
         const laneSvg = d3.select(laneEl).append('svg')
             .attr('class', 'bm-tl-svg')
@@ -246,7 +246,7 @@ const TIMELINE_ALIASES = {
 
         // State object — must exist before wiring event handlers.
         const s = {
-            laneEl, bottomEl, laneSvg, botSvg,
+            laneEl, bottomEl, laneSvg, botSvg, dotnetRef,
             gridL, cursorL, blockL, headerL, cursorLine,
             heatL, selL, tickL, curBotL, tooltip,
             xScale, xZoom: d3.zoomIdentity,
@@ -712,7 +712,21 @@ const TIMELINE_ALIASES = {
             .style('stroke-width', d => d.e.name === s.hoveredName ? '1.5px' : '0.5px')
             .on('mouseenter', (ev, d) => onBlockEnter(s, ev, d))
             .on('mouseleave', (ev, d) => onBlockLeave(s, ev, d))
-            .on('click',      (ev, d) => { if (ev.ctrlKey) copyBlockDetails(s, d); });
+            .on('click',      (ev, d) => { if (ev.ctrlKey) copyBlockDetails(s, d); })
+            .on('dblclick',   (ev, d) => { ev.stopPropagation(); openLogFolder(s, d); });
+    }
+
+    // Double-clicking a block opens that instance's log folder — every event already
+    // carries its own service/server/PID (see PushDataAsync's payload shape), so there's
+    // enough here to resolve the folder without any extra lookup on the Blazor side beyond
+    // what RunDetail's own popover-instance click already does.
+    function openLogFolder(s, d) {
+        if (!s.dotnetRef) return;
+        const e = d.e;
+        if (!e || !e.service || !e.server) return;
+        const lastActivityEpochMs = d.bse + (e.finishMs ?? e.startMs);
+        s.dotnetRef.invokeMethodAsync('RequestOpenInstanceLog', e.service, e.server, e.processId ?? 0, lastActivityEpochMs)
+            .catch(() => {});
     }
 
     function renderHeader(s, sel, sec) {
