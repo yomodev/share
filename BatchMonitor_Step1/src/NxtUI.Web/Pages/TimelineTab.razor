@@ -807,29 +807,32 @@
             <MudText Typo="Typo.h6">Keyboard Shortcuts</MudText>
         </TitleContent>
         <DialogContent>
-            <MudSimpleTable Dense="true" Hover="false" Bordered="false" Striped="false" Class="bm-tl-shortcuts-table">
-                <thead>
-                    <tr>
-                        <th>Shortcut</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr><td>Drag on lanes</td><td>Pan horizontally and vertically</td></tr>
-                    <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Pan timeline left / right</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Zoom out (toward cursor)</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Randomize block colors</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+wheel / pinch on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
-                    <tr><td>Horizontal swipe on lanes</td><td>Pan timeline left / right</td></tr>
-                    <tr><td>Wheel on lanes</td><td>Scroll lanes up / down</td></tr>
-                    <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
-                    <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
-                    <tr><td><kbd>Ctrl</kbd>+click block</td><td>Copy message details to clipboard</td></tr>
-                </tbody>
-            </MudSimpleTable>
+            <div class="bm-tl-shortcuts-scroll">
+                <MudSimpleTable Dense="true" Hover="false" Bordered="false" Striped="false" Class="bm-tl-shortcuts-table">
+                    <thead>
+                        <tr>
+                            <th>Shortcut</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Drag on lanes</td><td>Pan horizontally and vertically</td></tr>
+                        <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Pan timeline left / right</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Zoom out (toward cursor)</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Zoom in (toward cursor)</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd></td><td>Decrease bar height</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+<kbd>↓</kbd></td><td>Increase bar height</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Randomize block colors</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+wheel / pinch on lanes</td><td>Zoom in / out toward mouse (capped to the full time range)</td></tr>
+                        <tr><td>Horizontal swipe on lanes</td><td>Pan timeline left / right</td></tr>
+                        <tr><td>Wheel on lanes</td><td>Scroll lanes up / down</td></tr>
+                        <tr><td>Wheel on selector</td><td>Zoom in / out toward mouse</td></tr>
+                        <tr><td>↑ / ↓</td><td>Scroll lanes up / down</td></tr>
+                        <tr><td><kbd>Ctrl</kbd>+click block</td><td>Copy message details to clipboard</td></tr>
+                        <tr><td>Double-click block</td><td>Open that instance's log folder</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+            </div>
         </DialogContent>
         <DialogActions>
             <MudButton OnClick="@(() => _shortcutsOpen = false)">Close</MudButton>

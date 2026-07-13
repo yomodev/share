@@ -196,13 +196,21 @@
                                                Disabled="@_copyingFor.Contains(rowKey)"
                                                OnClick="@(() => CopyPathAsync(context))" />
                             </MudTooltip>
-                            <MudTooltip Text="Open log viewer">
-                                <MudIconButton Icon="@Icons.Material.Outlined.Article"
-                                               Size="Size.Small"
-                                               Color="@(rowPath != null ? Color.Default : Color.Inherit)"
-                                               Disabled="@_openingLogFor.Contains(rowKey)"
-                                               OnClick="@(() => OpenLogViewerAsync(context))" />
-                            </MudTooltip>
+                            @if (_openingLogFor.Contains(rowKey))
+                            {
+                                <MudTooltip Text="Looking up log path…">
+                                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="bm-row-action-spinner" />
+                                </MudTooltip>
+                            }
+                            else
+                            {
+                                <MudTooltip Text="Open log viewer">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Article"
+                                                   Size="Size.Small"
+                                                   Color="@(rowPath != null ? Color.Default : Color.Inherit)"
+                                                   OnClick="@(() => OpenLogViewerAsync(context))" />
+                                </MudTooltip>
+                            }
                         </div>
                     </MudTd>
                 </RowTemplate>

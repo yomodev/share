@@ -240,6 +240,13 @@
 
 /* ── Shortcuts dialog ────────────────────────────────────────────── */
 
+/* Caps the dialog's own height and lets the (growing) shortcut list scroll inside it
+   instead of pushing the dialog past the viewport once there are enough rows. */
+.bm-tl-shortcuts-scroll {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
 .bm-tl-shortcuts-table td:first-child {
     white-space: nowrap;
     font-family: var(--bm-font-mono, monospace);

@@ -320,18 +320,64 @@ const D3Graph = (() => {
         return { flowNodes, flowEdges, metaById, edgeDataByKey };
     }
 
+    // Companion to the top-level refreshDataInPlace, scoped to one cached child sub-layout:
+    // swaps each metaById node entry's `data` (and each edgeDataByKey entry) for the
+    // matching object in the freshly-computed childTopo, leaving the cached geometry alone.
+    function refreshChildBuiltDataInPlace(built, childTopo) {
+        const nodeById = new Map(childTopo.nodes.map(n => [n.id, n]));
+        for (const meta of built.metaById.values()) {
+            if (meta.kind === 'node' && nodeById.has(meta.data.id)) meta.data = nodeById.get(meta.data.id);
+        }
+        const edgeByKey = new Map((childTopo.edges || []).map(e => [`${e.source}->${e.target}`, e]));
+        for (const key of built.edgeDataByKey.keys()) {
+            if (edgeByKey.has(key)) built.edgeDataByKey.set(key, edgeByKey.get(key));
+        }
+    }
+
     // Recursively computes one expanded child's own sub-layout (bottom-up — a box's size
     // must be known before its own parent can be placed) and returns a spec describing its
     // box size plus everything flattenChildRunBoxes needs to merge its contents in later.
     function buildChildRunBoxSpec(handle, childTopo, entry, parentDirection, boxColor) {
         const direction = parentDirection; // sub-boxes keep the same flow direction as their parent
-        // One level deeper: THIS child's own boxes (for ITS children, i.e. grandchildren of
-        // the outer level) are colored by childTopo's own resolved color, not `boxColor`
-        // (which belongs to the level that owns `entry`, i.e. this box itself).
-        const built = buildLevelForLayout(
-            handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren,
-            direction, childTopo.childRunBoxColor);
-        const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
+
+        // Reuse the previous commit's sub-layout for this child if ITS OWN subtree (structure
+        // recursively down through ITS OWN expanded grandchildren) hasn't changed — a full
+        // outer relayout can be triggered by the ROOT graph gaining an edge, or by a totally
+        // different sibling child changing, in which case redoing THIS child's bm-flow-layout
+        // call from scratch is pure waste. Keyed by runId (not childTopo identity, which is a
+        // fresh object every recompute even when nothing in it actually changed) + a
+        // structural signature; the cache lives on the handle so it survives across commits
+        // for the life of the graph instance.
+        const childKey = structuralKey(childTopo);
+        if (!handle.childSpecCache) handle.childSpecCache = new Map();
+        handle._touchedChildRunIds?.add(entry.runId);
+        const cached = handle.childSpecCache.get(entry.runId);
+        // Reuse is only safe when this child has no expanded grandchildren of its own: a
+        // cache hit skips the recursive buildLevelForLayout call entirely, which is also
+        // what would normally (a) mark a grandchild's own runId as touched this pass (so
+        // pruneChildSpecCache doesn't evict its still-valid cache entry out from under it)
+        // and (b) refresh ITS data in place. Leaf children (the common case — see docs/12
+        // §7's default non-recursive expand) have neither concern.
+        const hasExpandedGrandchildren = Object.keys(childTopo.expandedChildren || {}).length > 0;
+        let built, result;
+        if (cached && cached.key === childKey && cached.direction === direction && !hasExpandedGrandchildren) {
+            ({ built, result } = cached);
+            // Geometry (node positions, edge points, box size) is unchanged, but the counts/
+            // colours on each node/edge are NOT part of structuralKey and DO change every
+            // tick — refresh those in place so a reused layout doesn't freeze this child's
+            // displayed data at whatever it was when the cache entry was built.
+            refreshChildBuiltDataInPlace(built, childTopo);
+        } else {
+            // One level deeper: THIS child's own boxes (for ITS children, i.e. grandchildren
+            // of the outer level) are colored by childTopo's own resolved color, not
+            // `boxColor` (which belongs to the level that owns `entry`, i.e. this box itself).
+            built = buildLevelForLayout(
+                handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren,
+                direction, childTopo.childRunBoxColor);
+            result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
+            handle.childSpecCache.set(entry.runId, { key: childKey, direction, built, result });
+        }
+
         // The box must be at least wide enough for its own header title (a long run
         // description shouldn't get clipped just because its content happens to be narrow) —
         // same "grow to fit text" rule a real service node's card follows.
@@ -387,6 +433,13 @@ const D3Graph = (() => {
         }
     }
 
+    function pruneChildSpecCache(handle) {
+        if (!handle.childSpecCache || !handle._touchedChildRunIds) return;
+        for (const runId of handle.childSpecCache.keys()) {
+            if (!handle._touchedChildRunIds.has(runId)) handle.childSpecCache.delete(runId);
+        }
+    }
+
     // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
     // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
     // Blueprint hints (role/group/order, decorated onto topo nodes by
@@ -399,8 +452,14 @@ const D3Graph = (() => {
         const dir = chooseDir(handle, layout);
         const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
 
+        // Tracks which runIds buildChildRunBoxSpec actually touched this layout pass, so
+        // stale entries (a child that got collapsed and never re-expanded) don't sit in
+        // childSpecCache forever — pruned below once the whole tree's been walked.
+        handle._touchedChildRunIds = new Set();
+
         const built = buildLevelForLayout(handle, topo.nodes, topo.edges, topo.childRuns, topo.expandedChildren, direction, topo.childRunBoxColor);
         const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, { seedOrder });
+        pruneChildSpecCache(handle);
 
         const nodes = new Map();
         const outEdges = [];
@@ -415,6 +474,9 @@ const D3Graph = (() => {
     }
 
     async function runLayoutElk(handle, topo) {
+        // See runLayoutCustom's own copy of this comment — same childSpecCache pruning need.
+        handle._touchedChildRunIds = new Set();
+
         const ids  = new Set(topo.nodes.map(n => n.id));
         const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
 
@@ -458,6 +520,7 @@ const D3Graph = (() => {
             boxChildren.push({ id: boxId, width: spec.width, height: spec.height, ports: [], layoutOptions: {} });
             boxMetaById.set(boxId, { kind: 'box', spec });
         }
+        pruneChildSpecCache(handle);
 
         const children = topo.nodes.map(n => {
             // Cached on the node so updateClipPaths reuses the width without re-measuring.
