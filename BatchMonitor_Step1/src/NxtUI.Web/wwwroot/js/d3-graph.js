@@ -294,6 +294,14 @@ const D3Graph = (() => {
             metaById.set(n.id, { kind: 'node', data: n });
         }
 
+        // Expanded child-run boxes are deliberately NOT added to flowNodes (i.e. never fed
+        // into bm-flow-layout's own layered solve alongside the real pipeline) — see
+        // packSatelliteBoxes for why: a box has no structural edges to anything (by design),
+        // so the longest-path layer assignment lumped it into layer 0 together with genuine
+        // source nodes, and its (often much wider) size then distorted every downstream
+        // layer's offset for the WHOLE pipeline, producing visibly overlapping groups/rows.
+        // Positioned as a separate satellite pass instead, entirely outside the layered solve.
+        const boxSpecs = [];
         for (const entry of (childRunEntries || [])) {
             const childTopo = expandedChildren ? expandedChildren[entry.runId] : null;
             if (!childTopo) continue; // collapsed — handled separately by renderChildRuns's row
@@ -302,7 +310,7 @@ const D3Graph = (() => {
             // colored by ITS OWN parent (this level), not by the child's own topology.
             const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, boxColor);
             const boxId = `__box_${entry.runId}`;
-            flowNodes.push({ id: boxId, width: spec.width, height: spec.height });
+            boxSpecs.push({ id: boxId, width: spec.width, height: spec.height });
             metaById.set(boxId, { kind: 'box', spec });
         }
 
@@ -317,7 +325,62 @@ const D3Graph = (() => {
         }
         const edgeDataByKey = new Map(edges.map(e => [`${e.source}->${e.target}`, e]));
 
-        return { flowNodes, flowEdges, metaById, edgeDataByKey };
+        return { flowNodes, flowEdges, metaById, edgeDataByKey, boxSpecs };
+    }
+
+    // Places expanded child-run boxes in a row (horizontal flow) or column (vertical flow)
+    // just outside the pipeline's own laid-out bounding box, entirely separate from
+    // bm-flow-layout's layered solve — see buildLevelForLayout's comment for why they can't
+    // share that solve. Mirrors renderChildRuns' collapsed-block row packing.
+    function packSatelliteBoxes(mainNodes, boxSpecs, direction) {
+        const positions = new Map();
+        if (boxSpecs.length === 0) return positions;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [, p] of mainNodes) {
+            minX = Math.min(minX, p.x - p.width / 2); maxX = Math.max(maxX, p.x + p.width / 2);
+            minY = Math.min(minY, p.y - p.height / 2); maxY = Math.max(maxY, p.y + p.height / 2);
+        }
+        if (!Number.isFinite(minX)) { minX = maxX = minY = maxY = 0; }
+
+        const GAP = 24, MARGIN = 48;
+        if (direction === 'horizontal') {
+            const totalW = boxSpecs.reduce((a, b) => a + b.width, 0) + GAP * Math.max(0, boxSpecs.length - 1);
+            let cursor = minX + (maxX - minX - totalW) / 2;
+            const baseY = maxY + MARGIN;
+            for (const b of boxSpecs) {
+                positions.set(b.id, { x: cursor + b.width / 2, y: baseY + b.height / 2, width: b.width, height: b.height });
+                cursor += b.width + GAP;
+            }
+        } else {
+            const totalH = boxSpecs.reduce((a, b) => a + b.height, 0) + GAP * Math.max(0, boxSpecs.length - 1);
+            let cursor = minY + (maxY - minY - totalH) / 2;
+            const baseX = maxX + MARGIN;
+            for (const b of boxSpecs) {
+                positions.set(b.id, { x: baseX + b.width / 2, y: cursor + b.height / 2, width: b.width, height: b.height });
+                cursor += b.height + GAP;
+            }
+        }
+        return positions;
+    }
+
+    // Merges a flowLayout() result (the pipeline only) with separately-packed satellite box
+    // positions, recomputing the combined bounding box — result.width/height from
+    // flowLayout() alone only cover the pipeline, not whatever boxes got appended outside it.
+    function mergeSatelliteBoxes(result, boxSpecs, direction) {
+        if (!boxSpecs || boxSpecs.length === 0) return result;
+        const boxPositions = packSatelliteBoxes(result.nodes, boxSpecs, direction);
+        const nodes = new Map([...result.nodes, ...boxPositions]);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [, p] of nodes) {
+            minX = Math.min(minX, p.x - p.width / 2); maxX = Math.max(maxX, p.x + p.width / 2);
+            minY = Math.min(minY, p.y - p.height / 2); maxY = Math.max(maxY, p.y + p.height / 2);
+        }
+        return {
+            nodes, edges: result.edges,
+            width: Number.isFinite(minX) ? maxX - minX : result.width,
+            height: Number.isFinite(minY) ? maxY - minY : result.height,
+        };
     }
 
     // Companion to the top-level refreshDataInPlace, scoped to one cached child sub-layout:
@@ -374,7 +437,9 @@ const D3Graph = (() => {
             built = buildLevelForLayout(
                 handle, childTopo.nodes, childTopo.edges, childTopo.childRuns, childTopo.expandedChildren,
                 direction, childTopo.childRunBoxColor);
-            result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {});
+            result = mergeSatelliteBoxes(
+                flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, {}),
+                built.boxSpecs, direction);
             handle.childSpecCache.set(entry.runId, { key: childKey, direction, built, result });
         }
 
@@ -458,7 +523,9 @@ const D3Graph = (() => {
         handle._touchedChildRunIds = new Set();
 
         const built = buildLevelForLayout(handle, topo.nodes, topo.edges, topo.childRuns, topo.expandedChildren, direction, topo.childRunBoxColor);
-        const result = flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, { seedOrder });
+        const result = mergeSatelliteBoxes(
+            flowLayout({ nodes: built.flowNodes, edges: built.flowEdges, direction }, { seedOrder }),
+            built.boxSpecs, direction);
         pruneChildSpecCache(handle);
 
         const nodes = new Map();

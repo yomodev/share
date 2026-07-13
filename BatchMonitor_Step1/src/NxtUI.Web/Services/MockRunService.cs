@@ -107,6 +107,11 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
     private readonly Dictionary<string, Dictionary<string, List<(string Svc, string Pipeline, string Src, string Server, int Pid)>>>
         _livePool = new();
 
+    // Last event Start assigned per (runId, chunkId), keyed by "runId:chunkId" — see
+    // GenerateLiveEvents. Ensures hops fired for the same chunk always get strictly
+    // increasing timestamps, matching the ORDER they were actually dequeued/fired in.
+    private readonly Dictionary<string, DateTime> _liveChunkLastStart = new();
+
     // ── Construction ──────────────────────────────────────────────────────
 
     public MockRunService(RunEventBroker? eventBroker = null, RunsSettings? runsSettings = null, ILogger<MockRunService>? logger = null)
@@ -532,7 +537,19 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 var (svc, pipeline, src, server, pid) = hops[0];
                 hops.RemoveAt(0);
 
-                var start = DateTime.UtcNow.AddSeconds(-rng.Next(1, 12));
+                // Each hop's Start must be strictly later than the PREVIOUS hop fired for
+                // this same chunk — TopologyComputationService derives edge direction purely
+                // from per-chunk Start order (docs/12), so independently randomizing each
+                // hop's timestamp (the old `DateTime.UtcNow.AddSeconds(-rng.Next(1, 12))`)
+                // could give a hop fired LATER an EARLIER timestamp than one fired before it
+                // purely by chance, silently reversing that edge's recorded direction. Hops
+                // are still fired 0-3 per tick per chunk (see toFire above) — only the
+                // timestamp assigned to each one needs to respect firing order now.
+                var chunkKey = $"{runId}:{chunkId}";
+                var prevStart = _liveChunkLastStart.TryGetValue(chunkKey, out var p) ? p : DateTime.UtcNow.AddSeconds(-12);
+                var start = prevStart.AddSeconds(rng.Next(1, 4));
+                if (start > DateTime.UtcNow) start = DateTime.UtcNow;
+                _liveChunkLastStart[chunkKey] = start;
                 // The demo pool (docs/12 §7) is documented as a deliberately clean, predictable
                 // example — random errors here contradicted that (a service could turn red mid-
                 // demo for no reason a viewer could see, since GenerateDemoEvents' own error
@@ -559,7 +576,11 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
             }
             if (hops.Count == 0) done.Add(chunkId);
         }
-        foreach (var id in done) pool.Remove(id);
+        foreach (var id in done)
+        {
+            pool.Remove(id);
+            _liveChunkLastStart.Remove($"{runId}:{id}");
+        }
 
         return events;
     }
