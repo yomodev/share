@@ -522,6 +522,8 @@ const D3Graph = (() => {
         }
         pruneChildSpecCache(handle);
 
+        const anyPinned = topo.nodes.some(n => typeof n.pinX === 'number' || typeof n.pinY === 'number');
+
         const children = topo.nodes.map(n => {
             // Cached on the node so updateClipPaths reuses the width without re-measuring.
             n._layoutWidth = computeNodeWidth(handle, n);
@@ -545,7 +547,18 @@ const D3Graph = (() => {
             // Per-node hints from the run-type blueprint (layered layout only). role pins the
             // node to the first/last layer; order biases in-layer placement (lower = earlier).
             if (!tree) {
-                const lc = layerConstraint(n.role);
+                let lc = layerConstraint(n.role);
+                // Live-tested: ELK's INTERACTIVE crossing-minimization/node-placement
+                // strategies (switched on below whenever any node is pinned) throw
+                // "UnsupportedConfigurationException ... layer constraint set to
+                // FIRST/LAST, but has an edge that does not come from/go to a
+                // FIRST_SEPARATE/LAST_SEPARATE node" against a plain FIRST/LAST
+                // constraint — those two only coexist with FIRST_SEPARATE/LAST_SEPARATE,
+                // which reserves source/sink their own dedicated layer instead of merely
+                // preferring one. Upgrading to the _SEPARATE variant whenever the graph
+                // has any pin keeps role-based source/sink pinning working instead of the
+                // whole layout throwing.
+                if (anyPinned && (lc === 'FIRST' || lc === 'LAST')) lc += '_SEPARATE';
                 if (lc !== 'NONE') nodeOpts['elk.layered.layering.layerConstraint'] = lc;
                 if (typeof n.order === 'number') nodeOpts['elk.priority'] = String(-n.order);
             }
@@ -557,7 +570,6 @@ const D3Graph = (() => {
             if (typeof n.pinY === 'number') pos.y = n.pinY;
             return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts, ...pos };
         });
-        const anyPinned = topo.nodes.some(n => typeof n.pinX === 'number' || typeof n.pinY === 'number');
 
         // Content-based id (source/target service+pipeline), NOT an array index — the
         // `edges` array's order can shift between successive topology recomputes (a new
@@ -602,17 +614,21 @@ const D3Graph = (() => {
                 'elk.spacing.edgeNode': px(34),
                 'elk.spacing.edgeEdge': px(28),
                 'elk.layered.spacing.edgeNodeBetweenLayers': px(34),
+                // Live-tested against a hint file using role (source/sink — FIRST/LAST layer
+                // constraints): switching elk.layered.layering.strategy to INTERACTIVE throws
+                // "UnsupportedConfigurationException ... layer constraint set to LAST/FIRST,
+                // but has an edge that does not go to/come from a LAST_SEPARATE/FIRST_SEPARATE
+                // node" — ELK's interactive LAYERING is fundamentally incompatible with the
+                // FIRST/LAST hard pins role already relies on, and role is used by nearly every
+                // real hint file. So PinX only ever influences which position WITHIN whatever
+                // layer the normal automatic/role-constrained assignment already gave the node
+                // (via crossingMinimization+nodePlacement INTERACTIVE, which ARE compatible with
+                // FIRST/LAST) — it does not (and, short of dropping role support, safely cannot)
+                // move a node to a different layer/column. PinY has full effect within a layer.
                 'elk.layered.crossingMinimization.strategy': anyPinned ? 'INTERACTIVE' : 'LAYER_SWEEP',
                 'elk.layered.nodePlacement.strategy': anyPinned ? 'INTERACTIVE'
                     : (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
                 'elk.padding': '[top=48,left=48,bottom=48,right=48]',
-                // Only switched on when ServiceHint.PinX/PinY gave at least one node an
-                // explicit position (anyPinned, computed above alongside `children`) — ELK's
-                // interactive layering derives each node's LAYER from its given x (and
-                // in-layer order from y) instead of the normal automatic longest-path
-                // assignment + crossing-minimization sweep. Unpinned nodes simply have no x/y
-                // to derive from, so they fall back to ELK's own placement for that axis.
-                ...(anyPinned ? { 'elk.layered.layering.strategy': 'INTERACTIVE' } : {}),
             },
             children: [...children, ...boxChildren],
             edges: elkEdges,
