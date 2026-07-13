@@ -590,28 +590,42 @@
     {
         if (string.IsNullOrWhiteSpace(service) || string.IsNullOrWhiteSpace(server)) return;
 
-        var svc = new ServiceStatus
+        // The filesystem search below (FindNowAsync/FindServiceParentFolderAsync) can take a
+        // noticeable moment with nothing on screen to show it's working — surface this
+        // Timeline tab's own loading spinner for the duration, same pattern RunDetail.razor
+        // uses for its own log-path lookups.
+        Tab?.BeginLoading();
+        TabService.NotifyChanged();
+        try
         {
-            ServiceName = service,
-            HostName = server,
-            ProcessId = processId,
-            // The day/time THIS instance was active, not "now" — the log folder is dated
-            // by when the instance actually ran.
-            UpdatedDateTime = DateTimeOffset.FromUnixTimeMilliseconds((long)lastActivityEpochMs).UtcDateTime,
-        };
+            var svc = new ServiceStatus
+            {
+                ServiceName = service,
+                HostName = server,
+                ProcessId = processId,
+                // The day/time THIS instance was active, not "now" — the log folder is dated
+                // by when the instance actually ran.
+                UpdatedDateTime = DateTimeOffset.FromUnixTimeMilliseconds((long)lastActivityEpochMs).UtcDateTime,
+            };
 
-        var path = await DiscoverySvc.FindNowAsync(svc, Environment)
-            ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
+            var path = await DiscoverySvc.FindNowAsync(svc, Environment)
+                ?? await DiscoverySvc.FindServiceParentFolderAsync(svc, Environment);
 
-        if (path is null)
-        {
-            Snackbar.Add("Log path not found", Severity.Warning);
-            return;
+            if (path is null)
+            {
+                Snackbar.Add("Log path not found", Severity.Warning);
+                return;
+            }
+
+            var tab = TabModel.CreateFilesDashboard(Environment);
+            tab.NavigationHint = path;
+            TabService.OpenOrFocus(tab);
         }
-
-        var tab = TabModel.CreateFilesDashboard(Environment);
-        tab.NavigationHint = path;
-        TabService.OpenOrFocus(tab);
+        finally
+        {
+            Tab?.EndLoading();
+            TabService.NotifyChanged();
+        }
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────

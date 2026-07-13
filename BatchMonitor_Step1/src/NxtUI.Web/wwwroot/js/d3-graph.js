@@ -841,7 +841,20 @@ const D3Graph = (() => {
             // (below, main-layout branch only) won't auto-adjust to include the taller view —
             // a manual re-fit (the toolbar button) picks it up.
             renderChildRuns(handle);
-            renderChildRunBoxes(handle);
+            // Unlike renderChildRuns' collapsed cards (whose fake pipeline row shows live
+            // counts that genuinely change every tick), an EXPANDED box's chrome — the only
+            // thing renderChildRunBoxes draws, its real merged content is drawn separately by
+            // renderNodes/renderEdges above — is derived entirely from handle.currentGraph,
+            // which this (structurally-stable) branch just proved is byte-identical to last
+            // commit. Profiling a live demo run showed this full clear-and-rebuild (including
+            // discarding and re-registering every box's clip-path def) costing a ~50ms main-
+            // thread long task on every ~2s live-tail tick for zero visual change — skip it
+            // unless something that actually affects the chrome (status color/label) changed.
+            const boxSig = childRunBoxesSignature(handle);
+            if (boxSig !== handle.lastChildRunBoxesSig) {
+                renderChildRunBoxes(handle);
+                handle.lastChildRunBoxesSig = boxSig;
+            }
             return;
         }
 
@@ -868,6 +881,7 @@ const D3Graph = (() => {
         renderNodes(handle);
         renderChildRuns(handle);
         renderChildRunBoxes(handle);
+        handle.lastChildRunBoxesSig = childRunBoxesSignature(handle);
         if (!handle.userZoomed) fitToView(handle, true);
     }
 
@@ -886,6 +900,14 @@ const D3Graph = (() => {
     const CHILD_RUN_MIN_WIDTH = NODE_WIDTH;
     const CHILD_RUN_HEIGHT = HEADER_HEIGHT + ROW_HEIGHT; // header + one fake pipeline row
     const CHILD_BADGE_W = 34, CHILD_BADGE_H = 20;
+
+    // Cheap fingerprint of everything renderChildRunBoxes' chrome actually depends on
+    // (position/size come from currentGraph, which the caller already knows is unchanged on
+    // the stable-path branch — this only needs to catch a status flip or box-color change).
+    function childRunBoxesSignature(handle) {
+        const boxes = handle.currentGraph?.childRunBoxes || [];
+        return boxes.map(b => `${b.runId}:${b.entry?.status}:${b.boxColor || ''}`).join('|');
+    }
 
     function childRunStatusColor(status) {
         switch (String(status || '').toLowerCase()) {
@@ -965,7 +987,12 @@ const D3Graph = (() => {
             .attr('x', bx + CHILD_BADGE_W / 2).attr('y', -hh + HEADER_HEIGHT / 2)
             .text(expanded ? '▾' : '▴');
 
-        attachHoverZoom(g, handle);
+        // Hover-zoom exists to make a small, hard-to-read card legible when the graph is
+        // zoomed way out — an EXPANDED box is already a big container full of its own
+        // full-size real nodes (not a compact card needing magnification), so scaling the
+        // whole thing on hover is just disorienting. Collapsed cards are the same size as a
+        // real node and get the same benefit a real node does.
+        if (!expanded) attachHoverZoom(g, handle);
     }
 
     // Registers (or updates) the rounded-rect clipPath a child card's header accent band
