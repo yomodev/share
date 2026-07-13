@@ -62,6 +62,18 @@ public class RunsSettings
     public string GraphDirection { get; set; } = "Horizontal";
 
     /// <summary>
+    /// Which layout engine computes the run-detail flow graph's node positions/edge
+    /// routing. <c>Elk</c> (default): the mature, full-featured ELK.js engine (ports,
+    /// multiple algorithms, battle-tested) — see docs/12_Custom_Layout_And_Nested_Runs.md.
+    /// <c>Custom</c>: the in-house bm-flow-layout engine built alongside it as a Stage 1
+    /// comparison (docs/12 §5) — no per-pipeline ports yet (service-to-service edges only)
+    /// and a narrower feature set, but no external CDN dependency and full control over its
+    /// behavior. Any other value falls back to Elk. Not currently overridable per topology
+    /// hint — this is a whole-app choice, not a per-run-type one.
+    /// </summary>
+    public string GraphLayoutEngine { get; set; } = "Elk";
+
+    /// <summary>
     /// How many seconds since a pipeline's last finished chunk it still counts as
     /// "recently active" (bright green/blue header and row color in the run-detail
     /// flow graph) rather than "quiet" (dim green/gray). Measured against the run's

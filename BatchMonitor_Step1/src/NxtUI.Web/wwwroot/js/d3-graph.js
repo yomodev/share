@@ -747,7 +747,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl, dotNetRef, portConstraints, edgeStyle, defaultDirection) {
+    function init(containerEl, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -816,6 +816,9 @@ const D3Graph = (() => {
             // fixes the default; 'AUTO' keeps the old aspect-ratio auto-pick. A run-type
             // hint's own layout.direction (see chooseDir) always wins over this either way.
             defaultDirection: (defaultDirection === 'DOWN' || defaultDirection === 'AUTO') ? defaultDirection : 'RIGHT',
+            // RunsSettings.GraphLayoutEngine — 'elk' (default) or 'custom' (bm-flow-layout).
+            // See runLayout()'s own comment for what each engine actually supports.
+            layoutEngine: layoutEngine === 'custom' ? 'custom' : 'elk',
             animState: createState(),
             elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
@@ -823,7 +826,7 @@ const D3Graph = (() => {
             userZoomed: false, isVisible: true, disposed: false,
             popoverNodeId: null, popoverPipeline: null, popoverHideTimer: null,
         };
-        if (!handle.elk) console.error('[D3Graph] ELK not loaded — flow graph cannot lay out.');
+        if (!handle.elk && handle.layoutEngine !== 'custom') console.error('[D3Graph] ELK not loaded — flow graph cannot lay out.');
 
         const frame = now => {
             if (handle.disposed) return;
@@ -886,7 +889,10 @@ const D3Graph = (() => {
     }
 
     async function commitLayout(handle) {
-        if (handle.disposed || !handle.elk) return;
+        // The custom engine (RunsSettings.GraphLayoutEngine = "Custom") doesn't touch ELK at
+        // all, so it shouldn't be blocked by ELK failing to load (e.g. the CDN script being
+        // unreachable) — only the default 'elk' engine actually needs handle.elk.
+        if (handle.disposed || (handle.layoutEngine !== 'custom' && !handle.elk)) return;
         const topo = handle.pendingTopology;
         if (!topo) return;
         handle.lastCommitTime = performance.now();
@@ -1935,7 +1941,7 @@ const D3Graph = (() => {
 const _handles = new Map();
 
 /** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [portConstraints] "FIXED_SIDE" (default) or "FIXED_POS" @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
-export function init(el, key, dotNetRef, portConstraints, edgeStyle, defaultDirection) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle, defaultDirection)); }
+export function init(el, key, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */
