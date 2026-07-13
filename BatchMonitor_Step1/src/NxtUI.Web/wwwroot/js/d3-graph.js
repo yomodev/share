@@ -481,15 +481,23 @@ const D3Graph = (() => {
             return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts };
         });
 
-        const elkEdges = edges.map((e, i) => ({
-            id: `e${i}`,
+        // Content-based id (source/target service+pipeline), NOT an array index — the
+        // `edges` array's order can shift between successive topology recomputes (a new
+        // pipeline appearing shifts everything after it), and renderEdges' D3 join keys on
+        // this id (`.data(data, d => d.id)`) to track element identity across updates. An
+        // index-based id would silently rebind "e5"'s DOM element (with its stale computed
+        // path/colour) onto a completely different logical edge whenever the order shifted,
+        // which read as edges briefly showing the wrong colour or appearing to vanish/jump.
+        const edgeId = e => `${e.source}::${e.sourcePipeline || ''}->${e.target}::${e.targetPipeline || ''}`;
+        const elkEdges = edges.map(e => ({
+            id: edgeId(e),
             // No pipeline → attach to the node itself (ELK routes it to a sensible point on
             // the node's boundary automatically), not a per-pipeline port. See the port-
             // building comment above for why.
             sources: [e.sourcePipeline ? portId(e.source, 'out', e.sourcePipeline) : e.source],
             targets: [e.targetPipeline ? portId(e.target, 'in',  e.targetPipeline) : e.target],
         }));
-        const edgeDataById = new Map(edges.map((e, i) => [`e${i}`, e]));
+        const edgeDataById = new Map(edges.map(e => [edgeId(e), e]));
 
         // Nudges ELK's own compaction toward filling the container's actual shape
         // instead of defaulting to a fixed internal ratio — helps address layouts
@@ -602,22 +610,68 @@ const D3Graph = (() => {
     // distinct from its siblings. `siblingIndex`/`siblingCount` (edges sharing this edge's
     // target) add a small perpendicular stagger for the case where the sources themselves
     // are also close together (e.g. several sibling pipelines on the same source node).
-    function edgeLabelPos(pts, siblingIndex = 0, siblingCount = 1) {
-        if (!pts || pts.length < 2) return { x: 0, y: 0 };
-        const start = pts[0];
-        const next  = pts[1];
-        const dx = next.x - start.x, dy = next.y - start.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const fwd = Math.min(len * 0.5, 40);
-        const ux = dx / len, uy = dy / len;
-        // Perpendicular unit vector, used to fan siblings apart instead of stacking them
-        // directly on top of one another.
-        const px = -uy, py = ux;
-        const stagger = siblingCount > 1 ? (siblingIndex - (siblingCount - 1) / 2) * 14 : 0;
-        return {
-            x: start.x + ux * fwd - 6 + px * stagger,
-            y: start.y + uy * fwd - 11 + py * stagger,
-        };
+    // Walks a (possibly multi-bend) polyline to the point `t` (0-1) of the way along its
+    // total length, plus the unit tangent direction there — used to try several candidate
+    // label positions along an edge rather than being pinned to one fixed spot.
+    function pointAlongPath(pts, t) {
+        if (!pts || pts.length < 2) return { x: 0, y: 0, ux: 1, uy: 0 };
+        const segLens = [];
+        let total = 0;
+        for (let i = 1; i < pts.length; i++) {
+            const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+            segLens.push(l);
+            total += l;
+        }
+        let target = total * Math.max(0, Math.min(1, t));
+        for (let i = 0; i < segLens.length; i++) {
+            const l = segLens[i] || 1;
+            if (target <= l || i === segLens.length - 1) {
+                const f = Math.max(0, Math.min(1, target / l));
+                const p0 = pts[i], p1 = pts[i + 1];
+                return { x: p0.x + (p1.x - p0.x) * f, y: p0.y + (p1.y - p0.y) * f, ux: (p1.x - p0.x) / l, uy: (p1.y - p0.y) / l };
+            }
+            target -= l;
+        }
+        const last = pts[pts.length - 1];
+        return { x: last.x, y: last.y, ux: 1, uy: 0 };
+    }
+
+    function rectsOverlap(a, b) {
+        return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+    }
+
+    // Finds a spot for an edge's label that doesn't sit on top of a node card or another
+    // already-placed label — NOT pinned close to either endpoint. Tries a handful of
+    // positions spread along the path (avoiding the very ends, which are cluttered by the
+    // node card and arrowhead) at a few perpendicular offsets/distances from the line, and
+    // takes the first one that clears every node bbox and every label placed so far this
+    // render pass (`placedRects`, shared across all edges — the caller resets it once per
+    // renderEdges call). Falls back to the path midpoint if every candidate collides (dense
+    // graphs can run out of clean spots; still better than not drawing a label at all).
+    function placeEdgeLabel(pts, text, nodeBoxes, placedRects) {
+        const w = Math.max(24, String(text || '').length * 6.4 + 10), h = 16;
+        const tCandidates = [0.5, 0.35, 0.65, 0.22, 0.78];
+        const distances = [12, 22, 32];
+        for (const t of tCandidates) {
+            const p = pointAlongPath(pts, t);
+            const px = -p.uy, py = p.ux; // perpendicular unit vector
+            for (const side of [-1, 1]) {
+                for (const dist of distances) {
+                    const cx = p.x + px * dist * side, cy = p.y + py * dist * side;
+                    const rect = { x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 };
+                    const hitsNode  = nodeBoxes.some(b => rectsOverlap(rect, b));
+                    const hitsLabel = placedRects.some(r => rectsOverlap(rect, r));
+                    if (!hitsNode && !hitsLabel) {
+                        placedRects.push(rect);
+                        return { x: cx, y: cy };
+                    }
+                }
+            }
+        }
+        const p = pointAlongPath(pts, 0.5);
+        const cx = p.x - p.uy * 12, cy = p.y + p.ux * 12;
+        placedRects.push({ x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 });
+        return { x: cx, y: cy };
     }
 
     // ── init ─────────────────────────────────────────────────────────────
@@ -850,7 +904,7 @@ const D3Graph = (() => {
     // on the right (in place of a real node's instance-count pill). Returns nothing; callers
     // add whatever goes below the header (a fake row for collapsed, nothing for expanded —
     // the real merged nodes sit there instead).
-    function renderChildCardChrome(g, handle, { width, height, status, label, expanded, onToggle }) {
+    function renderChildCardChrome(g, handle, { id, width, height, status, label, expanded, onToggle }) {
         const hw = width / 2, hh = height / 2;
         const statusCol = childRunStatusColor(status);
 
@@ -858,12 +912,20 @@ const D3Graph = (() => {
             .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', height)
             .attr('fill', nodeBg()).attr('stroke', statusCol);
 
+        // Real nodes clip their header accent band to the card's own rounded-corner shape
+        // (updateClipPaths/bm-clip-<id>) so it never pokes square corners out past the
+        // rounded card underneath it — this reuses that same mechanism for a child card's
+        // header (registerChildCardClip, called by each caller before this).
         g.append('rect').attr('class', 'bm-node-accent')
             .attr('x', -hw).attr('y', -hh).attr('width', width).attr('height', HEADER_HEIGHT)
             .attr('fill', statusCol).attr('fill-opacity', 0.4)
+            .attr('clip-path', `url(#bm-clip-${id})`)
             .style('cursor', 'pointer').on('click', onToggle);
 
-        g.append('text').attr('class', 'bm-node-label')
+        // dy centers the text on its own line (matches buildNode's real header label,
+        // which sets the same dy at enter time) — without it the glyph sits on the SVG
+        // text baseline instead of vertically centered in the header band.
+        g.append('text').attr('class', 'bm-node-label').attr('dy', '0.32em')
             .attr('x', -hw + 14).attr('y', -hh + HEADER_HEIGHT / 2)
             .style('cursor', 'pointer').on('click', onToggle)
             .text(label);
@@ -874,17 +936,34 @@ const D3Graph = (() => {
             .attr('stroke', dividerColor());
 
         // Expand/collapse badge — same rounded-pill shape as a real node's instance count,
-        // but showing a chevron for "this card can be toggled" instead of a count.
+        // showing an up/down chevron (expanding/collapsing this card vertically opens/
+        // closes content beneath it, same as any disclosure control) instead of a count.
         const bx = hw - 10 - CHILD_BADGE_W, by = -hh + HEADER_HEIGHT / 2 - CHILD_BADGE_H / 2;
         const badge = g.append('g').attr('class', 'bm-node-badge bm-child-card-badge')
             .style('cursor', 'pointer').on('click', onToggle);
+        badge.append('title').text(expanded ? 'Collapse this run' : 'Expand this run');
         badge.append('rect').attr('class', 'bm-node-badge-bg')
             .attr('x', bx).attr('y', by).attr('width', CHILD_BADGE_W).attr('height', CHILD_BADGE_H)
             .attr('rx', CHILD_BADGE_H / 2);
         badge.append('text').attr('class', 'bm-node-badge-text')
             .attr('text-anchor', 'middle').attr('dy', '0.32em')
             .attr('x', bx + CHILD_BADGE_W / 2).attr('y', -hh + HEADER_HEIGHT / 2)
-            .text(expanded ? '▾' : '▸');
+            .text(expanded ? '▾' : '▴');
+
+        attachHoverZoom(g, handle);
+    }
+
+    // Registers (or updates) the rounded-rect clipPath a child card's header accent band
+    // clips to — see the comment on renderChildCardChrome. Callers own a class name so two
+    // independent full-clear-then-rebuild passes (collapsed cards vs expanded boxes) don't
+    // remove each other's entries mid-commit.
+    function resetChildCardClips(handle, cssClass) {
+        handle.defs.selectAll(`clipPath.${cssClass}`).remove();
+    }
+    function registerChildCardClip(handle, cssClass, id, width, height) {
+        const clip = handle.defs.append('clipPath').attr('class', cssClass).attr('id', `bm-clip-${id}`);
+        clip.append('rect').attr('rx', 10)
+            .attr('x', -width / 2).attr('y', -height / 2).attr('width', width).attr('height', height);
     }
 
     // Draws the one fake pipeline row a COLLAPSED card shows, reusing the exact same
@@ -940,19 +1019,24 @@ const D3Graph = (() => {
         const baseY = g.height + CHILD_RUN_MARGIN;
         let cursorX = (g.width - totalWidth) / 2;
 
+        resetChildCardClips(handle, 'bm-child-collapsed-clip');
+
         collapsed.forEach((entry, i) => {
             const width = widths[i];
             const cx = cursorX + width / 2, cy = baseY + CHILD_RUN_HEIGHT / 2;
+            const clipId = `child-collapsed-${entry.runId}`;
+            registerChildCardClip(handle, 'bm-child-collapsed-clip', clipId, width, CHILD_RUN_HEIGHT);
             const onToggle = ev => {
                 ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
                 handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
             };
             const gEl = handle.crLayer.append('g').attr('class', 'bm-child-run')
+                .datum({ x: cx, y: cy })
                 .attr('transform', `translate(${cx},${cy})`)
                 .on('click', onToggle);
 
             renderChildCardChrome(gEl, handle, {
-                width, height: CHILD_RUN_HEIGHT, status: entry.status,
+                id: clipId, width, height: CHILD_RUN_HEIGHT, status: entry.status,
                 label: truncateLabel(entry.description || entry.runId, 34), expanded: false, onToggle,
             });
             renderFakePipelineRow(gEl, width, CHILD_RUN_HEIGHT, entry);
@@ -970,15 +1054,19 @@ const D3Graph = (() => {
     function renderChildRunBoxes(handle) {
         handle.cbLayer.selectAll('*').remove();
         const boxes = handle.currentGraph?.childRunBoxes || [];
+        resetChildCardClips(handle, 'bm-child-expanded-clip');
         for (const box of boxes) {
+            const clipId = `child-expanded-${box.runId}`;
+            registerChildCardClip(handle, 'bm-child-expanded-clip', clipId, box.width, box.height);
             const g = handle.cbLayer.append('g').attr('class', 'bm-child-run bm-child-run-expanded')
+                .datum({ x: box.x, y: box.y })
                 .attr('transform', `translate(${box.x},${box.y})`);
             const onToggle = ev => {
                 ev.stopPropagation();
                 handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', box.runId);
             };
             renderChildCardChrome(g, handle, {
-                width: box.width, height: box.height, status: box.entry.status,
+                id: clipId, width: box.width, height: box.height, status: box.entry.status,
                 label: truncateLabel(box.entry.description || box.runId, 40), expanded: true, onToggle,
             });
         }
@@ -1521,16 +1609,12 @@ const D3Graph = (() => {
     function renderEdges(handle) {
         const data = handle.currentGraph.edges;
 
-        // Several edges can converge on the same target (e.g. a fan-in pipeline) — their
-        // label anchor points (near the shared target) would otherwise coincide and the
-        // text would overlap illegibly. Index each edge among its same-target siblings so
-        // edgeLabelPos can stagger them apart.
-        const targetCounts = new Map();
-        for (const d of data) {
-            const t = d.data?.target ?? d.id;
-            targetCounts.set(t, (targetCounts.get(t) || 0) + 1);
-        }
-        const targetSeen = new Map();
+        // Shared across every edge in this render pass — placeEdgeLabel consults both so a
+        // label never lands on top of a node card or an already-placed sibling label.
+        const nodeBoxes = [...handle.currentGraph.nodes.values()].map(n => ({
+            x0: n.x - n.width / 2, y0: n.y - n.height / 2, x1: n.x + n.width / 2, y1: n.y + n.height / 2,
+        }));
+        const placedLabelRects = [];
 
         const sel = handle.eLayer.selectAll('g.bm-edge').data(data, d => d.id);
 
@@ -1588,20 +1672,15 @@ const D3Graph = (() => {
 
             el.select('title').text(edgeTooltip(d.data));
 
-            // Place the label near the SOURCE end rather than the target — when several
-            // edges converge on the same target (fan-in), their target-end points cluster
-            // together and the labels overlap; staying close to each edge's own (distinct)
-            // source keeps them legibly apart. Edges sharing a target are additionally
-            // staggered by their index among those siblings, in case the sources
-            // themselves are also close together.
-            const t = d.data?.target ?? d.id;
-            const idx = targetSeen.get(t) || 0;
-            targetSeen.set(t, idx + 1);
-            const siblingCount = targetCounts.get(t) || 1;
-            const lp = edgeLabelPos(d.pts, idx, siblingCount);
+            // Not pinned to either endpoint — placeEdgeLabel searches a handful of spots
+            // along the path and picks the first that doesn't land on a node card or a
+            // label already placed for an earlier edge this render pass (see nodeBoxes/
+            // placedLabelRects above).
+            const labelText = edgeLabel(d.data);
+            const lp = placeEdgeLabel(d.pts, labelText, nodeBoxes, placedLabelRects);
             el.select('.bm-edge-label')
                 .attr('x', lp.x).attr('y', lp.y)
-                .text(edgeLabel(d.data));
+                .text(labelText);
         });
 
         // Hover: bring the hovered edge to the front and highlight it (thicker, glowing),

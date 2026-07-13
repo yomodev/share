@@ -423,6 +423,16 @@
     private void UpdateSliderRange(IEnumerable<PerformanceEvent> events)
     {
         var list = events.ToList();
+        // Fold in every currently-expanded child's own events too (_expandedChildEvents,
+        // populated by PopulateExpandedChildrenAsync just before this is called) — a child
+        // run's own event window can extend earlier/later than its parent's (particularly
+        // in mock data, where each run's Start/End is set independently), and while it's
+        // expanded its real nodes/edges are animating on-screen right alongside the
+        // parent's, so the replay slider covering only the parent's own window would clamp
+        // or cut off activity that's visibly still there.
+        foreach (var childEvents in _expandedChildEvents.Values)
+            list.AddRange(childEvents);
+
         if (list.Count == 0) return;
 
         _sliderMin = list.Min(e => e.Start);
@@ -647,8 +657,20 @@
             {
                 var childDetails = await RunService.GetRunDetailsAsync(Environment, child.RunId);
                 var childEvents  = await RunService.GetRunEventsAsync(Environment, child.RunId, childDetails.Start);
-                var childStore   = childEvents.ToDictionary(e => e.CompositeKey, e => e);
+                // Kept as the FULL (unclamped) list — used for the slider's own min/max
+                // (UpdateSliderRange) and for the errors dialog, both of which need the
+                // child's true extent regardless of where the replay scrub position sits.
                 _expandedChildEvents[child.RunId] = childEvents;
+
+                // The parent's own topology is already replay-clamped (see `filtered` in
+                // RecomputeTopologyAsync) — an expanded child's real nodes/edges are merged
+                // into that SAME rendered graph, so they need the same clamp. Without this,
+                // scrubbing the replay slider moved the parent's animation but a child's own
+                // merged content stayed frozen at its final state.
+                var childStore = (_replayTimestamp.HasValue
+                        ? childEvents.Where(e => e.Start <= _replayTimestamp.Value)
+                        : childEvents)
+                    .ToDictionary(e => e.CompositeKey, e => e);
 
                 TopologyBlueprint? childBlueprint = null;
                 var childHintFile = HintLoader.Get(childDetails.Type);

@@ -533,7 +533,13 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 hops.RemoveAt(0);
 
                 var start = DateTime.UtcNow.AddSeconds(-rng.Next(1, 12));
-                var isError = rng.Next(0, 100) < 5;
+                // The demo pool (docs/12 §7) is documented as a deliberately clean, predictable
+                // example — random errors here contradicted that (a service could turn red mid-
+                // demo for no reason a viewer could see, since GenerateDemoEvents' own error
+                // injection is correctly conditioned on RunStatus.Failed but this live-tail path
+                // wasn't). The generic pool keeps its unconditional error rate — some background
+                // noise is realistic there.
+                var isError = !isDemoPool && rng.Next(0, 100) < 5;
                 var inProg = !isError && rng.Next(0, 100) < 8;
 
                 events.Add(new PerformanceEvent
