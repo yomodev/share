@@ -1,4 +1,12 @@
-# BatchMonitor — Technical Decisions
+# NxtUI — Technical Decisions
+
+> This is a historical decisions log (kept append-only, like an ADR journal) — entries
+> describe the reasoning *at the time*, and some now use old names (`BatchMonitor.*`
+> namespaces, `IBatchService`, `PerformanceEventService`/`TimelineBatch`) that were
+> renamed to `NxtUI.*`/`IRunService`/`TimelineRun` since. Where a decision has been
+> **factually superseded** (not just renamed) a note says so and points to the doc
+> with current details — see `01_Architecture.md` and `02_Models_DataFlow.md` for the
+> present-day picture.
 
 ## D1. Blazor Server only (no WASM)
 
@@ -120,7 +128,15 @@ The Blazor container div remains untouched. When Blazor re-renders (e.g. after G
 
 ## D7. SignalR hub event routing
 
-**Decision:** The `"BatchEvent"` message carries three arguments: `(string env, string runId, PerformanceEvent event)`.
+> **Superseded.** Live event delivery no longer goes through a SignalR hub push at
+> all — it's `RunEventBroker`, an in-process pub/sub keyed by `"{env}:{runId}"`
+> (`RunHub` only handles group membership). See `02_Models_DataFlow.md`'s "Live
+> Event Delivery" section for the current design. The routing problem this decision
+> solved (multiple tabs sharing one connection, needing to know which run an event
+> belongs to) is still solved the same way conceptually — by keying on `env:runId` —
+> just without a SignalR round trip.
+
+**Original decision:** The `"BatchEvent"` message carries three arguments: `(string env, string runId, PerformanceEvent event)`.
 
 **Rationale:** `SignalRConnectionService` is scoped (one per Blazor circuit) and shared across all batch subscriptions in that circuit (multiple BatchDetail tabs + multiple Timeline tabs). Routing requires knowing which `(env, runId)` an incoming event belongs to. The event itself doesn't carry env/runId, so they must be sent as separate args.
 
@@ -130,14 +146,26 @@ The Blazor container div remains untouched. When Blazor re-renders (e.g. after G
 
 ## D8. PerformanceEventService hybrid push+poll
 
-**Decision:** For running batches, subscribe to SignalR push AND run a slow fallback poll (30s interval). For completed batches, load history once then poll at normal cadence.
+> **Terminology updated, decision still current.** "SignalR push" below is now
+> `RunEventBroker` push (see D7's note and `02_Models_DataFlow.md`) — the
+> hybrid push+poll shape and rationale are otherwise unchanged as of this writing.
+> Current intervals: focused-poll 3s, unfocused-poll 15s, push-active fallback 30s
+> (`FocusedPollIntervalMs`/`UnfocusedPollIntervalMs`/`PushFallbackPollMs` in
+> `PerformanceEventService.cs`).
+
+**Decision:** For running runs, subscribe to broker push AND run a slow fallback poll (30s interval when push is active). For completed runs (or if push subscription fails), rely on the regular polling loop.
 
 **Rationale:**
-- SignalR may drop connections; polling provides resilience
-- Completed batches can't receive push events (no server push for historical data)
-- Focus-aware: unfocused tabs poll at 15s; SignalR active tabs at 30s
+- The in-process broker has no persistence — a circuit that starts polling
+  mid-run and a push subscription that silently stops both need polling as a
+  safety net.
+- Completed runs don't get push events from a service that's no longer running.
+- Focus-aware: unfocused tabs poll slower (15s) than focused ones (3s active poll
+  baseline, relaxed to 30s once push is confirmed active).
 
-**Poll vs push priority:** SignalR events upsert into `PerformanceEventStore` immediately. Poll results are also upserted. Because upsert uses `CompositeKey` with last-write-wins by `Timestamp`, duplicate delivery is idempotent.
+**Poll vs push priority:** broker-pushed events upsert into the event store
+immediately. Poll results are also upserted. Because upsert uses `CompositeKey`
+with last-write-wins, duplicate delivery from both paths is idempotent.
 
 ---
 
@@ -184,9 +212,16 @@ The stack-mode blocks use `item.xStart`/`item.xEnd` directly (not scaled through
 
 ---
 
-## D11. BatchMonitor.Core namespace strategy
+## D11. Core namespace strategy
 
-**Decision:** Keep namespaces as `BatchMonitor.Models`, `BatchMonitor.Services`, `BatchMonitor.Configuration` in the Core library (not `BatchMonitor.Core.Models` etc.).
+> **Reversed.** The current Core library (`NxtUI.Core`) uses fully-qualified
+> namespaces matching its folder structure — `NxtUI.Core.Models`,
+> `NxtUI.Core.Services`, etc. — with no `RootNamespace` override, the opposite of
+> this decision. `_Imports.razor` lists every namespace explicitly instead (see
+> `06_UI_Components.md`). Left here for the historical rationale in case the
+> flat-namespace tradeoff comes up again.
+
+**Original decision:** Keep namespaces as `BatchMonitor.Models`, `BatchMonitor.Services`, `BatchMonitor.Configuration` in the Core library (not `BatchMonitor.Core.Models` etc.).
 
 **Rationale:** Zero `@using` changes required in all `.razor` files. The assembly is named `BatchMonitor.Core` but the root namespace is `BatchMonitor` (set via `<RootNamespace>BatchMonitor</RootNamespace>` in the csproj).
 
