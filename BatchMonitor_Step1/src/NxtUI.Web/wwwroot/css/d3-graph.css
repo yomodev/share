@@ -166,6 +166,20 @@
 .bm-row-track { fill: rgba(255,255,255,0.07); }
 .bm-row-fill  { transition: width 350ms ease; }
 
+/* Third progress-bar state for a collapsed child-run card (see renderFakePipelineRow):
+   Running with no known DoneCount/TotalCount yet — a fixed-width segment sliding across
+   the track, distinct from both a real percentage and "no bar at all". Slide distance
+   (--bm-row-slide) is set per-instance in JS since track width varies by card width. */
+.bm-row-fill-indeterminate {
+    transition: none;
+    animation: bm-row-slide 1.4s ease-in-out infinite;
+}
+@keyframes bm-row-slide {
+    0%   { transform: translateX(0); }
+    50%  { transform: translateX(var(--bm-row-slide, 0px)); }
+    100% { transform: translateX(0); }
+}
+
 .bm-row-counts {
     font-size: 0.72rem;
     font-family: var(--bm-font-mono, monospace);

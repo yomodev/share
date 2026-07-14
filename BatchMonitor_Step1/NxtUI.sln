@@ -31,6 +31,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\12_Custom_Layout_And_Nested_Runs.md = docs\12_Custom_Layout_And_Nested_Runs.md
 		docs\13_Setting_Up_Nested_Runs_And_Topology.md = docs\13_Setting_Up_Nested_Runs_And_Topology.md
 		docs\14_Client_Side_Architecture.md = docs\14_Client_Side_Architecture.md
+		docs\15_Backend_Services.md = docs\15_Backend_Services.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"

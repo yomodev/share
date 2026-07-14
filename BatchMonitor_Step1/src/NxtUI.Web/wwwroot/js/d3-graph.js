@@ -1407,9 +1407,16 @@ const D3Graph = (() => {
     // Draws the one fake pipeline row a COLLAPSED card shows, reusing the exact same
     // .bm-row-* classes/geometry a real node's pipeline row uses (see renderRows) so a
     // collapsed child run has the same silhouette as any other service card. The row's
-    // "name" slot shows the run's status instead of a pipeline name; its progress bar
-    // reflects DoneCount/TotalCount when known, or is fully filled once Completed — always
-    // drawn (never hidden) so the card never looks broken/incomplete while Running/Failed.
+    // "name" slot shows the run's status instead of a pipeline name; the bar itself has
+    // three states, since DoneCount/TotalCount are both nullable ("not cheaply known" —
+    // see RunNode.cs) and collapsing that into one "empty bar" look was indistinguishable
+    // from genuine 0% progress:
+    //   1. Known progress (TotalCount > 0, or Completed) — real bar at done/total (100% if
+    //      Completed, overriding any stale counts).
+    //   2. Running with no known total — an animated indeterminate bar (a segment sliding
+    //      across the track) so it still visibly communicates "this is alive," not broken.
+    //   3. Anything else with no known total (NotStarted, Failed, Terminated, ...) — no bar
+    //      at all; a finished/not-yet-started run with no counts has nothing to show.
     function renderFakePipelineRow(g, width, cardHeight, entry) {
         const hw = width / 2;
         const top = -cardHeight / 2 + HEADER_HEIGHT;
@@ -1418,8 +1425,12 @@ const D3Graph = (() => {
         const pX = -hw + PAD, pW = width - PAD * 2, pH = 3;
         const statusCol = childRunStatusColor(entry.status);
         const done = entry.doneCount ?? 0, total = entry.totalCount ?? 0;
-        const isCompleted = String(entry.status || '').toLowerCase() === 'completed';
-        const frac = isCompleted ? 1 : (total > 0 ? Math.max(0, Math.min(1, done / total)) : 0);
+        const statusLower = String(entry.status || '').toLowerCase();
+        const isCompleted = statusLower === 'completed';
+        const hasCounts = total > 0;
+        const isIndeterminate = !isCompleted && !hasCounts && statusLower === 'running';
+        const showBar = isCompleted || hasCounts || isIndeterminate;
+        const frac = isCompleted ? 1 : (hasCounts ? Math.max(0, Math.min(1, done / total)) : 0);
 
         g.append('line').attr('class', 'bm-row-div')
             .attr('x1', -hw).attr('x2', hw).attr('y1', top).attr('y2', top)
@@ -1427,16 +1438,29 @@ const D3Graph = (() => {
         g.append('text').attr('class', 'bm-row-name')
             .attr('x', -hw + PAD).attr('y', textY)
             .text(entry.status ?? 'Unknown');
-        if (total > 0) {
+        if (hasCounts) {
             g.append('text').attr('class', 'bm-row-counts')
                 .attr('x', hw - PAD).attr('y', textY).attr('text-anchor', 'end')
                 .text(`${done} / ${total}`);
         }
+        if (!showBar) return;
         g.append('rect').attr('class', 'bm-row-track').attr('rx', 2)
             .attr('x', pX).attr('y', barY).attr('width', pW).attr('height', pH);
-        g.append('rect').attr('class', 'bm-row-fill').attr('rx', 2)
-            .attr('x', pX).attr('y', barY).attr('width', pW * frac).attr('height', pH)
-            .attr('fill', statusCol);
+        if (isIndeterminate) {
+            // A fixed-width segment (~35% of the track, min 24px so short cards still show
+            // motion) that slides end-to-end via CSS `transform: translateX()` — raw SVG
+            // `x`/`width` attributes can't be smoothly keyframe-animated the way CSS
+            // transforms can, so the geometry is fixed and only the transform moves.
+            const segW = Math.max(24, pW * 0.35);
+            g.append('rect').attr('class', 'bm-row-fill bm-row-fill-indeterminate').attr('rx', 2)
+                .attr('x', pX).attr('y', barY).attr('width', segW).attr('height', pH)
+                .attr('fill', statusCol)
+                .style('--bm-row-slide', `${pW - segW}px`);
+        } else {
+            g.append('rect').attr('class', 'bm-row-fill').attr('rx', 2)
+                .attr('x', pX).attr('y', barY).attr('width', pW * frac).attr('height', pH)
+                .attr('fill', statusCol);
+        }
     }
 
     // Unified renderer for every child-run item (handle.currentGraph.childRunBoxes) at
