@@ -90,6 +90,75 @@ from the run's events.
 
 ---
 
+## Run Stats
+
+Aggregate run counts/status over time, opened from the sidebar.
+
+- **Graph / Table** toggle (top left).
+- **Environments** — multi-select; defaults to the currently active
+  environment only. Selecting more than one enables the **color-by-env**
+  toggle (only shown in Graph view with **Group by = None**, since grouping
+  by Day/Week/Month already uses color for the group axis) — switches bar
+  coloring from run status to environment, and adds an env hover-highlight
+  across bars.
+- **Group by** (Graph view only) — None / Day / Week / Month; controls how
+  runs are bucketed along the x-axis.
+- **Filter box** — same run filter grammar as the Runs page (try
+  `env:UAT1`), applied server-side before aggregation.
+- Table view reuses the same run table component as the Runs page (sortable
+  columns, pagination) but without row actions.
+
+---
+
+## Config
+
+Opened from the sidebar's Config entry — a CodeMirror-based editor over the
+current environment's config file (path resolved from
+`EnvConfig:SourcePathTemplate`).
+
+- Read-only unless editing is enabled for the environment
+  (`EnvConfigSvc.IsEditingEnabled`); the source file path is shown in the
+  footer.
+- **Toolbar** (when editable): Undo/Redo (`Ctrl+Z`/`Ctrl+Y`), Fold/Unfold all
+  (`Ctrl+Alt+[`/`Ctrl+Alt+]`), Find/Replace (`Ctrl+F`), and a **History**
+  menu listing previous timestamped backups — picking one loads it into the
+  editor (still requires **Save** to actually restore it).
+- **Word wrap** toggle (`Ctrl+Alt+W`) persists across sessions (local
+  storage).
+- **Refresh** (`Ctrl+Alt+R`) reloads from disk — confirms first if there are
+  unsaved edits.
+- **Save** (`Ctrl+S`) writes to every configured save target for the
+  environment (there can be more than one server); if there's more than one
+  target, a confirmation dialog lists every file about to be overwritten. A
+  timestamped backup of the current source copy is taken before any write.
+  If some targets fail, the ones that succeeded are still kept and a warning
+  names the environment/Settings page for details.
+- An "● unsaved changes" flag appears next to the toolbar while the editor
+  differs from the last loaded/saved content.
+
+---
+
+## Environment
+
+Opened from the sidebar's environment badge (or "Manage environment") — a
+per-environment operations dashboard. **Note:** as of this writing the whole
+page is a front-end mockup — booking slots, quick links, component install
+state, and the installation log are all in-memory UI state with no backend
+service behind them (no `@inject` service calls other than layout), useful
+for prototyping the eventual real feature but not yet wired to anything
+persistent.
+
+- **Environment Booking** — a day timeline of 15-minute slots (free/yours/
+  taken); click-drag to select a range, then **Book** or **Clear**.
+- **Quick Links** — a grid of external link cards.
+- **Components** — a checklist of installable components with per-row status
+  (Installed / Not installed / Installing / Error) and an **Apply** button
+  that becomes enabled once at least one row has a pending change.
+- **Installation Log** — a terminal-style scrolling log of the (simulated)
+  install operations, with a clear button.
+
+---
+
 ## Services
 
 A live table/card view of every running service process, refreshed on a
@@ -125,20 +194,66 @@ underneath for zooming into a time range.
 
 Three related views, opened from the sidebar's Kafka entry:
 
-- **Dashboard** — lists topics (with partition/lag info) and consumer
-  groups side by side; a filter box narrows either list.
-- **Topic Inspector** — live-tails a topic's messages (Start/Pause), with a
-  filter box over the decoded fields and a JSON detail panel per message.
-- **Consumer Groups** — select a group to see its per-topic lag breakdown.
+### Dashboard
+
+- A **Topics / Consumer groups** toggle switches the whole page between the
+  two lists; the filter box's placeholder changes to match
+  ("Filter topics…" / "Filter consumer groups…").
+- **Topics list**: partition count, total lag, and size per topic. Row
+  actions: **Topic config** (view/edit the topic's Kafka config entries),
+  **Consumer groups** (jump to the Groups view pre-filtered to that topic),
+  **Inspect messages** (opens the Topic Inspector), **Delete topic**.
+- **Consumer groups list**: state and total lag per group; row action to
+  delete the group.
+- **Purge topics…** (toolbar) — bulk-select topics and clear their messages
+  via a temporary `retention.ms` drop rather than deleting/recreating the
+  topic, so partition count/config survive the purge.
+
+### Topic Inspector
+
+Live-tails a topic's messages.
+
+- **Start/Pause** toggles the live stream; **Clear** stops and empties the
+  currently-buffered messages without restarting the stream.
+- **Filter/seek box** — accepts both a content filter and a seek position in
+  one expression, e.g. `partition:0 offset:>1000`, `latest:500` (last N
+  messages), `timestamp:>2024-01-15`.
+- **Partition stats** — per-partition high-water mark / lag popover.
+- Per-message **JSON detail panel**: Expand all / Collapse all, a
+  **JSONPath query box** (e.g. `$.items[?(@.price > 10)]`) to drill into a
+  large payload with **Clear** to restore the full view, **Download raw
+  binary**, and **Save JSON** to export the decoded payload.
+
+### Consumer Groups
+
+Select a group (from its own list, or via a topic's row action) to see its
+per-topic/per-partition lag breakdown.
 
 ---
 
 ## MongoDB
 
-- **Dashboard** — pick a database, browse its collections with row counts
-  and sizes; a filter box narrows the collection list.
-- **Collection Inspector** — paginated, sortable, filterable document browser
-  for a single collection; double-click a document to expand it.
+Two related views, opened from the sidebar's MongoDB entry:
+
+### Dashboard
+
+- Pick a database, then browse its collections — document count and storage
+  size per collection; a filter box narrows the collection list.
+- Row actions: **Browse documents** (opens the Collection Inspector),
+  **Collection info** (indexes/stats dialog), **Delete collection**.
+- **Purge collections…** (toolbar) — bulk-select collections and clear all
+  their documents (`DeleteMany`) in parallel, verifying the remaining count
+  afterward, without dropping the collection itself (indexes/config survive).
+
+### Collection Inspector
+
+A paginated, sortable, filterable document browser for a single collection.
+
+- **Search box** filters documents server-side.
+- Double-click a document to expand it into the detail panel: Expand all /
+  Collapse all, a **JSONPath query box** (same syntax as the Kafka message
+  inspector) with **Clear** to restore the full document, and **Save as
+  JSON** to export it.
 
 ---
 
