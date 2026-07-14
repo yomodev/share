@@ -388,3 +388,59 @@ describe('recursive boxes (subGraph)', () => {
         warnSpy.mockRestore();
     });
 });
+
+describe('per-pipeline port variants (docs/12 §6 "port hints")', () => {
+    it('emits one rendered edge per variant, each entering/leaving at its own offset', () => {
+        const nodes = [node('A', 200, 140), node('B', 200, 140)];
+        const result = layout({
+            nodes,
+            edges: [{
+                source: 'A', target: 'B',
+                variants: [
+                    { id: 'row1', sourceOffset: -40, targetOffset: -40 },
+                    { id: 'row2', sourceOffset: 40, targetOffset: 40 },
+                ],
+            }],
+        });
+        expect(result.edges).toHaveLength(2);
+        const row1 = result.edges.find(e => e.id === 'row1');
+        const row2 = result.edges.find(e => e.id === 'row2');
+        expect(row1.points[0].y).toBeLessThan(row2.points[0].y);
+        expect(row1.points.at(-1).y).toBeLessThan(row2.points.at(-1).y);
+    });
+
+    it('every variant edge stays axis-aligned (orthogonal routing applies per-variant too)', () => {
+        const result = layout({
+            nodes: [node('A', 200, 140), node('B', 200, 140)],
+            edges: [{
+                source: 'A', target: 'B',
+                variants: [{ id: 'row1', sourceOffset: -40, targetOffset: 40 }],
+            }],
+        });
+        const pts = result.edges[0].points;
+        for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            expect(a.x === b.x || a.y === b.y).toBe(true);
+        }
+    });
+
+    it('clamps an out-of-range offset to within the node\'s own extent', () => {
+        const nodes = [node('A', 200, 100), node('B', 200, 100)];
+        const result = layout({
+            nodes,
+            edges: [{
+                source: 'A', target: 'B',
+                variants: [{ id: 'row1', sourceOffset: 9999, targetOffset: -9999 }],
+            }],
+        });
+        const a = result.nodes.get('A'), b = result.nodes.get('B');
+        const pts = result.edges[0].points;
+        expect(pts[0].y).toBeLessThanOrEqual(a.y + a.height / 2);
+        expect(pts.at(-1).y).toBeGreaterThanOrEqual(b.y - b.height / 2);
+    });
+
+    it('omitting variants keeps the old single-centered-edge behavior (backward compatible)', () => {
+        const result = layout({ nodes: [node('A'), node('B')], edges: [edge('A', 'B')] });
+        expect(result.edges).toHaveLength(1);
+    });
+});

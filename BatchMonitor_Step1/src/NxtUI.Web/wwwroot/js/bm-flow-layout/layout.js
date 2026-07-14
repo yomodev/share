@@ -68,6 +68,17 @@
  * @property {string} source
  * @property {string} target
  * @property {string} [id]
+ * @property {{id:string, sourceOffset?:number, targetOffset?:number}[]} [variants] - Stage 6:
+ *        when a source/target NODE pair has more than one real (e.g. per-pipeline-row) edge
+ *        between them, the layered solve still only needs ONE structural edge for layering/
+ *        ordering/dummy-chain purposes — but each real edge still needs its OWN rendered
+ *        polyline, entering/leaving at its own cross-axis offset rather than the node's
+ *        center (e.g. a specific pipeline row's y). Set `variants` to emit one output edge
+ *        per entry instead of one for the whole node pair, all sharing this edge's
+ *        structural chain (same dummy waypoints), each independently offset at its own
+ *        source/target end by `sourceOffset`/`targetOffset` (cross-axis pixels from the
+ *        node's center; positive = toward `below`/`right`). Omit (or pass an empty array)
+ *        for the default "one polyline per node pair, centered" behavior.
  *
  * @typedef {Object} LayoutInput
  * @property {LayoutNode[]} nodes
@@ -147,13 +158,25 @@ export function layout(input, opts = {}) {
     const edgesOut = [];
     for (const e of structuralEdges) {
         const chain = edgeChains.get(edgeKey(e));
-        edgesOut.push({
-            id: e.id ?? edgeKey(e),
-            source: e.source,
-            target: e.target,
-            points: chainToPoints(chain, positioned, direction),
-            isBackEdge: false,
-        });
+        if (e.variants && e.variants.length > 0) {
+            for (const v of e.variants) {
+                edgesOut.push({
+                    id: v.id,
+                    source: e.source,
+                    target: e.target,
+                    points: chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
+                    isBackEdge: false,
+                });
+            }
+        } else {
+            edgesOut.push({
+                id: e.id ?? edgeKey(e),
+                source: e.source,
+                target: e.target,
+                points: chainToPoints(chain, positioned, direction),
+                isBackEdge: false,
+            });
+        }
     }
     for (const e of backEdges) {
         edgesOut.push({
@@ -590,10 +613,12 @@ function assignCoordinates(layers, nodesById, dummies, layerOf, direction, layer
 //   2. insert an elbow (H-then-V, or V-then-H) between every consecutive pair of waypoints
 //      whose cross-axis coordinate differs, bending at the horizontal (resp. vertical)
 //      midpoint of that hop — see orthogonalizeChain.
-// No per-pipeline ports yet (docs/12 §6/"port hints" — still unbuilt): every edge enters/
-// exits at its node's cross-axis CENTER, not a specific pipeline row's y. That's the one
-// remaining visual gap vs. ELK's FIXED_POS mode.
-function chainToPoints(chain, positioned, direction) {
+// Stage 6 (per-pipeline ports, docs/12 §6): `sourceOffset`/`targetOffset` (cross-axis
+// pixels from the node's own center, clamped to its own half-extent so a port can never
+// render past its own node's edge) let a caller anchor an edge's endpoint at a specific
+// row instead of the node's plain center — see LayoutEdge.variants. Both default to 0,
+// which is exactly the old (pre-Stage-6) always-centered behavior.
+function chainToPoints(chain, positioned, direction, sourceOffset = 0, targetOffset = 0) {
     const raw = chain.map(id => {
         const p = positioned.get(id);
         return { x: p.x, y: p.y };
@@ -602,14 +627,26 @@ function chainToPoints(chain, positioned, direction) {
         const first = positioned.get(chain[0]);
         const last = positioned.get(chain[chain.length - 1]);
         if (direction === 'horizontal') {
-            raw[0] = { x: first.x + first.width / 2, y: first.y };
-            raw[raw.length - 1] = { x: last.x - last.width / 2, y: last.y };
+            const so = clampOffset(sourceOffset, first.height);
+            const to = clampOffset(targetOffset, last.height);
+            raw[0] = { x: first.x + first.width / 2, y: first.y + so };
+            raw[raw.length - 1] = { x: last.x - last.width / 2, y: last.y + to };
         } else {
-            raw[0] = { x: first.x, y: first.y + first.height / 2 };
-            raw[raw.length - 1] = { x: last.x, y: last.y - last.height / 2 };
+            const so = clampOffset(sourceOffset, first.width);
+            const to = clampOffset(targetOffset, last.width);
+            raw[0] = { x: first.x + so, y: first.y + first.height / 2 };
+            raw[raw.length - 1] = { x: last.x + to, y: last.y - last.height / 2 };
         }
     }
     return orthogonalizeChain(raw, direction);
+}
+
+// Keeps a port offset within its own node's cross-axis extent (minus a small margin so
+// the port never sits exactly on a rounded corner) — a defensive clamp, not something a
+// well-formed caller should ever need to rely on.
+function clampOffset(offset, extent) {
+    const half = Math.max(0, extent / 2 - 6);
+    return Math.max(-half, Math.min(half, offset || 0));
 }
 
 // Inserts an elbow between each consecutive pair of points whose cross-axis coordinate

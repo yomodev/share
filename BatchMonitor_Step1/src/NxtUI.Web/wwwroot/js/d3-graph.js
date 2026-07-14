@@ -338,17 +338,55 @@ const D3Graph = (() => {
         }
 
         const edges = (topoEdges || []).filter(e => ids.has(e.source) && ids.has(e.target));
-        const seenPairs = new Set();
-        const flowEdges = [];
+
+        // One structural edge per NODE PAIR (bm-flow-layout's layered solve only needs one —
+        // layering/ordering/dummy-chain construction don't care which specific pipeline row
+        // an edge represents), but one `variant` per REAL (source,sourcePipeline,target,
+        // targetPipeline) edge sharing that pair, each anchored at its own pipeline row's
+        // cross-axis offset instead of the node's plain center — see chainToPoints/
+        // LayoutEdge.variants in bm-flow-layout/layout.js. This both routes edges from/to
+        // the correct row (docs/12 §6 "port hints") AND fixes a real edges-collapsing bug a
+        // node-pair-keyed Map used to have: two distinct pipeline-level edges between the
+        // same two services previously shared ONE id, so the second silently overwrote the
+        // first in edgeDataByKey and only one of them ever actually rendered.
+        const nodeById = new Map(topoNodes.map(n => [n.id, n]));
+        const edgeId = e => `${e.source}::${e.sourcePipeline || ''}->${e.target}::${e.targetPipeline || ''}`;
+        const variantsByPair = new Map(); // "source->target" -> variant[]
+        const edgeDataByKey = new Map();
         for (const e of edges) {
-            const key = `${e.source}->${e.target}`;
-            if (seenPairs.has(key)) continue;
-            seenPairs.add(key);
-            flowEdges.push({ id: key, source: e.source, target: e.target });
+            const fullId = edgeId(e);
+            if (edgeDataByKey.has(fullId)) continue; // defensive: shouldn't happen, but never lose data to a collision
+            edgeDataByKey.set(fullId, e);
+
+            const pairKey = `${e.source}->${e.target}`;
+            const sourceOffset = portOffset(nodeById.get(e.source), e.sourcePipeline, direction);
+            const targetOffset = portOffset(nodeById.get(e.target), e.targetPipeline, direction);
+            const list = variantsByPair.get(pairKey) || [];
+            list.push({ id: fullId, sourceOffset, targetOffset });
+            variantsByPair.set(pairKey, list);
         }
-        const edgeDataByKey = new Map(edges.map(e => [`${e.source}->${e.target}`, e]));
+        const flowEdges = [...variantsByPair.entries()].map(([pairKey, variants]) => {
+            const [source, target] = pairKey.split('->');
+            return { id: pairKey, source, target, variants };
+        });
 
         return { flowNodes, flowEdges, metaById, edgeDataByKey, boxSpecs };
+    }
+
+    // Cross-axis offset (pixels from the node's own center) for a specific pipeline row —
+    // undefined/not-found pipeline (declared-but-not-yet-observed blueprint edges connect
+    // two SERVICES, not two specific rows) falls back to 0 (plain center), same as before
+    // per-pipeline ports existed. Reuses the exact same row-position math the ELK path's
+    // portYFromTop/portXEvenSpread already established (see those functions' own docs) —
+    // just expressed relative to center instead of relative to the node's top/left edge,
+    // which is what bm-flow-layout's chainToPoints wants.
+    function portOffset(node, pipelineName, direction) {
+        if (!node || !pipelineName) return 0;
+        const i = pipelineIdx(node, pipelineName);
+        if (i < 0) return 0;
+        if (direction === 'horizontal') return rowCY(node, i);
+        const w = node._layoutWidth || NODE_WIDTH;
+        return portXEvenSpread(node, pipelineName, w) - w / 2;
     }
 
     // Places expanded child-run boxes in a row (horizontal flow) or column (vertical flow)
