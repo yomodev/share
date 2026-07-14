@@ -2,12 +2,32 @@
 
 ## Overview
 
-A unified filter language used across the entire application. The same syntax works in every filter textbox — timeline, batch list, and any future view. The parser runs on the client (JS) and produces an **AST**. Depending on the context the AST is either:
+A unified filter language used across the entire application. The same syntax works
+in every filter textbox — Runs, Services, Kafka, MongoDB, Run Stats, Timeline, the
+Log Browser/Viewer, and any future view (`Components/FilterBox.razor` is the shared
+UI input for all of them). **There are two independent implementations of this
+grammar**, not one parser feeding both sides — this app is Blazor **Server**, so
+"parse it once on the client" doesn't mean what it would in a SPA:
 
-- **Evaluated in-memory** (JS) — timeline and any view that filters already-loaded data
-- **Sent to the server as JSON** and translated into a MongoDB `FilterDefinition` (C#) — views that query the database
+- **`src/NxtUI.Core/Filtering/FilterParser.cs`** (C#) — parses the raw filter text
+  directly wherever a page needs to turn it into a query against a backing store.
+  `FilterBox.razor` itself has no parsing logic; it just raises `OnFilterChanged`
+  with the debounced raw text, and the owning page (e.g. `Runs.razor`) calls
+  `FilterParser.Parse(text, useUtc)` right there in its own C# code (which already
+  runs server-side under Blazor Server — no network hop needed to "reach the
+  server"). The resulting `FilterNode` AST is then handed to
+  `MongoFilterBuilder.Build()` or `SqlFilterBuilder.Build()` depending on the active
+  `IRunService`/`IKafkaService`/`IMongoService` backend.
+- **`wwwroot/js/filter.js`** (JS) — a second, independently-maintained parser +
+  in-memory evaluator, used only where filtering must happen **in the browser
+  without a round trip** — Timeline (already-loaded event data, filtered at 60fps
+  during pan/zoom) and the Log Viewer/Browser's content search (`09_Features.md`).
 
-The parser is written once. The server never parses filter strings — it only interprets ASTs.
+Keep both grammars in sync by hand when adding a new operator/field-alias — unlike
+the log-line-format grammar (`log-viewer-parser.js` / `LogBrowserService.cs`), there
+is currently no shared JS↔C# contract test enforcing that these two parsers stay
+identical; the sections below describe the intended shared grammar both are meant to
+implement.
 
 ---
 
@@ -273,11 +293,12 @@ finish:null                   not yet finished
 When a term has no field prefix it is matched against a **declared list of searchable fields** for the current view. This list is defined in JS alongside the filter component for each view.
 
 ```js
-// timeline
+// timeline (client-evaluated, filter.js)
 searchableFields = ['Service', 'Pipeline', 'Source', 'Name', 'Server']
 
-// batch list
-searchableFields = ['BatchName', 'Type', 'RunId']
+// Runs page (server-evaluated, FilterParser.cs — RunFilter.SearchText covers
+// RunId/RequestId/Description as a free-text OR; field-scoped terms like
+// type:/status:/start: are parsed into the AST separately)
 ```
 
 A bare term `Loader` on the timeline expands in the AST to:
@@ -310,7 +331,7 @@ svc:(Loader, Transformer) start:>-1h
 # Chunks with more than 100 records that are not yet finished
 records:>100 finish:null
 
-# Batches that failed or are still running
+# Runs that failed or are still running
 status:(Failed, Running)
 
 # Exact service name, case-sensitive, large record count
@@ -353,7 +374,35 @@ Node =
   | Or            { left: Node, right: Node }
 ```
 
-Global terms are expanded into an `Or` of `FieldTerm` nodes (one per searchable field) before the AST leaves the parser. The evaluators never see raw `GlobalTerm` nodes — the expansion is the parser's last step.
+Global terms are expanded into an `Or` of `FieldTerm` nodes (one per searchable
+field) before the AST leaves the parser. The evaluators never see raw `GlobalTerm`
+nodes — the expansion is the parser's last step.
+
+The real C# record types (`src/NxtUI.Core/Filtering/FilterAst.cs`):
+```csharp
+public abstract record FilterNode;
+public record AndNode(FilterNode Left, FilterNode Right) : FilterNode;
+public record OrNode(FilterNode Left, FilterNode Right) : FilterNode;
+public record NotNode(FilterNode Operand) : FilterNode;
+public record FieldTermNode(/* field, value, matchType, comparison, caseSensitive */) : FilterNode;
+
+public abstract record FilterValue;
+public record StringValue(string Value) : FilterValue;
+public record NumberValue(double Value) : FilterValue;
+public record BoolValue(bool Value) : FilterValue;
+public record DateValue(DateTime Value) : FilterValue;
+public record TimeOfDayValue(int Seconds) : FilterValue;   // parsed, but currently
+                                                             // unreachable from any
+                                                             // live UI path — see
+                                                             // note below
+public record NullValue : FilterValue;
+public record RangeValue(FilterValue Low, FilterValue High) : FilterValue;
+```
+
+`TimeOfDayValue` (a bare `9:30`-style time with no date) is fully parsed and modeled,
+but nothing in the current UI actually produces a query that reaches it end-to-end —
+treat it as dead/unreachable code if you're touching this grammar, not a working
+feature to build on.
 
 ---
 
@@ -403,11 +452,15 @@ Corner cases to cover:
 - `today` matches midnight of today, not yesterday or tomorrow
 - Empty searchable fields list → global term matches nothing
 
-### C# unit tests (AST → MongoDB filter)
+### C# unit tests
 
-The C# tests receive a pre-built AST (deserialized from JSON) and assert the resulting `FilterDefinition` is correct. No filter string parsing in C#.
+Two layers, both exercised directly (not via JSON deserialized from JS — see the
+Overview's correction: `FilterParser.cs` parses raw filter strings itself):
 
-Corner cases to cover:
+1. **`FilterParser.Parse(text)` → `FilterNode`** — same parser-correctness cases as
+   the JS list above, run against the C# implementation.
+2. **`FilterNode` → `MongoFilterBuilder.Build()` / `SqlFilterBuilder.Build()`** — the
+   AST-to-query translation, covering:
 
 - `FieldTerm` contains → `$regex` with `i` flag
 - `FieldTerm` contains, case-sensitive → `$regex` without `i` flag
@@ -421,9 +474,13 @@ Corner cases to cover:
 - `And` node → `$and`
 - `Or` node → `$or`
 - `Not` node → `$nor` with single element
-- Alias already resolved (aliases are resolved client-side; C# receives full field names)
+- Alias resolution already happened inside `FilterParser.Parse()` itself (its own
+  `DefaultAliases` table, e.g. `svc`/`service` → `Service`, `runid` → `RunId`) — the
+  builders always receive a `FieldTermNode` with the canonical field name already
+  resolved.
 - Unknown field name → no filter applied for that term (yields no matches silently)
 - Deeply nested AND/OR tree → correct nesting in Mongo filter
-- Date values arrive as UTC ISO strings → parsed as UTC `DateTime`
+- Date values: parsed directly as local or UTC `DateTime` by `FilterParser` itself
+  (`useUtc` parameter), not received pre-converted from JS.
 - Empty `Or` list → matches nothing (`$nor: [{}]` or equivalent)
 - Empty `And` list → matches everything (no filter)
