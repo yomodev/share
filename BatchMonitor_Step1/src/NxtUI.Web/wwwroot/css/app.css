@@ -2323,6 +2323,19 @@ html, body {
     opacity: 0.65;
 }
 
+/* Section header refresh button — sized/colored to match the section title's own icon
+   (.bm-memory-header-icon) instead of MudButton's default pill look, while staying a real
+   button (icon inside it) rather than a styled div/link like the header's own left side. */
+.bm-section-refresh-btn.mud-icon-button .mud-icon-root {
+    font-size: 15px !important;
+    opacity: 0.65;
+    color: var(--mud-palette-text-secondary);
+}
+.bm-section-refresh-btn.mud-icon-button:hover .mud-icon-root {
+    opacity: 1;
+    color: var(--mud-palette-primary);
+}
+
 .bm-memory-spinner {
     width: 13px !important;
     height: 13px !important;

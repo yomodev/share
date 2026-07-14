@@ -179,7 +179,7 @@
     {
         if (firstRender)
         {
-            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/run-stats-chart.js?v=5"); }
+            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/run-stats-chart.js?v=6"); }
             catch (Exception ex) { Notifications.Report($"Failed to initialize the run stats chart: {ex.Message}", ex, "Run Stats"); }
         }
 

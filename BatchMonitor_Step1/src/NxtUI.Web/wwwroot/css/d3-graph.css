@@ -306,6 +306,19 @@
 .bm-pop-inst-error .bm-pop-cnt { color: #F85149; }
 
 .bm-pop-srv { flex: 1; color: var(--mud-palette-text-primary); white-space: nowrap; }
+
+/* Shown only while an instance row's own RequestOpenInstanceLog call is in flight AND the
+   path wasn't already known (see showPopover in d3-graph.js) — a cached path opens
+   instantly, no spinner needed. */
+.bm-pop-inst-spinner {
+    display: none;
+    width: 11px; height: 11px; flex-shrink: 0;
+    border: 2px solid rgba(128, 128, 128, 0.25);
+    border-top-color: var(--mud-palette-primary);
+    border-radius: 50%;
+    animation: bm-spin 0.8s linear infinite;
+}
+.bm-pop-inst-loading .bm-pop-inst-spinner { display: inline-block; }
 /* Fixed width ("PID " + 5 digits, the digits nbsp-padded in JS), monospace,
    left-aligned — PID is the leftmost column, so the server column after it
    lines up regardless of whether a given PID is 2 digits or 5. */

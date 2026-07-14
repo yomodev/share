@@ -1706,7 +1706,8 @@ const D3Graph = (() => {
                 const errored = (i.errorCount ?? 0) > 0;
                 return `<div class="bm-pop-inst${errored ? ' bm-pop-inst-error' : ''}" title="Open logs">
                     <span class="bm-pop-pid">PID&nbsp;${esc(pid)}</span>
-                    <span class="bm-pop-srv" title="Resolving log path…">${esc(i.server)}</span>
+                    <span class="bm-pop-srv">${esc(i.server)}</span>
+                    <span class="bm-pop-inst-spinner" title="Looking up log path…"></span>
                     <span class="bm-pop-cnt">${done} / ${total}</span>
                 </div>`;
             }).join('')
@@ -1757,13 +1758,26 @@ const D3Graph = (() => {
             const inst = instances[idx];
             const row  = d3.select(this);
             row.on('click', () => {
-                if (handle.dotNetRef)
-                    handle.dotNetRef.invokeMethodAsync('RequestOpenInstanceLog', rawServiceId, inst.server, inst.processId ?? 0, inst.lastActivity);
+                if (!handle.dotNetRef) return;
+                // Only show the spinner when the path isn't already known (set below, once
+                // RequestInstanceLogPathHint resolves) — a cached path opens immediately, no
+                // need to flash a spinner for that.
+                const known = row.attr('data-path-known') === '1';
+                if (!known) row.classed('bm-pop-inst-loading', true);
+                handle.dotNetRef
+                    .invokeMethodAsync('RequestOpenInstanceLog', rawServiceId, inst.server, inst.processId ?? 0, inst.lastActivity)
+                    .finally(() => row.classed('bm-pop-inst-loading', false));
             });
             if (handle.dotNetRef) {
                 handle.dotNetRef
                     .invokeMethodAsync('RequestInstanceLogPathHint', rawServiceId, inst.server, inst.processId ?? 0)
-                    .then(path => row.select('.bm-pop-srv').attr('title', path || 'Log path not discovered yet'))
+                    .then(path => {
+                        row.attr('data-path-known', path ? '1' : '0');
+                        // No tooltip at all when the path isn't known yet — a title like
+                        // "Log path not discovered yet" just restated what the missing
+                        // tooltip already implied.
+                        row.select('.bm-pop-srv').attr('title', path || null);
+                    })
                     .catch(() => {});
             }
         });

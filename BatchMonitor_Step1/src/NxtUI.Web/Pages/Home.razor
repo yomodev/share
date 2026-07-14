@@ -157,8 +157,8 @@
                 <MudText Typo="Typo.subtitle2" Class="bm-section-title">Services</MudText>
             </div>
             <MudTooltip Text="Refresh services">
-                <MudButton StartIcon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
-                           Disabled="@(!_mapReady)" OnClick="RefreshServicesAsync">Refresh</MudButton>
+                <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" Class="bm-section-refresh-btn"
+                               Disabled="@(!_mapReady)" OnClick="RefreshServicesAsync" />
             </MudTooltip>
         </div>
         <HomeMemoryTreemap @ref="_treemapRef" Env="@EnvService.SelectedId" Visible="@IsVisible"
@@ -179,8 +179,8 @@
             <MudText Typo="Typo.subtitle2" Class="bm-section-title">Recent Runs</MudText>
         </div>
         <MudTooltip Text="Refresh recent runs">
-            <MudButton StartIcon="@Icons.Material.Outlined.Refresh" Size="Size.Small"
-                       Disabled="@_runsLoading" OnClick="@(() => LoadRunsAsync())">Refresh</MudButton>
+            <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" Class="bm-section-refresh-btn"
+                           Disabled="@_runsLoading" OnClick="@(() => LoadRunsAsync())" />
         </MudTooltip>
     </div>
 

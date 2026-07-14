@@ -122,7 +122,6 @@ function render(container, points, options) {
     const height  = Math.max(280, container.clientHeight || 420);
     const margin  = { top: 16, right: 16, bottom: 46, left: 56 };
     const innerH  = height - margin.top - margin.bottom;
-    const X0_PAD_INNER = 0.12, X0_PAD_OUTER = 0.04; // tightened per feedback (was 0.25/0.1)
 
     // Line granularity always follows the bar bucketing (even in 'None' mode, where bars
     // are per-run but the average line still buckets/floats at day granularity) — this is
@@ -132,6 +131,14 @@ function render(container, points, options) {
 
     const buckets = [...new Set(points.map(p => p._bucket))].sort();
     const grouped = groupBy !== 'None';
+
+    // Ungrouped (None) mode's per-bucket bandwidth gets stretched (see neededBandwidth
+    // below) to fit the busiest day's run count at a legible minimum width — a FIXED
+    // padding fraction of that (now much wider) bandwidth turned into a huge absolute gap
+    // between days, especially next to a sparse day. Grouped mode's bars stay a fixed,
+    // legible width regardless of bucket count, so its bandwidth never inflates the same
+    // way — its padding can stay larger without ballooning in absolute pixels.
+    const X0_PAD_INNER = grouped ? 0.12 : 0.04, X0_PAD_OUTER = 0.04;
 
     // (bucket, env) -> average duration — feeds the hover-triggered per-env average line in
     // BOTH modes (grouped bars already compute their own via `bars`; ungrouped/None mode has
