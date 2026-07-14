@@ -1330,6 +1330,16 @@ const D3Graph = (() => {
             .attr('x', d => d.b.x0 - PAD).attr('y', d => d.b.y0 - PAD)
             .attr('width', d => (d.b.x1 - d.b.x0) + PAD * 2)
             .attr('height', d => (d.b.y1 - d.b.y0) + PAD * 2)
+            // A group belonging to a nested (expanded) child run must never visually escape
+            // that run's own box: this rect's own outward PAD (14) is deliberately larger
+            // than the box's content padding (EXPANDED_PAD, 12 — see buildChildRunBoxSpec),
+            // so an un-clipped band for a group sitting near the edge of its box pokes a
+            // couple of pixels past the box's border into open canvas — the "thin green
+            // shape" artifact. Clipping to the box's own already-registered full-box
+            // clipPath (registerChildCardClip, id `bm-clip-child-run-<runId>`) guarantees
+            // containment regardless of that padding relationship. Root-level groups
+            // (d.b.runId === '') have no such box and aren't clipped.
+            .attr('clip-path', d => d.b.runId ? `url(#bm-clip-child-run-${d.b.runId})` : null)
             // .style (not .attr) — a CSS class rule beats an SVG presentation attribute, so
             // .attr('fill', ...) here would be silently overridden by .bm-group-rect's own
             // CSS; inline style wins over a class rule without !important.
