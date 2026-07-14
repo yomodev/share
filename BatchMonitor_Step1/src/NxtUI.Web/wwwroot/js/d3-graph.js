@@ -301,17 +301,29 @@ const D3Graph = (() => {
         // source nodes, and its (often much wider) size then distorted every downstream
         // layer's offset for the WHOLE pipeline, producing visibly overlapping groups/rows.
         // Positioned as a separate satellite pass instead, entirely outside the layered solve.
+        // Collapsed child-run cards are ALSO satellite items now (not just expanded boxes) —
+        // this is what makes a grandchild's own collapsed card visible/clickable at every
+        // nesting depth, not just a run's own immediate children: previously, only the
+        // TOP-level topology's childRuns got a rendered (and clickable-to-expand) collapsed
+        // card at all, via the now-removed renderChildRuns/crLayer. A card nested inside an
+        // already-expanded parent simply never rendered, with no way to reach it.
         const boxSpecs = [];
         for (const entry of (childRunEntries || [])) {
             const childTopo = expandedChildren ? expandedChildren[entry.runId] : null;
-            if (!childTopo) continue; // collapsed — handled separately by renderChildRuns's row
-            // `boxColor` is THIS level's own resolved color (RunsSettings.ChildRunBoxColor,
-            // topology-hint-overridable) — the box drawn for `entry` belongs to and is
-            // colored by ITS OWN parent (this level), not by the child's own topology.
-            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, boxColor);
-            const boxId = `__box_${entry.runId}`;
-            boxSpecs.push({ id: boxId, width: spec.width, height: spec.height });
-            metaById.set(boxId, { kind: 'box', spec });
+            if (childTopo) {
+                // `boxColor` is THIS level's own resolved color (RunsSettings.ChildRunBoxColor,
+                // topology-hint-overridable) — the box drawn for `entry` belongs to and is
+                // colored by ITS OWN parent (this level), not by the child's own topology.
+                const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, boxColor);
+                const boxId = `__box_${entry.runId}`;
+                boxSpecs.push({ id: boxId, width: spec.width, height: spec.height });
+                metaById.set(boxId, { kind: 'box', spec });
+            } else {
+                const width = computeChildCardWidth(handle, entry.description || entry.runId);
+                const cardId = `__card_${entry.runId}`;
+                boxSpecs.push({ id: cardId, width, height: CHILD_RUN_HEIGHT });
+                metaById.set(cardId, { kind: 'collapsedCard', entry, boxColor });
+            }
         }
 
         const edges = (topoEdges || []).filter(e => ids.has(e.source) && ids.has(e.target));
@@ -469,6 +481,16 @@ const D3Graph = (() => {
                 outNodes.set(outId, {
                     x: pos.x + offX, y: pos.y + offY, width: pos.width, height: pos.height,
                     data: runIdPrefix ? { ...meta.data, _runId: runIdPrefix } : meta.data,
+                });
+            } else if (meta.kind === 'collapsedCard') {
+                // A collapsed card has no content to recurse into — just its own chrome,
+                // positioned here exactly like an expanded box would be. This is what makes
+                // a grandchild's own collapsed card reachable/clickable no matter how deep
+                // it's nested (previously only a run's own immediate children ever got a
+                // rendered collapsed card at all).
+                outBoxes.push({
+                    runId: meta.entry.runId, entry: meta.entry, x: pos.x + offX, y: pos.y + offY,
+                    width: pos.width, height: pos.height, boxColor: meta.boxColor, collapsed: true,
                 });
             } else {
                 const spec = meta.spec;
@@ -876,12 +898,12 @@ const D3Graph = (() => {
         const cbLayer = root.append('g').attr('class', 'bm-child-box-layer');
         const eLayer = root.append('g').attr('class', 'bm-edge-layer');
         const nLayer = root.append('g').attr('class', 'bm-node-layer');
-        // COLLAPSED child-run blocks (docs/12 §7.4) render in their own layer, below the main
-        // service flow — they're triggered at the RUN level, not by a specific service/
-        // pipeline, so they're never wired into gLayer/eLayer/nLayer's edges. (An EXPANDED
-        // child's content lives in eLayer/nLayer instead, merged with the main graph — see
-        // cbLayer above and buildLevelForLayout/flattenChildRunBoxes.)
-        const crLayer = root.append('g').attr('class', 'bm-child-run-layer');
+        // Every child-run item (collapsed card or expanded box, at any nesting depth) is a
+        // satellite item positioned by packSatelliteBoxes and drawn in cbLayer above by
+        // renderChildRunBoxes — they're triggered at the RUN level, not by a specific
+        // service/pipeline, so they're never wired into gLayer/eLayer/nLayer's edges. (An
+        // EXPANDED child's real merged content lives in eLayer/nLayer instead, alongside the
+        // main graph's own nodes/edges — see buildLevelForLayout/flattenChildRunBoxes.)
 
         // Popover div.
         const popover = d3.select(containerEl).append('div')
@@ -906,7 +928,7 @@ const D3Graph = (() => {
         svg.on('click', () => hidePopover(handle));
 
         const handle = {
-            containerEl, svg, root, gLayer, cbLayer, eLayer, nLayer, crLayer, zoom, popover, defs, dotNetRef,
+            containerEl, svg, root, gLayer, cbLayer, eLayer, nLayer, zoom, popover, defs, dotNetRef,
             portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             // RunsSettings.GraphDirection (Program.cs / D3FlowGraph.razor) — 'RIGHT'/'DOWN'
@@ -1000,22 +1022,18 @@ const D3Graph = (() => {
             renderGroups(handle);
             renderEdges(handle);
             renderNodes(handle);
-            // childRuns isn't part of structuralKey (a new/changed child shouldn't reshuffle
-            // the whole service graph), so it's always re-rendered fresh from the latest
-            // topology regardless of which branch this commit took. Known gap: if a child
-            // appears while the main graph's structure is otherwise unchanged, fitToView
-            // (below, main-layout branch only) won't auto-adjust to include the taller view —
-            // a manual re-fit (the toolbar button) picks it up.
-            renderChildRuns(handle);
-            // Unlike renderChildRuns' collapsed cards (whose fake pipeline row shows live
-            // counts that genuinely change every tick), an EXPANDED box's chrome — the only
-            // thing renderChildRunBoxes draws, its real merged content is drawn separately by
-            // renderNodes/renderEdges above — is derived entirely from handle.currentGraph,
-            // which this (structurally-stable) branch just proved is byte-identical to last
-            // commit. Profiling a live demo run showed this full clear-and-rebuild (including
-            // discarding and re-registering every box's clip-path def) costing a ~50ms main-
-            // thread long task on every ~2s live-tail tick for zero visual change — skip it
-            // unless something that actually affects the chrome (status color/label) changed.
+            // childRunBoxes (collapsed cards AND expanded boxes, both are satellite items
+            // now — see buildLevelForLayout) isn't part of structuralKey (a new/changed
+            // child shouldn't reshuffle the whole service graph), so its geometry is always
+            // whatever handle.currentGraph already has — this (structurally-stable) branch
+            // just proved that's byte-identical to last commit. Profiling a live demo run
+            // showed a full clear-and-rebuild here (including discarding and re-registering
+            // every card/box's clip-path def) costing a ~50ms main-thread long task on every
+            // ~2s live-tail tick for zero visual change most of the time — skip it unless the
+            // signature (status/color, plus a collapsed card's own live counts) changed.
+            // Known gap: if a child appears while the main graph's structure is otherwise
+            // unchanged, fitToView (below, main-layout branch only) won't auto-adjust to
+            // include the taller view — a manual re-fit (the toolbar button) picks it up.
             const boxSig = childRunBoxesSignature(handle);
             if (boxSig !== handle.lastChildRunBoxesSig) {
                 renderChildRunBoxes(handle);
@@ -1045,7 +1063,6 @@ const D3Graph = (() => {
         renderGroups(handle);  // group bands beneath everything
         renderEdges(handle);   // edges below nodes
         renderNodes(handle);
-        renderChildRuns(handle);
         renderChildRunBoxes(handle);
         handle.lastChildRunBoxesSig = childRunBoxesSignature(handle);
         if (!handle.userZoomed) fitToView(handle, true);
@@ -1062,17 +1079,22 @@ const D3Graph = (() => {
     // flattenChildRunBoxes above) and rendered through the exact same buildNode/updateNode/
     // renderEdges/animation/popover path as any top-level service, at full size.
     // renderChildRunBoxes (below) only draws the chrome behind that merged content.
-    const CHILD_RUN_GAP = 16, CHILD_RUN_MARGIN = 48;
     const CHILD_RUN_MIN_WIDTH = NODE_WIDTH;
     const CHILD_RUN_HEIGHT = HEADER_HEIGHT + ROW_HEIGHT; // header + one fake pipeline row
     const CHILD_BADGE_W = 34, CHILD_BADGE_H = 20;
 
-    // Cheap fingerprint of everything renderChildRunBoxes' chrome actually depends on
-    // (position/size come from currentGraph, which the caller already knows is unchanged on
-    // the stable-path branch — this only needs to catch a status flip or box-color change).
+    // Cheap fingerprint of everything renderChildRunBoxes actually depends on (position/size
+    // come from currentGraph, which the caller already knows is unchanged on the stable-path
+    // branch). A collapsed card also draws a fake pipeline row with LIVE counts (doneCount/
+    // totalCount), which genuinely change every tick and aren't covered by status/color
+    // alone — included here so a collapsed card's progress bar doesn't freeze on the
+    // stable-path skip the way it would if only status/color were fingerprinted.
     function childRunBoxesSignature(handle) {
         const boxes = handle.currentGraph?.childRunBoxes || [];
-        return boxes.map(b => `${b.runId}:${b.entry?.status}:${b.boxColor || ''}`).join('|');
+        return boxes.map(b => {
+            const counts = b.collapsed ? `:${b.entry?.doneCount ?? ''}/${b.entry?.totalCount ?? ''}` : '';
+            return `${b.runId}:${b.entry?.status}:${b.boxColor || ''}${counts}`;
+        }).join('|');
     }
 
     function childRunStatusColor(status) {
@@ -1209,76 +1231,36 @@ const D3Graph = (() => {
             .attr('fill', statusCol);
     }
 
-    // Only COLLAPSED child runs render here — an expanded one's id is in
-    // handle.pendingTopology.expandedChildren and is skipped: its content is part of the
-    // main graph now (see comment above), drawn by renderNodes/renderEdges instead.
-    function renderChildRuns(handle) {
-        const childRuns = handle.pendingTopology?.childRuns || [];
-        const expandedChildren = handle.pendingTopology?.expandedChildren || {};
-        const g = handle.currentGraph;
-
-        handle.crLayer.selectAll('*').remove();
-        if (!g) return;
-        const collapsed = childRuns.filter(entry => !expandedChildren[entry.runId]);
-        if (collapsed.length === 0) return;
-
-        const widths = collapsed.map(entry => computeChildCardWidth(handle, entry.description || entry.runId));
-        const totalWidth = widths.reduce((a, w) => a + w, 0) + CHILD_RUN_GAP * Math.max(0, collapsed.length - 1);
-        const baseY = g.height + CHILD_RUN_MARGIN;
-        let cursorX = (g.width - totalWidth) / 2;
-
-        resetChildCardClips(handle, 'bm-child-collapsed-clip');
-
-        collapsed.forEach((entry, i) => {
-            const width = widths[i];
-            const cx = cursorX + width / 2, cy = baseY + CHILD_RUN_HEIGHT / 2;
-            const clipId = `child-collapsed-${entry.runId}`;
-            registerChildCardClip(handle, 'bm-child-collapsed-clip', clipId, width, CHILD_RUN_HEIGHT);
-            const onToggle = ev => {
-                ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
-                handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', entry.runId);
-            };
-            const gEl = handle.crLayer.append('g').attr('class', 'bm-child-run')
-                .datum({ x: cx, y: cy })
-                .attr('transform', `translate(${cx},${cy})`)
-                .on('click', onToggle);
-
-            renderChildCardChrome(gEl, handle, {
-                id: clipId, width, height: CHILD_RUN_HEIGHT, status: entry.status,
-                label: truncateLabel(entry.description || entry.runId, 34), expanded: false, onToggle,
-                boxColor: handle.pendingTopology?.childRunBoxColor,
-            });
-            renderFakePipelineRow(gEl, width, CHILD_RUN_HEIGHT, entry);
-
-            cursorX += width + CHILD_RUN_GAP;
-        });
-    }
-
-    // Background + header for each EXPANDED child-run box (handle.currentGraph.childRunBoxes,
-    // populated by runLayoutCustom/runLayoutElk's flattenChildRunBoxes — one entry per
-    // expanded child at every nesting level, already in final outer coordinates). Drawn in
-    // its own layer behind nLayer/eLayer so the merged real nodes/edges render on top of it.
-    // Clicking the header (or its badge) collapses that run back (same RequestOpenChildRun
-    // toggle a collapsed block's click uses).
+    // Unified renderer for every child-run item (handle.currentGraph.childRunBoxes) at
+    // EVERY nesting level — both collapsed cards and expanded boxes are satellite items
+    // positioned by the same packSatelliteBoxes pass (see buildLevelForLayout), so a single
+    // pass here draws them all, including a grandchild's own collapsed card nested inside an
+    // already-expanded parent (previously only a run's own immediate children ever got a
+    // rendered collapsed card at all — see the removed renderChildRuns/crLayer). Drawn in
+    // its own layer behind nLayer/eLayer so an expanded box's merged real nodes/edges render
+    // on top of it. Clicking a card/box's header (or badge) toggles it.
     function renderChildRunBoxes(handle) {
         handle.cbLayer.selectAll('*').remove();
         const boxes = handle.currentGraph?.childRunBoxes || [];
-        resetChildCardClips(handle, 'bm-child-expanded-clip');
+        resetChildCardClips(handle, 'bm-child-run-clip');
         for (const box of boxes) {
-            const clipId = `child-expanded-${box.runId}`;
-            registerChildCardClip(handle, 'bm-child-expanded-clip', clipId, box.width, box.height);
-            const g = handle.cbLayer.append('g').attr('class', 'bm-child-run bm-child-run-expanded')
+            const clipId = `child-run-${box.runId}`;
+            registerChildCardClip(handle, 'bm-child-run-clip', clipId, box.width, box.height);
+            const g = handle.cbLayer.append('g')
+                .attr('class', `bm-child-run${box.collapsed ? '' : ' bm-child-run-expanded'}`)
                 .datum({ x: box.x, y: box.y })
                 .attr('transform', `translate(${box.x},${box.y})`);
             const onToggle = ev => {
-                ev.stopPropagation();
+                ev.stopPropagation(); // don't let svg's own click (hidePopover) swallow this
                 handle.dotNetRef?.invokeMethodAsync('RequestOpenChildRun', box.runId);
             };
+            if (box.collapsed) g.on('click', onToggle); // whole card toggles, not just header/badge
             renderChildCardChrome(g, handle, {
                 id: clipId, width: box.width, height: box.height, status: box.entry.status,
-                label: truncateLabel(box.entry.description || box.runId, 40), expanded: true, onToggle,
-                boxColor: box.boxColor,
+                label: truncateLabel(box.entry.description || box.runId, box.collapsed ? 34 : 40),
+                expanded: !box.collapsed, onToggle, boxColor: box.boxColor,
             });
+            if (box.collapsed) renderFakePipelineRow(g, box.width, box.height, box.entry);
         }
     }
 
