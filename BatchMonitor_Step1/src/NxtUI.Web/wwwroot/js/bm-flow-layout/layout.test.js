@@ -343,6 +343,40 @@ describe('external/arriveFrom (docs/12 §6)', () => {
         });
         expect(result.warnings.some(w => w.includes('not applicable to a horizontal flow'))).toBe(true);
     });
+
+    it('pushes an external node clear of an unrelated group\'s bounding box, even when a tall group member naturally overlaps its layer on the cross axis', () => {
+        // Mirrors the real bug: Intake (tall, group "Ingest") sits in layer 0; Checker
+        // (also group "Ingest") and Sidecar (external, arriveFrom "below", NOT in the
+        // group) both sit in layer 1. Per-layer centering naturally aligns Intake's
+        // height with the Checker+Sidecar stack, so the group's raw bounding box (over
+        // Intake+Checker only) can end up geometrically containing Sidecar even though
+        // it was never part of the union.
+        const nodes = [
+            { id: 'Intake', width: 160, height: 90, group: 'Ingest' },
+            { id: 'Checker', width: 160, height: 60, group: 'Ingest' },
+            { id: 'Sidecar', width: 160, height: 60, external: true, arriveFrom: 'below' },
+            { id: 'Merger', width: 160, height: 60 },
+        ];
+        const edges = [
+            edge('Intake', 'Checker'), edge('Intake', 'Sidecar'),
+            edge('Checker', 'Merger'), edge('Sidecar', 'Merger'),
+        ];
+        const result = layout({ nodes, edges, direction: 'horizontal' });
+
+        const PAD = 14; // must match renderGroups()'s PAD in d3-graph.js
+        const rectOf = id => {
+            const p = result.nodes.get(id);
+            return { x0: p.x - p.width / 2, y0: p.y - p.height / 2, x1: p.x + p.width / 2, y1: p.y + p.height / 2 };
+        };
+        const intake = rectOf('Intake'), checker = rectOf('Checker'), sidecar = rectOf('Sidecar');
+        const groupBox = {
+            x0: Math.min(intake.x0, checker.x0) - PAD, y0: Math.min(intake.y0, checker.y0) - PAD,
+            x1: Math.max(intake.x1, checker.x1) + PAD, y1: Math.max(intake.y1, checker.y1) + PAD,
+        };
+        const overlapsX = sidecar.x0 < groupBox.x1 && sidecar.x1 > groupBox.x0;
+        const overlapsY = sidecar.y0 < groupBox.y1 && sidecar.y1 > groupBox.y0;
+        expect(overlapsX && overlapsY).toBe(false);
+    });
 });
 
 describe('recursive boxes (subGraph)', () => {
