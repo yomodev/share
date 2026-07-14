@@ -290,6 +290,12 @@ const D3Graph = (() => {
             flowNodes.push({
                 id: n.id, width: n._layoutWidth, height: nh(n),
                 role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
+                // n.direction is THIS node's own hint for where ITS successor should go
+                // (docs/12 §6 "direction") — bm-flow-layout models that as placeSuccessor,
+                // a soft hint offered to whatever node comes next, not this node's own
+                // placement (that's the successor's own `placement`, which always wins over
+                // this if both are set — see bm-flow-layout/layout.js's own docs).
+                placeSuccessor: n.direction ? { side: n.direction } : undefined,
             });
             metaById.set(n.id, { kind: 'node', data: n });
         }

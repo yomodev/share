@@ -135,6 +135,15 @@ public sealed class ServiceHint
     /// <summary>See <see cref="PinX"/>.</summary>
     public double? PinY { get; set; }
 
+    /// <summary>
+    /// "left" | "right" | "above" | "below" — soft placement preference for THIS node's
+    /// successor(s) in the flow (Custom layout engine only — bm-flow-layout's own
+    /// <c>placeSuccessor</c> hint). A successor node's own <see cref="Direction"/> (its
+    /// self-declared <c>placement</c>) always wins over this if both are set. Ignored by the
+    /// Elk engine. See docs/12_Custom_Layout_And_Nested_Runs.md §6 "direction".
+    /// </summary>
+    public string? Direction { get; set; }
+
     /// <summary>Start folded.</summary>
     public bool Collapsed { get; set; }
 

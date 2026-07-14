@@ -134,6 +134,12 @@ public class TopologyNode
     /// <summary>See <see cref="PinX"/>.</summary>
     public double? PinY { get; set; }
 
+    /// <summary>
+    /// "left" | "right" | "above" | "below" — soft placement preference for this node's
+    /// successor(s) (Custom layout engine only). See <see cref="ServiceHint.Direction"/>.
+    /// </summary>
+    public string? Direction { get; set; }
+
     /// <summary>True when the run-type blueprint declared this service (matched a ServiceHint).</summary>
     public bool IsDeclared { get; set; }
 
