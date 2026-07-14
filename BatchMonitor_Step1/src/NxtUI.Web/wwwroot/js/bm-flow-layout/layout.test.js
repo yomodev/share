@@ -61,6 +61,43 @@ describe('A<->B back-edge handling', () => {
         const back = result.edges.find(e => e.isBackEdge);
         expect(back.points.length).toBeGreaterThanOrEqual(3);
     });
+
+    it('routes the back-edge as a fully axis-aligned detour, not a diagonal', () => {
+        const result = layout({
+            nodes: [node('A'), node('B')],
+            edges: [edge('A', 'B'), edge('B', 'A')],
+        });
+        const back = result.edges.find(e => e.isBackEdge);
+        for (let i = 1; i < back.points.length; i++) {
+            const a = back.points[i - 1], b = back.points[i];
+            expect(a.x === b.x || a.y === b.y).toBe(true);
+        }
+    });
+
+    it('does not emit duplicate consecutive points on the back-edge detour', () => {
+        const result = layout({
+            nodes: [node('A'), node('B')],
+            edges: [edge('A', 'B'), edge('B', 'A')],
+        });
+        const back = result.edges.find(e => e.isBackEdge);
+        for (let i = 1; i < back.points.length; i++) {
+            const a = back.points[i - 1], b = back.points[i];
+            expect(a.x === b.x && a.y === b.y).toBe(false);
+        }
+    });
+
+    it('routes an axis-aligned back-edge detour in vertical direction too', () => {
+        const result = layout({
+            nodes: [node('A'), node('B')],
+            edges: [edge('A', 'B'), edge('B', 'A')],
+            direction: 'vertical',
+        });
+        const back = result.edges.find(e => e.isBackEdge);
+        for (let i = 1; i < back.points.length; i++) {
+            const a = back.points[i - 1], b = back.points[i];
+            expect(a.x === b.x || a.y === b.y).toBe(true);
+        }
+    });
 });
 
 describe('dummy-node routing for multi-layer edges', () => {

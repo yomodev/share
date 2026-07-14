@@ -661,13 +661,20 @@ function orthogonalizeChain(points, direction) {
     for (let i = 1; i < points.length; i++) {
         const a = out[out.length - 1];
         const b = points[i];
-        if (direction === 'horizontal') {
-            if (a.y !== b.y) {
+        // A segment that already shares an x OR a y is already a straight H/V line — no
+        // bend needed regardless of flow direction (only a genuinely diagonal segment,
+        // sharing NEITHER coordinate, needs one). Structural (layered) chains always
+        // differ in x for a horizontal flow (successive layers), so checking only y used
+        // to be an equivalent shortcut there — but routeBackEdge's own detour can produce
+        // consecutive waypoints that already share an x (a pure vertical hop) even in a
+        // horizontal-direction layout, and unconditionally bending those inserted two
+        // redundant duplicate points collapsed onto the segment's own already-straight
+        // line instead of leaving it alone.
+        if (a.x !== b.x && a.y !== b.y) {
+            if (direction === 'horizontal') {
                 const midX = (a.x + b.x) / 2;
                 out.push({ x: midX, y: a.y }, { x: midX, y: b.y });
-            }
-        } else {
-            if (a.x !== b.x) {
+            } else {
                 const midY = (a.y + b.y) / 2;
                 out.push({ x: a.x, y: midY }, { x: b.x, y: midY });
             }
@@ -678,17 +685,32 @@ function orthogonalizeChain(points, direction) {
 }
 
 // Back-edges (the reverse of an A<->B pair) aren't part of the layered structure — route a
-// simple curve that bows out to one side of the straight line between the two nodes, so it
-// visually distinguishes itself from the structural edge instead of overlapping it.
+// rectangular detour on one side of both nodes (below them for a horizontal flow, right of
+// them for vertical) instead of a straight line between centers, so it visually
+// distinguishes itself from the structural edge instead of overlapping it. Was originally a
+// single-bow CURVE through one offset midpoint — replaced with an all-axis-aligned detour
+// (still offset, for the same "don't overlap the forward edge" reason) once real orthogonal
+// routing landed for every other edge (see chainToPoints/orthogonalizeChain) and a diagonal
+// cycle edge started reading as a stray/broken line rather than a deliberate design choice.
 function routeBackEdge(e, positioned, direction) {
     const a = positioned.get(e.source);
     const b = positioned.get(e.target);
     if (!a || !b) return [];
-    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    const bow = direction === 'horizontal' ? { x: 0, y: 28 } : { x: 28, y: 0 };
-    return [
-        { x: a.x, y: a.y },
-        { x: mid.x + bow.x, y: mid.y + bow.y },
-        { x: b.x, y: b.y },
-    ];
+    const LANE_GAP = 28;
+    if (direction === 'horizontal') {
+        const lane = Math.max(a.y + a.height / 2, b.y + b.height / 2) + LANE_GAP;
+        return orthogonalizeChain([
+            { x: a.x, y: a.y + a.height / 2 },
+            { x: a.x, y: lane },
+            { x: b.x, y: lane },
+            { x: b.x, y: b.y + b.height / 2 },
+        ], direction);
+    }
+    const lane = Math.max(a.x + a.width / 2, b.x + b.width / 2) + LANE_GAP;
+    return orthogonalizeChain([
+        { x: a.x + a.width / 2, y: a.y },
+        { x: lane, y: a.y },
+        { x: lane, y: b.y },
+        { x: b.x + b.width / 2, y: b.y },
+    ], direction);
 }
