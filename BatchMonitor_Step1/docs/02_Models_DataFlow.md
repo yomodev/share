@@ -1,70 +1,97 @@
-# BatchMonitor — Models & Data Flow
+# NxtUI — Models & Data Flow
 
 ## PerformanceEvent
 
-The core domain object. Represents one chunk of work processed by one service.
+The core domain object (`src/NxtUI.Core/Models/PerformanceEvent.cs`). Represents one
+chunk of work processed by one service/pipeline.
 
 ```csharp
 public class PerformanceEvent
 {
-    public string Name   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
-    public string Service   { get; set; }   // Service name (e.g. "Enricher")
-    public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
-    public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
-    public string Server    { get; set; }   // Host that processed it
-    public int ProcessId { get; set; }   // OS process ID
-    public DateTime Start   { get; set; }
-    public DateTime? Finish { get; set; }   // null = still in progress
-    public string? Error    { get; set; }   // null = no error
-    public int RecordCount  { get; set; }
+    public string Name       { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
+    public string Service    { get; set; }   // Service name (e.g. "Enricher")
+    public string Pipeline   { get; set; }   // Pipeline within service (e.g. "enrich-main")
+    public string Source     { get; set; }   // Class/processor name (e.g. "LookupEnricher")
+    public string Server     { get; set; }   // Host that processed it
+    public int ProcessId     { get; set; }   // OS process ID
+    public DateTime Start    { get; set; }
+    public DateTime? Finish  { get; set; }   // null = still in progress
+    public string? Error     { get; set; }   // null/empty = no error
+    public int RecordCount   { get; set; }
+    public string? Info      { get; set; }   // free-text extra detail, shown in the UI
+    public double? Value     { get; set; }   // optional numeric metric attached to the event
+    public DateTime LastUpdate { get; set; }
 
     // Computed
     public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
-    public bool IsDone  => Finish.HasValue && Error == null;
-    public bool IsError => Error != null;
-    public DateTime Timestamp => Finish ?? Start;  // for upsert ordering
+    public bool IsDone  => Finish.HasValue;
+    public bool IsError => !string.IsNullOrEmpty(Error);
+    public DateTime Timestamp => Start;   // for upsert ordering
 }
 ```
 
 ### Key field: `Source`
 
-`Source` is the class name or pipe processor that handled the chunk. It's the **default Colour By** key in the Timeline tab. Example values: `CsvIngester`, `SchemaValidator`, `FieldMapper`, `LookupEnricher`, `MongoWriter`.
+`Source` is the class name or pipe processor that handled the chunk. It's the
+**default Colour By** key in the Timeline tab. Values vary per generated demo run
+(mock data draws from a randomized service/source-name pool — see "MockRunService
+data generation" below) — don't rely on any specific literal `Source` value existing
+across every run.
 
 ### Key field: `Name`
 
-Same `Name` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `Name` across all batches/services.
+Same `Name` string can appear in **multiple services** (a chunk passes through the
+pipeline). In the Timeline tab, hovering any block highlights all blocks with the
+same `Name` across all runs/services.
 
 ---
 
 ## CompositeKey and Upsert
 
-Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
-- Duplicate pushes from SignalR + polling overlap
-- Updates when a chunk finishes (Start event arrives first, then Finish event)
+Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`.
+This handles:
+- Duplicate pushes from live-push + polling overlap.
+- Updates when a chunk finishes (a Start-only event arrives first, then a Finish
+  event with the same key replaces it).
 
 ---
 
-## Topology Model
+## Topology Model (`src/NxtUI.Core/Models/Topology.cs`)
 
-Used by the flow graph in BatchDetail.
+Used by the flow graph in Run Detail. Considerably richer than a plain node/edge
+graph — it also carries nested-run and layout-hint data:
 
 ```
 Topology
 ├── Nodes: List<TopologyNode>
 │   ├── Id, Label, InstanceCount
 │   ├── HeaderState: PipelineState
-│   └── Pipelines: List<PipelineRow>
-│       ├── Name, Topic
-│       ├── DoneCount, InProgressCount, ErrorCount
-│       ├── Progress (0.0–1.0)
-│       ├── State: PipelineState
-│       ├── RecentThroughputScore
-│       └── Instances: List<InstanceStats>
-└── Edges: List<TopologyEdge>
-    ├── Source, SourcePipeline → Target, TargetPipeline
-    ├── DoneCount, WaitingEstimate
-    └── State: PipelineState
+│   ├── Pipelines: List<PipelineRow>
+│   │   ├── Name, DisplayName, Topic
+│   │   ├── DoneCount, InProgressCount, ErrorCount
+│   │   ├── Progress (0.0–1.0)
+│   │   ├── State: PipelineState
+│   │   ├── RecentThroughputScore
+│   │   └── Instances: List<InstanceStats>
+│   └── Layout-hint decoration (see 11_Topology_Hints.md):
+│       Role, Group, Color, Order, Pin, PinX, PinY, Direction, External,
+│       ArriveFrom, Orientation, IsDeclared, IsObserved
+├── Edges: List<TopologyEdge>
+│   ├── Source, SourcePipeline → Target, TargetPipeline
+│   ├── DoneCount, WaitingEstimate
+│   ├── State: PipelineState
+│   └── IsDeclared, IsObserved
+├── ChildRuns: List<RunNode>              — nested child-run summaries (see 12_/13_)
+├── ExpandedChildren: Dictionary<string, Topology> — recursively-computed sub-topology
+│                                            per expanded child run
+├── Layout: LayoutHint?, GroupColors, ChildRunBoxColor, HasBlueprint
+└── Rollups: TotalChunks, TotalEvents, TotalDone, TotalInProgress, EstimatedProgress
 ```
+
+`IsDeclared`/`IsObserved` on nodes and edges track whether an element came from a
+topology hint's blueprint (declared) versus was inferred purely from observed events
+(observed) — a node/edge can be either, both, or (briefly, before its first event)
+declared-only.
 
 ### PipelineState (JSON: lowercase string)
 
@@ -72,128 +99,155 @@ Topology
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PipelineState
 {
-    NotStarted, Completed, Idle, InProgress, Active, Errored
+    NotStarted = 0,
+    Completed  = 1,
+    Idle       = 2,
+    InProgress = 3,
+    Active     = 4,
+    Errored    = 5,
 }
 ```
 
-**State → colour mapping** (used in both graph and timeline):
+Numeric values double as priority order (higher wins) when rolling many pipeline
+rows' states up into one node's `HeaderState`.
+
+**State → colour mapping** (`wwwroot/js/d3-graph.js` / `css/d3-graph.css`, used in
+both the flow graph and the Timeline):
 - `Errored`    → `#F85149` (red)
 - `Active`     → `#3FB950` (green, with pulse animation)
 - `InProgress` → `#388BFD` (blue)
 - `Idle`       → `#8B949E` (grey)
 - `Completed`  → `#8B949E` (grey)
-- `NotStarted` → `rgba(139,148,158,0.22)` (faint)
+- `NotStarted` → faint/dimmed (theme divider colour)
 
 ---
 
-## Data Flow: BatchDetail Tab
+## Data Flow: Run Detail Tab
 
 ```
-User opens BatchDetail
+User opens RunDetail (src/NxtUI.Web/Pages/RunDetail.razor)
     │
-    ├─ BatchService.GetBatchDetailsAsync()  →  BatchDetails (metadata, status)
+    ├─ RunService.GetRunDetailsAsync(env, runId)  →  RunDetails (metadata, status)
     │
-    ├─ PerformanceEventService.StartAsync()
-    │     ├─ HTTP: GetBatchEventsAsync() from batchStart  →  historical events
-    │     ├─ SignalR: SubscribeToBatchAsync()  →  live push (running batches)
-    │     └─ Poll loop (fallback, 30s when SignalR active)
+    ├─ StartEventServiceAsync()
+    │     ├─ PerformanceEventService: HTTP-loads full event history
+    │     └─ RunEventBroker.SubscribeToRunAsync(env, runId, handler)
+    │           — in-process pub/sub, NOT a SignalR client call (see below)
     │
-    ├─ DebouncedTopologyCompute() [400ms debounce]
-    │     ├─ Filter events by _replayTimestamp (null = all)
-    │     ├─ TopologyComputationService.ComputeTopology()
-    │     └─ StateHasChanged() → D3FlowGraph.update(topology)
+    ├─ RunTopologyLoopAsync() [PeriodicTimer, 400ms tick]
+    │     ├─ only recomputes when DebouncedTopologyCompute() flagged _topologyDirty
+    │     ├─ filters events by _replayTimestamp (null = all, i.e. live)
+    │     ├─ TopologyComputationService.ComputeTopology(events, labelFormatter, blueprint)
+    │     └─ StateHasChanged() → <D3FlowGraph Topology="@_topology" .../>
     │
-    └─ D3FlowGraph (JS)
-          ├─ dagre layout (LR or TB based on canvas aspect ratio)
-          ├─ D3 nodes + edges render
-          └─ D3Animation RAF loop (edge dash-flow)
+    └─ D3FlowGraph (Components/D3FlowGraph.razor) → wwwroot/js/d3-graph.js
+          ├─ bm-flow-layout engine lays out nodes/edges (see 12_Custom_Layout_And_Nested_Runs.md)
+          ├─ D3 nodes + edges render, including nested/expanded child-run boxes
+          └─ d3-animation.js RAF loop (edge dash-flow)
 ```
 
-### Replay mode (Step 8)
+### Replay mode
 
-`_replayTimestamp` (nullable DateTime):
-- `null` → LIVE mode, slider at rightmost position
-- set → REPLAY mode, topology computed filtering `event.Start <= _replayTimestamp`
+`_replayTimestamp` (nullable `DateTime`):
+- `null` → LIVE mode, slider at rightmost position.
+- set → REPLAY mode; `RecomputeTopologyAsync()` filters events to
+  `Start <= _replayTimestamp`.
 
-Slider uses 0–1000 integer steps (not Unix ms) to avoid browser validation tooltip. `SliderToDateTime(value)` converts linearly within `[_sliderMin, _sliderMax]`.
+Slider uses integer steps (`0..SliderSteps`, not raw timestamps, to avoid a browser
+validation tooltip). `SliderToDateTime(value)` clamps the fraction to `[0,1]` and maps
+linearly across `[_sliderMin, _sliderMax]`, where the min/max bounds are derived from
+every loaded event's Start/Finish **including expanded children's events** — opening
+a child-run box extends the replay range to cover it (task #50). `_isPlaying` drives
+an auto-advance loop through replay time when enabled.
 
 ---
 
 ## Data Flow: Timeline Tab
 
 ```
-User opens Timeline (from BatchDetail [⏱] button)
+User opens Timeline (from RunDetail's [⏱] button, or the sidebar, or the "Add" dialog)
     │
-    ├─ InitialRunId set → LoadBatchAsync(env, runId)
+    ├─ InitialRunId set (if opened from a run) → adds that run via the same path as "Add"
     │
-    └─ TimelineBatch.LoadAsync()
-          ├─ GetBatchDetailsAsync()  →  BatchName, BatchStart, IsLive
-          ├─ GetBatchEventsAsync()   →  historical events (upsert by Name)
-          └─ SignalRConnectionService.SubscribeToBatchAsync() (if IsLive)
-                └─ OnBatchEvent() → UpsertEvent() → DebouncedPushAsync()
+    ├─ TimelineTab's Add dialog: search/filter runs by env → constructs a TimelineRun,
+    │  appended to _runs — this is how every run (including the initial one) is loaded
+    │
+    └─ TimelineRun.LoadAsync() (src/NxtUI.Web/Services/TimelineRun.cs)
+          ├─ GetRunDetailsAsync()  →  run name, start time, status
+          ├─ GetRunEventsAsync()   →  historical events (upsert by CompositeKey)
+          └─ StartLiveSubscriptionAsync() — only if Status == Running
+                └─ RunEventBroker.SubscribeToRunAsync(env, runId, OnEvent)
+                      └─ OnEvent() → UpsertEvent() → DebouncedPushAsync()
 
-DebouncedPushAsync() [300ms debounce]
-    └─ BuildPayload()
-          ├─ groupBy, colourBy, filter, stackView
-          └─ batches[]:
-                ├─ runId, batchName, isLive, batchStartEpochMs
-                └─ events[]: name, source, pipeline, service,
-                             processId, server, startMs, finishMs,
-                             status, error
-    └─ JS: BatchMonitor.Timeline.update(key, payload)
+DebouncedPushAsync() [debounced]
+    └─ BuildPayload(): groupBy, colourBy, filter, stackView, and per-run event arrays
+    └─ JS: Timeline.update(key, payload)  (wwwroot/js/d3-timeline.js)
 ```
 
-### TimelineBatch
+### TimelineRun
 
-One instance per loaded batch in a Timeline tab. Manages:
-- Event store (`Dictionary<string, PerformanceEvent>` keyed by Name)
-- SignalR subscription (live batches only)
-- 3-hour live timeout (per spec)
-- CSV-imported batches use `CreateFromCsv()` — no live subscription
+One instance per loaded run in a Timeline tab (the renamed `TimelineBatch`). Manages:
+- Event store keyed by `CompositeKey`.
+- Live subscription via `RunEventBroker`, only while the run's status is `Running`.
+- `StatusWatchLoopAsync` re-polls run status every 30s and stops the live
+  subscription either when status leaves `Running` or after a **3-hour live
+  timeout** (`LiveTimeout = TimeSpan.FromHours(3)`) — a run that's realistically
+  never going to update again stops costing a subscription.
+- CSV import/export: `ExportCsv()` (JS-driven download); importing parses a CSV
+  client-side and builds a run via `TimelineRun.CreateFromCsv(runId, env, events)` —
+  no live subscription, since there's no real run behind it to watch.
 
 ---
 
-## SignalR Event Push Flow
+## Live Event Delivery: RunEventBroker (not a SignalR push)
+
+The `RunHub` (`/hubs/run`) SignalR hub only handles group membership
+(`SubscribeToRun`/`UnsubscribeFromRun`) — **nothing in the app currently pushes data
+through it**. Actual live delivery is entirely in-process, via `RunEventBroker`:
 
 ```
-MockBatchService background timer (2s)
-    └─ GenerateLiveEvents()
-          └─ IHubContext<BatchEventsHub>.Clients
-               .Group("{env}:{runId}")
-               .SendAsync("BatchEvent", env, runId, PerformanceEvent)
+RunEventBroker (singleton)
+  Dictionary<"{env}:{runId}", List<Func<PerformanceEvent, Task>>>
+  Publish(env, runId, evt) → fans out synchronously to every subscribed handler
+  fires RunWatchStarted / RunWatchStopped on 0→1 / 1→0 subscriber transitions
 
-Client (SignalRConnectionService)
-    └─ HubConnection.On<string,string,PerformanceEvent>("BatchEvent")
-          └─ Route to handlers keyed by "{env}:{runId}"
-                ├─ PerformanceEventService.OnSignalREvent()  (BatchDetail)
-                └─ TimelineBatch.OnBatchEvent()              (Timeline)
+Two ways an event reaches the broker:
+  1. MockRunService implements IPushesOwnRunEvents and calls
+     broker.Publish(...) directly from its own simulated-live-run timer.
+  2. RunEventWatcher (IHostedService) listens for RunWatchStarted/Stopped and, for
+     any IRunService implementation that does NOT self-push (e.g. a real SQL/Mongo-
+     backed service), starts a shared 3-second poll loop per watched run and calls
+     broker.Publish(...) itself with whatever new events polling turns up.
+
+Subscribers (both go through the same broker, not a hub):
+  ├─ PerformanceEventService.OnEvent()  (RunDetail's event accumulator)
+  └─ TimelineRun.OnEvent()              (Timeline tab)
 ```
 
-**Three arguments** on `"BatchEvent"`: env + runId + event. The env+runId allow client-side routing to the correct batch handler. This was necessary because the HubConnection is shared across all batch subscriptions in a circuit.
+This design means swapping `IRunService` from the mock to a real Mongo/SQL-backed
+implementation (see `01_Architecture.md`) doesn't require any change to how the UI
+receives live updates — `RunEventWatcher`'s poll-and-publish path already covers any
+`IRunService` that isn't self-pushing.
 
 ---
 
-## MockBatchService Data Generation
+## MockRunService Data Generation
 
-### Source names by service/pipeline
+`MockRunService` (`src/NxtUI.Web/Services/MockRunService.cs`) generates two kinds of
+demo topology:
 
-```csharp
-("Ingester",    "ingest-main")  → ["CsvIngester", "JsonIngester", "XmlIngester"]
-("Validator",   "validate-main")→ ["SchemaValidator", "BusinessRuleValidator"]
-("Transformer", "transform-main")→["FieldMapper", "Normaliser", "Deduplicator"]
-("Enricher",    "enrich-main") → ["LookupEnricher", "GeoEnricher"]
-("Enricher",    "enrich-lookup")→ ["ReferenceLookup", "CacheEnricher"]
-("Loader",      "load-main")   → ["MongoWriter", "ElasticWriter"]
-```
+- A small, fixed 4-stage chain — `Ingester → Validator → Enricher → Loader` — used
+  for a handful of clean, easy-to-read demo runs.
+- Larger randomized topologies drawn from a bigger service-name pool
+  (`Ingester, Validator, Normaliser, Transformer, Enricher, Router, Loader, Auditor,
+  Notifier, Archiver`, ...) paired with a `Source`-class pool (`SchemaValidator,
+  RuleEngine, FormatChecker, RetryHandler, DeadLetterProcessor, GeoLookup, RefLookup,
+  CacheFiller, TagResolver, MetadataEnricher`, ...) to build varied, less predictable
+  topologies for exercising the layout engine and filters against realistic variety.
 
-### Service pipeline chain
-
-```
-Ingester → Validator → Transformer → Enricher → Loader
-```
-
-Enricher may also process via `enrich-lookup` (40% chance). Validator retries via `validate-retry` (15% chance). Some chunks error at a random hop.
-
-### Live push simulation
-
-`SimulateLivePushAsync()` runs as a background Task for all `BatchStatus.Running` batches. Every 2 seconds it generates 1–3 new events and pushes them via `IHubContext<BatchEventsHub>`. Events are also persisted in-memory so HTTP polling also returns them.
+Don't treat any single fixed chain (including the 4-stage one above) as canonical —
+most generated runs draw randomly from the larger pools. Separately, the dedicated
+`RUN-DEMO-LAYOUT-HINTS`/`layouthintsdemo.json` and `RUN-DEMO-ROOT`/`nesteddemo.json`
+topologies (see `13_Setting_Up_Nested_Runs_And_Topology.md`) are hand-authored, not
+randomized — those are the ones to read when you want a specific, reproducible
+example of a hint/feature rather than general variety.
