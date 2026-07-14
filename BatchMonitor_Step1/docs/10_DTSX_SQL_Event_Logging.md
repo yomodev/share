@@ -7,6 +7,17 @@ view can build topology, spans, errors and lag from it — using the generalized
 > This is a design resource for DB / SSIS authors. It describes the *shape* of the data
 > we want; the C# side polls it through an `IEventSource` abstraction (resume from the
 > last reported id/timestamp).
+>
+> **Implementation status:** built, matching this doc's schema exactly —
+> `src/NxtUI.Core/Events/IEventSource.cs` (the `IEventSource`/`EventCursor`/`EventBatch`
+> contract), `IRunEventSink.cs`, and the SQL-side implementations
+> `Events/Sql/SqlRunEventSink.cs` (writes to `dbo.RunEventLog`, same columns as below),
+> `Events/Sql/SqlRunEventSource.cs` (the resumable poll side), and
+> `Events/Sql/SsisDbEventSource.cs` (Option 2 below — reading `SSISDB` catalog views
+> directly). Not yet wired into `Program.cs`'s default DI registrations (the app still
+> runs on `MockRunService`/`MockKafkaService`/`MockMongoService` — see
+> `01_Architecture.md`), but the event-sourcing layer itself is real, tested code, not
+> a proposal.
 
 ## Concept mapping: SSIS → event model
 
