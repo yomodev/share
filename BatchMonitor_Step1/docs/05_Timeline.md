@@ -1,8 +1,9 @@
-# BatchMonitor — Timeline Tab
+# NxtUI — Timeline Tab
 
 ## Overview
 
-The Timeline tab visualises PerformanceEvents across one or more batch runs on a shared time axis. Multiple batches can be loaded and compared side by side.
+The Timeline tab visualises `PerformanceEvent`s across one or more **runs** on a
+shared time axis. Multiple runs can be loaded and compared side by side.
 
 ---
 
@@ -11,9 +12,16 @@ The Timeline tab visualises PerformanceEvents across one or more batch runs on a
 | File | Purpose |
 |------|---------|
 | `Pages/TimelineTab.razor` | Blazor component: control bar, canvas div, dialog, import/export |
-| `Services/TimelineBatch.cs` | Per-batch event store + SignalR subscription |
+| `Services/TimelineRun.cs` | Per-run event store + live subscription (via `RunEventBroker` — see `02_Models_DataFlow.md`) |
 | `wwwroot/js/d3-timeline.js` | All D3 rendering (multi-instance) |
 | `wwwroot/css/d3-timeline.css` | Timeline styles |
+
+`TimelineRun` is the renamed `TimelineBatch`; the JS module is imported per-component
+as an ES module (`IJSObjectReference`, e.g. `_tlModule`) rather than exposed as a
+global `BatchMonitor.Timeline` namespace object — `init`/`update`/`dispose`/etc. are
+called directly on that imported module reference. A `DotNetObjectReference` is
+passed into `init` too, so the JS side can call back into the component (used for
+things like double-clicking a block to open its log folder — task #54).
 
 ---
 
@@ -28,7 +36,7 @@ The timeline uses **two separate SVG elements**:
         ├── gridL      (global vertical tick lines)
         ├── cursorL    (magenta cursor line — behind blocks)
         ├── blockL     (message blocks per section)
-        └── headerL    (batch name rows — on top)
+        └── headerL    (run name rows — on top)
 
 .bm-tl-bottom-panel (fixed height, never scrolls)
 └── botSvg
@@ -44,30 +52,36 @@ The bottom panel is fixed regardless of lane scroll position.
 
 ## Instance Isolation
 
-Each `TimelineTab` component generates a unique `_instanceKey = Guid.NewGuid().ToString("N")`. All JS calls pass this key:
+Each `TimelineTab` component generates a unique `_instanceKey = Guid.NewGuid().ToString("N")`.
+All JS calls go through the imported module reference, keyed by that instance:
 
 ```csharp
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.init",    _instanceKey, _canvasRef, _bottomRef, GetOptions());
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.update",  _instanceKey, payload);
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose", _instanceKey);
+await _tlModule.InvokeVoidAsync("init",    _instanceKey, _canvasRef, _bottomRef, GetOptions(), _selfRef);
+await _tlModule.InvokeVoidAsync("update",  _instanceKey, payload);
+await _tlModule.InvokeVoidAsync("dispose", _instanceKey);
 ```
 
-JS maintains `_instances: Map<key, state>`. Each instance has completely independent zoom, data, and DOM elements.
+JS maintains `_instances: Map<key, state>`. Each instance has completely independent
+zoom, data, and DOM elements — multiple Timeline tabs (or split panes) never collide.
 
 ---
 
 ## X-Axis (Time)
 
 ### Coordinate system
-- All events use **relative milliseconds** from their batch's `BatchStart`
-- `t=0` = batch start; `t=60000` = 1 minute into the batch
-- Multiple batches are **all aligned to t=0** (not absolute wall clock)
-- This allows comparing "how did this batch perform vs last time" at the same relative position
+- All events use **relative milliseconds** from their run's start time.
+- `t=0` = run start; `t=60000` = 1 minute into the run.
+- Multiple runs are **all aligned to t=0** (not absolute wall clock).
+- This allows comparing "how did this run perform vs last time" at the same relative
+  position.
 
 ### Frozen domain
-`frozenDomainMax` is set on first data load to the maximum finish time across all loaded batches. It **never changes** from incoming data updates. `xScale.domain([0, frozenDomainMax])` is set once and stays fixed.
+`frozenDomainMax` is set on first data load to the maximum finish time across all
+loaded runs. It **never changes** from incoming data updates.
+`xScale.domain([0, frozenDomainMax])` is set once and stays fixed.
 
-`globalMax` tracks the true current maximum (including new live events). It grows as new events arrive. Only the heatmap and range selector use `globalMax`.
+`globalMax` tracks the true current maximum (including new live events). It grows as
+new events arrive. Only the heatmap and range selector use `globalMax`.
 
 ### Zoom/pan limits
 - Left: `tx ≤ 0` (t=0 never goes right of the left screen edge → no negative time)
@@ -87,20 +101,21 @@ applyZoom(s, d3.zoomIdentity.scale(k));
 
 ### Normal mode
 
-Per batch section:
+Per run section:
 ```
-HEADER_H (26px)  — batch name row
+HEADER_H (26px)  — run name row
 ├── Group row 1 (height = ROW_PAD*2 + subrows.length * (SUBROW_H + BLOCK_GAP))
 ├── Group row 2
 └── ...
 SECTION_GAP (6px)
 ```
 
-**Group key** is determined by the GroupBy setting:
+**Group key** is determined by the `GroupByOption` setting
+(`Pages/TimelineTab.razor`, `enum GroupByOption`):
 | Option | Key |
 |--------|-----|
 | Service / Pipeline | `"Enricher / enrich-main"` |
-| PID / Service / Pipeline | `"server01:4821 / Enricher / enrich-main"` |
+| Service / PID / Pipeline | `"server01:4821 / Enricher / enrich-main"` |
 | Service | `"Enricher"` |
 | Pipeline | `"enrich-main"` |
 | PID | `"server01:4821"` |
@@ -113,11 +128,13 @@ SECTION_GAP (6px)
 
 **No cap** on sub-row count. Row height expands as needed.
 
-**Sub-row height adjustment:** `↑/↓` keys change `s.subrowHOverride` (min 1px). When vertical scrollbar is active, `↑/↓` scroll instead (Ctrl+↑/↓ to adjust height).
+**Sub-row height adjustment:** `↑/↓` keys change `s.subrowHOverride` (min 1px). When
+vertical scrollbar is active, `↑/↓` scroll instead (`Ctrl+↑/↓` to adjust height).
 
 ### Stack mode
 
-One row per distinct `name`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
+One row per distinct `name`. Events within a chunk are placed **consecutively by
+duration** (not wall-clock position):
 ```javascript
 let cursor = 0;
 for (const e of evts) {
@@ -127,11 +144,14 @@ for (const e of evts) {
 }
 ```
 
-Use case: compare pipeline stage durations for each chunk, independent of when processing started.
+Use case: compare pipeline stage durations for each chunk, independent of when
+processing started.
 
 ### Vertical scroll
 
-The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, totalH + 16)`. If content is taller than the viewport, a scrollbar appears.
+The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height =
+`max(viewH, totalH + 16)`. If content is taller than the viewport, a scrollbar
+appears.
 
 ---
 
@@ -145,35 +165,42 @@ The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, t
 | Service | `e.service` |
 | Status | `e.status` → fixed colours |
 
-**Status colours:**
+**Status colours** (same values as `PipelineState`'s colour mapping — see
+`02_Models_DataFlow.md`):
 - `done` → `#3FB950` (green)
 - `inprogress` → `#388BFD` (blue)
 - `error` → `#F85149` (red)
 
-**Palette colours** (Source/Pipeline/Service): deterministic hash of the key string → index into a 19-colour curated palette. Same key always gets the same colour across sessions.
+**Palette colours** (Source/Pipeline/Service): deterministic hash of the key string
+→ index into a 19-colour curated palette. Same key always gets the same colour
+across sessions.
 
 ---
 
 ## Filtering
 
-The `Filter…` text box filters events by substring match across: `name`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
+The `Filter…` text box filters events by substring match across: `name`, `source`,
+`pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from
+the layout (but still count in heatmap).
 
 ---
 
 ## Cursor
 
-The magenta cursor line spans the full height of the lane SVG. It auto-hides after 2 seconds of mouse stillness.
+The magenta cursor line spans the full height of the lane SVG. It auto-hides after 2
+seconds of mouse stillness.
 
 The cursor label in the bottom panel shows:
 - Relative time: `HH:MM:SS.mmm`
-- Absolute time in parentheses if the hovered batch has a known `batchStartEpochMs`
-- Which batch is "hovered" is determined by the y-position of the mouse in the lane area
+- Absolute time in parentheses if the hovered run has a known `batchStartEpochMs`
+- Which run is "hovered" is determined by the y-position of the mouse in the lane area
 
 ---
 
 ## Heatmap
 
-The heatmap shows event density across the full `globalMax` range using vertical lines:
+The heatmap shows event density across the full `globalMax` range using vertical
+lines:
 - Neutral background (`#161620`)
 - Lines coloured `#388BFD` with opacity `0.12 + 0.88 * (count / maxCount)`
 - 500 buckets across the usable width (PAD left/right)
@@ -182,21 +209,27 @@ The heatmap shows event density across the full `globalMax` range using vertical
 
 ## Range Selector
 
-`d3.brushX()` overlay on top of the heatmap. Built once per instance; only `.move` is called to sync position. The brush extent maps `[PAD, W-PAD] → [0, globalMax]`.
+`d3.brushX()` overlay on top of the heatmap. Built once per instance; only `.move` is
+called to sync position. The brush extent maps `[PAD, W-PAD] → [0, globalMax]`.
 
-Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` and calls `applyZoom()` (which temporarily removes then re-adds the zoom handler to avoid re-entrancy).
+Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` and
+calls `applyZoom()` (which temporarily removes then re-adds the zoom handler to avoid
+re-entrancy).
 
 ---
 
 ## Block Highlighting (name)
 
-Hovering any block highlights all blocks with the same `name` across all batch sections:
+Hovering any block highlights all blocks with the same `name` across all run
+sections:
 ```javascript
 s.blockL.selectAll('rect.bm-tl-block')
     .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12);
 ```
 
-The same chunk ID can appear in multiple batches (if multiple runs processed the same chunk) and in multiple services within a batch (as the chunk travels through the pipeline).
+The same chunk ID can appear in multiple runs (if multiple runs processed the same
+chunk) and in multiple services within a run (as the chunk travels through the
+pipeline).
 
 ---
 
@@ -210,36 +243,46 @@ Shows on block hover:
 - Duration
 - Error message (if any)
 
-**Ctrl+click** copies all fields to clipboard.
+**Ctrl+click** copies all fields to clipboard. **Double-click** opens that event's
+log folder (see `09_Features.md`'s Timeline section).
 
-Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm` (local time).
+Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm`
+(local time).
 
 ---
 
 ## CSV Export / Import
 
 ### Export
-Uses `window.showSaveFilePicker()` (Chrome/Edge save dialog) with blob-download fallback. Filename: `timeline_YYYY-MM-DD-HH-MM-SS.csv`.
+`doExport()` in `d3-timeline.js` uses `window.showSaveFilePicker()` (Chrome/Edge save
+dialog) with a blob-download fallback for other browsers. Filename:
+`{firstRunName}_{YYYY-MM-DDTHH-MM-SS}.csv` (derived from the first loaded run's
+name, sanitized to `[a-zA-Z0-9_-]`).
 
-Columns: `RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
+Columns (one row per event, absolute ISO timestamps — **not** the relative-ms/
+duration/status shape you might expect from the in-memory model):
+`RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, Start, Finish, Error`
 
 ### Import
-Triggered by hidden `<InputFile>` element clicked programmatically. Parsed by `ImportCsvAsync()` which:
-1. Reads header row to find column indices (order-independent)
-2. Groups rows by `RunId`
-3. Upserts into existing `TimelineBatch` or creates a new CSV-only batch via `TimelineBatch.CreateFromCsv()`
+Triggered by a hidden `<InputFile>` element clicked programmatically. Parsed
+client-side by `ImportCsvAsync()` which:
+1. Reads the header row to find column indices (order-independent).
+2. Groups rows by `RunId`.
+3. Upserts into an existing `TimelineRun` or creates a new CSV-only run via
+   `TimelineRun.CreateFromCsv()`.
 
-CSV batches have no live subscription and no polling. They are identified by the absence of an `IBatchService` reference.
+CSV-imported runs have no live subscription and no polling — there's no real run
+behind them to watch.
 
 ---
 
-## Add Batch Dialog
+## Add Run Dialog
 
-- MudBlazor `MudDataGrid` with search, env selector, paginated results
-- Single-click selects/deselects a row
-- Double-click (detected via `MouseEventArgs.Detail == 2`) immediately loads the batch
-- `CloseButton = true` in `DialogOptions` adds an × button to the dialog header
-- Already-loaded batches show an info alert; loading them again refreshes/merges events
+- MudBlazor `MudDataGrid` with search, env selector, paginated results.
+- Single-click selects/deselects a row.
+- Double-click (detected via `MouseEventArgs.Detail == 2`) immediately loads the run.
+- `CloseButton = true` in `DialogOptions` adds an × button to the dialog header.
+- Already-loaded runs show an info alert; loading them again refreshes/merges events.
 
 ---
 
@@ -254,15 +297,23 @@ CSV batches have no live subscription and no polling. They are identified by the
 | Reset view | ZoomOutMap | Fits all data in viewport |
 | Export | Save | Saves CSV (with save dialog on Chrome/Edge) |
 | Import | FolderOpen | Opens file picker for CSV import |
-| Remove | LayersClear | Dropdown to remove individual or all batches |
-| Add | Add | Opens Add Batch dialog |
+| Remove | LayersClear | Dropdown to remove individual runs or clear all |
+| Add | Add | Opens Add Run dialog |
 
 ---
 
 ## Known Limitations / Pending Work
 
-- Group row labels (lane key names on the left side) — not yet implemented
-- Legend for colour key — not yet implemented
-- Batch title header does not scroll with vertical pan (intentional — it re-renders with the content)
-- Stack view x-axis represents accumulated duration, not wall clock — ticks show relative time which may be confusing when mixed with normal batches
-- Import does not reconstruct absolute `batchStartEpochMs` from relative ms (absolute times in tooltip will not show for imported batches)
+- Group row labels (lane key names on the left side) and a legend for the colour key
+  are still not implemented as of this writing.
+- Run title header does not scroll with vertical pan (intentional — it re-renders
+  with the content).
+- Stack view x-axis represents accumulated duration, not wall clock — ticks show
+  relative time which may be confusing when mixed with normal-mode runs.
+- CSV import does not reconstruct absolute `batchStartEpochMs` from the exported
+  ISO timestamps the way normal-mode runs have it, so behavior for
+  relative-vs-absolute display on re-imported runs should be spot-checked against
+  current code rather than assumed.
+- Keyboard shortcuts are a known target for a redesign — the current set (documented
+  in `09_Features.md`) isn't considered fully intuitive; treat it as current-state,
+  not final.
