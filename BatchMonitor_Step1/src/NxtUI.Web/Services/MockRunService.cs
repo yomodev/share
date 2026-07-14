@@ -515,7 +515,15 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
         for (int i = 0; i < newChunks; i++)
         {
             var chunkId = $"LIVE-{counter++:D5}";
-            int hops = rng.Next(4, 13);
+            // The demo pool's own linear chain (Ingester -> Validator -> Enricher -> Loader)
+            // must visit each service EXACTLY once per chunk — `h % servicePool.Length`
+            // wrapping past 4 hops would revisit Ingester/Validator mid-chunk (e.g. hops=6
+            // gives Ingester,Validator,Enricher,Loader,Ingester,Validator), and consecutive
+            // hops become edges, so Loader -> Ingester (hop 4 -> 5) got recorded as a real
+            // structural edge — a genuine cycle that left every node with indegree >= 1,
+            // so bm-flow-layout's topological layer assignment never even started and
+            // silently left every node in layer 0. The generic pool has no chain to violate.
+            int hops = isDemoPool ? servicePool.Length : rng.Next(4, 13);
             var pending = new List<(string, string, string, string, int)>(hops);
             for (int h = 0; h < hops; h++)
             {
