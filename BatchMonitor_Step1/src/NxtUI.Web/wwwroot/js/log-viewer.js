@@ -9,7 +9,7 @@
 // appendRaw updates doc.entries and re-renders every attached viewport.
 // destroy() ref-counts: when the last viewport is removed the doc is unloaded.
 
-import { parseMore, compileFormat, detectFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=8';
+import { compileMultiFormat, parseMultiFormat, buildRegex, findMatches, highlightText, escapeHtml } from './log-viewer-parser.js?v=9';
 import { parse as parseFilter, evaluate as evalFilter } from './filter.js?v=2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -545,11 +545,6 @@ function _createViewport(container, doc, options) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-function _compileFormats(formatStrs) {
-    if (!formatStrs || formatStrs.length === 0) return [];
-    return formatStrs.map(compileFormat).filter(Boolean);
-}
-
 /**
  * Render a log file into `container`. Creates a new document and a viewport.
  * Returns the docId so callers can attach additional viewports later.
@@ -562,14 +557,18 @@ function render(container, rawText, options = {}) {
     destroy(container);
 
     const raw = rawText ?? '';
-    const compiledFormats = _compileFormats(options.formats);
-    const detectedFormat  = detectFormat(raw, compiledFormats);
+    // Every configured format is tried per-entry (not one globally "detected" winner —
+    // see compileMultiFormat's own doc for why: a real log file can genuinely mix line
+    // shapes, e.g. most lines omit {host} but some don't, and forcing the whole file
+    // through one chosen template either mis-parses or entirely drops whichever shape
+    // lost the vote).
+    const multiFormat = compileMultiFormat(options.formats);
 
     const docId = _newDocId();
     const doc = {
         docId,
-        entries:       parseMore(raw, detectedFormat),
-        detectedFormat,
+        entries:     parseMultiFormat(raw, multiFormat),
+        multiFormat,
         bookmarks:  new Map(),
         _viewports: new Set(),
     };
@@ -593,7 +592,7 @@ function appendRaw(container, newRawText) {
     const doc     = vp.doc;
     const entries = doc.entries;
 
-    const newEntries = parseMore(newRawText, doc.detectedFormat);
+    const newEntries = parseMultiFormat(newRawText, doc.multiFormat);
     if (newEntries.length === 0) return;
 
     const lastSourceLine = entries.length > 0
@@ -813,8 +812,9 @@ function renderLocalFile(container, key, opts) {
  * either way, no separate code path to keep in sync.
  *
  * Chunks from the network aren't aligned to line boundaries, so a trailing partial
- * line is buffered ("carry") and prepended to the next chunk before parsing — parseMore
- * expects complete lines, same assumption the live-tail appendRaw path already relies on.
+ * line is buffered ("carry") and prepended to the next chunk before parsing —
+ * parseMultiFormat expects complete lines, same assumption the live-tail appendRaw path
+ * already relies on.
  *
  * anchorLine is deferred until the whole file has streamed in, since the target line
  * may not exist yet in the first chunk(s).

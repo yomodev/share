@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { parse, evaluate } from './filter.js'
-import { parseLog } from './log-viewer-parser.js'
+import { compileMultiFormat, parseMultiFormat } from './log-viewer-parser.js'
+
+const LEGACY_FORMAT = '{timestamp}|{level}|{host}|{pid}|{thread}|{message}|{caller}{*}{$}'
+const parseLog = (raw) => parseMultiFormat(raw, compileMultiFormat([LEGACY_FORMAT]))
 
 const FIELDS = ['Name', 'Service', 'Pipeline']
 
