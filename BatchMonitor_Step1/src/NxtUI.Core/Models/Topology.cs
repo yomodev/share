@@ -140,6 +140,12 @@ public class TopologyNode
     /// </summary>
     public string? Direction { get; set; }
 
+    /// <summary>See <see cref="ServiceHint.External"/> (Custom layout engine only).</summary>
+    public bool External { get; set; }
+
+    /// <summary>See <see cref="ServiceHint.ArriveFrom"/>.</summary>
+    public string? ArriveFrom { get; set; }
+
     /// <summary>True when the run-type blueprint declared this service (matched a ServiceHint).</summary>
     public bool IsDeclared { get; set; }
 

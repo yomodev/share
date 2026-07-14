@@ -261,6 +261,53 @@ describe('directional soft hints', () => {
     });
 });
 
+describe('external/arriveFrom (docs/12 §6)', () => {
+    it('pins an external node to the far end of the layer on the arriveFrom side, even against three peers converging on the same target', () => {
+        const nodes = [node('A'), node('B'), node('C'), node('TARGET')];
+        nodes.find(n => n.id === 'C').external = true;
+        nodes.find(n => n.id === 'C').arriveFrom = 'below';
+        const result = layout({
+            nodes,
+            edges: [edge('A', 'TARGET'), edge('B', 'TARGET'), edge('C', 'TARGET')],
+        });
+        const y = id => result.nodes.get(id).y;
+        expect(y('C')).toBeGreaterThan(y('A'));
+        expect(y('C')).toBeGreaterThan(y('B'));
+    });
+
+    it('flips to the min-y end for arriveFrom "above"', () => {
+        const nodes = [node('A'), node('B'), node('C'), node('TARGET')];
+        nodes.find(n => n.id === 'C').external = true;
+        nodes.find(n => n.id === 'C').arriveFrom = 'above';
+        const result = layout({
+            nodes,
+            edges: [edge('A', 'TARGET'), edge('B', 'TARGET'), edge('C', 'TARGET')],
+        });
+        const y = id => result.nodes.get(id).y;
+        expect(y('C')).toBeLessThan(y('A'));
+        expect(y('C')).toBeLessThan(y('B'));
+    });
+
+    it('warns and ignores the hint when external is set without arriveFrom', () => {
+        const nodes = [node('A'), node('B')];
+        nodes.find(n => n.id === 'B').external = true;
+        const result = layout({ nodes, edges: [edge('A', 'B')] });
+        expect(result.warnings.some(w => w.includes('external') && w.includes('arriveFrom'))).toBe(true);
+    });
+
+    it('warns and ignores an orthogonal arriveFrom side (left/right in a horizontal flow)', () => {
+        const nodes = [node('A'), node('B'), node('TARGET')];
+        nodes.find(n => n.id === 'B').external = true;
+        nodes.find(n => n.id === 'B').arriveFrom = 'left';
+        const result = layout({
+            nodes,
+            edges: [edge('A', 'TARGET'), edge('B', 'TARGET')],
+            direction: 'horizontal',
+        });
+        expect(result.warnings.some(w => w.includes('not applicable to a horizontal flow'))).toBe(true);
+    });
+});
+
 describe('recursive boxes (subGraph)', () => {
     it('sizes a box to fit its sub-layout plus padding', () => {
         const nodes = [node('Outer1'), node('Box'), node('Outer2')];

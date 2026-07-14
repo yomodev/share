@@ -47,6 +47,16 @@
  * @property {{side:'left'|'right'|'above'|'below'}} [placeSuccessor] - soft: where this
  *        node would like its successor(s) placed. Loses to the successor's own
  *        `placement` if it declares one.
+ * @property {boolean} [external] - soft, Stage 5: pull this node to the extreme end (not
+ *        just biased) of its layer's cross axis, per `arriveFrom`, rather than letting the
+ *        ordinary median heuristic interleave it among its peers — "place me outside the
+ *        cluster of siblings converging on the same target." Ignored (with a warning) if
+ *        set without `arriveFrom`, or if `arriveFrom` isn't valid for the flow direction
+ *        (same left/right/above/below <-> horizontal/vertical rule as `placement`).
+ * @property {'left'|'right'|'above'|'below'} [arriveFrom] - which side of the layer this
+ *        `external` node is pinned to; its incoming edge visually approaches from that
+ *        side as a natural side effect of the elbow routing (see chainToPoints), not a
+ *        separate routing rule. Meaningless without `external: true`.
  * @property {LayoutInput} [subGraph] - Stage 2b: makes this node a recursive box. Its own
  *        `width`/`height` are ignored (ADDED to, actually never set) — the box is sized to
  *        fit the sub-layout plus `subGraph.padding` (default DEFAULT_SUBGRAPH_PADDING) on
@@ -340,6 +350,7 @@ function orderLayers(layers, edgeChains, nodesById, direction, seedOrder, warnin
 
     const neighborsOf = buildNeighborIndex(edgeChains);
     const hints = collectDirectionalHints(edgeChains, nodesById, direction, warnings);
+    const externalSides = collectExternalSides(nodesById, direction, warnings);
     const indexInLayer = () => {
         const idx = new Map();
         layers.forEach((layer, li) => layer.forEach((n, i) => idx.set(n.id, { li, i })));
@@ -347,6 +358,10 @@ function orderLayers(layers, edgeChains, nodesById, direction, seedOrder, warnin
     };
 
     const HINT_BIAS = 1000; // large enough to dominate same-layer neighbor medians
+    // Bigger than HINT_BIAS: `external` is an absolute "stick to this end of the layer"
+    // pin, not a relative nudge toward a predecessor — it must win even when a hint or
+    // neighbor median would otherwise pull the node back toward the middle.
+    const EXTERNAL_BIAS = 1e6;
 
     for (let pass = 0; pass < ORDERING_PASSES; pass++) {
         const forward = pass % 2 === 0;
@@ -360,6 +375,11 @@ function orderLayers(layers, edgeChains, nodesById, direction, seedOrder, warnin
             if (adjLi < 0 || adjLi >= layers.length) continue;
             const layer = layers[li];
             const medians = layer.map(n => {
+                const side = externalSides.get(n.id);
+                if (side) {
+                    const towardHigher = side === 'below' || side === 'right';
+                    return { node: n, median: towardHigher ? EXTERNAL_BIAS : -EXTERNAL_BIAS };
+                }
                 const hint = hints.get(n.id);
                 if (hint && positions.get(hint.pred)?.li === adjLi) {
                     const predPos = positions.get(hint.pred).i;
@@ -460,6 +480,28 @@ function collectDirectionalHints(edgeChains, nodesById, direction, warnings) {
         // per node), and a later parent hint never overrides an already-chosen self hint.
     }
     return chosen;
+}
+
+// ── Soft constraint: external/arriveFrom (docs/12 §6) ──────────────────────────────────
+// "Place me outside the cluster of peers on the same target; my incoming arrow should come
+// from this side." Unlike `placement`/`placeSuccessor` (a nudge relative to ONE specific
+// predecessor, only usable on adjacent-layer edges), `external` is an absolute pin to
+// whichever end of the node's OWN layer `arriveFrom` names — applies regardless of how many
+// predecessors the node has, how many layers away they are, or whether it has any
+// predecessor at all. Resolved once per layout (not per ordering pass, since it depends
+// only on the node's own declared hint, never on neighbor positions).
+function collectExternalSides(nodesById, direction, warnings) {
+    const sides = new Map();
+    for (const [id, node] of nodesById) {
+        if (!node.external) continue;
+        if (!node.arriveFrom) {
+            warnings.push(`Node "${id}" has "external" set but no "arriveFrom" — hint ignored.`);
+            continue;
+        }
+        const side = normalizeSide(node.arriveFrom, direction, warnings, id);
+        if (side != null) sides.set(id, side);
+    }
+    return sides;
 }
 
 // A hint is only meaningful on the CROSS axis: "above/below" bias order within a

@@ -296,6 +296,11 @@ const D3Graph = (() => {
                 // placement (that's the successor's own `placement`, which always wins over
                 // this if both are set — see bm-flow-layout/layout.js's own docs).
                 placeSuccessor: n.direction ? { side: n.direction } : undefined,
+                // docs/12 §6 "external"/"arriveFrom" — place this node outside its peer
+                // cluster on the named layer edge, pinned regardless of predecessor distance
+                // (see collectExternalSides in bm-flow-layout/layout.js).
+                external: n.external || undefined,
+                arriveFrom: n.arriveFrom || undefined,
             });
             metaById.set(n.id, { kind: 'node', data: n });
         }

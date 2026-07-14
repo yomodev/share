@@ -144,6 +144,25 @@ public sealed class ServiceHint
     /// </summary>
     public string? Direction { get; set; }
 
+    /// <summary>
+    /// Custom layout engine only. Place this node outside the cluster of peer siblings
+    /// converging on the same downstream target, pinned to the layer-edge named by
+    /// <see cref="ArriveFrom"/>, instead of letting the ordinary median-based ordering
+    /// interleave it among them. Meaningless without <see cref="ArriveFrom"/> also set
+    /// (ignored with a warning). See docs/12_Custom_Layout_And_Nested_Runs.md §6 "external".
+    /// </summary>
+    public bool External { get; set; }
+
+    /// <summary>
+    /// "left" | "right" | "above" | "below" — which side of the layer an
+    /// <see cref="External"/> node is pinned to; its incoming edge visually approaches from
+    /// that side as a side effect of the engine's own orthogonal routing, not a separate
+    /// rule. Only "above"/"below" are valid in a horizontal flow, only "left"/"right" in a
+    /// vertical one (the flow axis itself is already fixed by layer) — an invalid side is
+    /// dropped with a warning. See <see cref="External"/>.
+    /// </summary>
+    public string? ArriveFrom { get; set; }
+
     /// <summary>Start folded.</summary>
     public bool Collapsed { get; set; }
 
