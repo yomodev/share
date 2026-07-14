@@ -1,6 +1,6 @@
 # 14 — Client-Side Architecture: JS Modules and How to Test Them
 
-BatchMonitor is a Blazor **Server** app — components run on the server, and the DOM the user
+NxtUI is a Blazor **Server** app — components run on the server, and the DOM the user
 sees is a live SignalR-synced rendering of server state. Most UI is plain Blazor/MudBlazor and
 never touches JavaScript at all. But several features are either too visually specialized (the
 D3-based flow graph and timeline), too performance-sensitive to round-trip through the SignalR
