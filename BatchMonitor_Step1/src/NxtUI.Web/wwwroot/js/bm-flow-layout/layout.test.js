@@ -70,8 +70,18 @@ describe('dummy-node routing for multi-layer edges', () => {
             edges: [edge('A', 'B'), edge('B', 'C'), edge('C', 'D'), edge('A', 'D')],
         });
         const longEdge = result.edges.find(e => e.source === 'A' && e.target === 'D');
-        // 4 layers apart (0->3) means 2 intermediate dummy waypoints + 2 endpoints = 4 points.
-        expect(longEdge.points.length).toBe(4);
+        // 4 layers apart (0->3) means at least 2 intermediate dummy waypoints + 2 endpoints
+        // = 4 points, PLUS an orthogonal elbow (2 extra points) at every hop where the
+        // dummy's cross-axis position differs from its neighbor's (it shares a layer with
+        // a real node here, so it's pushed off-center to avoid overlapping it) — see
+        // orthogonalizeChain. The exact count is an implementation detail of the elbow
+        // routing; what matters is there's real multi-point routing, and every segment
+        // stays axis-aligned (asserted below) rather than cutting a diagonal through B/C.
+        expect(longEdge.points.length).toBeGreaterThanOrEqual(4);
+        for (let i = 1; i < longEdge.points.length; i++) {
+            const a = longEdge.points[i - 1], b = longEdge.points[i];
+            expect(a.x === b.x || a.y === b.y).toBe(true);
+        }
     });
 
     it('never exposes dummy node ids in the public node map', () => {

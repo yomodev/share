@@ -538,11 +538,64 @@ function assignCoordinates(layers, nodesById, dummies, layerOf, direction, layer
     return positioned;
 }
 
-function chainToPoints(chain, positioned, _direction) {
-    return chain.map(id => {
+// Real orthogonal routing (Stage 5): earlier revisions returned raw node/dummy CENTERS,
+// which is only axis-aligned when every waypoint in the chain happens to share the same
+// cross-axis coordinate — anything else (the overwhelmingly common case) drew a diagonal
+// line straight through node cards. Two things fix that, matching what ELK's own
+// ORTHOGONAL edge router produces:
+//   1. clip the first/last point to the actual node BORDER (not center) on the flow axis,
+//      so the edge visibly starts/ends at the card edge instead of poking through it.
+//   2. insert an elbow (H-then-V, or V-then-H) between every consecutive pair of waypoints
+//      whose cross-axis coordinate differs, bending at the horizontal (resp. vertical)
+//      midpoint of that hop — see orthogonalizeChain.
+// No per-pipeline ports yet (docs/12 §6/"port hints" — still unbuilt): every edge enters/
+// exits at its node's cross-axis CENTER, not a specific pipeline row's y. That's the one
+// remaining visual gap vs. ELK's FIXED_POS mode.
+function chainToPoints(chain, positioned, direction) {
+    const raw = chain.map(id => {
         const p = positioned.get(id);
         return { x: p.x, y: p.y };
     });
+    if (raw.length >= 2) {
+        const first = positioned.get(chain[0]);
+        const last = positioned.get(chain[chain.length - 1]);
+        if (direction === 'horizontal') {
+            raw[0] = { x: first.x + first.width / 2, y: first.y };
+            raw[raw.length - 1] = { x: last.x - last.width / 2, y: last.y };
+        } else {
+            raw[0] = { x: first.x, y: first.y + first.height / 2 };
+            raw[raw.length - 1] = { x: last.x, y: last.y - last.height / 2 };
+        }
+    }
+    return orthogonalizeChain(raw, direction);
+}
+
+// Inserts an elbow between each consecutive pair of points whose cross-axis coordinate
+// differs, so every segment of the resulting polyline is axis-aligned (pure horizontal or
+// pure vertical) — required for roundedOrthPath's corner-rounding to look right, and for
+// the edge to read as "orthogonal" at all. The bend sits at the midpoint of the FLOW axis
+// between the two points (e.g. halfway between a horizontal hop's two x values), which is
+// also where ELK conventionally bends multi-segment orthogonal edges.
+function orthogonalizeChain(points, direction) {
+    if (points.length < 2) return points;
+    const out = [points[0]];
+    for (let i = 1; i < points.length; i++) {
+        const a = out[out.length - 1];
+        const b = points[i];
+        if (direction === 'horizontal') {
+            if (a.y !== b.y) {
+                const midX = (a.x + b.x) / 2;
+                out.push({ x: midX, y: a.y }, { x: midX, y: b.y });
+            }
+        } else {
+            if (a.x !== b.x) {
+                const midY = (a.y + b.y) / 2;
+                out.push({ x: a.x, y: midY }, { x: b.x, y: midY });
+            }
+        }
+        out.push(b);
+    }
+    return out;
 }
 
 // Back-edges (the reverse of an A<->B pair) aren't part of the layered structure — route a
