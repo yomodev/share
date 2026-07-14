@@ -36,7 +36,14 @@
    D3's own JS-driven easeCubicInOut transitions on the plain position attribute updates —
    those aren't CSS transitions and have no class to key off, so this can't double-animate
    them the way a blanket `.bm-node { transition: transform }` would have. */
-.bm-node-hover-zoom { transition: transform 140ms ease; }
+/* A collapsed child-run card lives in cbLayer, which is deliberately painted BEHIND
+   eLayer/nLayer (see init() in d3-graph.js — so an EXPANDED box's merged real content
+   paints on top of its own chrome). d3.select(this).raise() only reorders within cbLayer's
+   own children, so scaling a card up on hover left it visually cut off by root-graph edges/
+   nodes from the layers painted after cbLayer. `transform` (already set on hover) creates a
+   new stacking context, so z-index here lifts the hovered card above every layer, not just
+   its cbLayer siblings — without needing to physically move it out of the D3 join's parent. */
+.bm-node-hover-zoom { transition: transform 140ms ease; z-index: 1000; }
 
 .bm-node-rect {
     fill: none;

@@ -2010,19 +2010,41 @@ const D3Graph = (() => {
             return;
         }
 
-        // A group's label is drawn OUTSIDE (above) its box — see renderGroups/
-        // GROUP_LABEL_MARGIN — which can poke above y=0 (the topmost node's own edge)
-        // in graph coordinates. Reserve that extra height here so the label never
-        // gets clipped by the viewport when a group sits in the top row.
-        const gi = { width: g.width, height: g.height + GROUP_LABEL_MARGIN };
+        // g.width/g.height are only a SPAN (maxX-minX / maxY-minY), not a promise that
+        // content starts at x=0,y=0 — bm-flow-layout's own coordinates are routinely
+        // negative (see assignCoordinates's per-layer centering, and subGraph's own
+        // min-bound anchoring), and packSatelliteBoxes can push a child-run box's row
+        // further left/up than the main pipeline's own x=0 start whenever that row's
+        // total width/height exceeds the main pipeline's (packSatelliteBoxes centers
+        // satellite boxes around the pipeline's OWN [minX,maxX], which goes negative
+        // once the satellite row is wider than that range). Centering on span alone
+        // under-pans in that case and clips the true leftmost/topmost content out of
+        // view — the actual real bounding box must be measured, not assumed.
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const n of g.nodes.values()) {
+            minX = Math.min(minX, n.x - n.width / 2); maxX = Math.max(maxX, n.x + n.width / 2);
+            minY = Math.min(minY, n.y - n.height / 2); maxY = Math.max(maxY, n.y + n.height / 2);
+        }
+        for (const b of (g.childRunBoxes || [])) {
+            minX = Math.min(minX, b.x - b.width / 2); maxX = Math.max(maxX, b.x + b.width / 2);
+            minY = Math.min(minY, b.y - b.height / 2); maxY = Math.max(maxY, b.y + b.height / 2);
+        }
+        if (!Number.isFinite(minX)) { minX = minY = 0; maxX = g.width; maxY = g.height; }
+
+        // A group's label is drawn OUTSIDE (above) its own box — see renderGroups/
+        // GROUP_LABEL_MARGIN — which can poke above the topmost node's own top edge in
+        // graph coordinates. Reserve that extra height here so the label never gets
+        // clipped by the viewport when a group sits in the top row.
+        minY -= GROUP_LABEL_MARGIN;
+        const spanW = maxX - minX, spanH = maxY - minY;
         const cw = cw0 || 1;
         const ch = ch0 || 1;
         const pad = 52;
         const scale = Math.max(0.12, Math.min(3,
-            Math.min((cw - pad * 2) / (gi.width  || 1),
-                     (ch - pad * 2) / (gi.height || 1))));
-        const tx = (cw - (gi.width  || 0) * scale) / 2;
-        const ty = (ch - (gi.height || 0) * scale) / 2 + GROUP_LABEL_MARGIN * scale;
+            Math.min((cw - pad * 2) / (spanW || 1),
+                     (ch - pad * 2) / (spanH || 1))));
+        const tx = (cw - spanW * scale) / 2 - minX * scale;
+        const ty = (ch - spanH * scale) / 2 - minY * scale;
         const tr = d3.zoomIdentity.translate(tx, ty).scale(scale);
         if (animate) handle.svg.transition().duration(T).call(handle.zoom.transform, tr);
         else         handle.svg.call(handle.zoom.transform, tr);
