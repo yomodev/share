@@ -153,15 +153,26 @@ observed nodes fill in.
 Additive and backward-compatible with [11_Topology_Hints.md](11_Topology_Hints.md). New,
 all optional:
 
-- **orientation** (per node or group): `horizontal` | `vertical` — the flow direction *from*
-  this node; spawns a recursive sub-flow when it differs from the parent's.
+- **orientation** (per node): `horizontal` | `vertical` — the flow direction *from* this node;
+  spawns a recursive sub-flow when it differs from the parent's. **Implemented** — see
+  `13_Setting_Up_Nested_Runs_And_Topology.md` §4.5b for the worked example (`AuditProcessor`/
+  `AuditLog` in `RUN-DEMO-LAYOUT-HINTS`) and `computeOrientationClosures`/
+  `buildOrientationSubGraph` in `wwwroot/js/d3-graph.js` for the implementation (the closure
+  computation and subGraph construction live there, not in `bm-flow-layout` itself — the engine
+  only provides the generic recursive `subGraph` primitive both this and nested-run/group boxes
+  build on).
 - **direction** (per node, relative to the *current* service, in flow terms):
   `left` | `right` | `above` | `below` — a soft placement preference for the node's successor.
+  **Implemented.**
 - **external** (per node, boolean) + **arriveFrom** (`left`|`right`|`above`|`below`): "place me
   outside the cluster of peers on the same target; my incoming arrow should come from this
   side," which the engine uses to pick which side of the shared target to place the node.
+  **Implemented** — see the pushExternalNodesClearOfGroups note in doc 13 §4.5b for a known
+  interaction with hard group boxes worth knowing about when debugging this hint.
 - **port hints** (per edge or per endpoint): `enter`/`leave` side (vertical vs horizontal) and
   `snapToPipeline` (must connect to a specific pipeline row → forces a 90° turn if needed).
+  Per-pipeline port routing (`LayoutEdge.variants`) is **implemented**; `snapToPipeline` as a
+  distinct per-edge override is **not yet built**.
 
 Reminder from doc 11 that still holds: hint *names* match against the **stripped** service
 label (env-agnostic), not the raw id — see `ApplyBlueprint` in `TopologyComputationService`.

@@ -281,6 +281,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         node.Direction = hint.Direction;
         node.External = hint.External;
         node.ArriveFrom = hint.ArriveFrom;
+        node.Orientation = hint.Orientation;
     }
 
     // A declared endpoint (literal or glob) → the concrete node ids it resolves to, matched

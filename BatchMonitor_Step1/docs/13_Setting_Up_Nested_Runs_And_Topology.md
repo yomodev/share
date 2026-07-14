@@ -205,6 +205,45 @@ cluster." Set `external: true` plus `arriveFrom: "below"` (or `above`/`left`/`ri
 on flow direction) on that node; the engine pins it to the extreme edge of its layer rather than
 letting it get sorted in among its siblings by the normal ordering heuristic.
 
+### 4.5b Add an `orientation` (continue the flow in a different direction)
+
+A different problem again: a genuine **side-branch** — one node and everything downstream of
+it that never rejoins the main pipeline — reads better laid out top-to-bottom (or left-to-right)
+instead of continuing the main flow's own direction. Set `orientation` on the *first* node of
+that branch to a direction different from the run's own `layout.direction`:
+
+```json
+{ "name": "AuditProcessor", "role": "middle", "orientation": "vertical",
+  "subscribes": ["audit-processor-topic"], "publishes": ["audit-log-topic"] },
+{ "name": "AuditLog", "role": "sink", "subscribes": ["audit-log-topic"] }
+```
+
+In a horizontal (default) run, this makes `AuditProcessor` the root of a small recursive
+sub-flow laid out **vertically**: it and its exclusive downstream closure (`AuditLog` here —
+computed automatically by forward-reachability from `AuditProcessor`, then trimmed of anything
+that has an edge coming in from *outside* that closure, i.e. a rejoin point) are packed as one
+rigid box in the parent layout, the same recursive-box primitive used for groups and nested-run
+child boxes. You only declare `orientation` on the turn node itself — its downstream members
+don't need any hint at all, they're picked up automatically as long as they're a genuine
+dead-end and don't loop back into the main graph.
+
+This is the newest of the layout hints — see it working in the shipped
+`RUN-DEMO-LAYOUT-HINTS`/`layouthintsdemo.json` example (§3's sibling demo, described in that
+file's own header comment): `AuditProcessor`/`AuditLog` hang off `Checker` as a vertical
+side-branch while the rest of the run flows horizontally.
+
+**A subtlety worth knowing if you're debugging this hint**: the sub-flow's own recursive box is
+just another node as far as its *parent* layer's rendering is concerned — including group
+bounding boxes. A hard `group` box in one layer is drawn as a simple rectangle over its
+members' laid-out positions, and the layered layout centers each layer's cross-axis extent
+independently, so a tall member in one layer can end up geometrically overlapping an unrelated
+node (including an `orientation` sub-flow's box, or an `external` node) in the very next layer
+purely by coincidence — this bit an early version of the `Sidecar`/`Ingest` group interaction in
+this same demo file, fixed by pushing `external` nodes clear of any group box they'd otherwise
+land inside (`pushExternalNodesClearOfGroups` in `bm-flow-layout/layout.js`). If you add a new
+hint combination and see one box swallow another that clearly isn't a member, this is the class
+of bug to suspect first.
+
 ### 4.6 Verify with the JS unit tests, not just the browser
 
 Every hint described above (`role`, `group`+`groups` coloring, `direction`, `external`/

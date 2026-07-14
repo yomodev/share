@@ -145,6 +145,20 @@ public sealed class ServiceHint
     public string? Direction { get; set; }
 
     /// <summary>
+    /// "horizontal" | "vertical" — Custom layout engine only. When set to a value DIFFERENT
+    /// from the graph's own overall flow direction, this node becomes the root of a
+    /// recursive sub-flow: it and everything downstream of it that never rejoins the rest
+    /// of the graph are laid out internally in the new direction and packed as one rigid
+    /// box in the parent layout (the same "recursive box" primitive used for groups and
+    /// nested-run boxes — see docs/12 §2). A downstream node with an edge coming in from
+    /// OUTSIDE this node's own reachable set (i.e. a point where the branch rejoins the
+    /// main pipeline) is excluded from the sub-flow and stays in the parent graph instead —
+    /// this hint is for a genuine side-branch/dead-end sub-chain, not a detour that
+    /// reconnects. Equal to the graph's own direction (or unset) is a no-op.
+    /// </summary>
+    public string? Orientation { get; set; }
+
+    /// <summary>
     /// Custom layout engine only. Place this node outside the cluster of peer siblings
     /// converging on the same downstream target, pinned to the layer-edge named by
     /// <see cref="ArriveFrom"/>, instead of letting the ordinary median-based ordering

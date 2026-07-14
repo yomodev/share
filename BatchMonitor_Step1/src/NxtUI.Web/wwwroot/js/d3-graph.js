@@ -11,7 +11,7 @@
 //  - Edges: paint-order ensures labels are readable on both themes.
 
 import { createState, sampleEdge, tick } from './d3-animation.js';
-import { layout as flowLayout } from './bm-flow-layout/layout.js';
+import { layout as flowLayout } from './bm-flow-layout/layout.js?v=1';
 
 const D3Graph = (() => {
 
@@ -186,6 +186,108 @@ const D3Graph = (() => {
         return r === 'source' || r === 'sink' ? r : undefined;
     }
 
+    function normalizeOrientation(o) {
+        const r = o ? String(o).toLowerCase() : '';
+        return r === 'horizontal' || r === 'vertical' ? r : undefined;
+    }
+
+    // docs/12 §6 "orientation": finds, for every node whose `orientation` hint differs from
+    // the level's own flow `direction`, the set of nodes strictly downstream of it that
+    // should be pulled into its own recursive sub-flow — everything forward-reachable from
+    // it, MINUS any node the main graph also reaches some other way (a rejoin/merge point,
+    // where the branch reconnects to the rest of the pipeline). Returns Map<turnNodeId,
+    // Set<memberId>> — memberId set never includes the turn node's own id, and is only
+    // present in the map for a turn node that actually has something to absorb.
+    //
+    // Algorithm: full forward BFS from the turn node first (the "candidate" set), THEN a
+    // fixed-point elimination pass removes any candidate with an incoming edge from outside
+    // {turnNode} ∪ candidate, repeating until stable — a single elimination pass isn't
+    // enough because removing a rejoin point can itself orphan nodes that were only
+    // reachable through it, which then need removing too. At ≤50 nodes this converges in a
+    // handful of iterations; correctness (not needing multiple BFS-order-dependent guesses)
+    // matters far more than speed here.
+    function computeOrientationClosures(topoNodes, edges, direction) {
+        const outgoing = new Map(topoNodes.map(n => [n.id, []]));
+        const incoming = new Map(topoNodes.map(n => [n.id, []]));
+        for (const e of edges) {
+            outgoing.get(e.source)?.push(e.target);
+            incoming.get(e.target)?.push(e.source);
+        }
+
+        const claimed = new Set(); // ids already absorbed by an earlier turn node's closure
+        const closures = new Map();
+
+        for (const n of topoNodes) {
+            const wantDir = normalizeOrientation(n.orientation);
+            if (!wantDir || wantDir === direction || claimed.has(n.id)) continue;
+
+            const candidate = new Set();
+            const queue = [n.id];
+            const seen = new Set([n.id]);
+            while (queue.length) {
+                const cur = queue.shift();
+                for (const nxt of (outgoing.get(cur) || [])) {
+                    if (seen.has(nxt) || claimed.has(nxt)) continue;
+                    seen.add(nxt);
+                    candidate.add(nxt);
+                    queue.push(nxt);
+                }
+            }
+
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (const id of [...candidate]) {
+                    const ins = incoming.get(id) || [];
+                    const hasOutsideSource = ins.some(src => src !== n.id && !candidate.has(src));
+                    if (hasOutsideSource) { candidate.delete(id); changed = true; }
+                }
+            }
+
+            if (candidate.size === 0) continue; // hint present but nothing qualifies — no-op
+            closures.set(n.id, candidate);
+            for (const id of candidate) claimed.add(id);
+        }
+        return closures;
+    }
+
+    // Builds the LayoutInput.subGraph for one orientation turn node: itself plus its closure
+    // members, laid out internally in the node's OWN declared direction. Registers a
+    // metaById entry (kind:'node') for every closure member into the SAME map the outer
+    // level uses — ids are unique within one topology level, so no separate nested map is
+    // needed the way an expanded child-run box needs its own (that's a wholly different
+    // topology fetched from elsewhere; this is a subset of the SAME one).
+    function buildOrientationSubGraph(handle, allTopoNodes, sameLevelEdges, turnNode, memberIds, metaById, nodeById, edgeDataByKey) {
+        const memberNodes = [...memberIds].map(id => nodeById.get(id)).filter(Boolean);
+        const subDirection = normalizeOrientation(turnNode.orientation);
+
+        const subFlowNodes = [turnNode, ...memberNodes].map(n => {
+            n._layoutWidth = computeNodeWidth(handle, n);
+            metaById.set(n.id, { kind: 'node', data: n });
+            return {
+                id: n.id, width: n._layoutWidth, height: nh(n),
+                role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
+                placeSuccessor: n.direction ? { side: n.direction } : undefined,
+                external: n.external || undefined,
+                arriveFrom: n.arriveFrom || undefined,
+                // A member's OWN orientation (a nested turn within this sub-flow) is
+                // intentionally not resolved recursively here — one level of orientation
+                // turn per graph, see docs/12 §6's own scope note on this hint.
+            };
+        });
+        const memberSet = new Set(memberIds);
+        // Same per-pipeline port-variant treatment as the outer level (see
+        // buildPortVariantEdges) — sharing the outer `edgeDataByKey` map means a subGraph
+        // edge's real TopologyEdge `.data` is found by the exact same lookup
+        // flattenChildRunBoxes already uses for every other edge, rather than a bare
+        // "source->target" id that would silently miss it.
+        const rawSubEdges = sameLevelEdges.filter(e =>
+            (e.source === turnNode.id || memberSet.has(e.source)) && (e.target === turnNode.id || memberSet.has(e.target)));
+        const subFlowEdges = buildPortVariantEdges(nodeById, rawSubEdges, subDirection, edgeDataByKey);
+
+        return { nodes: subFlowNodes, edges: subFlowEdges, direction: subDirection };
+    }
+
     // Port position along the node's EAST/WEST edge, aligned to the centre of the
     // owning pipeline row (used when flow direction is RIGHT, FIXED_POS only).
     function portYFromTop(node, pipeline) {
@@ -285,8 +387,27 @@ const D3Graph = (() => {
         const ids = new Set(topoNodes.map(n => n.id));
         const flowNodes = [];
         const metaById = new Map();
+
+        // docs/12 §6 "orientation": resolve BEFORE building flowNodes, since a node absorbed
+        // into another node's orientation closure must never get its own top-level flowNode
+        // entry (it's only reachable through that node's subGraph instead) — see
+        // computeOrientationClosures for the actual closure/rejoin-point algorithm.
+        const sameLevelEdges = (topoEdges || []).filter(e => ids.has(e.source) && ids.has(e.target));
+        const orientationClosures = computeOrientationClosures(topoNodes, sameLevelEdges, direction);
+        const absorbed = new Set();
+        for (const members of orientationClosures.values()) for (const id of members) absorbed.add(id);
+
+        // Built up-front (not after the node loop, unlike before orientation existed) — a
+        // turn node's own subGraph edges need to land in this SAME map while the node loop
+        // is still running, so flattenChildRunBoxes' later `edgeDataByKey.get(...)` lookups
+        // find them exactly like any other edge.
+        const nodeById = new Map(topoNodes.map(n => [n.id, n]));
+        const edgeDataByKey = new Map();
+
         for (const n of topoNodes) {
+            if (absorbed.has(n.id)) continue;
             n._layoutWidth = computeNodeWidth(handle, n);
+            const closureMembers = orientationClosures.get(n.id);
             flowNodes.push({
                 id: n.id, width: n._layoutWidth, height: nh(n),
                 role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
@@ -301,6 +422,15 @@ const D3Graph = (() => {
                 // (see collectExternalSides in bm-flow-layout/layout.js).
                 external: n.external || undefined,
                 arriveFrom: n.arriveFrom || undefined,
+                // docs/12 §6 "orientation": this node roots a recursive sub-flow containing
+                // itself + closureMembers, laid out internally in its own declared direction
+                // — bm-flow-layout resolves subGraph.width/height FOR us from the sub-solve
+                // (see layout.js's own docs on the subGraph node property), so no width/
+                // height override is needed here beyond what computeNodeWidth/nh already gave
+                // this node as a floor.
+                subGraph: closureMembers
+                    ? buildOrientationSubGraph(handle, topoNodes, sameLevelEdges, n, closureMembers, metaById, nodeById, edgeDataByKey)
+                    : undefined,
             });
             metaById.set(n.id, { kind: 'node', data: n });
         }
@@ -337,23 +467,34 @@ const D3Graph = (() => {
             }
         }
 
-        const edges = (topoEdges || []).filter(e => ids.has(e.source) && ids.has(e.target));
+        // Only the top-level (non-absorbed) structural edges go into the outer flowEdges —
+        // an edge entirely within one orientation closure was already folded into that
+        // closure's own subGraph.edges by buildOrientationSubGraph (called above, which
+        // shares this SAME edgeDataByKey map so a subGraph edge's real TopologyEdge `.data`
+        // is found by the same lookup flattenChildRunBoxes already uses for everything else).
+        const topLevelEdges = sameLevelEdges.filter(e => !absorbed.has(e.source) && !absorbed.has(e.target));
+        const flowEdges = buildPortVariantEdges(nodeById, topLevelEdges, direction, edgeDataByKey);
 
-        // One structural edge per NODE PAIR (bm-flow-layout's layered solve only needs one —
-        // layering/ordering/dummy-chain construction don't care which specific pipeline row
-        // an edge represents), but one `variant` per REAL (source,sourcePipeline,target,
-        // targetPipeline) edge sharing that pair, each anchored at its own pipeline row's
-        // cross-axis offset instead of the node's plain center — see chainToPoints/
-        // LayoutEdge.variants in bm-flow-layout/layout.js. This both routes edges from/to
-        // the correct row (docs/12 §6 "port hints") AND fixes a real edges-collapsing bug a
-        // node-pair-keyed Map used to have: two distinct pipeline-level edges between the
-        // same two services previously shared ONE id, so the second silently overwrote the
-        // first in edgeDataByKey and only one of them ever actually rendered.
-        const nodeById = new Map(topoNodes.map(n => [n.id, n]));
+        return { flowNodes, flowEdges, metaById, edgeDataByKey, boxSpecs };
+    }
+
+    // One structural edge per NODE PAIR (bm-flow-layout's layered solve only needs one —
+    // layering/ordering/dummy-chain construction don't care which specific pipeline row an
+    // edge represents), but one `variant` per REAL (source,sourcePipeline,target,
+    // targetPipeline) edge sharing that pair, each anchored at its own pipeline row's
+    // cross-axis offset instead of the node's plain center — see chainToPoints/
+    // LayoutEdge.variants in bm-flow-layout/layout.js. This both routes edges from/to the
+    // correct row (docs/12 §6 "port hints") AND fixes a real edges-collapsing bug a node-
+    // pair-keyed Map used to have: two distinct pipeline-level edges between the same two
+    // services previously shared ONE id, so the second silently overwrote the first in
+    // edgeDataByKey and only one of them ever actually rendered. Shared between the outer
+    // level and each orientation subGraph (both need the exact same port-routing/edge-
+    // identity treatment) — `edgeDataByKey` is passed in and MUTATED (entries added) rather
+    // than returned, so a subGraph's edges land in the SAME map the outer level's do.
+    function buildPortVariantEdges(nodeById, edgesSubset, direction, edgeDataByKey) {
         const edgeId = e => `${e.source}::${e.sourcePipeline || ''}->${e.target}::${e.targetPipeline || ''}`;
         const variantsByPair = new Map(); // "source->target" -> variant[]
-        const edgeDataByKey = new Map();
-        for (const e of edges) {
+        for (const e of edgesSubset) {
             const fullId = edgeId(e);
             if (edgeDataByKey.has(fullId)) continue; // defensive: shouldn't happen, but never lose data to a collision
             edgeDataByKey.set(fullId, e);
@@ -365,12 +506,10 @@ const D3Graph = (() => {
             list.push({ id: fullId, sourceOffset, targetOffset });
             variantsByPair.set(pairKey, list);
         }
-        const flowEdges = [...variantsByPair.entries()].map(([pairKey, variants]) => {
+        return [...variantsByPair.entries()].map(([pairKey, variants]) => {
             const [source, target] = pairKey.split('->');
             return { id: pairKey, source, target, variants };
         });
-
-        return { flowNodes, flowEdges, metaById, edgeDataByKey, boxSpecs };
     }
 
     // Cross-axis offset (pixels from the node's own center) for a specific pipeline row —
@@ -531,6 +670,26 @@ const D3Graph = (() => {
                     x: pos.x + offX, y: pos.y + offY, width: pos.width, height: pos.height,
                     data: runIdPrefix ? { ...meta.data, _runId: runIdPrefix } : meta.data,
                 });
+                // docs/12 §6 "orientation": bm-flow-layout resolved this node's OWN recursive
+                // subGraph (see buildOrientationSubGraphs) as part of the SAME layout() call
+                // this node's own position came from — pos.subGraph.nodes/edges are already
+                // in that call's local frame, i.e. exactly the frame pos.x/pos.y themselves
+                // are in, so the SAME offX/offY (not a freshly re-anchored one, unlike an
+                // expanded child-run box below, which is a wholly separate layout() call with
+                // its own independent origin) carries them into the outer coordinate space.
+                if (pos.subGraph) {
+                    flattenChildRunBoxes(
+                        pos.subGraph.nodes, metaById, edgeDataByKey, direction,
+                        offX, offY, runIdPrefix, outNodes, outEdges, outBoxes, outGroupColors);
+                    for (const e of pos.subGraph.edges) {
+                        const outId2 = runIdPrefix ? `${runIdPrefix}::${e.id}` : e.id;
+                        outEdges.push({
+                            id: outId2,
+                            pts: e.points.map(p => ({ x: p.x + offX, y: p.y + offY })),
+                            data: edgeDataByKey.get(e.id),
+                        });
+                    }
+                }
             } else if (meta.kind === 'collapsedCard') {
                 // A collapsed card has no content to recurse into — just its own chrome,
                 // positioned here exactly like an expanded box would be. This is what makes

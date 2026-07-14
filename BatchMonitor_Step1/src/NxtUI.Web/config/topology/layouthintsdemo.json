@@ -26,17 +26,23 @@
   //     own edge into Merger approaching from that side as a side effect of the routing.
   //   - order: BranchA/BranchB get explicit order (1/2) as a tiebreak demonstration —
   //     redundant with declaration order here, but shows the hint is wired end to end.
+  //   - AuditProcessor: `orientation: "vertical"` against the run's own "horizontal" flow —
+  //     it and its exclusive downstream (AuditLog, a dead-end sink that never rejoins the
+  //     main Intake->...->Merger pipeline) become a recursive sub-flow laid out top-to-bottom
+  //     and packed as one rigid box in the parent layout (docs/12 §6 "orientation").
   "runType": "LayoutHintsDemo",
   "default": {
     "layout": { "direction": "horizontal", "shape": "layered" },
     "services": [
       { "name": "Intake",   "role": "source", "group": "Ingest",    "color": "#58A6FF", "publishes": ["ingest-topic"] },
-      { "name": "Checker",  "role": "middle", "group": "Ingest",    "subscribes": ["ingest-topic"], "publishes": ["validate-topic"] },
+      { "name": "Checker",  "role": "middle", "group": "Ingest",    "subscribes": ["ingest-topic"], "publishes": ["validate-topic", "audit-processor-topic"] },
       { "name": "Sidecar",  "external": true, "arriveFrom": "below", "subscribes": ["ingest-topic"], "publishes": ["audit-topic"] },
       { "name": "Splitter", "role": "middle", "direction": "below", "subscribes": ["validate-topic"], "publishes": ["route-a-topic", "route-b-topic"] },
       { "name": "BranchA",  "role": "middle", "group": "Branches", "order": 1, "subscribes": ["route-a-topic"], "publishes": ["merge-topic"] },
       { "name": "BranchB",  "role": "middle", "group": "Branches", "order": 2, "subscribes": ["route-b-topic"], "publishes": ["merge-topic"] },
-      { "name": "Merger",   "role": "sink",   "subscribes": ["merge-topic", "audit-topic"] }
+      { "name": "Merger",   "role": "sink",   "subscribes": ["merge-topic", "audit-topic"] },
+      { "name": "AuditProcessor", "role": "middle", "orientation": "vertical", "subscribes": ["audit-processor-topic"], "publishes": ["audit-log-topic"] },
+      { "name": "AuditLog",       "role": "sink",   "subscribes": ["audit-log-topic"] }
     ],
     "groups": [
       { "name": "Ingest",    "color": "#3FB950" },
