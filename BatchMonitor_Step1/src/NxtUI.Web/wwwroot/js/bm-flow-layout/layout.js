@@ -154,6 +154,7 @@ export function layout(input, opts = {}) {
 
     const positioned = assignCoordinates(
         layers, nodesById, dummies, layerOf, direction, layerSpacing, nodeSpacing);
+    pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings);
 
     const edgesOut = [];
     for (const e of structuralEdges) {
@@ -543,6 +544,65 @@ function normalizeSide(side, direction, warnings, nodeId) {
         return null;
     }
     return side;
+}
+
+// `external` only pins a node to the extreme end of its OWN layer's cross-axis order
+// (collectExternalSides/EXTERNAL_BIAS above) — it says nothing about neighboring LAYERS,
+// whose cross-axis extents are each independently centered around 0 (assignCoordinates).
+// A hard group's bounding box (drawn in d3-graph.js's renderGroups as a simple rectangle
+// spanning its members' combined extent) can end up geometrically containing an unrelated
+// external node in an adjacent layer purely by coincidence — e.g. a tall member in layer N
+// naturally overlaps, on the cross axis, an external sibling pinned to the bottom of layer
+// N+1, even though neither node "did" anything wrong; the layered centering that makes
+// most graphs look clean is exactly what causes this. Rather than turn the group's render
+// box into a non-rectangular shape (impractical for a single SVG rect) or make every
+// layer's centering aware of every other layer's group memberships, push each external
+// node further along its own pinned side, after normal coordinate assignment, until it
+// clears every hard group's (padded, matching renderGroups' own PAD) bounding box it
+// currently overlaps. Known limitation: this can shrink the gap to an adjacent SAME-side
+// external sibling in the same layer if only one of them needed the push — acceptable for
+// the common case (usually at most one external node needs clearing per side) rather than
+// solving general N-body compaction here.
+function pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings) {
+    const RENDER_PAD = 14; // must match renderGroups()'s PAD in d3-graph.js
+    const CLEAR_GAP = 8;   // extra breathing room past the padded group border
+
+    const groupBoxes = new Map();
+    for (const [id, p] of positioned) {
+        const node = nodesById.get(id);
+        if (!node?.group) continue;
+        const hw = p.width / 2, hh = p.height / 2;
+        const b = groupBoxes.get(node.group) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+        b.x0 = Math.min(b.x0, p.x - hw - RENDER_PAD);
+        b.y0 = Math.min(b.y0, p.y - hh - RENDER_PAD);
+        b.x1 = Math.max(b.x1, p.x + hw + RENDER_PAD);
+        b.y1 = Math.max(b.y1, p.y + hh + RENDER_PAD);
+        groupBoxes.set(node.group, b);
+    }
+    if (groupBoxes.size === 0) return;
+
+    for (const [id, node] of nodesById) {
+        if (!node.external || !node.arriveFrom || node.group) continue;
+        const side = normalizeSide(node.arriveFrom, direction, warnings, id);
+        if (side == null) continue;
+        const p = positioned.get(id);
+        if (!p) continue;
+        const hw = p.width / 2, hh = p.height / 2;
+
+        for (const b of groupBoxes.values()) {
+            const overlapsX = (p.x - hw) < b.x1 && (p.x + hw) > b.x0;
+            const overlapsY = (p.y - hh) < b.y1 && (p.y + hh) > b.y0;
+            if (!overlapsX || !overlapsY) continue;
+
+            if (direction === 'horizontal') {
+                if (side === 'below') p.y = Math.max(p.y, b.y1 + hh + CLEAR_GAP);
+                else                  p.y = Math.min(p.y, b.y0 - hh - CLEAR_GAP);
+            } else {
+                if (side === 'right') p.x = Math.max(p.x, b.x1 + hw + CLEAR_GAP);
+                else                  p.x = Math.min(p.x, b.x0 - hw - CLEAR_GAP);
+            }
+        }
+    }
 }
 
 function buildNeighborIndex(edgeChains) {
