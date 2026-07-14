@@ -1,8 +1,28 @@
-# BatchMonitor — Session Context & Next Steps
+# NxtUI — Session Context & Next Steps (ARCHIVED)
+
+> **This entire document is a historical snapshot from the app's earliest
+> prototyping phase**, when it was called `BatchMonitor`, developed via
+> zip-delta patches applied to a working directory at `/home/claude/BatchMonitor/`
+> (see "Development Workflow" below), and had no Kafka/Mongo/Config/LogViewer/
+> RunStats/Environment pages, no `NxtUI.Core`/`NxtUI.Protos` split, and no git
+> history at all. **None of that describes the current repo** — it's a proper git
+> project (`git log` is the real changelog now), the Kafka dashboard from "Pending
+> Features" below was long since built, and most of "Known Issues" has moved or
+> been fixed.
+>
+> Kept for historical interest only. For actual current-state docs, start with
+> `01_Architecture.md`, `02_Models_DataFlow.md`, and `03_Decisions.md` — and for
+> "how do I resume/orient in this codebase", just read those three plus
+> `09_Features.md` and run `git log`/`git status`, the same way you'd approach any
+> other git repo. Two items below are still genuinely true today and were carried
+> forward into `05_Timeline.md`'s "Known Limitations" section: Timeline group row
+> labels and a colour legend are still not implemented.
 
 ## Session History Summary
 
-This document captures the development history, current state, and pending work.
+This document captures the development history, current state, and pending work,
+**as they stood at the end of the app's earliest prototyping phase** — see the
+archival note above before trusting anything below as current.
 
 ---
 
