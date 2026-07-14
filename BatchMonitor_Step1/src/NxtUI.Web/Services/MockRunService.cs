@@ -145,6 +145,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
 
         GenerateMockEvents(rng);
         GenerateDemoNestedRuns();
+        GenerateDemoLayoutHintsRun();
 
         if (_eventBroker is not null)
             _ = SimulateLivePushAsync(_bgCts.Token);
@@ -408,6 +409,105 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
             End = end,
         });
         _eventsByRunId[runId] = GenerateDemoEvents(start, end, status, seed);
+    }
+
+    // Reference run for config/topology/layouthintsdemo.json — deliberately exercises every
+    // Custom-engine hint in ONE topology, in COMBINATIONS, rather than one hint per toy
+    // example: role (source/middle/sink), a group WITH a declared color (real bordered box)
+    // next to one WITHOUT (free cosmetic band — no extra config needed for that case), a
+    // `color` override, a `direction` soft placement hint, `external`/`arriveFrom`, and
+    // (via Splitter/Merger each having >1 real pipeline row feeding/fed-by different
+    // services) the per-pipeline port routing from docs/12 §6 — the exact case that
+    // motivated it: distinct rows on the SAME node should get distinct edge entry/exit
+    // points instead of every edge converging on the node's center. See
+    // docs/13_Setting_Up_Nested_Runs_And_Topology.md for how to read/extend this pattern
+    // for your own run type.
+    //
+    // Deliberately Completed (not Running) — SimulateLivePushAsync only injects further
+    // random events into `RunStatus.Running` batches, and doing so here would pollute this
+    // reference topology with events from the wrong service pool over time (the same
+    // class of bug fixed for the NestedDemo family — see the "isDemoPool" special-casing in
+    // SimulateLivePushAsync/GenerateLiveEvents). A static demo is also just easier to
+    // compare against the hint file while reading it side by side.
+    private void GenerateDemoLayoutHintsRun()
+    {
+        var now = DateTime.UtcNow;
+        var start = now.AddMinutes(-15);
+        var end = now.AddMinutes(-2);
+        _store.Insert(0, new RunSummary
+        {
+            RunId = "RUN-DEMO-LAYOUT-HINTS",
+            Description = "LayoutHintsDemo — every Custom-engine hint, combined",
+            Type = "LayoutHintsDemo",
+            Status = RunStatus.Completed,
+            Start = start,
+            End = end,
+        });
+        _eventsByRunId["RUN-DEMO-LAYOUT-HINTS"] = GenerateLayoutHintsDemoEvents(start, end, seed: 3001);
+    }
+
+    // Two independent chunk populations, each a straight-line hop chain (edges are derived
+    // from consecutive-by-time hops within one chunk — see TopologyComputationService Phase
+    // 3 — so keeping the two paths in SEPARATE chunks, rather than interleaved hops within
+    // one chunk, is what makes each rendered edge mean what its name implies):
+    //   - ~70% "main" chunks: Intake(ingest) -> Checker(validate) -> Splitter(route-a OR
+    //     route-b, chosen per chunk) -> BranchA(transform-a) or BranchB(transform-b) ->
+    //     Merger(merge-main). Splitter's two outgoing pipelines land on two DIFFERENT rows
+    //     on the same node — the core port-routing test on the SOURCE side.
+    //   - ~30% "sidecar" chunks: Intake(ingest) -> Sidecar(audit) -> Merger(merge-side).
+    //     Sidecar is the `external`/`arriveFrom` node; Merger receiving both merge-main AND
+    //     merge-side on separate rows is the port-routing test on the TARGET side.
+    private static List<PerformanceEvent> GenerateLayoutHintsDemoEvents(DateTime start, DateTime end, int seed)
+    {
+        var rng = new Random(seed);
+        var events = new List<PerformanceEvent>();
+        var duration = end - start;
+        const int chunkCount = 160;
+
+        void Hop(string chunkId, ref DateTime t, string service, string pipeline)
+        {
+            var server = PickServer(rng);
+            var pid = PickPid(rng);
+            var dur = rng.Next(1, 20);
+            events.Add(new PerformanceEvent
+            {
+                Name = chunkId,
+                Service = service,
+                Pipeline = pipeline,
+                Source = PickSource(pipeline, rng),
+                Server = server,
+                ProcessId = pid,
+                Start = t,
+                Finish = t.AddSeconds(dur),
+                RecordCount = rng.Next(10, 500),
+                LastUpdate = t.AddSeconds(dur),
+            });
+            t = t.AddSeconds(dur + rng.Next(1, 5));
+        }
+
+        for (int ci = 0; ci < chunkCount; ci++)
+        {
+            var chunkId = $"LHD-{ci:D4}";
+            var t = start + TimeSpan.FromSeconds(rng.Next(0, Math.Max(1, (int)duration.TotalSeconds)));
+
+            if (rng.Next(0, 100) < 70)
+            {
+                Hop(chunkId, ref t, "Intake", "ingest");
+                Hop(chunkId, ref t, "Checker", "validate");
+                var toB = rng.Next(0, 100) < 50;
+                Hop(chunkId, ref t, "Splitter", toB ? "route-b" : "route-a");
+                Hop(chunkId, ref t, toB ? "BranchB" : "BranchA", toB ? "transform-b" : "transform-a");
+                Hop(chunkId, ref t, "Merger", "merge-main");
+            }
+            else
+            {
+                Hop(chunkId, ref t, "Intake", "ingest");
+                Hop(chunkId, ref t, "Sidecar", "audit");
+                Hop(chunkId, ref t, "Merger", "merge-side");
+            }
+        }
+
+        return events.OrderBy(e => e.Start).ToList();
     }
 
     private static List<PerformanceEvent> GenerateDemoEvents(DateTime start, DateTime? end, RunStatus status, int seed)

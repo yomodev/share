@@ -1,0 +1,46 @@
+{
+  // Reference topology for run Type "LayoutHintsDemo" (RUN-DEMO-LAYOUT-HINTS — see
+  // MockRunService.GenerateDemoLayoutHintsRun). Exercises every Custom-engine hint
+  // (docs/12_Custom_Layout_And_Nested_Runs.md §6) in ONE topology, in combination,
+  // rather than one hint per toy example — open RUN-DEMO-LAYOUT-HINTS and read this file
+  // side by side with docs/13_Setting_Up_Nested_Runs_And_Topology.md.
+  //
+  // What to look for:
+  //   - "Ingest" group: given a color below -> renders as a real bordered/tinted box.
+  //   - "Branches" group: also given a color -> a SECOND independent real box, proving
+  //     group-name collisions between unrelated groups in the same run don't merge.
+  //   - Intake: a `color` override on top of its role — header accent is the override,
+  //     not the group's tint (the two are independent).
+  //   - Splitter: `direction: "below"` nudges BOTH its direct successors (BranchA,
+  //     BranchB) downward relative to it — neither declares its own `placement`, so
+  //     Splitter's hint applies to both (see docs/12 §3 "child overrides parent" — a
+  //     successor's own placement, if it had one, would win instead).
+  //   - Splitter ALSO has two distinct real pipeline rows ("route-a", "route-b") feeding
+  //     BranchA/BranchB respectively — the per-pipeline PORT test (docs/12 §6 "port
+  //     hints"): the two outgoing edges should visibly leave from two different rows on
+  //     Splitter's card, not both from its center.
+  //   - Merger similarly has two rows ("merge-main", "merge-side") fed by different
+  //     upstream nodes — the port test on the RECEIVING side.
+  //   - Sidecar: `external: true` + `arriveFrom: "below"` — pinned outside the main
+  //     Intake->Checker->Splitter cluster, on the layer's extreme "below" edge, with its
+  //     own edge into Merger approaching from that side as a side effect of the routing.
+  //   - order: BranchA/BranchB get explicit order (1/2) as a tiebreak demonstration —
+  //     redundant with declaration order here, but shows the hint is wired end to end.
+  "runType": "LayoutHintsDemo",
+  "default": {
+    "layout": { "direction": "horizontal", "shape": "layered" },
+    "services": [
+      { "name": "Intake",   "role": "source", "group": "Ingest",    "color": "#58A6FF", "publishes": ["ingest-topic"] },
+      { "name": "Checker",  "role": "middle", "group": "Ingest",    "subscribes": ["ingest-topic"], "publishes": ["validate-topic"] },
+      { "name": "Sidecar",  "external": true, "arriveFrom": "below", "subscribes": ["ingest-topic"], "publishes": ["audit-topic"] },
+      { "name": "Splitter", "role": "middle", "direction": "below", "subscribes": ["validate-topic"], "publishes": ["route-a-topic", "route-b-topic"] },
+      { "name": "BranchA",  "role": "middle", "group": "Branches", "order": 1, "subscribes": ["route-a-topic"], "publishes": ["merge-topic"] },
+      { "name": "BranchB",  "role": "middle", "group": "Branches", "order": 2, "subscribes": ["route-b-topic"], "publishes": ["merge-topic"] },
+      { "name": "Merger",   "role": "sink",   "subscribes": ["merge-topic", "audit-topic"] }
+    ],
+    "groups": [
+      { "name": "Ingest",    "color": "#3FB950" },
+      { "name": "Branches",  "color": "#A371F7" }
+    ]
+  }
+}
