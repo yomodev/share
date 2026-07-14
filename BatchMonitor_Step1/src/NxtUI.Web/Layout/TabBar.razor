@@ -51,6 +51,8 @@
                 <button class="bm-tab-close-btn"
                         @onclick="@(() => TabService.Close(tabId))"
                         @onclick:stopPropagation="true"
+                        @ondblclick:stopPropagation="true"
+                        @ondblclick:preventDefault="true"
                         aria-label="Close tab">
                     <MudIcon Icon="@Icons.Material.Outlined.Close" Size="Size.Small" />
                 </button>
