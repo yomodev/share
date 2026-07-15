@@ -154,8 +154,10 @@ export function layout(input, opts = {}) {
 
     const positioned = assignCoordinates(
         layers, nodesById, dummies, layerOf, direction, layerSpacing, nodeSpacing);
-    const groupBoxes = computeGroupBoxes(positioned, nodesById);
-    pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direction, warnings);
+    //const groupBoxes = computeGroupBoxes(positioned, nodesById);
+    //pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direction, warnings);
+
+    pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings);
 
     const edgesOut = [];
     for (const e of structuralEdges) {
@@ -166,9 +168,10 @@ export function layout(input, opts = {}) {
                     id: v.id,
                     source: e.source,
                     target: e.target,
-                    points: pushChainPointsClearOfGroups(
-                        chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
-                        groupBoxes),
+                    points: chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
+                    // points: pushChainPointsClearOfGroups(
+                    //chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
+                    //groupBoxes),
                     isBackEdge: false,
                 });
             }
@@ -177,8 +180,9 @@ export function layout(input, opts = {}) {
                 id: e.id ?? edgeKey(e),
                 source: e.source,
                 target: e.target,
-                points: pushChainPointsClearOfGroups(
-                    chainToPoints(chain, positioned, direction), groupBoxes),
+                points: chainToPoints(chain, positioned, direction),
+                //points: pushChainPointsClearOfGroups(
+                //    chainToPoints(chain, positioned, direction), groupBoxes),
                 isBackEdge: false,
             });
         }
@@ -188,8 +192,9 @@ export function layout(input, opts = {}) {
             id: e.id ?? edgeKey(e),
             source: e.source,
             target: e.target,
-            points: pushChainPointsClearOfGroups(
-                routeBackEdge(e, positioned, direction), groupBoxes),
+            points: routeBackEdge(e, positioned, direction),
+            //points: pushChainPointsClearOfGroups(
+            //    routeBackEdge(e, positioned, direction), groupBoxes),
             isBackEdge: true,
         });
     }
@@ -568,6 +573,7 @@ function normalizeSide(side, direction, warnings, nodeId) {
 // external sibling in the same layer if only one of them needed the push — acceptable for
 // the common case (usually at most one external node needs clearing per side) rather than
 // solving general N-body compaction here.
+
 // Shared by pushExternalNodesClearOfGroups and pushEdgeWaypointsClearOfGroups — RENDER_PAD
 // must match renderGroups()'s own PAD in d3-graph.js, so a node/waypoint that just clears
 // the raw member bbox doesn't still get swallowed by the padded rectangle actually drawn.
@@ -590,33 +596,6 @@ function computeGroupBoxes(positioned, nodesById) {
     return groupBoxes;
 }
 
-function pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direction, warnings) {
-    if (groupBoxes.size === 0) return;
-
-    for (const [id, node] of nodesById) {
-        if (!node.external || !node.arriveFrom || node.group) continue;
-        const side = normalizeSide(node.arriveFrom, direction, warnings, id);
-        if (side == null) continue;
-        const p = positioned.get(id);
-        if (!p) continue;
-        const hw = p.width / 2, hh = p.height / 2;
-
-        for (const b of groupBoxes.values()) {
-            const overlapsX = (p.x - hw) < b.x1 && (p.x + hw) > b.x0;
-            const overlapsY = (p.y - hh) < b.y1 && (p.y + hh) > b.y0;
-            if (!overlapsX || !overlapsY) continue;
-
-            if (direction === 'horizontal') {
-                if (side === 'below') p.y = Math.max(p.y, b.y1 + hh + GROUP_CLEAR_GAP);
-                else                  p.y = Math.min(p.y, b.y0 - hh - GROUP_CLEAR_GAP);
-            } else {
-                if (side === 'right') p.x = Math.max(p.x, b.x1 + hw + GROUP_CLEAR_GAP);
-                else                  p.x = Math.min(p.x, b.x0 - hw - GROUP_CLEAR_GAP);
-            }
-        }
-    }
-}
-
 // A long edge (spanning more than one layer) routes through dummy waypoints in the
 // intermediate layers (buildDummyChains) — those get positioned by the same per-layer
 // cross-axis centering as real nodes, with no awareness of a group box that happens to
@@ -637,7 +616,7 @@ function pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direc
 // (shared y) and vertical runs (shared x). Nudging a single point's cross-axis coordinate
 // without its run-mate would turn a clean 90° elbow into a diagonal, so both endpoints of
 // an offending run are pushed together, keeping every segment perfectly axis-aligned.
-function pushChainPointsClearOfGroups(points, groupBoxes) {
+function pushChainPointsClearOfGroups2(points, groupBoxes) {
     if (groupBoxes.size === 0 || !points || points.length < 2) return points;
 
     for (let i = 0; i < points.length - 1; i++) {
@@ -665,6 +644,46 @@ function pushChainPointsClearOfGroups(points, groupBoxes) {
         }
     }
     return points;
+}
+function pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings) {
+    const RENDER_PAD = 14; // must match renderGroups()'s PAD in d3-graph.js
+    const CLEAR_GAP = 8;   // extra breathing room past the padded group border
+    const groupBoxes = new Map();
+    for (const [id, p] of positioned) {
+        const node = nodesById.get(id);
+        if (!node?.group) continue;
+        const hw = p.width / 2, hh = p.height / 2;
+        const b = groupBoxes.get(node.group) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+        b.x0 = Math.min(b.x0, p.x - hw - RENDER_PAD);
+        b.y0 = Math.min(b.y0, p.y - hh - RENDER_PAD);
+        b.x1 = Math.max(b.x1, p.x + hw + RENDER_PAD);
+        b.y1 = Math.max(b.y1, p.y + hh + RENDER_PAD);
+        groupBoxes.set(node.group, b);
+    }
+    if (groupBoxes.size === 0) return;
+
+    for (const [id, node] of nodesById) {
+        if (!node.external || !node.arriveFrom || node.group) continue;
+        const side = normalizeSide(node.arriveFrom, direction, warnings, id);
+        if (side == null) continue;
+        const p = positioned.get(id);
+        if (!p) continue;
+        const hw = p.width / 2, hh = p.height / 2;
+
+        for (const b of groupBoxes.values()) {
+            const overlapsX = (p.x - hw) < b.x1 && (p.x + hw) > b.x0;
+            const overlapsY = (p.y - hh) < b.y1 && (p.y + hh) > b.y0;
+            if (!overlapsX || !overlapsY) continue;
+
+            if (direction === 'horizontal') {
+                if (side === 'below') p.y = Math.max(p.y, b.y1 + hh + CLEAR_GAP);
+                else p.y = Math.min(p.y, b.y0 - hh - CLEAR_GAP);
+            } else {
+                if (side === 'right') p.x = Math.max(p.x, b.x1 + hw + CLEAR_GAP);
+                else p.x = Math.min(p.x, b.x0 - hw - CLEAR_GAP);
+            }
+        }
+    }
 }
 
 function buildNeighborIndex(edgeChains) {

@@ -56,7 +56,7 @@ desktop.ini
 .vscode/
 .github/
 FILE NxtUI.sln
-LENGTH 7295
+LENGTH 7427
 
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
@@ -90,6 +90,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{7ABC20F6-F
 		docs\12_Custom_Layout_And_Nested_Runs.md = docs\12_Custom_Layout_And_Nested_Runs.md
 		docs\13_Setting_Up_Nested_Runs_And_Topology.md = docs\13_Setting_Up_Nested_Runs_And_Topology.md
 		docs\14_Client_Side_Architecture.md = docs\14_Client_Side_Architecture.md
+		docs\15_Backend_Services.md = docs\15_Backend_Services.md
+		docs\16_Layout_Hints_Reference.md = docs\16_Layout_Hints_Reference.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F43E8FB1-B9B8-458F-8289-B084629D45AE}"
@@ -773,23 +775,31 @@ LENGTH 62698
    at System.Threading.Tasks.Task.Run(Action action)
 2026-06-25 18:45:51.242|INFO|srv-03|2749|94|Token refresh succeeded for user=user-468|InventoryService.Handler.Handle
 FILE docs/01_Architecture.md
-LENGTH 5904
-# BatchMonitor — Architecture Overview
+LENGTH 11238
+# NxtUI — Architecture Overview
 
 ## Solution Structure
 
 ```
-BatchMonitor.sln
-├── BatchMonitor.Core/          Class library — domain models, interfaces, real services
-└── BatchMonitor/               Blazor Server web app — UI, hubs, mock services, JS/CSS
+NxtUI.sln
+├── src/NxtUI.Core/       Class library — domain models, real service implementations
+│                         (Mongo/Kafka/SQL), filtering, topology computation
+├── src/NxtUI.Protos/     Dynamic protobuf schema handling — parses .proto files at
+│                         runtime (protobuf-net.Reflection), no generated C# classes
+├── src/NxtUI.Web/        Blazor Server web app — UI, hubs, mock services, JS/CSS
+└── tests/NxtUI.Tests/    xUnit v3 test suite covering Core, Protos, and Web
 ```
 
-### Why two projects?
+### Why split Core/Protos/Web?
 
-`BatchMonitor.Core` was extracted so that:
-- Domain models and `IBatchService` can be referenced without pulling in Blazor/SignalR
-- `MongoBatchService` and topology computation are independently testable
-- A future API worker or background service can reference Core without the web project
+- Domain models and `IRunService`/`IKafkaService`/`IMongoService` can be referenced
+  without pulling in Blazor/SignalR.
+- The real Mongo/Kafka/SQL implementations (see below) are independently testable.
+- Dynamic proto decoding (topic message schemas discovered/loaded at runtime, not
+  compiled in) is isolated in its own project since it pulls in protobuf-net.Reflection
+  and has its own test-only dependencies (Google.Protobuf/Grpc.Tools, used only to
+  generate fixture messages for the decoder's own tests).
+- A future API worker or background service can reference Core without the web project.
 
 ---
 
@@ -798,94 +808,104 @@ BatchMonitor.sln
 | Layer | Technology |
 |-------|-----------|
 | UI framework | Blazor Server (.NET 8) |
-| Component library | MudBlazor 9.5 |
-| Graph visualisation | D3 v7 + dagre 0.8.5 |
-| Timeline visualisation | D3 v7 (custom, no dagre) |
+| Component library | MudBlazor 9.6 |
+| Run/pipeline graph visualisation | D3 v7 + custom `bm-flow-layout` layered-layout engine (own Sugiyama-lite implementation; dagre and ELK are both gone from the render path — see `04_FlowGraph.md`/`12_Custom_Layout_And_Nested_Runs.md`) |
+| Timeline visualisation | D3 v7 (custom, no layout library) |
+| Memory/treemap visualisations | D3 v7 (`d3-home-treemap.js`, `d3-memory-stacked.js`, `d3-memory-sunburst.js`) |
 | Real-time push | ASP.NET Core SignalR |
-| Database (real) | MongoDB (MongoDB.Driver 2.27) |
-| Database (mock) | In-memory Dictionary |
-| SignalR client | Microsoft.AspNetCore.SignalR.Client 8.0 |
+| Kafka client | Confluent.Kafka 2.14 |
+| MongoDB client | MongoDB.Driver 3.9 |
+| SQL client | Microsoft.Data.SqlClient 7.0 |
+| JSONPath queries (Kafka/Mongo message inspectors) | JsonPath.Net 2.1 |
+| Logging | NLog.Web.AspNetCore |
+| JS testing | Vitest (`wwwroot/js` is a proper tested subproject — `package.json`, `vitest.config.js`, `*.test.js` files alongside the modules they cover) |
 
 ---
 
 ## Render Mode
 
-**Blazor Server only** — no WebAssembly, no InteractiveAuto. All component state lives on the server. SignalR is the underlying transport for the Blazor circuit.
+**Blazor Server only** — no WebAssembly, no InteractiveAuto. All component state lives
+on the server. SignalR is the underlying transport for the Blazor circuit.
 
-Key consequence: JS interop calls (`IJSRuntime.InvokeVoidAsync`) are asynchronous round-trips over the SignalR circuit. This affects how we handle D3 rendering — we never await D3 calls from tight loops.
+Key consequence: JS interop calls (`IJSRuntime.InvokeVoidAsync`) are asynchronous
+round-trips over the SignalR circuit. This affects how D3 rendering is driven — never
+await D3 calls from tight loops, and JS modules are imported lazily per-component
+(`IJSObjectReference`) rather than loaded globally, so a circuit reconnect/tab close
+cleanly disposes just that component's JS state.
 
 ---
 
 ## Multi-Tab Architecture
 
-The app uses a **persistent multi-tab** pattern:
-- `TabService` holds a list of `TabModel` items
-- `MainLayout` renders **all** tabs simultaneously as `div.bm-content-pane` elements
-- Inactive tabs are hidden via CSS `display:none` (class `bm-pane-hidden`)
-- `ShouldRender()` returns `IsFocused` so inactive tabs don't re-render on every SignalR push
+The app uses a **persistent multi-tab** pattern, same idea as a browser's own tab bar
+but implemented entirely inside one Blazor circuit:
+- `TabService` (scoped) holds the list of `TabModel` items for the circuit.
+- `MainLayout` renders **all** open tabs simultaneously as separate content panes.
+- Inactive tabs are hidden via CSS rather than being torn down, so JS-side state
+  (D3 render state, CodeMirror editor instances, live SignalR subscriptions, scroll
+  position) survives switching away and back.
+- Inactive tabs skip re-rendering on incoming pushes (`ShouldRender()` gated on
+  whether the tab is the focused one), so a busy background tab doesn't cost render
+  time until you switch to it.
 
-```
-MainLayout
-└── TabBar          (horizontal scroll, JS-side drag-and-drop)
-└── for each tab:
-    └── TabContent  (switch on TabType)
-        ├── Home
-        ├── Batches
-        ├── BatchDetail    (graph + slider + SignalR)
-        └── TimelineTab    (multi-batch timeline)
-```
-
-### Tab types
+### Tab types (`TabModel.TabType`, `src/NxtUI.Web/Models/TabModel.cs`)
 
 ```csharp
-public enum TabType { Home, Batches, BatchDetail, Timeline }
+public enum TabType
+{
+    Runs, Services, Pipelines, Kafka, MongoDB, Config, Batches, FileBrowser,
+    Settings, RunDetail, Timeline, ServiceDetail, KafkaMessages, KafkaGroups,
+    MongoDetail, LogViewer, LogWorkspace, FilterHelp, MemoryGraph, Environment,
+    RunStats,
+}
 ```
 
-`TabModel.CreateTimeline(runId, env)` sets `EntityId = runId` which `TimelineTab` receives as `InitialRunId`.
+One tab type per distinct page/view described in `09_Features.md` — e.g. `RunDetail`
+carries the run's graph view, `Timeline` the multi-run swimlane view, `LogViewer` an
+individual open log file (there can be many of these open at once, one tab each).
 
 ---
 
-## BatchMonitor.Core Contents
+## NxtUI.Core Contents
 
-### Models
+### Models (`src/NxtUI.Core/Models/`)
 
-| File | Purpose |
-|------|---------|
-| `BatchSummary.cs` | List-view item: RunId, BatchName, Type, Status, Start, End |
-| `BatchDetails.cs` | Detail view: adds Metadata dictionary, Duration computed |
-| `PerformanceEvent.cs` | Processing event: Name, Service, Pipeline, Source, Server, ProcessId, Start, Finish, Error, RecordCount |
-| `Topology.cs` | Graph model: TopologyNode, PipelineRow, TopologyEdge, PipelineState enum |
-| `EnvironmentInfo.cs` | Environment descriptor with badge colour |
+Domain is **runs**, not "batches" — a "batch" naming vestige survives only in
+`IBatchCatalogService`/`TabType.Batches`, an unrelated catalog concept, not the core
+run/pipeline monitoring model. Key models: `RunSummary`/`RunDetails` (list/detail run
+views), `PerformanceEvent` (a single pipeline processing event), `Topology`/
+`TopologyNode`/`PipelineRow`/`TopologyEdge` (the run's graph model — see
+`02_Models_DataFlow.md`), `TopologyHint` (per-run layout customization — see
+`11_Topology_Hints.md`), `EnvironmentInfo`.
 
-### Services
+### Services (`src/NxtUI.Core/Services/`)
 
-| File | Purpose |
-|------|---------|
-| `IBatchService.cs` | Interface: GetBatches, Cancel, GetDetails, GetEvents, GetTopology |
-| `MongoBatchService.cs` | Real MongoDB implementation |
-| `TopologyComputationService.cs` | Pure function: event store → Topology graph |
-| `PerformanceEventStore.cs` | In-memory upsert store keyed by CompositeKey |
+| Interface | Mock (default, always registered) | Real implementations (exist, commented out in `Program.cs` pending live infra) |
+|---|---|---|
+| `IRunService` | `MockRunService` | `MongoRunService`, `SqlRunService` |
+| `IKafkaService`/`IKafkaMonitor`/`IKafkaAdmin` | `MockKafkaService` | (real Kafka-backed implementation via Confluent.Kafka) |
+| `IMongoService`/`IMongoReader`/`IMongoAdmin` | `MockMongoService` | (real Mongo-backed implementation via MongoDB.Driver) |
+| `IHeartbeatService` | `MockHeartbeatService` | — |
+| `IEnvironmentService` | `MockEnvironmentService` | — |
 
-### Configuration
+Every environment in this deployment currently runs on mocks; swapping to a real
+backend is a `Program.cs` DI registration change, not a rewrite — the real
+implementations already exist in Core and are exercised by the test suite.
 
-| File | Purpose |
-|------|---------|
-| `MongoSettings.cs` | ConnectionString, DatabaseName, CollectionName |
-| `AppSettings.cs` | Top-level settings wrapper |
+Also in Core: `TopologyComputationService` (pure function: event store → `Topology`
+graph), `IMessageRegistry`/`TopicDeserializerPipeline` (Kafka message decoding,
+including the dynamic-proto path via NxtUI.Protos), filtering (`08_FilterSyntax.md`'s
+grammar parser/evaluator).
 
 ---
 
-## BatchMonitor (Web) — Key Services
+## NxtUI.Web — Key Services (`src/NxtUI.Web/Services/`)
 
-| File | Scope | Purpose |
-|------|-------|---------|
-| `MockBatchService.cs` | Singleton | Generates deterministic fake data; simulates live push via `IHubContext<BatchEventsHub>` every 2s |
-| `PerformanceEventService.cs` | Per-tab | Hybrid push+poll event accumulator |
-| `SignalRConnectionService.cs` | Scoped (per circuit) | Owns one `HubConnection` to `/hubs/batch-events`; fans events to per-batch callbacks |
-| `TabService.cs` | Scoped | Tab list CRUD + reorder |
-| `ThemeService.cs` | Scoped | Dark/light theme toggle |
-| `EnvironmentSelectorService.cs` | Scoped | Available environments list |
-| `TimelineBatch.cs` | Per-tab instance | Per-batch event store + SignalR subscription for Timeline tab |
+| Lifetime | Services |
+|---|---|
+| Singleton | `EnvironmentConfigLoader`, `TopologyHintLoader`, `KafkaConnectionFactory`, `MongoConnectionFactory`, `OperationTracker`, `RunEventBroker`, `HeartbeatMonitor`, `ILogPathDiscoveryService`, `ILogBrowserService`, `ILogViewerService`, `IEnvConfigService`, `InfraHealthCache`, `IBatchCatalogService`, `ServiceMetricsMonitor` |
+| Scoped (per circuit) | `TabService`, `EnvironmentSelectorService`, `ThemeService`, `DateTimeDisplayService`, `ErrorNotificationService`, `RunActionsService` |
+| Hosted (background) | `RunEventWatcher`, `HeartbeatMonitor`, `InfraHealthCache`, `ServiceMetricsMonitor`, and conditionally `TestLogGenerator`/`ServerDiagnosticsMonitor` (dev/diagnostics only) |
 
 ---
 
@@ -893,124 +913,191 @@ public enum TabType { Home, Batches, BatchDetail, Timeline }
 
 | Hub | Route | Purpose |
 |-----|-------|---------|
-| `BatchHub` | `/hubs/batch` | Legacy/general hub |
-| `BatchEventsHub` | `/hubs/batch-events` | Live event streaming; groups named `{env}:{runId}` |
+| `RunHub` | `/hubs/run` | Live run/pipeline event push to circuits watching a given run. |
+
+`ErrorNotificationHubFilter` and (conditionally) `BlazorCircuitFilter` are SignalR hub
+filters (cross-cutting error reporting / circuit diagnostics), not separate hubs.
 
 ---
 
 ## Program.cs Registration Summary
 
 ```csharp
-// Core
-builder.Services.AddSingleton<IBatchService, MockBatchService>(sp =>
-    new MockBatchService(sp.GetRequiredService<IHubContext<BatchEventsHub>>()));
+// Core — mock implementations, real ones exist and are swap-in registrations
+builder.Services.AddSingleton<IRunService, MockRunService>();
+builder.Services.AddSingleton<IKafkaService, MockKafkaService>();
+builder.Services.AddSingleton<IMongoService, MockMongoService>();
+builder.Services.AddSingleton<IHeartbeatService, MockHeartbeatService>();
+builder.Services.AddSingleton<IEnvironmentService, MockEnvironmentService>();
 
-// Web
-builder.Services.AddScoped<SignalRConnectionService>();
+// Web — scoped, one instance per Blazor circuit
 builder.Services.AddScoped<TabService>();
 builder.Services.AddScoped<ThemeService>();
 builder.Services.AddScoped<EnvironmentSelectorService>();
 
-// Hubs
-app.MapHub<BatchHub>("/hubs/batch");
-app.MapHub<BatchEventsHub>("/hubs/batch-events");
+// Hosted background services
+builder.Services.AddHostedService<RunEventWatcher>();
+builder.Services.AddHostedService<HeartbeatMonitor>();
+builder.Services.AddHostedService<InfraHealthCache>();
+builder.Services.AddHostedService<ServiceMetricsMonitor>();
+
+// Hub
+app.MapHub<RunHub>("/hubs/run");
 ```
 
 ---
 
-## Static Assets (`wwwroot/`)
+## Static Assets (`src/NxtUI.Web/wwwroot/`)
 
 ```
 css/
-  app.css           Global styles, tab bar, status chips, layout
-  d3-graph.css      Flow graph (BatchDetail) styles
-  d3-timeline.css   Timeline tab styles
+  app.css               Global styles, tab bar, status chips, layout
+  d3-graph.css          Run/pipeline flow graph styles
+  d3-timeline.css       Timeline tab styles
+  log-viewer.css        Log Viewer styles
 js/
-  app.js            Tab drag-and-drop, wheel scroll
-  d3-graph.js       D3 flow graph rendering
-  d3-animation.js   Edge dash-flow animation state machine
-  d3-timeline.js    D3 timeline rendering (multi-instance)
+  app.js                Tab drag-and-drop, wheel scroll, shared interop helpers
+  bm-flow-layout/        Custom layered-layout engine (own package, own tests —
+                          see 12_Custom_Layout_And_Nested_Runs.md)
+  d3-graph.js            Run/pipeline flow graph rendering (drives bm-flow-layout)
+  d3-animation.js        Edge dash-flow animation state machine
+  d3-timeline.js         Multi-instance D3 timeline rendering
+  d3-home-treemap.js     Home page memory treemap
+  d3-memory-stacked.js   Memory Graph stacked/line chart
+  d3-memory-sunburst.js  Memory Graph sunburst view
+  filter.js              Shared filter-grammar parser/evaluator (08_FilterSyntax.md)
+  json-viewer.js         Expandable JSON detail panel (Kafka/Mongo inspectors)
+  log-file-access.js     Chromium local-file-access mode for the Log Viewer
+  log-viewer.js          Log Viewer rendering/interaction
+  log-viewer-parser.js   Log line format grammar (compile/parse), shared with C#
+                          via a contract test — see the log-format-grammar files
+  purge-stream.js        Streaming progress UI for Kafka/Mongo bulk purge
+  run-stats-chart.js     Run Stats page graph view
+  text-editor.js         CodeMirror wrapper used by the Config page editor
+  workspace.js           Tab/window management glue
+  package.json, vitest.config.js, node_modules/   JS is a proper tested subproject;
+                          run `node node_modules/vitest/vitest.mjs run` from
+                          wwwroot/js to execute the JS suite directly if the
+                          node_modules/.bin wrapper isn't runnable in your shell
 ```
 
 ---
 
-## Key Design Decisions (summary — see 03_Decisions.md for rationale)
+## Key Design Decisions (summary — see `03_Decisions.md` for rationale)
 
-1. **Blazor Server only** — no WASM complexity, server state simplifies SignalR
-2. **Persistent tab panes** — CSS hide/show, not navigation, preserves JS state
-3. **D3 for all visualisations** — not chart libraries; full control required
-4. **Multi-instance JS pattern** — timeline uses `Map<key, state>` not a singleton
-5. **Frozen domain** — timeline x-axis never moves when new data arrives
-6. **BatchMonitor.Core split** — testability and future API reuse
+1. **Blazor Server only** — no WASM complexity, server state simplifies SignalR.
+2. **Persistent tab panes** — CSS hide/show, not navigation, preserves JS/editor/live-
+   subscription state across tab switches.
+3. **D3 for all visualisations** — not chart libraries; full control required.
+4. **Custom layered-layout engine (`bm-flow-layout`)** replaced the earlier
+   dagre/ELK-based run graph layout — purpose-built support for role pinning, groups,
+   directional/orientation hints, nested run boxes, and per-pipeline edge ports that
+   general-purpose layout libraries don't offer out of the box.
+5. **Multi-instance JS pattern** — timeline/graph/memory JS modules key their state by
+   a per-tab identifier (`Map<key, state>`), not a singleton, so multiple tabs of the
+   same view type don't collide.
+6. **Mock-first services with real implementations ready** — every `I*Service` has a
+   working mock backing the whole app's demo/dev experience, with the real
+   Mongo/Kafka/SQL-backed implementation already written in Core and one `Program.cs`
+   line away from being live.
+7. **Core/Protos/Web split** — testability, future API reuse, and isolating the
+   dynamic-proto-decoding dependency footprint from the rest of Core.
 FILE docs/02_Models_DataFlow.md
-LENGTH 7624
-# BatchMonitor — Models & Data Flow
+LENGTH 11501
+# NxtUI — Models & Data Flow
 
 ## PerformanceEvent
 
-The core domain object. Represents one chunk of work processed by one service.
+The core domain object (`src/NxtUI.Core/Models/PerformanceEvent.cs`). Represents one
+chunk of work processed by one service/pipeline.
 
 ```csharp
 public class PerformanceEvent
 {
-    public string Name   { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
-    public string Service   { get; set; }   // Service name (e.g. "Enricher")
-    public string Pipeline  { get; set; }   // Pipeline within service (e.g. "enrich-main")
-    public string Source    { get; set; }   // Class/processor name (e.g. "LookupEnricher")
-    public string Server    { get; set; }   // Host that processed it
-    public int ProcessId { get; set; }   // OS process ID
-    public DateTime Start   { get; set; }
-    public DateTime? Finish { get; set; }   // null = still in progress
-    public string? Error    { get; set; }   // null = no error
-    public int RecordCount  { get; set; }
+    public string Name       { get; set; }   // Identifies the unit of work (e.g. "CHK-0001")
+    public string Service    { get; set; }   // Service name (e.g. "Enricher")
+    public string Pipeline   { get; set; }   // Pipeline within service (e.g. "enrich-main")
+    public string Source     { get; set; }   // Class/processor name (e.g. "LookupEnricher")
+    public string Server     { get; set; }   // Host that processed it
+    public int ProcessId     { get; set; }   // OS process ID
+    public DateTime Start    { get; set; }
+    public DateTime? Finish  { get; set; }   // null = still in progress
+    public string? Error     { get; set; }   // null/empty = no error
+    public int RecordCount   { get; set; }
+    public string? Info      { get; set; }   // free-text extra detail, shown in the UI
+    public double? Value     { get; set; }   // optional numeric metric attached to the event
+    public DateTime LastUpdate { get; set; }
 
     // Computed
     public string CompositeKey => $"{Name}:{Service}:{Pipeline}:{ProcessId}";
-    public bool IsDone  => Finish.HasValue && Error == null;
-    public bool IsError => Error != null;
-    public DateTime Timestamp => Finish ?? Start;  // for upsert ordering
+    public bool IsDone  => Finish.HasValue;
+    public bool IsError => !string.IsNullOrEmpty(Error);
+    public DateTime Timestamp => Start;   // for upsert ordering
 }
 ```
 
 ### Key field: `Source`
 
-`Source` is the class name or pipe processor that handled the chunk. It's the **default Colour By** key in the Timeline tab. Example values: `CsvIngester`, `SchemaValidator`, `FieldMapper`, `LookupEnricher`, `MongoWriter`.
+`Source` is the class name or pipe processor that handled the chunk. It's the
+**default Colour By** key in the Timeline tab. Values vary per generated demo run
+(mock data draws from a randomized service/source-name pool — see "MockRunService
+data generation" below) — don't rely on any specific literal `Source` value existing
+across every run.
 
 ### Key field: `Name`
 
-Same `Name` string can appear in **multiple services** (a chunk passes through the pipeline). In the Timeline tab, hovering any block highlights all blocks with the same `Name` across all batches/services.
+Same `Name` string can appear in **multiple services** (a chunk passes through the
+pipeline). In the Timeline tab, hovering any block highlights all blocks with the
+same `Name` across all runs/services.
 
 ---
 
 ## CompositeKey and Upsert
 
-Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`. Last-write-wins by `Timestamp` (Finish > Start). This handles:
-- Duplicate pushes from SignalR + polling overlap
-- Updates when a chunk finishes (Start event arrives first, then Finish event)
+Events are upserted by `CompositeKey = "{Name}:{Service}:{Pipeline}:{ProcessId}"`.
+This handles:
+- Duplicate pushes from live-push + polling overlap.
+- Updates when a chunk finishes (a Start-only event arrives first, then a Finish
+  event with the same key replaces it).
 
 ---
 
-## Topology Model
+## Topology Model (`src/NxtUI.Core/Models/Topology.cs`)
 
-Used by the flow graph in BatchDetail.
+Used by the flow graph in Run Detail. Considerably richer than a plain node/edge
+graph — it also carries nested-run and layout-hint data:
 
 ```
 Topology
 ├── Nodes: List<TopologyNode>
 │   ├── Id, Label, InstanceCount
 │   ├── HeaderState: PipelineState
-│   └── Pipelines: List<PipelineRow>
-│       ├── Name, Topic
-│       ├── DoneCount, InProgressCount, ErrorCount
-│       ├── Progress (0.0–1.0)
-│       ├── State: PipelineState
-│       ├── RecentThroughputScore
-│       └── Instances: List<InstanceStats>
-└── Edges: List<TopologyEdge>
-    ├── Source, SourcePipeline → Target, TargetPipeline
-    ├── DoneCount, WaitingEstimate
-    └── State: PipelineState
+│   ├── Pipelines: List<PipelineRow>
+│   │   ├── Name, DisplayName, Topic
+│   │   ├── DoneCount, InProgressCount, ErrorCount
+│   │   ├── Progress (0.0–1.0)
+│   │   ├── State: PipelineState
+│   │   ├── RecentThroughputScore
+│   │   └── Instances: List<InstanceStats>
+│   └── Layout-hint decoration (see 11_Topology_Hints.md):
+│       Role, Group, Color, Order, Pin, PinX, PinY, Direction, External,
+│       ArriveFrom, Orientation, IsDeclared, IsObserved
+├── Edges: List<TopologyEdge>
+│   ├── Source, SourcePipeline → Target, TargetPipeline
+│   ├── DoneCount, WaitingEstimate
+│   ├── State: PipelineState
+│   └── IsDeclared, IsObserved
+├── ChildRuns: List<RunNode>              — nested child-run summaries (see 12_/13_)
+├── ExpandedChildren: Dictionary<string, Topology> — recursively-computed sub-topology
+│                                            per expanded child run
+├── Layout: LayoutHint?, GroupColors, ChildRunBoxColor, HasBlueprint
+└── Rollups: TotalChunks, TotalEvents, TotalDone, TotalInProgress, EstimatedProgress
 ```
+
+`IsDeclared`/`IsObserved` on nodes and edges track whether an element came from a
+topology hint's blueprint (declared) versus was inferred purely from observed events
+(observed) — a node/edge can be either, both, or (briefly, before its first event)
+declared-only.
 
 ### PipelineState (JSON: lowercase string)
 
@@ -1018,134 +1105,169 @@ Topology
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PipelineState
 {
-    NotStarted, Completed, Idle, InProgress, Active, Errored
+    NotStarted = 0,
+    Completed  = 1,
+    Idle       = 2,
+    InProgress = 3,
+    Active     = 4,
+    Errored    = 5,
 }
 ```
 
-**State → colour mapping** (used in both graph and timeline):
+Numeric values double as priority order (higher wins) when rolling many pipeline
+rows' states up into one node's `HeaderState`.
+
+**State → colour mapping** (`wwwroot/js/d3-graph.js` / `css/d3-graph.css`, used in
+both the flow graph and the Timeline):
 - `Errored`    → `#F85149` (red)
 - `Active`     → `#3FB950` (green, with pulse animation)
 - `InProgress` → `#388BFD` (blue)
 - `Idle`       → `#8B949E` (grey)
 - `Completed`  → `#8B949E` (grey)
-- `NotStarted` → `rgba(139,148,158,0.22)` (faint)
+- `NotStarted` → faint/dimmed (theme divider colour)
 
 ---
 
-## Data Flow: BatchDetail Tab
+## Data Flow: Run Detail Tab
 
 ```
-User opens BatchDetail
+User opens RunDetail (src/NxtUI.Web/Pages/RunDetail.razor)
     │
-    ├─ BatchService.GetBatchDetailsAsync()  →  BatchDetails (metadata, status)
+    ├─ RunService.GetRunDetailsAsync(env, runId)  →  RunDetails (metadata, status)
     │
-    ├─ PerformanceEventService.StartAsync()
-    │     ├─ HTTP: GetBatchEventsAsync() from batchStart  →  historical events
-    │     ├─ SignalR: SubscribeToBatchAsync()  →  live push (running batches)
-    │     └─ Poll loop (fallback, 30s when SignalR active)
+    ├─ StartEventServiceAsync()
+    │     ├─ PerformanceEventService: HTTP-loads full event history
+    │     └─ RunEventBroker.SubscribeToRunAsync(env, runId, handler)
+    │           — in-process pub/sub, NOT a SignalR client call (see below)
     │
-    ├─ DebouncedTopologyCompute() [400ms debounce]
-    │     ├─ Filter events by _replayTimestamp (null = all)
-    │     ├─ TopologyComputationService.ComputeTopology()
-    │     └─ StateHasChanged() → D3FlowGraph.update(topology)
+    ├─ RunTopologyLoopAsync() [PeriodicTimer, 400ms tick]
+    │     ├─ only recomputes when DebouncedTopologyCompute() flagged _topologyDirty
+    │     ├─ filters events by _replayTimestamp (null = all, i.e. live)
+    │     ├─ TopologyComputationService.ComputeTopology(events, labelFormatter, blueprint)
+    │     └─ StateHasChanged() → <D3FlowGraph Topology="@_topology" .../>
     │
-    └─ D3FlowGraph (JS)
-          ├─ dagre layout (LR or TB based on canvas aspect ratio)
-          ├─ D3 nodes + edges render
-          └─ D3Animation RAF loop (edge dash-flow)
+    └─ D3FlowGraph (Components/D3FlowGraph.razor) → wwwroot/js/d3-graph.js
+          ├─ bm-flow-layout engine lays out nodes/edges (see 12_Custom_Layout_And_Nested_Runs.md)
+          ├─ D3 nodes + edges render, including nested/expanded child-run boxes
+          └─ d3-animation.js RAF loop (edge dash-flow)
 ```
 
-### Replay mode (Step 8)
+### Replay mode
 
-`_replayTimestamp` (nullable DateTime):
-- `null` → LIVE mode, slider at rightmost position
-- set → REPLAY mode, topology computed filtering `event.Start <= _replayTimestamp`
+`_replayTimestamp` (nullable `DateTime`):
+- `null` → LIVE mode, slider at rightmost position.
+- set → REPLAY mode; `RecomputeTopologyAsync()` filters events to
+  `Start <= _replayTimestamp`.
 
-Slider uses 0–1000 integer steps (not Unix ms) to avoid browser validation tooltip. `SliderToDateTime(value)` converts linearly within `[_sliderMin, _sliderMax]`.
+Slider uses integer steps (`0..SliderSteps`, not raw timestamps, to avoid a browser
+validation tooltip). `SliderToDateTime(value)` clamps the fraction to `[0,1]` and maps
+linearly across `[_sliderMin, _sliderMax]`, where the min/max bounds are derived from
+every loaded event's Start/Finish **including expanded children's events** — opening
+a child-run box extends the replay range to cover it (task #50). `_isPlaying` drives
+an auto-advance loop through replay time when enabled.
 
 ---
 
 ## Data Flow: Timeline Tab
 
 ```
-User opens Timeline (from BatchDetail [⏱] button)
+User opens Timeline (from RunDetail's [⏱] button, or the sidebar, or the "Add" dialog)
     │
-    ├─ InitialRunId set → LoadBatchAsync(env, runId)
+    ├─ InitialRunId set (if opened from a run) → adds that run via the same path as "Add"
     │
-    └─ TimelineBatch.LoadAsync()
-          ├─ GetBatchDetailsAsync()  →  BatchName, BatchStart, IsLive
-          ├─ GetBatchEventsAsync()   →  historical events (upsert by Name)
-          └─ SignalRConnectionService.SubscribeToBatchAsync() (if IsLive)
-                └─ OnBatchEvent() → UpsertEvent() → DebouncedPushAsync()
+    ├─ TimelineTab's Add dialog: search/filter runs by env → constructs a TimelineRun,
+    │  appended to _runs — this is how every run (including the initial one) is loaded
+    │
+    └─ TimelineRun.LoadAsync() (src/NxtUI.Web/Services/TimelineRun.cs)
+          ├─ GetRunDetailsAsync()  →  run name, start time, status
+          ├─ GetRunEventsAsync()   →  historical events (upsert by CompositeKey)
+          └─ StartLiveSubscriptionAsync() — only if Status == Running
+                └─ RunEventBroker.SubscribeToRunAsync(env, runId, OnEvent)
+                      └─ OnEvent() → UpsertEvent() → DebouncedPushAsync()
 
-DebouncedPushAsync() [300ms debounce]
-    └─ BuildPayload()
-          ├─ groupBy, colourBy, filter, stackView
-          └─ batches[]:
-                ├─ runId, batchName, isLive, batchStartEpochMs
-                └─ events[]: name, source, pipeline, service,
-                             processId, server, startMs, finishMs,
-                             status, error
-    └─ JS: BatchMonitor.Timeline.update(key, payload)
+DebouncedPushAsync() [debounced]
+    └─ BuildPayload(): groupBy, colourBy, filter, stackView, and per-run event arrays
+    └─ JS: Timeline.update(key, payload)  (wwwroot/js/d3-timeline.js)
 ```
 
-### TimelineBatch
+### TimelineRun
 
-One instance per loaded batch in a Timeline tab. Manages:
-- Event store (`Dictionary<string, PerformanceEvent>` keyed by Name)
-- SignalR subscription (live batches only)
-- 3-hour live timeout (per spec)
-- CSV-imported batches use `CreateFromCsv()` — no live subscription
+One instance per loaded run in a Timeline tab (the renamed `TimelineBatch`). Manages:
+- Event store keyed by `CompositeKey`.
+- Live subscription via `RunEventBroker`, only while the run's status is `Running`.
+- `StatusWatchLoopAsync` re-polls run status every 30s and stops the live
+  subscription either when status leaves `Running` or after a **3-hour live
+  timeout** (`LiveTimeout = TimeSpan.FromHours(3)`) — a run that's realistically
+  never going to update again stops costing a subscription.
+- CSV import/export: `ExportCsv()` (JS-driven download); importing parses a CSV
+  client-side and builds a run via `TimelineRun.CreateFromCsv(runId, env, events)` —
+  no live subscription, since there's no real run behind it to watch.
 
 ---
 
-## SignalR Event Push Flow
+## Live Event Delivery: RunEventBroker (not a SignalR push)
+
+The `RunHub` (`/hubs/run`) SignalR hub only handles group membership
+(`SubscribeToRun`/`UnsubscribeFromRun`) — **nothing in the app currently pushes data
+through it**. Actual live delivery is entirely in-process, via `RunEventBroker`:
 
 ```
-MockBatchService background timer (2s)
-    └─ GenerateLiveEvents()
-          └─ IHubContext<BatchEventsHub>.Clients
-               .Group("{env}:{runId}")
-               .SendAsync("BatchEvent", env, runId, PerformanceEvent)
+RunEventBroker (singleton)
+  Dictionary<"{env}:{runId}", List<Func<PerformanceEvent, Task>>>
+  Publish(env, runId, evt) → fans out synchronously to every subscribed handler
+  fires RunWatchStarted / RunWatchStopped on 0→1 / 1→0 subscriber transitions
 
-Client (SignalRConnectionService)
-    └─ HubConnection.On<string,string,PerformanceEvent>("BatchEvent")
-          └─ Route to handlers keyed by "{env}:{runId}"
-                ├─ PerformanceEventService.OnSignalREvent()  (BatchDetail)
-                └─ TimelineBatch.OnBatchEvent()              (Timeline)
+Two ways an event reaches the broker:
+  1. MockRunService implements IPushesOwnRunEvents and calls
+     broker.Publish(...) directly from its own simulated-live-run timer.
+  2. RunEventWatcher (IHostedService) listens for RunWatchStarted/Stopped and, for
+     any IRunService implementation that does NOT self-push (e.g. a real SQL/Mongo-
+     backed service), starts a shared 3-second poll loop per watched run and calls
+     broker.Publish(...) itself with whatever new events polling turns up.
+
+Subscribers (both go through the same broker, not a hub):
+  ├─ PerformanceEventService.OnEvent()  (RunDetail's event accumulator)
+  └─ TimelineRun.OnEvent()              (Timeline tab)
 ```
 
-**Three arguments** on `"BatchEvent"`: env + runId + event. The env+runId allow client-side routing to the correct batch handler. This was necessary because the HubConnection is shared across all batch subscriptions in a circuit.
+This design means swapping `IRunService` from the mock to a real Mongo/SQL-backed
+implementation (see `01_Architecture.md`) doesn't require any change to how the UI
+receives live updates — `RunEventWatcher`'s poll-and-publish path already covers any
+`IRunService` that isn't self-pushing.
 
 ---
 
-## MockBatchService Data Generation
+## MockRunService Data Generation
 
-### Source names by service/pipeline
+`MockRunService` (`src/NxtUI.Web/Services/MockRunService.cs`) generates two kinds of
+demo topology:
 
-```csharp
-("Ingester",    "ingest-main")  → ["CsvIngester", "JsonIngester", "XmlIngester"]
-("Validator",   "validate-main")→ ["SchemaValidator", "BusinessRuleValidator"]
-("Transformer", "transform-main")→["FieldMapper", "Normaliser", "Deduplicator"]
-("Enricher",    "enrich-main") → ["LookupEnricher", "GeoEnricher"]
-("Enricher",    "enrich-lookup")→ ["ReferenceLookup", "CacheEnricher"]
-("Loader",      "load-main")   → ["MongoWriter", "ElasticWriter"]
-```
+- A small, fixed 4-stage chain — `Ingester → Validator → Enricher → Loader` — used
+  for a handful of clean, easy-to-read demo runs.
+- Larger randomized topologies drawn from a bigger service-name pool
+  (`Ingester, Validator, Normaliser, Transformer, Enricher, Router, Loader, Auditor,
+  Notifier, Archiver`, ...) paired with a `Source`-class pool (`SchemaValidator,
+  RuleEngine, FormatChecker, RetryHandler, DeadLetterProcessor, GeoLookup, RefLookup,
+  CacheFiller, TagResolver, MetadataEnricher`, ...) to build varied, less predictable
+  topologies for exercising the layout engine and filters against realistic variety.
 
-### Service pipeline chain
-
-```
-Ingester → Validator → Transformer → Enricher → Loader
-```
-
-Enricher may also process via `enrich-lookup` (40% chance). Validator retries via `validate-retry` (15% chance). Some chunks error at a random hop.
-
-### Live push simulation
-
-`SimulateLivePushAsync()` runs as a background Task for all `BatchStatus.Running` batches. Every 2 seconds it generates 1–3 new events and pushes them via `IHubContext<BatchEventsHub>`. Events are also persisted in-memory so HTTP polling also returns them.
+Don't treat any single fixed chain (including the 4-stage one above) as canonical —
+most generated runs draw randomly from the larger pools. Separately, the dedicated
+`RUN-DEMO-LAYOUT-HINTS`/`layouthintsdemo.json` and `RUN-DEMO-ROOT`/`nesteddemo.json`
+topologies (see `13_Setting_Up_Nested_Runs_And_Topology.md`) are hand-authored, not
+randomized — those are the ones to read when you want a specific, reproducible
+example of a hint/feature rather than general variety.
 FILE docs/03_Decisions.md
-LENGTH 10761
-# BatchMonitor — Technical Decisions
+LENGTH 12903
+# NxtUI — Technical Decisions
+
+> This is a historical decisions log (kept append-only, like an ADR journal) — entries
+> describe the reasoning *at the time*, and some now use old names (`BatchMonitor.*`
+> namespaces, `IBatchService`, `PerformanceEventService`/`TimelineBatch`) that were
+> renamed to `NxtUI.*`/`IRunService`/`TimelineRun` since. Where a decision has been
+> **factually superseded** (not just renamed) a note says so and points to the doc
+> with current details — see `01_Architecture.md` and `02_Models_DataFlow.md` for the
+> present-day picture.
 
 ## D1. Blazor Server only (no WASM)
 
@@ -1267,7 +1389,15 @@ The Blazor container div remains untouched. When Blazor re-renders (e.g. after G
 
 ## D7. SignalR hub event routing
 
-**Decision:** The `"BatchEvent"` message carries three arguments: `(string env, string runId, PerformanceEvent event)`.
+> **Superseded.** Live event delivery no longer goes through a SignalR hub push at
+> all — it's `RunEventBroker`, an in-process pub/sub keyed by `"{env}:{runId}"`
+> (`RunHub` only handles group membership). See `02_Models_DataFlow.md`'s "Live
+> Event Delivery" section for the current design. The routing problem this decision
+> solved (multiple tabs sharing one connection, needing to know which run an event
+> belongs to) is still solved the same way conceptually — by keying on `env:runId` —
+> just without a SignalR round trip.
+
+**Original decision:** The `"BatchEvent"` message carries three arguments: `(string env, string runId, PerformanceEvent event)`.
 
 **Rationale:** `SignalRConnectionService` is scoped (one per Blazor circuit) and shared across all batch subscriptions in that circuit (multiple BatchDetail tabs + multiple Timeline tabs). Routing requires knowing which `(env, runId)` an incoming event belongs to. The event itself doesn't carry env/runId, so they must be sent as separate args.
 
@@ -1277,14 +1407,26 @@ The Blazor container div remains untouched. When Blazor re-renders (e.g. after G
 
 ## D8. PerformanceEventService hybrid push+poll
 
-**Decision:** For running batches, subscribe to SignalR push AND run a slow fallback poll (30s interval). For completed batches, load history once then poll at normal cadence.
+> **Terminology updated, decision still current.** "SignalR push" below is now
+> `RunEventBroker` push (see D7's note and `02_Models_DataFlow.md`) — the
+> hybrid push+poll shape and rationale are otherwise unchanged as of this writing.
+> Current intervals: focused-poll 3s, unfocused-poll 15s, push-active fallback 30s
+> (`FocusedPollIntervalMs`/`UnfocusedPollIntervalMs`/`PushFallbackPollMs` in
+> `PerformanceEventService.cs`).
+
+**Decision:** For running runs, subscribe to broker push AND run a slow fallback poll (30s interval when push is active). For completed runs (or if push subscription fails), rely on the regular polling loop.
 
 **Rationale:**
-- SignalR may drop connections; polling provides resilience
-- Completed batches can't receive push events (no server push for historical data)
-- Focus-aware: unfocused tabs poll at 15s; SignalR active tabs at 30s
+- The in-process broker has no persistence — a circuit that starts polling
+  mid-run and a push subscription that silently stops both need polling as a
+  safety net.
+- Completed runs don't get push events from a service that's no longer running.
+- Focus-aware: unfocused tabs poll slower (15s) than focused ones (3s active poll
+  baseline, relaxed to 30s once push is confirmed active).
 
-**Poll vs push priority:** SignalR events upsert into `PerformanceEventStore` immediately. Poll results are also upserted. Because upsert uses `CompositeKey` with last-write-wins by `Timestamp`, duplicate delivery is idempotent.
+**Poll vs push priority:** broker-pushed events upsert into the event store
+immediately. Poll results are also upserted. Because upsert uses `CompositeKey`
+with last-write-wins, duplicate delivery from both paths is idempotent.
 
 ---
 
@@ -1331,9 +1473,16 @@ The stack-mode blocks use `item.xStart`/`item.xEnd` directly (not scaled through
 
 ---
 
-## D11. BatchMonitor.Core namespace strategy
+## D11. Core namespace strategy
 
-**Decision:** Keep namespaces as `BatchMonitor.Models`, `BatchMonitor.Services`, `BatchMonitor.Configuration` in the Core library (not `BatchMonitor.Core.Models` etc.).
+> **Reversed.** The current Core library (`NxtUI.Core`) uses fully-qualified
+> namespaces matching its folder structure — `NxtUI.Core.Models`,
+> `NxtUI.Core.Services`, etc. — with no `RootNamespace` override, the opposite of
+> this decision. `_Imports.razor` lists every namespace explicitly instead (see
+> `06_UI_Components.md`). Left here for the historical rationale in case the
+> flat-namespace tradeoff comes up again.
+
+**Original decision:** Keep namespaces as `BatchMonitor.Models`, `BatchMonitor.Services`, `BatchMonitor.Configuration` in the Core library (not `BatchMonitor.Core.Models` etc.).
 
 **Rationale:** Zero `@using` changes required in all `.razor` files. The assembly is named `BatchMonitor.Core` but the root namespace is `BatchMonitor` (set via `<RootNamespace>BatchMonitor</RootNamespace>` in the csproj).
 
@@ -1352,12 +1501,26 @@ The stack-mode blocks use `item.xStart`/`item.xEnd` directly (not scaled through
 
 **Heatmap behind selector:** The layer order in the bottom SVG is: tickL → heatL → selL → curBotL. The selector `g` is on top of the heatmap `g`, and the brush selection rect is semi-transparent (`rgba(56,139,253,0.18)`).
 FILE docs/04_FlowGraph.md
-LENGTH 6592
-# BatchMonitor — Flow Graph (BatchDetail)
+LENGTH 10846
+# NxtUI — Flow Graph (Run Detail)
 
 ## Overview
 
-The flow graph in `BatchDetail` shows the service pipeline topology for a batch run. Nodes represent services; edges represent chunk flow between services. The graph is rendered using D3 v7 + dagre for layout.
+The flow graph in `RunDetail` shows the service pipeline topology for a run. Nodes
+represent services; edges represent chunk flow between services (and, for nested
+runs, whole child-run boxes — see `12_Custom_Layout_And_Nested_Runs.md`). The graph
+is rendered using D3 v7, with node/edge **positions** computed entirely by the
+custom `bm-flow-layout` engine. **On this branch, ELK.js has been removed
+entirely** (docs/12 §9 "Retire ELK") — no CDN script, no `handle.elk`/
+`handle.layoutEngine`/`RunsSettings.GraphLayoutEngine`, no `GraphPortConstraints`.
+**Dagre is also gone** — this doc previously described a dagre-based layout that no
+longer exists.
+
+This doc covers the D3/SVG **rendering** layer (what happens once node/edge
+positions are known) — for how those positions are actually computed (role pins,
+groups, direction/orientation hints, nested-run recursive boxes, per-pipeline edge
+ports), see `12_Custom_Layout_And_Nested_Runs.md`, which is the authoritative,
+much more detailed doc for the layout engine itself.
 
 ---
 
@@ -1365,8 +1528,9 @@ The flow graph in `BatchDetail` shows the service pipeline topology for a batch 
 
 | File | Purpose |
 |------|---------|
-| `Components/D3FlowGraph.razor` | Blazor wrapper; passes `Topology` and `IsVisible` to JS |
-| `wwwroot/js/d3-graph.js` | All D3 rendering logic |
+| `Components/D3FlowGraph.razor` | Blazor wrapper; passes `Topology` and visibility to JS |
+| `wwwroot/js/d3-graph.js` | All D3 rendering logic, drives `bm-flow-layout` for positions |
+| `wwwroot/js/bm-flow-layout/` | The custom layout engine itself (own package, own tests) |
 | `wwwroot/js/d3-animation.js` | Edge dash-flow animation state machine |
 | `wwwroot/css/d3-graph.css` | Graph styles |
 
@@ -1374,17 +1538,24 @@ The flow graph in `BatchDetail` shows the service pipeline topology for a batch 
 
 ## Blazor Interop
 
-`D3FlowGraph.razor` exposes three JS methods via `window.BatchMonitor.D3FlowGraphInterop`:
+`d3-graph.js` is imported lazily as an ES module per `D3FlowGraph` instance
+(`IJSRuntime.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=NN")`) —
+there is no `window.BatchMonitor.D3FlowGraphInterop` global anymore. Exported
+functions, called directly on the imported module reference:
 
 ```javascript
-init(el, key)           // Initialise SVG in container element
-update(key, topology)   // Push new topology data (debounced layout)
-setVisible(key, visible)// Pause animation RAF when hidden
-dispose(key)            // Clean up
-fitToView(key)          // Programmatic fit-to-view
+init(el, key, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine)
+update(key, topo)          // Push new topology data (debounced layout)
+setVisible(key, visible)   // Pause animation RAF when hidden
+dispose(key)               // Clean up
+fitToView(key)             // Programmatic fit-to-view (resets zoom first)
 ```
 
-`key` is a string (typically the RunId) used to maintain multiple independent graph instances.
+`key` is a string (typically the RunId) used to maintain multiple independent graph
+instances (multiple `RunDetail` tabs, or split panes). `init` now takes several
+config args driven by `RunsSettings` — `portConstraints`, `edgeStyle`,
+`defaultDirection`, `layoutEngine` — so the engine, edge-drawing style, and default
+flow direction are all configurable per deployment, not hardcoded.
 
 ---
 
@@ -1409,6 +1580,8 @@ fitToView(key)          // Programmatic fit-to-view
 
 ### State → border colour
 
+Same mapping as `PipelineState`'s colours (`02_Models_DataFlow.md`):
+
 | State | Colour | Effect |
 |-------|--------|--------|
 | `errored` | `#F85149` | Red border + drop-shadow glow |
@@ -1421,45 +1594,79 @@ fitToView(key)          // Programmatic fit-to-view
 
 ## Edge Rendering
 
-Edges use S-curve bezier paths with **forced horizontal entry and exit**:
-```javascript
-const dx = Math.max(Math.abs(t.x - s.x) * 0.45, 70);
-return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`;
-```
+Edges are no longer simple S-curve beziers between two node centres — the layout
+engine (bm-flow-layout) returns a full **waypoint polyline** per edge
+(start point, zero or more bend points for orthogonal routing around other nodes,
+end point), and `d3-graph.js` draws through those waypoints one of two ways
+(`RunsSettings:GraphEdgeStyle`, `handle.edgeStyle`):
 
-Control points are offset only in X, giving natural horizontal tangents at both ends regardless of angle.
+- **`roundedOrthPath`** — straight orthogonal segments with rounded corners at each
+  bend (`Q` quadratic curve commands at each waypoint transition).
+- **`curvedPath`** — a smooth Catmull-Rom spline through the same waypoints
+  (`d3.line().curve(d3.curveCatmullRom.alpha(0.5))`) for a looser, organic look.
 
-**Port snapping:** Edge endpoints snap to the y-position of the specific pipeline row they connect. Source port exits from the right edge of the source node; target port enters from the left edge of the target node.
+Both apply to the *same* underlying waypoints — the choice is purely cosmetic, not a
+different routing algorithm. See `12_Custom_Layout_And_Nested_Runs.md` for how the
+waypoints themselves are chosen (orthogonal channel routing between node "blocks" so
+edges never cross a node).
 
-**Arrow marker:** `orient="auto"` (not `auto-start-reverse`). `fill="context-stroke"` makes the arrowhead inherit the path's stroke colour. **Critically:** `stroke` must be set as an SVG **attribute** (`path.attr('stroke', colour)`) not as a CSS property — `context-stroke` only resolves from SVG attributes, not CSS.
+**Port snapping / per-pipeline ports:** edge endpoints snap to the y-position (or
+x-position, direction-dependent) of the specific pipeline row they connect, and
+`bm-flow-layout`'s `LayoutEdge.variants` mechanism can route multiple real edges
+(different `sourcePipeline`/`targetPipeline` pairs between the same node pair)
+through one shared structural chain while still rendering each from/to its own
+distinct port — see `12_Custom_Layout_And_Nested_Runs.md` §6 "port hints".
 
-**Edge width:** `1 + log10(doneCount + 1) * 1.7` — logarithmic scaling, range 1–5px.
+**Arrow marker:** `orient="auto"` (not `auto-start-reverse`). `fill="context-stroke"`
+makes the arrowhead inherit the path's stroke colour. **Critically:** `stroke` must
+be set as an SVG **attribute** (`path.attr('stroke', colour)`) not as a CSS
+property — `context-stroke` only resolves from SVG attributes, not CSS.
+
+**Edge width:** logarithmic scaling by `doneCount`, range 1–5px (same idea as
+before; check `d3-graph.js` for the exact current constant if precision matters).
 
 ---
 
 ## Layout
 
-**Auto-orient:** Layout direction (LR vs TB) is chosen based on canvas aspect ratio:
+**Direction:** an explicit topology-hint `layout.direction` (`"horizontal"` /
+`"vertical"`) always wins; otherwise falls back to `handle.defaultDirection`
+(`RunsSettings:GraphDirection` — `"RIGHT"`/`"DOWN"` fixed, or `"AUTO"` for the old
+aspect-ratio auto-pick):
 ```javascript
-function chooseDir(containerEl) {
-    const r = containerEl.getBoundingClientRect();
-    return r.width >= r.height ? 'LR' : 'TB';
+function chooseDir(handle, layout) {
+    const d = layout?.direction ? String(layout.direction).toLowerCase() : '';
+    if (d === 'horizontal') return 'RIGHT';
+    if (d === 'vertical')   return 'DOWN';
+    if (handle.defaultDirection === 'AUTO') {
+        const r = handle.containerEl.getBoundingClientRect();
+        return r.width >= r.height ? 'RIGHT' : 'DOWN';
+    }
+    return handle.defaultDirection;
 }
 ```
 
-**Dagre settings:**
-```javascript
-g.setGraph({
-    rankdir: dir,
-    nodesep: dir === 'LR' ? 60  : 80,
-    ranksep: dir === 'LR' ? 160 : 100,
-    marginx: 48, marginy: 48,
-});
-```
+**Density:** a `layout.density` hint (`"compact"`/`"airy"`) is schema-declared but
+not currently consumed anywhere — `densityScale()` was ELK-only and was removed
+along with ELK on this branch; see the "snapToPipeline/density/straightenEdges"
+note in this repo's session history if you're wiring this up for `bm-flow-layout`.
 
-**Debounced layout:** `update()` sets `pendingTopology` and starts a 500ms debounce timer. `commitLayout()` runs dagre and re-renders. The first update bypasses debounce.
+**Engine:** `bm-flow-layout/layout.js` is the only layout engine on this branch —
+`handle.layoutEngine`/`RunsSettings.GraphLayoutEngine` and the ELK code path
+(`runLayoutElk`) have been removed entirely (docs/12 §9). It supports role pins,
+groups, direction/orientation hints, external/arriveFrom placement, nested-run
+recursive boxes, and per-pipeline ports (`12_Custom_...md`) — everything ELK's
+comparison run never fully matched.
 
-**User zoom:** `userZoomed` flag prevents auto-fit after the user has manually panned/zoomed. `fitToView()` resets this flag.
+**Debounced layout:** `update()` sets a pending topology and debounces the actual
+layout recompute; the first update bypasses the debounce so the initial render isn't
+delayed.
+
+**User zoom:** a `userZoomed` flag prevents auto-fit after the user has manually
+panned/zoomed. `fitToView()` resets this flag and computes the real bounding box of
+every node **and child-run box** (bm-flow-layout coordinates are routinely negative,
+not anchored at origin — a bug fixed this session, see git history around `d04e3ac`)
+rather than assuming content starts at `(0,0)`.
 
 ---
 
@@ -1493,15 +1700,24 @@ The edge dash-flow animation uses a requestAnimationFrame loop:
 
 ## SVG Clip Paths
 
-Each node has a `<clipPath id="bm-clip-{nodeId}">` in `<defs>` that clips the pipeline rows group. This prevents row content (progress bars, left border) from overflowing the rounded card corners.
+Each node has a `<clipPath id="bm-clip-{nodeId}">` in `<defs>` that clips the
+pipeline rows group, preventing row content (progress bars, left border) from
+overflowing the rounded card corners. Nested-run child-card header accent bands get
+their own clip via `registerChildCardClip` (`id="bm-clip-child-run-<runId>"`).
 
-The clip path rect dimensions match the node width/height and are updated whenever the topology changes.
+The clip path rect dimensions match the node width/height and are updated whenever
+the topology changes.
 
 ---
 
 ## Hover Behaviour
 
 **Node hover:** `filter: brightness(1.35)` on `.bm-node-rect` only — no CSS `transform: scale()`. Scale transforms on SVG `<g>` elements conflict with D3's `attr('transform', 'translate(x,y)')` and cause a "strobo" effect where the node jumps position on hover and flickers as D3 transitions and CSS transitions fight each other.
+
+**Hover-zoom** (small/scaled-down nodes get temporarily enlarged on hover) uses
+`.bm-node-hover-zoom { z-index: 1000 }` so a zoomed node renders above sibling
+child-run boxes too (fixed this session — see `d04e3ac`), and is skipped for
+already-expanded child-run boxes (task #56).
 
 **Pipeline row hover:** Row text turns primary colour; row background gets a subtle blue tint.
 
@@ -1511,12 +1727,13 @@ The clip path rect dimensions match the node width/height and are updated whenev
 
 Node background uses `getComputedStyle(document.documentElement).getPropertyValue('--mud-palette-surface')` at render time. This makes the graph work in both dark and light MudBlazor themes. All other colours use either hardcoded dark-theme values (acceptable for internal tool) or reference `--mud-palette-*` CSS variables via SVG `fill` properties.
 FILE docs/05_Timeline.md
-LENGTH 9763
-# BatchMonitor — Timeline Tab
+LENGTH 11143
+# NxtUI — Timeline Tab
 
 ## Overview
 
-The Timeline tab visualises PerformanceEvents across one or more batch runs on a shared time axis. Multiple batches can be loaded and compared side by side.
+The Timeline tab visualises `PerformanceEvent`s across one or more **runs** on a
+shared time axis. Multiple runs can be loaded and compared side by side.
 
 ---
 
@@ -1525,9 +1742,16 @@ The Timeline tab visualises PerformanceEvents across one or more batch runs on a
 | File | Purpose |
 |------|---------|
 | `Pages/TimelineTab.razor` | Blazor component: control bar, canvas div, dialog, import/export |
-| `Services/TimelineBatch.cs` | Per-batch event store + SignalR subscription |
+| `Services/TimelineRun.cs` | Per-run event store + live subscription (via `RunEventBroker` — see `02_Models_DataFlow.md`) |
 | `wwwroot/js/d3-timeline.js` | All D3 rendering (multi-instance) |
 | `wwwroot/css/d3-timeline.css` | Timeline styles |
+
+`TimelineRun` is the renamed `TimelineBatch`; the JS module is imported per-component
+as an ES module (`IJSObjectReference`, e.g. `_tlModule`) rather than exposed as a
+global `BatchMonitor.Timeline` namespace object — `init`/`update`/`dispose`/etc. are
+called directly on that imported module reference. A `DotNetObjectReference` is
+passed into `init` too, so the JS side can call back into the component (used for
+things like double-clicking a block to open its log folder — task #54).
 
 ---
 
@@ -1542,7 +1766,7 @@ The timeline uses **two separate SVG elements**:
         ├── gridL      (global vertical tick lines)
         ├── cursorL    (magenta cursor line — behind blocks)
         ├── blockL     (message blocks per section)
-        └── headerL    (batch name rows — on top)
+        └── headerL    (run name rows — on top)
 
 .bm-tl-bottom-panel (fixed height, never scrolls)
 └── botSvg
@@ -1558,30 +1782,36 @@ The bottom panel is fixed regardless of lane scroll position.
 
 ## Instance Isolation
 
-Each `TimelineTab` component generates a unique `_instanceKey = Guid.NewGuid().ToString("N")`. All JS calls pass this key:
+Each `TimelineTab` component generates a unique `_instanceKey = Guid.NewGuid().ToString("N")`.
+All JS calls go through the imported module reference, keyed by that instance:
 
 ```csharp
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.init",    _instanceKey, _canvasRef, _bottomRef, GetOptions());
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.update",  _instanceKey, payload);
-await JS.InvokeVoidAsync("BatchMonitor.Timeline.dispose", _instanceKey);
+await _tlModule.InvokeVoidAsync("init",    _instanceKey, _canvasRef, _bottomRef, GetOptions(), _selfRef);
+await _tlModule.InvokeVoidAsync("update",  _instanceKey, payload);
+await _tlModule.InvokeVoidAsync("dispose", _instanceKey);
 ```
 
-JS maintains `_instances: Map<key, state>`. Each instance has completely independent zoom, data, and DOM elements.
+JS maintains `_instances: Map<key, state>`. Each instance has completely independent
+zoom, data, and DOM elements — multiple Timeline tabs (or split panes) never collide.
 
 ---
 
 ## X-Axis (Time)
 
 ### Coordinate system
-- All events use **relative milliseconds** from their batch's `BatchStart`
-- `t=0` = batch start; `t=60000` = 1 minute into the batch
-- Multiple batches are **all aligned to t=0** (not absolute wall clock)
-- This allows comparing "how did this batch perform vs last time" at the same relative position
+- All events use **relative milliseconds** from their run's start time.
+- `t=0` = run start; `t=60000` = 1 minute into the run.
+- Multiple runs are **all aligned to t=0** (not absolute wall clock).
+- This allows comparing "how did this run perform vs last time" at the same relative
+  position.
 
 ### Frozen domain
-`frozenDomainMax` is set on first data load to the maximum finish time across all loaded batches. It **never changes** from incoming data updates. `xScale.domain([0, frozenDomainMax])` is set once and stays fixed.
+`frozenDomainMax` is set on first data load to the maximum finish time across all
+loaded runs. It **never changes** from incoming data updates.
+`xScale.domain([0, frozenDomainMax])` is set once and stays fixed.
 
-`globalMax` tracks the true current maximum (including new live events). It grows as new events arrive. Only the heatmap and range selector use `globalMax`.
+`globalMax` tracks the true current maximum (including new live events). It grows as
+new events arrive. Only the heatmap and range selector use `globalMax`.
 
 ### Zoom/pan limits
 - Left: `tx ≤ 0` (t=0 never goes right of the left screen edge → no negative time)
@@ -1601,20 +1831,21 @@ applyZoom(s, d3.zoomIdentity.scale(k));
 
 ### Normal mode
 
-Per batch section:
+Per run section:
 ```
-HEADER_H (26px)  — batch name row
+HEADER_H (26px)  — run name row
 ├── Group row 1 (height = ROW_PAD*2 + subrows.length * (SUBROW_H + BLOCK_GAP))
 ├── Group row 2
 └── ...
 SECTION_GAP (6px)
 ```
 
-**Group key** is determined by the GroupBy setting:
+**Group key** is determined by the `GroupByOption` setting
+(`Pages/TimelineTab.razor`, `enum GroupByOption`):
 | Option | Key |
 |--------|-----|
 | Service / Pipeline | `"Enricher / enrich-main"` |
-| PID / Service / Pipeline | `"server01:4821 / Enricher / enrich-main"` |
+| Service / PID / Pipeline | `"server01:4821 / Enricher / enrich-main"` |
 | Service | `"Enricher"` |
 | Pipeline | `"enrich-main"` |
 | PID | `"server01:4821"` |
@@ -1627,11 +1858,13 @@ SECTION_GAP (6px)
 
 **No cap** on sub-row count. Row height expands as needed.
 
-**Sub-row height adjustment:** `↑/↓` keys change `s.subrowHOverride` (min 1px). When vertical scrollbar is active, `↑/↓` scroll instead (Ctrl+↑/↓ to adjust height).
+**Sub-row height adjustment:** `↑/↓` keys change `s.subrowHOverride` (min 1px). When
+vertical scrollbar is active, `↑/↓` scroll instead (`Ctrl+↑/↓` to adjust height).
 
 ### Stack mode
 
-One row per distinct `name`. Events within a chunk are placed **consecutively by duration** (not wall-clock position):
+One row per distinct `name`. Events within a chunk are placed **consecutively by
+duration** (not wall-clock position):
 ```javascript
 let cursor = 0;
 for (const e of evts) {
@@ -1641,11 +1874,14 @@ for (const e of evts) {
 }
 ```
 
-Use case: compare pipeline stage durations for each chunk, independent of when processing started.
+Use case: compare pipeline stage durations for each chunk, independent of when
+processing started.
 
 ### Vertical scroll
 
-The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, totalH + 16)`. If content is taller than the viewport, a scrollbar appears.
+The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height =
+`max(viewH, totalH + 16)`. If content is taller than the viewport, a scrollbar
+appears.
 
 ---
 
@@ -1659,35 +1895,42 @@ The `.bm-tl-canvas-wrap` has `overflow-y: auto`. Lane SVG height = `max(viewH, t
 | Service | `e.service` |
 | Status | `e.status` → fixed colours |
 
-**Status colours:**
+**Status colours** (same values as `PipelineState`'s colour mapping — see
+`02_Models_DataFlow.md`):
 - `done` → `#3FB950` (green)
 - `inprogress` → `#388BFD` (blue)
 - `error` → `#F85149` (red)
 
-**Palette colours** (Source/Pipeline/Service): deterministic hash of the key string → index into a 19-colour curated palette. Same key always gets the same colour across sessions.
+**Palette colours** (Source/Pipeline/Service): deterministic hash of the key string
+→ index into a 19-colour curated palette. Same key always gets the same colour
+across sessions.
 
 ---
 
 ## Filtering
 
-The `Filter…` text box filters events by substring match across: `name`, `source`, `pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from the layout (but still count in heatmap).
+The `Filter…` text box filters events by substring match across: `name`, `source`,
+`pipeline`, `service`, `processId`, `server`. Non-matching events are excluded from
+the layout (but still count in heatmap).
 
 ---
 
 ## Cursor
 
-The magenta cursor line spans the full height of the lane SVG. It auto-hides after 2 seconds of mouse stillness.
+The magenta cursor line spans the full height of the lane SVG. It auto-hides after 2
+seconds of mouse stillness.
 
 The cursor label in the bottom panel shows:
 - Relative time: `HH:MM:SS.mmm`
-- Absolute time in parentheses if the hovered batch has a known `batchStartEpochMs`
-- Which batch is "hovered" is determined by the y-position of the mouse in the lane area
+- Absolute time in parentheses if the hovered run has a known `batchStartEpochMs`
+- Which run is "hovered" is determined by the y-position of the mouse in the lane area
 
 ---
 
 ## Heatmap
 
-The heatmap shows event density across the full `globalMax` range using vertical lines:
+The heatmap shows event density across the full `globalMax` range using vertical
+lines:
 - Neutral background (`#161620`)
 - Lines coloured `#388BFD` with opacity `0.12 + 0.88 * (count / maxCount)`
 - 500 buckets across the usable width (PAD left/right)
@@ -1696,21 +1939,27 @@ The heatmap shows event density across the full `globalMax` range using vertical
 
 ## Range Selector
 
-`d3.brushX()` overlay on top of the heatmap. Built once per instance; only `.move` is called to sync position. The brush extent maps `[PAD, W-PAD] → [0, globalMax]`.
+`d3.brushX()` overlay on top of the heatmap. Built once per instance; only `.move` is
+called to sync position. The brush extent maps `[PAD, W-PAD] → [0, globalMax]`.
 
-Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` and calls `applyZoom()` (which temporarily removes then re-adds the zoom handler to avoid re-entrancy).
+Dragging the brush calls `applyBrushSelection()` which computes the new `xZoom` and
+calls `applyZoom()` (which temporarily removes then re-adds the zoom handler to avoid
+re-entrancy).
 
 ---
 
 ## Block Highlighting (name)
 
-Hovering any block highlights all blocks with the same `name` across all batch sections:
+Hovering any block highlights all blocks with the same `name` across all run
+sections:
 ```javascript
 s.blockL.selectAll('rect.bm-tl-block')
     .style('fill-opacity', b => b.e.name === s.hoveredName ? 1 : 0.12);
 ```
 
-The same chunk ID can appear in multiple batches (if multiple runs processed the same chunk) and in multiple services within a batch (as the chunk travels through the pipeline).
+The same chunk ID can appear in multiple runs (if multiple runs processed the same
+chunk) and in multiple services within a run (as the chunk travels through the
+pipeline).
 
 ---
 
@@ -1724,36 +1973,46 @@ Shows on block hover:
 - Duration
 - Error message (if any)
 
-**Ctrl+click** copies all fields to clipboard.
+**Ctrl+click** copies all fields to clipboard. **Double-click** opens that event's
+log folder (see `09_Features.md`'s Timeline section).
 
-Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm` (local time).
+Relative times use `HH:MM:SS.mmm` precision. Absolute times use `HH:MM:SS.mmm`
+(local time).
 
 ---
 
 ## CSV Export / Import
 
 ### Export
-Uses `window.showSaveFilePicker()` (Chrome/Edge save dialog) with blob-download fallback. Filename: `timeline_YYYY-MM-DD-HH-MM-SS.csv`.
+`doExport()` in `d3-timeline.js` uses `window.showSaveFilePicker()` (Chrome/Edge save
+dialog) with a blob-download fallback for other browsers. Filename:
+`{firstRunName}_{YYYY-MM-DDTHH-MM-SS}.csv` (derived from the first loaded run's
+name, sanitized to `[a-zA-Z0-9_-]`).
 
-Columns: `RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, StartRelMs, FinishRelMs, DurationMs, Status, Error`
+Columns (one row per event, absolute ISO timestamps — **not** the relative-ms/
+duration/status shape you might expect from the in-memory model):
+`RunId, BatchName, Name, Source, Pipeline, Service, PID, Server, Start, Finish, Error`
 
 ### Import
-Triggered by hidden `<InputFile>` element clicked programmatically. Parsed by `ImportCsvAsync()` which:
-1. Reads header row to find column indices (order-independent)
-2. Groups rows by `RunId`
-3. Upserts into existing `TimelineBatch` or creates a new CSV-only batch via `TimelineBatch.CreateFromCsv()`
+Triggered by a hidden `<InputFile>` element clicked programmatically. Parsed
+client-side by `ImportCsvAsync()` which:
+1. Reads the header row to find column indices (order-independent).
+2. Groups rows by `RunId`.
+3. Upserts into an existing `TimelineRun` or creates a new CSV-only run via
+   `TimelineRun.CreateFromCsv()`.
 
-CSV batches have no live subscription and no polling. They are identified by the absence of an `IBatchService` reference.
+CSV-imported runs have no live subscription and no polling — there's no real run
+behind them to watch.
 
 ---
 
-## Add Batch Dialog
+## Add Run Dialog
 
-- MudBlazor `MudDataGrid` with search, env selector, paginated results
-- Single-click selects/deselects a row
-- Double-click (detected via `MouseEventArgs.Detail == 2`) immediately loads the batch
-- `CloseButton = true` in `DialogOptions` adds an × button to the dialog header
-- Already-loaded batches show an info alert; loading them again refreshes/merges events
+- MudBlazor `MudDataGrid` with search, env selector, paginated results.
+- Single-click selects/deselects a row.
+- Double-click (detected via `MouseEventArgs.Detail == 2`) immediately loads the run.
+- `CloseButton = true` in `DialogOptions` adds an × button to the dialog header.
+- Already-loaded runs show an info alert; loading them again refreshes/merges events.
 
 ---
 
@@ -1768,37 +2027,52 @@ CSV batches have no live subscription and no polling. They are identified by the
 | Reset view | ZoomOutMap | Fits all data in viewport |
 | Export | Save | Saves CSV (with save dialog on Chrome/Edge) |
 | Import | FolderOpen | Opens file picker for CSV import |
-| Remove | LayersClear | Dropdown to remove individual or all batches |
-| Add | Add | Opens Add Batch dialog |
+| Remove | LayersClear | Dropdown to remove individual runs or clear all |
+| Add | Add | Opens Add Run dialog |
 
 ---
 
 ## Known Limitations / Pending Work
 
-- Group row labels (lane key names on the left side) — not yet implemented
-- Legend for colour key — not yet implemented
-- Batch title header does not scroll with vertical pan (intentional — it re-renders with the content)
-- Stack view x-axis represents accumulated duration, not wall clock — ticks show relative time which may be confusing when mixed with normal batches
-- Import does not reconstruct absolute `batchStartEpochMs` from relative ms (absolute times in tooltip will not show for imported batches)
+- Group row labels (lane key names on the left side) and a legend for the colour key
+  are still not implemented as of this writing.
+- Run title header does not scroll with vertical pan (intentional — it re-renders
+  with the content).
+- Stack view x-axis represents accumulated duration, not wall clock — ticks show
+  relative time which may be confusing when mixed with normal-mode runs.
+- CSV import does not reconstruct absolute `batchStartEpochMs` from the exported
+  ISO timestamps the way normal-mode runs have it, so behavior for
+  relative-vs-absolute display on re-imported runs should be spot-checked against
+  current code rather than assumed.
+- Keyboard shortcuts are a known target for a redesign — the current set (documented
+  in `09_Features.md`) isn't considered fully intuitive; treat it as current-state,
+  not final.
 FILE docs/06_UI_Components.md
-LENGTH 7012
-# BatchMonitor — UI Components & CSS
+LENGTH 12649
+# NxtUI — UI Components & CSS
 
 ## Layout Structure
 
 ```
-MainLayout
-├── Sidebar (collapsible, left)
-│   └── SidebarNavItem × N
+MainLayout (Layout/MainLayout.razor)
+├── Sidebar (Layout/Sidebar.razor — collapsible, left)
+│   └── SidebarNavItem × N (Shared/SidebarNavItem.razor)
 ├── Main content area
-│   ├── TabBar (horizontal scroll, drag-to-reorder)
-│   └── Tab panes (all rendered, hidden/shown via CSS)
-│       ├── Home.razor
-│       ├── Batches.razor
-│       ├── BatchDetail.razor (× N)
-│       └── TimelineTab.razor (× N)
+│   ├── TabBar (Layout/TabBar.razor — horizontal scroll, drag-to-reorder)
+│   └── Tab panes (all rendered, hidden/shown via CSS — see TabContent.razor)
+│       ├── Home.razor, Runs.razor, RunDetail.razor (× N), RunStatsPage.razor
+│       ├── ServicesPage.razor, MemoryGraph.razor
+│       ├── KafkaDashboard.razor, KafkaTopicInspector.razor, KafkaGroupsDashboard.razor
+│       ├── MongoDashboard.razor, MongoCollectionInspector.razor
+│       ├── ConfigPage.razor, EnvironmentPage.razor
+│       ├── FileBrowser.razor, LogWorkspace.razor (LogViewer panes × N)
+│       ├── TimelineTab.razor (× N), FilterHelp.razor, Settings.razor
 └── ThemeToggle (in sidebar footer)
 ```
+
+21 `TabType` variants map to these pages (see `01_Architecture.md`'s Multi-Tab
+Architecture section for the full list) — the tab pane list above groups them by
+subsystem rather than repeating the enum.
 
 ---
 
@@ -1807,72 +2081,71 @@ MainLayout
 **File:** `Layout/TabBar.razor`
 
 **Behaviour:**
-- Horizontal scroll; no overflow dropdown
-- JS drag-and-drop (`BatchMonitor.initTabDrag`) — pure browser-side with DOM indicator
-- One Blazor call on drop: `[JSInvokable] OnTabDropped(tabId, targetIndex)`
-- Mouse wheel scrolls horizontally (`BatchMonitor.initTabWheelScroll`)
-- Active tab auto-scrolls into view after focus changes
+- Horizontal scroll; no overflow dropdown.
+- JS drag-and-drop (`app.js`'s `initTabDrag(containerEl, dotnetHelper)`, imported as
+  an ES module and invoked via `_appModule.InvokeVoidAsync("initTabDrag", ...)`) —
+  pure browser-side with a DOM drop indicator.
+- One Blazor call on drop: `[JSInvokable] OnTabDropped(tabId, targetIndex)`.
+- Mouse wheel scrolls horizontally (`initTabWheelScroll(containerEl)`, same module).
+- Active tab auto-scrolls into view after focus changes (`scrollTabIntoView(tabId)`).
+- `TabRenameDialog.razor` (also in `Layout/`) handles renaming a tab.
 
 **Tab anatomy:**
 - Icon (type-specific MudBlazor icon)
-- Label (batch name or tab type)
-- Environment badge (coloured pill, `font-size: 0.56rem`)
+- Label (run name or tab type)
+- Environment badge (`Shared/EnvironmentBadge.razor` — coloured pill)
 - Close button (visible on hover/active)
 
-**Cursor:** `default` on hover, `grabbing` only while actively dragging. No `grab` cursor on hover (matches VS Code/Chrome tab behaviour).
+**Cursor:** `default` on hover, `grabbing` only while actively dragging. No `grab`
+cursor on hover (matches VS Code/Chrome tab behaviour).
 
 ---
 
-## Batches Page
+## Runs Page
 
-**File:** `Pages/Batches.razor`
+**File:** `Pages/Runs.razor` (table body factored into the shared
+`Components/BmRunsTable.razor`, reused by Home's Recent Runs and Run Stats' table
+view — see `09_Features.md`).
 
-- MudDataGrid with virtual scrolling
-- Filter bar: text search + status chips + type filter
-- Pagination: configurable rows-per-page (10/25/50/100)
-- Row click opens BatchDetail tab (`TabService.OpenOrFocus`)
-- Status chips use `StatusIcon.razor` shared component
-
-**Rows-per-page select:** `width: 68px; font-size: 0.72rem` (set via `Style=` and CSS `.bm-rows-select .mud-input`). MudBlazor ignores inline font-size on the component itself; must target the inner `.mud-input` class via CSS.
+- `BmRunsTable` with pagination (`Components/BmPagination.razor`).
+- Filter bar: `Components/FilterBox.razor` (shared filter-grammar text input — see
+  `08_FilterSyntax.md`).
+- Row click opens a `RunDetail` tab (`TabService.OpenOrFocus`).
+- Status chips use `Shared/StatusIcon.razor`.
 
 ---
 
-## BatchDetail Page
+## RunDetail Page
 
-**File:** `Pages/BatchDetail.razor`
+**File:** `Pages/RunDetail.razor`
 
 ### Top bar
-```
-● Running  DeltaSync_Orders  ✓123  ⟳45  ░░░░░░░░░░░ ~67%  [⏱] [■] [∨]
-```
 
-Components:
-- Status dot + label (colour from `BatchStatus`)
-- Batch name
-- Done count (✓), In-progress count (⟳)
-- Progress bar (~% estimated)
-- Timeline button `[⏱]` → opens Timeline tab
-- Cancel button `[■]` (running only)
-- Expand/collapse details `[∨]`
+Status dot + label (colour from run status), run name, done/in-progress counts,
+progress bar, and action buttons: Timeline (`[⏱]`, opens a Timeline tab), Cancel
+(running runs only), expand/collapse the details strip.
 
-**Status chip:** Separate dot element (background-color) and label element (color). Both derive colour from `bm-status-{status}` CSS classes.
+**Status chip:** a separate dot element (background-colour) and label element
+(colour), both driven by `bm-status-{status}` CSS classes — see the colour table
+below (5 real statuses, not just running/completed/failed).
 
 ### Details strip
-Collapsible 2-column key-value grid. Persistence via `localStorage` (`bm_batch_details_strip_expanded`).
+
+Collapsible key-value grid. Persistence via `localStorage`.
 
 ### Graph area
-`D3FlowGraph` component; receives `Topology` and `IsVisible` params. `IsVisible` pauses the animation RAF loop when the tab is not active.
+
+`Components/D3FlowGraph.razor`; receives the computed `Topology` and an
+`IsVisible`-equivalent focus flag that pauses the edge-animation RAF loop when the
+tab isn't active. Layout is computed by the custom `bm-flow-layout` engine (see
+`04_FlowGraph.md`/`12_Custom_Layout_And_Nested_Runs.md`) — an ELK-based engine also
+still exists in the JS as a comparison/fallback toggle, but isn't the default path.
 
 ### Slider (replay)
 
-Bottom strip with:
-- History icon `[↺]` (enter replay) / Live icon `[●]` (return to live)
-- Left timestamp label
-- MudSlider (Min=0, Max=1000, Step=1)
-- Right timestamp label
-- Event count
-
-**Replay mode:** REPLAY chip (amber, pulsing) in the top bar shows current replay time.
+Bottom strip: history/live toggle, left/right timestamp labels, a `MudSlider`, and
+an event count. See `02_Models_DataFlow.md`'s Replay mode section for the mechanics
+behind it (`_replayTimestamp`, `SliderToDateTime`).
 
 ---
 
@@ -1880,81 +2153,121 @@ Bottom strip with:
 
 ### `app.css` — Global styles
 
-**Key CSS custom properties** (defined on `:root` or MudBlazor vars):
+Layout classes:
+- `.bm-page` — full-height column, no self-scroll.
+- `.bm-page-fill` — same + fills height end-to-end.
+- `.bm-content-pane` — absolute+inset, multi-tab pane.
+- `.bm-pane-hidden` — `display:none` for inactive tabs.
+
+**Status colours** (`.bm-status-{status}` — 5 real statuses, not 3):
 ```css
---bm-font-mono       /* JetBrains Mono → Fira Code → monospace fallback */
---bm-radius-sm       /* 4px */
---bm-radius-lg       /* 10px */
---bm-transition      /* 150ms ease */
+.bm-status-running     { color: #3FB950; }  /* green, pulsing icon animation */
+.bm-status-completed   { color: #58A6FF; }  /* blue */
+.bm-status-failed      { color: #F85149; }  /* red */
+.bm-status-terminated  { color: #D29922; }  /* amber */
+.bm-status-purged      { color: #8B949E; }  /* grey */
+.bm-status-unknown     { color: #8B949E; }  /* grey */
 ```
+Note these are a **different palette** from `PipelineState`'s node/pipeline colours
+in `02_Models_DataFlow.md` — run status and pipeline-row state are separate concepts
+with separate colour scales; don't assume "completed" looks the same in both places
+(it's grey for a pipeline row, blue for a run).
 
-**Status colours** (via CSS classes):
-```css
-.bm-status-running   /* green pulse dot */
-.bm-status-completed /* grey */
-.bm-status-failed    /* red */
-.bm-status-unknown   /* dim */
-```
+### `d3-graph.css` — Run/pipeline flow graph
 
-**Layout classes:**
-- `.bm-page` — full-height column, no self-scroll
-- `.bm-page-fill` — same + fills height end-to-end
-- `.bm-content-pane` — absolute+inset, multi-tab pane
-- `.bm-pane-hidden` — `display:none` for inactive tabs
-
-### `d3-graph.css` — Flow graph
-
-Key rules:
-- `.bm-node:hover .bm-node-rect { filter: brightness(1.35) }` — hover glow (NO transform)
-- `.bm-tl-sel-layer .overlay { fill: transparent !important }` — brush overlay transparency
-- `.bm-node-bg` — opaque rect matching page surface colour (set from JS via `getComputedStyle`)
+- `.bm-node:hover .bm-node-rect { filter: brightness(1.35) }` — hover glow (no transform).
+- `.bm-node-hover-zoom { z-index: 1000; }` — keeps a zoomed-in hovered small node above
+  everything else, including sibling child-run boxes (fixed this session — see
+  git history around `d04e3ac`).
+- `.bm-node-bg` — opaque rect matching page surface colour (set from JS via
+  `getComputedStyle`).
 
 ### `d3-timeline.css` — Timeline
 
-Key structural rules:
-```css
-.bm-tl-canvas-wrap {
-    overflow-y: auto;   /* vertical scroll for tall content */
-    overflow-x: hidden;
-    scrollbar-width: thin;
-}
-.bm-tl-bottom-panel {
-    flex-shrink: 0;
-    height: 52px;       /* TICK_H + BOT_PAD_T + HEAT_H + BOT_PAD_B */
-    position: relative;
-    z-index: 10;        /* above lane content */
-}
-.bm-tl-sel-layer .overlay { fill: transparent !important; }
-```
+See `05_Timeline.md`'s CSS-relevant structural notes (canvas-wrap scroll, fixed
+bottom panel height/z-index).
+
+### `log-viewer.css`
+
+Log Viewer pane styles — not covered by an earlier version of this doc at all;
+added alongside the Log Viewer feature (`09_Features.md`'s Log Browser section).
 
 ---
 
-## Shared Components
+## Shared Components (`src/NxtUI.Web/Shared/`, `src/NxtUI.Web/Components/`)
 
-### `StatusIcon.razor`
-Maps `BatchStatus` to a coloured MudBlazor icon. Used in Batches grid and Timeline Add dialog.
+Split across two folders: `Shared/` for small presentational pieces, `Components/`
+for larger composite/reusable UI (tables, dialogs, toolbars).
 
-### `SidebarNavItem.razor`
+### `Shared/StatusIcon.razor`
+Maps a run status to a coloured MudBlazor icon. Used in the Runs table and
+Timeline's Add Run dialog.
+
+### `Shared/SidebarNavItem.razor`
 Nav item with icon, label, active state. Wraps MudBlazor `MudNavLink`.
 
-### `EnvironmentBadge.razor`
-Coloured pill showing environment ID. Used in tab bar and Batches filter.
+### `Shared/EnvironmentBadge.razor`
+Coloured pill showing the environment ID. Used in the tab bar and Runs filter.
 
-### `TabContent.razor`
-Switch statement that renders the appropriate page component based on `Tab.Type`. Passes `IsFocused="@Tab.IsActive"` to all content components.
+### `Shared/TabContent.razor`
+Switch statement rendering the appropriate page component based on `Tab.Type`.
+
+### `Components/BmRunsTable.razor` / `Components/BmPagination.razor`
+Shared run-list table + pagination, reused by Home, Runs, and Run Stats (table view).
+
+### `Components/FilterBox.razor`
+Shared filter-grammar text input with field-hint autocomplete — see
+`08_FilterSyntax.md`.
+
+### `Components/D3FlowGraph.razor`
+Wraps `d3-graph.js`; used by `RunDetail.razor`.
+
+### `Components/ToolbarRefresh.razor`
+Shared refresh button (loading spinner state + tooltip) used across nearly every
+data page's toolbar.
+
+### `Components/BulkActionDialog.razor`
+Shared bulk-select confirmation dialog, used by the Kafka/Mongo purge flows
+(`09_Features.md`).
+
+### Log Browser components
+`Components/LogBrowserFileTree.razor`, `LogBrowserTreeNode.razor`,
+`LogViewerToolbar.razor`, `LogViewport.razor`, `OpenLogFileDialog.razor` — the Log
+Browser/Viewer's component breakdown (folder tree, per-pane toolbar, the scrollable
+viewport itself, and the "open a local file" dialog).
+
+### Kafka/Mongo dialogs
+`Components/KafkaTopicInfoDialog.razor`, `KafkaConsumerGroupsDialog.razor`,
+`MongoCollectionInfoDialog.razor` (in `Pages/`) — detail popups opened from their
+respective dashboards.
+
+### `Components/DiagnosticsMonitor.razor`
+Client-side perf metrics reporter (see `ServerDiagnosticsMonitor`/`client-diag` log
+lines in `01_Architecture.md`'s hosted-service list).
+
+### `Components/AsyncData.razor`
+Generic loading/error/data wrapper pattern used across pages that fetch data
+asynchronously.
 
 ---
 
 ## `_Imports.razor`
 
-Global usings for all Razor files:
+Global usings for all Razor files (`src/NxtUI.Web/_Imports.razor`):
 ```razor
 @using MudBlazor
-@using BatchMonitor
-@using BatchMonitor.Configuration
-@using BatchMonitor.Models
-@using BatchMonitor.Services
-@using BatchMonitor.Shared
+@using NxtUI
+@using NxtUI.Web.Components
+@using NxtUI.Core
+@using NxtUI.Core.Models
+@using NxtUI.Configuration
+@using NxtUI.Web.Layout
+@using NxtUI.Web.Pages
+@using NxtUI.Web.Models
+@using NxtUI.Core.Services
+@using NxtUI.Core.Services.Mock
+@using NxtUI.Web.Services
+@using NxtUI.Shared
 ```
 
 ---
@@ -1963,53 +2276,111 @@ Global usings for all Razor files:
 
 ```html
 <!-- CSS -->
-<link href="css/app.css" rel="stylesheet" />
-<link href="css/d3-graph.css" rel="stylesheet" />
-<link href="css/d3-timeline.css" rel="stylesheet" />
+<link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+<link href="css/app.css?v=NN" rel="stylesheet" />
+<link href="css/d3-graph.css?v=NN" rel="stylesheet" />
+<link href="css/d3-timeline.css?v=NN" rel="stylesheet" />
+<link href="css/log-viewer.css?v=NN" rel="stylesheet" />
 
-<!-- JS (order matters — dependencies first) -->
+<!-- Classic <script> tags: D3, ELK (comparison-engine dependency), and a handful of
+     JS files not yet migrated to ES modules -->
 <script src="https://d3js.org/d3.v7.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="js/d3-graph.js"></script>
-<script src="js/d3-animation.js"></script>
-<script src="js/d3-timeline.js"></script>
-<script src="js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="js/d3-memory-sunburst.js?v=NN"></script>
+<script src="js/d3-memory-stacked.js?v=NN"></script>
+<script src="js/d3-home-treemap.js?v=NN"></script>
+<script src="js/json-viewer.js?v=NN"></script>
+<script src="js/log-file-access.js?v=NN"></script>
+
+<!-- ES modules: imported by IJSObjectReference from each owning component, or
+     preloaded here as a perf hint -->
+<script type="module" src="js/log-viewer.js?v=NN"></script>
+<script src="js/workspace.js"></script>
+<link rel="modulepreload" href="js/log-viewer-parser.js?v=NN" />
+<link rel="modulepreload" href="js/filter.js?v=NN" />
+<link rel="modulepreload" href="js/app.js?v=NN" />
+<link rel="modulepreload" href="js/d3-timeline.js?v=NN" />
 ```
 
-`d3-animation.js` must load before `d3-graph.js` because the graph RAF loop calls `window.BatchMonitor.D3Animation.tick()`.
+Every JS asset carries a `?v=NN` cache-busting query string that must be bumped
+whenever that file changes — see `feedback_...` conventions established across this
+project's commit history (bump the version, don't rely on browser/CDN caching to
+pick up an edit). `d3-graph.js` itself is imported lazily per-`D3FlowGraph` instance
+(`IJSRuntime.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=NN")`),
+not loaded as a classic script tag — its own `?v=` bump lives in
+`Components/D3FlowGraph.razor`, not `_Host.cshtml`.
 
 ---
 
-## MudBlazor Version Notes (v9.5)
+## MudBlazor Version Notes (v9.6)
 
-Known API changes from earlier versions:
-- `MudDialog`: use `@bind-Visible` (not `@bind-IsVisible`)
-- `MudDialog`: `CloseButton` goes in `DialogOptions` object
-- `MudDataGrid`: no `RowDoubleClick` parameter — use `RowClick` + `MouseEventArgs.Detail == 2`
-- `MudSelect` font size: set via CSS targeting `.mud-input`, not inline `Style=`
+Known API quirks worth remembering:
+- `MudDialog`: use `@bind-Visible` (not `@bind-IsVisible`).
+- `MudDialog`: `CloseButton` goes in the `DialogOptions` object.
+- `MudTable`: no row-level double-click parameter, but `@ondblclick` works fine
+  bound directly on each `<MudTd>` (see `Components/BmRunsTable.razor`,
+  `Pages/FileBrowser.razor`, `Pages/KafkaDashboard.razor` for the pattern used
+  throughout this app) — no JS workaround needed for `MudTable`.
+- `MudDataGrid` (used by Timeline's Add Run dialog) genuinely has no double-click
+  parameter at all — detect via `MouseEventArgs.Detail == 2` on `RowClick` instead.
+- `MudSelect` font size: set via CSS targeting `.mud-input`, not inline `Style=`.
+- `MudSelect`/`MudTable` render as **two nested elements sharing a similar class**
+  (e.g. `.mud-select` on both an outer wrapper and an inner input container) in some
+  versions — a `Class=` prop only reaches the inner one; use `:has()` in CSS to
+  target the outer wrapper when needed (see `project_mudselect_flex_grow_override`
+  in this repo's working notes for a concrete case).
 
 ---
 
-## `app.js` — Tab utilities
+## `app.js` — Shared JS utilities (ES module)
 
-**`BatchMonitor.initTabDrag(containerEl, dotnetHelper)`**
-Wires HTML5 drag events on the tab strip. Shows a 2px drop indicator div during drag. On `drop`, calls `dotnetHelper.invokeMethodAsync('OnTabDropped', tabId, targetIndex)`.
+Exported functions (imported per-component as `IJSObjectReference`, not a global
+namespace):
 
-**`BatchMonitor.initTabWheelScroll(containerEl)`**
-Prevents default on wheel events and translates `deltaY → scrollLeft`. `{ passive: false }` required to call `preventDefault()`.
+- `getLocalStorage(key)` / `setLocalStorage(key, value)` — wrapped in try/catch for
+  environments where `localStorage` may throw.
+- `saveTheme(value)`, `saveTz(value)`, `saveDevMode(enabled)` — settings persistence.
+- `watchSystemTheme(dotnetRef)` — subscribes to the OS-level dark/light media query
+  and calls back into .NET on change.
+- `focusAfterFrame(wrapper)` — focuses an element after the next animation frame
+  (needed when Blazor's own render hasn't committed the DOM yet).
+- `clickInputInside(wrapper)` — programmatically clicks a hidden `<input>` (used for
+  the Config page's word-wrap toggle target and CSV/file import triggers elsewhere).
+- `initTabDrag(containerEl, dotnetHelper)` / `initTabWheelScroll(containerEl)` /
+  `scrollTabIntoView(tabId)` — TabBar interop, described above.
 
-**`BatchMonitor.scrollTabIntoView(tabId)`**
-Smooth-scrolls the active tab into the visible strip area.
-
-**`BatchMonitor.getLocalStorage(key)` / `setLocalStorage(key, value)`**
-Wrapped in try/catch for environments where `localStorage` may throw.
+A handful of legacy globals still hang off `window` rather than being ES exports
+(`window.bmInspectorResizer`, `window.logBrowserResizer`, `window.bmClientDiag`) —
+resizer/diagnostics helpers that predate the ES-module migration and haven't been
+converted; there is no longer a `window.BatchMonitor.*` namespace anywhere in the
+app.
 FILE docs/07_SessionContext.md
-LENGTH 7755
-# BatchMonitor — Session Context & Next Steps
+LENGTH 9091
+# NxtUI — Session Context & Next Steps (ARCHIVED)
+
+> **This entire document is a historical snapshot from the app's earliest
+> prototyping phase**, when it was called `BatchMonitor`, developed via
+> zip-delta patches applied to a working directory at `/home/claude/BatchMonitor/`
+> (see "Development Workflow" below), and had no Kafka/Mongo/Config/LogViewer/
+> RunStats/Environment pages, no `NxtUI.Core`/`NxtUI.Protos` split, and no git
+> history at all. **None of that describes the current repo** — it's a proper git
+> project (`git log` is the real changelog now), the Kafka dashboard from "Pending
+> Features" below was long since built, and most of "Known Issues" has moved or
+> been fixed.
+>
+> Kept for historical interest only. For actual current-state docs, start with
+> `01_Architecture.md`, `02_Models_DataFlow.md`, and `03_Decisions.md` — and for
+> "how do I resume/orient in this codebase", just read those three plus
+> `09_Features.md` and run `git log`/`git status`, the same way you'd approach any
+> other git repo. Two items below are still genuinely true today and were carried
+> forward into `05_Timeline.md`'s "Known Limitations" section: Timeline group row
+> labels and a colour legend are still not implemented.
 
 ## Session History Summary
 
-This document captures the development history, current state, and pending work.
+This document captures the development history, current state, and pending work,
+**as they stood at the end of the app's earliest prototyping phase** — see the
+archival note above before trusting anything below as current.
 
 ---
 
@@ -2150,17 +2521,37 @@ Changes were delivered as named delta zips: `BatchMonitor_delta10a.zip` etc. The
 - `MUD0002 RowDoubleClick` — not supported in MudDataGrid v9; use `MouseEventArgs.Detail == 2` in `RowClick`
 - `MUD0002 IsVisible` — use `@bind-Visible` on MudDialog
 FILE docs/08_FilterSyntax.md
-LENGTH 12730
+LENGTH 16063
 # 08 — Filter Syntax
 
 ## Overview
 
-A unified filter language used across the entire application. The same syntax works in every filter textbox — timeline, batch list, and any future view. The parser runs on the client (JS) and produces an **AST**. Depending on the context the AST is either:
+A unified filter language used across the entire application. The same syntax works
+in every filter textbox — Runs, Services, Kafka, MongoDB, Run Stats, Timeline, the
+Log Browser/Viewer, and any future view (`Components/FilterBox.razor` is the shared
+UI input for all of them). **There are two independent implementations of this
+grammar**, not one parser feeding both sides — this app is Blazor **Server**, so
+"parse it once on the client" doesn't mean what it would in a SPA:
 
-- **Evaluated in-memory** (JS) — timeline and any view that filters already-loaded data
-- **Sent to the server as JSON** and translated into a MongoDB `FilterDefinition` (C#) — views that query the database
+- **`src/NxtUI.Core/Filtering/FilterParser.cs`** (C#) — parses the raw filter text
+  directly wherever a page needs to turn it into a query against a backing store.
+  `FilterBox.razor` itself has no parsing logic; it just raises `OnFilterChanged`
+  with the debounced raw text, and the owning page (e.g. `Runs.razor`) calls
+  `FilterParser.Parse(text, useUtc)` right there in its own C# code (which already
+  runs server-side under Blazor Server — no network hop needed to "reach the
+  server"). The resulting `FilterNode` AST is then handed to
+  `MongoFilterBuilder.Build()` or `SqlFilterBuilder.Build()` depending on the active
+  `IRunService`/`IKafkaService`/`IMongoService` backend.
+- **`wwwroot/js/filter.js`** (JS) — a second, independently-maintained parser +
+  in-memory evaluator, used only where filtering must happen **in the browser
+  without a round trip** — Timeline (already-loaded event data, filtered at 60fps
+  during pan/zoom) and the Log Viewer/Browser's content search (`09_Features.md`).
 
-The parser is written once. The server never parses filter strings — it only interprets ASTs.
+Keep both grammars in sync by hand when adding a new operator/field-alias — unlike
+the log-line-format grammar (`log-viewer-parser.js` / `LogBrowserService.cs`), there
+is currently no shared JS↔C# contract test enforcing that these two parsers stay
+identical; the sections below describe the intended shared grammar both are meant to
+implement.
 
 ---
 
@@ -2426,11 +2817,12 @@ finish:null                   not yet finished
 When a term has no field prefix it is matched against a **declared list of searchable fields** for the current view. This list is defined in JS alongside the filter component for each view.
 
 ```js
-// timeline
+// timeline (client-evaluated, filter.js)
 searchableFields = ['Service', 'Pipeline', 'Source', 'Name', 'Server']
 
-// batch list
-searchableFields = ['BatchName', 'Type', 'RunId']
+// Runs page (server-evaluated, FilterParser.cs — RunFilter.SearchText covers
+// RunId/RequestId/Description as a free-text OR; field-scoped terms like
+// type:/status:/start: are parsed into the AST separately)
 ```
 
 A bare term `Loader` on the timeline expands in the AST to:
@@ -2463,7 +2855,7 @@ svc:(Loader, Transformer) start:>-1h
 # Chunks with more than 100 records that are not yet finished
 records:>100 finish:null
 
-# Batches that failed or are still running
+# Runs that failed or are still running
 status:(Failed, Running)
 
 # Exact service name, case-sensitive, large record count
@@ -2506,7 +2898,35 @@ Node =
   | Or            { left: Node, right: Node }
 ```
 
-Global terms are expanded into an `Or` of `FieldTerm` nodes (one per searchable field) before the AST leaves the parser. The evaluators never see raw `GlobalTerm` nodes — the expansion is the parser's last step.
+Global terms are expanded into an `Or` of `FieldTerm` nodes (one per searchable
+field) before the AST leaves the parser. The evaluators never see raw `GlobalTerm`
+nodes — the expansion is the parser's last step.
+
+The real C# record types (`src/NxtUI.Core/Filtering/FilterAst.cs`):
+```csharp
+public abstract record FilterNode;
+public record AndNode(FilterNode Left, FilterNode Right) : FilterNode;
+public record OrNode(FilterNode Left, FilterNode Right) : FilterNode;
+public record NotNode(FilterNode Operand) : FilterNode;
+public record FieldTermNode(/* field, value, matchType, comparison, caseSensitive */) : FilterNode;
+
+public abstract record FilterValue;
+public record StringValue(string Value) : FilterValue;
+public record NumberValue(double Value) : FilterValue;
+public record BoolValue(bool Value) : FilterValue;
+public record DateValue(DateTime Value) : FilterValue;
+public record TimeOfDayValue(int Seconds) : FilterValue;   // parsed, but currently
+                                                             // unreachable from any
+                                                             // live UI path — see
+                                                             // note below
+public record NullValue : FilterValue;
+public record RangeValue(FilterValue Low, FilterValue High) : FilterValue;
+```
+
+`TimeOfDayValue` (a bare `9:30`-style time with no date) is fully parsed and modeled,
+but nothing in the current UI actually produces a query that reaches it end-to-end —
+treat it as dead/unreachable code if you're touching this grammar, not a working
+feature to build on.
 
 ---
 
@@ -2556,11 +2976,15 @@ Corner cases to cover:
 - `today` matches midnight of today, not yesterday or tomorrow
 - Empty searchable fields list → global term matches nothing
 
-### C# unit tests (AST → MongoDB filter)
+### C# unit tests
 
-The C# tests receive a pre-built AST (deserialized from JSON) and assert the resulting `FilterDefinition` is correct. No filter string parsing in C#.
+Two layers, both exercised directly (not via JSON deserialized from JS — see the
+Overview's correction: `FilterParser.cs` parses raw filter strings itself):
 
-Corner cases to cover:
+1. **`FilterParser.Parse(text)` → `FilterNode`** — same parser-correctness cases as
+   the JS list above, run against the C# implementation.
+2. **`FilterNode` → `MongoFilterBuilder.Build()` / `SqlFilterBuilder.Build()`** — the
+   AST-to-query translation, covering:
 
 - `FieldTerm` contains → `$regex` with `i` flag
 - `FieldTerm` contains, case-sensitive → `$regex` without `i` flag
@@ -2574,14 +2998,18 @@ Corner cases to cover:
 - `And` node → `$and`
 - `Or` node → `$or`
 - `Not` node → `$nor` with single element
-- Alias already resolved (aliases are resolved client-side; C# receives full field names)
+- Alias resolution already happened inside `FilterParser.Parse()` itself (its own
+  `DefaultAliases` table, e.g. `svc`/`service` → `Service`, `runid` → `RunId`) — the
+  builders always receive a `FieldTermNode` with the canonical field name already
+  resolved.
 - Unknown field name → no filter applied for that term (yields no matches silently)
 - Deeply nested AND/OR tree → correct nesting in Mongo filter
-- Date values arrive as UTC ISO strings → parsed as UTC `DateTime`
+- Date values: parsed directly as local or UTC `DateTime` by `FilterParser` itself
+  (`useUtc` parameter), not received pre-converted from JS.
 - Empty `Or` list → matches nothing (`$nor: [{}]` or equivalent)
 - Empty `And` list → matches everything (no filter)
 FILE docs/09_Features.md
-LENGTH 10551
+LENGTH 15796
 # 09 — Features & Usage Guide
 
 ## Overview
@@ -2674,6 +3102,75 @@ from the run's events.
 
 ---
 
+## Run Stats
+
+Aggregate run counts/status over time, opened from the sidebar.
+
+- **Graph / Table** toggle (top left).
+- **Environments** — multi-select; defaults to the currently active
+  environment only. Selecting more than one enables the **color-by-env**
+  toggle (only shown in Graph view with **Group by = None**, since grouping
+  by Day/Week/Month already uses color for the group axis) — switches bar
+  coloring from run status to environment, and adds an env hover-highlight
+  across bars.
+- **Group by** (Graph view only) — None / Day / Week / Month; controls how
+  runs are bucketed along the x-axis.
+- **Filter box** — same run filter grammar as the Runs page (try
+  `env:UAT1`), applied server-side before aggregation.
+- Table view reuses the same run table component as the Runs page (sortable
+  columns, pagination) but without row actions.
+
+---
+
+## Config
+
+Opened from the sidebar's Config entry — a CodeMirror-based editor over the
+current environment's config file (path resolved from
+`EnvConfig:SourcePathTemplate`).
+
+- Read-only unless editing is enabled for the environment
+  (`EnvConfigSvc.IsEditingEnabled`); the source file path is shown in the
+  footer.
+- **Toolbar** (when editable): Undo/Redo (`Ctrl+Z`/`Ctrl+Y`), Fold/Unfold all
+  (`Ctrl+Alt+[`/`Ctrl+Alt+]`), Find/Replace (`Ctrl+F`), and a **History**
+  menu listing previous timestamped backups — picking one loads it into the
+  editor (still requires **Save** to actually restore it).
+- **Word wrap** toggle (`Ctrl+Alt+W`) persists across sessions (local
+  storage).
+- **Refresh** (`Ctrl+Alt+R`) reloads from disk — confirms first if there are
+  unsaved edits.
+- **Save** (`Ctrl+S`) writes to every configured save target for the
+  environment (there can be more than one server); if there's more than one
+  target, a confirmation dialog lists every file about to be overwritten. A
+  timestamped backup of the current source copy is taken before any write.
+  If some targets fail, the ones that succeeded are still kept and a warning
+  names the environment/Settings page for details.
+- An "● unsaved changes" flag appears next to the toolbar while the editor
+  differs from the last loaded/saved content.
+
+---
+
+## Environment
+
+Opened from the sidebar's environment badge (or "Manage environment") — a
+per-environment operations dashboard. **Note:** as of this writing the whole
+page is a front-end mockup — booking slots, quick links, component install
+state, and the installation log are all in-memory UI state with no backend
+service behind them (no `@inject` service calls other than layout), useful
+for prototyping the eventual real feature but not yet wired to anything
+persistent.
+
+- **Environment Booking** — a day timeline of 15-minute slots (free/yours/
+  taken); click-drag to select a range, then **Book** or **Clear**.
+- **Quick Links** — a grid of external link cards.
+- **Components** — a checklist of installable components with per-row status
+  (Installed / Not installed / Installing / Error) and an **Apply** button
+  that becomes enabled once at least one row has a pending change.
+- **Installation Log** — a terminal-style scrolling log of the (simulated)
+  install operations, with a clear button.
+
+---
+
 ## Services
 
 A live table/card view of every running service process, refreshed on a
@@ -2709,20 +3206,66 @@ underneath for zooming into a time range.
 
 Three related views, opened from the sidebar's Kafka entry:
 
-- **Dashboard** — lists topics (with partition/lag info) and consumer
-  groups side by side; a filter box narrows either list.
-- **Topic Inspector** — live-tails a topic's messages (Start/Pause), with a
-  filter box over the decoded fields and a JSON detail panel per message.
-- **Consumer Groups** — select a group to see its per-topic lag breakdown.
+### Dashboard
+
+- A **Topics / Consumer groups** toggle switches the whole page between the
+  two lists; the filter box's placeholder changes to match
+  ("Filter topics…" / "Filter consumer groups…").
+- **Topics list**: partition count, total lag, and size per topic. Row
+  actions: **Topic config** (view/edit the topic's Kafka config entries),
+  **Consumer groups** (jump to the Groups view pre-filtered to that topic),
+  **Inspect messages** (opens the Topic Inspector), **Delete topic**.
+- **Consumer groups list**: state and total lag per group; row action to
+  delete the group.
+- **Purge topics…** (toolbar) — bulk-select topics and clear their messages
+  via a temporary `retention.ms` drop rather than deleting/recreating the
+  topic, so partition count/config survive the purge.
+
+### Topic Inspector
+
+Live-tails a topic's messages.
+
+- **Start/Pause** toggles the live stream; **Clear** stops and empties the
+  currently-buffered messages without restarting the stream.
+- **Filter/seek box** — accepts both a content filter and a seek position in
+  one expression, e.g. `partition:0 offset:>1000`, `latest:500` (last N
+  messages), `timestamp:>2024-01-15`.
+- **Partition stats** — per-partition high-water mark / lag popover.
+- Per-message **JSON detail panel**: Expand all / Collapse all, a
+  **JSONPath query box** (e.g. `$.items[?(@.price > 10)]`) to drill into a
+  large payload with **Clear** to restore the full view, **Download raw
+  binary**, and **Save JSON** to export the decoded payload.
+
+### Consumer Groups
+
+Select a group (from its own list, or via a topic's row action) to see its
+per-topic/per-partition lag breakdown.
 
 ---
 
 ## MongoDB
 
-- **Dashboard** — pick a database, browse its collections with row counts
-  and sizes; a filter box narrows the collection list.
-- **Collection Inspector** — paginated, sortable, filterable document browser
-  for a single collection; double-click a document to expand it.
+Two related views, opened from the sidebar's MongoDB entry:
+
+### Dashboard
+
+- Pick a database, then browse its collections — document count and storage
+  size per collection; a filter box narrows the collection list.
+- Row actions: **Browse documents** (opens the Collection Inspector),
+  **Collection info** (indexes/stats dialog), **Delete collection**.
+- **Purge collections…** (toolbar) — bulk-select collections and clear all
+  their documents (`DeleteMany`) in parallel, verifying the remaining count
+  afterward, without dropping the collection itself (indexes/config survive).
+
+### Collection Inspector
+
+A paginated, sortable, filterable document browser for a single collection.
+
+- **Search box** filters documents server-side.
+- Double-click a document to expand it into the detail panel: Expand all /
+  Collapse all, a **JSONPath query box** (same syntax as the Kafka message
+  inspector) with **Clear** to restore the full document, and **Save as
+  JSON** to export it.
 
 ---
 
@@ -2807,7 +3350,7 @@ Two related pieces: the **folder browser** (tab list entry "Logs") and the
   moment to parse, and the spinner now reflects that instead of
   disappearing early.
 FILE docs/10_DTSX_SQL_Event_Logging.md
-LENGTH 11675
+LENGTH 12410
 # Logging DTSX / SSIS run progress to SQL
 
 How a DTSX (SSIS) package can report its progress into a SQL table so the Run Detail
@@ -2817,6 +3360,17 @@ view can build topology, spans, errors and lag from it — using the generalized
 > This is a design resource for DB / SSIS authors. It describes the *shape* of the data
 > we want; the C# side polls it through an `IEventSource` abstraction (resume from the
 > last reported id/timestamp).
+>
+> **Implementation status:** built, matching this doc's schema exactly —
+> `src/NxtUI.Core/Events/IEventSource.cs` (the `IEventSource`/`EventCursor`/`EventBatch`
+> contract), `IRunEventSink.cs`, and the SQL-side implementations
+> `Events/Sql/SqlRunEventSink.cs` (writes to `dbo.RunEventLog`, same columns as below),
+> `Events/Sql/SqlRunEventSource.cs` (the resumable poll side), and
+> `Events/Sql/SsisDbEventSource.cs` (Option 2 below — reading `SSISDB` catalog views
+> directly). Not yet wired into `Program.cs`'s default DI registrations (the app still
+> runs on `MockRunService`/`MockKafkaService`/`MockMongoService` — see
+> `01_Architecture.md`), but the event-sourcing layer itself is real, tested code, not
+> a proposal.
 
 ## Concept mapping: SSIS → event model
 
@@ -2991,7 +3545,7 @@ This minimizes package edits to essentially one "emit batch id + target" call, w
 rich timing comes from the catalog. Both feed the same `IEventSource`, so a package can
 start SSISDB-only and get "upgraded" later just by adding that one log line.
 FILE docs/11_Topology_Hints.md
-LENGTH 6177
+LENGTH 6169
 # Topology hints (per-run-type blueprints)
 
 An **optional** JSON file per run type that seeds the Run Detail flow graph: which services
@@ -3004,7 +3558,7 @@ inference).
 
 - **Stable layout from t=0.** Declared services render immediately as greyed `NotStarted`
   nodes; runtime events only flip their state and fill counts — no nodes popping in and
-  forcing an ELK re-layout mid-run.
+  forcing a full re-layout mid-run.
 - **Intended shape is visible even before (or without) data** — including expected edges.
 - **Author-controlled layout** per run type (vertical/tree, source/sink roles, groups).
 
@@ -3074,6 +3628,12 @@ If a real service matches **two** `services` entries, the **first in declaration
 
 ## Layout vocabulary → ELK
 
+> This section describes the ELK-era vocabulary/mapping. **On this branch ELK has
+> been removed entirely** (docs/12 §9) — `pinX`/`pinY` no longer exist anywhere in
+> the schema, and `density`/`straightenEdges` are schema-declared but not consumed
+> by anything (they were ELK-only). See `12_Custom_Layout_And_Nested_Runs.md` §6
+> for the vocabulary that's actually live now.
+
 Graph-level (`layout`):
 
 | Hint | Values | Effect |
@@ -3092,7 +3652,7 @@ Per-node (`services[]`):
 | `color` | hex | header accent tint (state still shown via border) |
 | `order` | int (lower first) | in-layer placement bias (ELK priority — approximate) |
 | `pin` | bool | *reserved* in v1 (proper pinning needs persisted positions) |
-| `pinX` / `pinY` | number | explicit position hint (**ELK only** — `RunsSettings.GraphLayoutEngine = "Elk"`, the default). Best-effort: ELK still avoids overlaps and keeps edges sensible, so a pinned node can shift somewhat from the exact value. Set either/both; an unset axis follows ELK's normal automatic layout. Switches the whole graph into ELK's interactive layering/crossing-minimization strategies whenever at least one node sets either — expect to iterate on the value by looking at the rendered result. |
+| ~~`pinX` / `pinY`~~ | number | **removed on this branch** — was an ELK-only explicit position hint; bm-flow-layout never consumed it |
 | `collapsed` | bool | *reserved* in v1 |
 
 ## Reconciliation (runtime vs blueprint)
@@ -3113,12 +3673,15 @@ Runtime always wins on state/counts; the blueprint only adds structure and styli
 - Variant select + compile: `src/NxtUI.Core/Models/TopologyBlueprint.cs`
 - Merge into the computed graph: `TopologyComputationService.ApplyBlueprint`
 - Selection/locking + wiring: `src/NxtUI.Web/Pages/RunDetail.razor` (`ResolveBlueprint`)
-- Layout/decoration → ELK + rendering: `src/NxtUI.Web/wwwroot/js/d3-graph.js`
+- Layout/decoration + rendering: `src/NxtUI.Web/wwwroot/js/d3-graph.js`
 FILE docs/12_Custom_Layout_And_Nested_Runs.md
-LENGTH 16792
+LENGTH 18923
 # 12 — Custom Layout Engine & Nested Runs (design)
 
-**Status:** design / experiment — branch `feature/custom-layout`. No implementation yet.
+**Status:** implemented and in production use — `bm-flow-layout` is the run-detail flow
+graph's layout engine. On the `remove-elk-layout-engine` branch, ELK.js has additionally
+been removed entirely (§9's "Retire ELK" step); on `main` it may still be present as a
+dormant, unused dependency depending on when this doc is read relative to that merge.
 **Supersedes for the flow graph:** the ELK (elkjs) usage described in [04_FlowGraph.md](04_FlowGraph.md).
 **Builds on:** [11_Topology_Hints.md](11_Topology_Hints.md) (the hint schema is *augmented*, not replaced),
 and the generalized event model in `NxtUI.Core/Events/` ([02_Models_DataFlow.md](02_Models_DataFlow.md)).
@@ -3271,15 +3834,32 @@ observed nodes fill in.
 Additive and backward-compatible with [11_Topology_Hints.md](11_Topology_Hints.md). New,
 all optional:
 
-- **orientation** (per node or group): `horizontal` | `vertical` — the flow direction *from*
-  this node; spawns a recursive sub-flow when it differs from the parent's.
+- **orientation** (per node): `horizontal` | `vertical` — the flow direction *from* this node;
+  spawns a recursive sub-flow when it differs from the parent's. **Implemented** — see
+  `13_Setting_Up_Nested_Runs_And_Topology.md` §4.5b for the worked example (`AuditProcessor`/
+  `AuditLog` in `RUN-DEMO-LAYOUT-HINTS`) and `computeOrientationClosures`/
+  `buildOrientationSubGraph` in `wwwroot/js/d3-graph.js` for the implementation (the closure
+  computation and subGraph construction live there, not in `bm-flow-layout` itself — the engine
+  only provides the generic recursive `subGraph` primitive both this and nested-run/group boxes
+  build on).
 - **direction** (per node, relative to the *current* service, in flow terms):
   `left` | `right` | `above` | `below` — a soft placement preference for the node's successor.
+  **Implemented.**
+- **placement** (per node): `left` | `right` | `above` | `below` — the mirror image of
+  `direction`: this node's own preference relative to whichever predecessor points at it.
+  Wins over a predecessor's `direction` for the same edge. **Implemented** (`ServiceHint.
+  Placement`/`TopologyNode.Placement`, wired through `TopologyComputationService.Decorate`
+  and threaded into `bm-flow-layout`'s existing `placement` field — the engine already
+  supported this hint, it just had no C# schema field to reach it until now).
 - **external** (per node, boolean) + **arriveFrom** (`left`|`right`|`above`|`below`): "place me
   outside the cluster of peers on the same target; my incoming arrow should come from this
   side," which the engine uses to pick which side of the shared target to place the node.
+  **Implemented** — see the pushExternalNodesClearOfGroups note in doc 13 §4.5b for a known
+  interaction with hard group boxes worth knowing about when debugging this hint.
 - **port hints** (per edge or per endpoint): `enter`/`leave` side (vertical vs horizontal) and
   `snapToPipeline` (must connect to a specific pipeline row → forces a 90° turn if needed).
+  Per-pipeline port routing (`LayoutEdge.variants`) is **implemented**; `snapToPipeline` as a
+  distinct per-edge override is **not yet built**.
 
 Reminder from doc 11 that still holds: hint *names* match against the **stripped** service
 label (env-agnostic), not the raw id — see `ApplyBlueprint` in `TopologyComputationService`.
@@ -3405,7 +3985,12 @@ there on real runs, we stop having spent ~2 days, not a rewrite.
 - **Independent — zoom-on-hover.** Anytime.
 
 Retire ELK (remove elkjs, delete the ELK branch of the seam) only after Stages 1–3 are trusted
-on real data.
+on real data. **Done** on the `remove-elk-layout-engine` branch: the elkjs CDN `<script>` tag,
+`runLayoutElk` and its ELK-only helpers (`portId`, `layerConstraint`, `densityScale`,
+`portYFromTop`), `handle.elk`/`handle.layoutEngine`, `RunsSettings.GraphLayoutEngine`/
+`GraphPortConstraints`, and `ServiceHint`/`TopologyNode.PinX`/`PinY` are all removed.
+`portXEvenSpread` was kept — despite being written for the ELK path originally, the
+custom engine's own per-pipeline ports (`portOffset`, §6 "port hints") now reuse it too.
 
 ---
 
@@ -3418,7 +4003,7 @@ on real data.
   — confirm this reads intuitively once a sub-flow flips orientation (a "below" inside a
   vertical sub-flow is a different screen direction than in a horizontal parent).
 FILE docs/13_Setting_Up_Nested_Runs_And_Topology.md
-LENGTH 19402
+LENGTH 22208
 # 13 — Setting Up a Run With Children and Customizing Its Topology
 
 A practical, hands-on companion to [11_Topology_Hints.md](11_Topology_Hints.md) (the hint
@@ -3614,17 +4199,63 @@ If the default layered ordering doesn't put a node where you want it relative to
 This is a *soft* hint: `Auditor` is saying "whatever comes after me, put it below me" (in a
 horizontal flow; `above`/`below` only make sense for a horizontal flow's cross axis — see doc
 11's table and doc 12 §6). If a node instead wants to say something about *its own* placement
-relative to whoever points at it, that's the (currently JS-engine-only, not yet in the C#
-schema — see doc 12's "port hints" gap) `placement` field, distinct from `direction` — read doc
-12 §6 carefully, the two are easy to conflate since they're mirror images of the same
-relationship (predecessor's `direction` about its successor vs. a node's own `placement` about
-itself, with the node's own hint always winning — "child overrides parent," doc 12 §3).
+relative to whoever points at it, use `placement` instead — distinct from `direction`, and easy
+to conflate since they're mirror images of the same relationship (predecessor's `direction`
+about its successor vs. a node's own `placement` about itself, with the node's own hint always
+winning — "child overrides parent," doc 12 §3):
+
+```json
+{ "name": "Auditor", "role": "middle", "placement": "above" }
+```
+
+Here `Auditor` is saying "wherever my predecessor wants to put me, I want to be above it
+instead" — this wins even if the predecessor also declared a `direction` hint pointing
+elsewhere.
 
 `external`/`arriveFrom` solves a different problem: several services all point at the same
 downstream target, and you want one of them visually separated from the rest — "outside the
 cluster." Set `external: true` plus `arriveFrom: "below"` (or `above`/`left`/`right` depending
 on flow direction) on that node; the engine pins it to the extreme edge of its layer rather than
 letting it get sorted in among its siblings by the normal ordering heuristic.
+
+### 4.5b Add an `orientation` (continue the flow in a different direction)
+
+A different problem again: a genuine **side-branch** — one node and everything downstream of
+it that never rejoins the main pipeline — reads better laid out top-to-bottom (or left-to-right)
+instead of continuing the main flow's own direction. Set `orientation` on the *first* node of
+that branch to a direction different from the run's own `layout.direction`:
+
+```json
+{ "name": "AuditProcessor", "role": "middle", "orientation": "vertical",
+  "subscribes": ["audit-processor-topic"], "publishes": ["audit-log-topic"] },
+{ "name": "AuditLog", "role": "sink", "subscribes": ["audit-log-topic"] }
+```
+
+In a horizontal (default) run, this makes `AuditProcessor` the root of a small recursive
+sub-flow laid out **vertically**: it and its exclusive downstream closure (`AuditLog` here —
+computed automatically by forward-reachability from `AuditProcessor`, then trimmed of anything
+that has an edge coming in from *outside* that closure, i.e. a rejoin point) are packed as one
+rigid box in the parent layout, the same recursive-box primitive used for groups and nested-run
+child boxes. You only declare `orientation` on the turn node itself — its downstream members
+don't need any hint at all, they're picked up automatically as long as they're a genuine
+dead-end and don't loop back into the main graph.
+
+This is the newest of the layout hints — see it working in the shipped
+`RUN-DEMO-LAYOUT-HINTS`/`layouthintsdemo.json` example (§3's sibling demo, described in that
+file's own header comment): `AuditProcessor`/`AuditLog` hang off `Checker` as a vertical
+side-branch while the rest of the run flows horizontally.
+
+**A subtlety worth knowing if you're debugging this hint**: the sub-flow's own recursive box is
+just another node as far as its *parent* layer's rendering is concerned — including group
+bounding boxes. A hard `group` box in one layer is drawn as a simple rectangle over its
+members' laid-out positions, and the layered layout centers each layer's cross-axis extent
+independently, so a tall member in one layer can end up geometrically overlapping an unrelated
+node (including an `orientation` sub-flow's box, or an `external` node) in the very next layer
+purely by coincidence — this bit an early version of the `Sidecar`/`Ingest` group interaction in
+this same demo file, fixed by pushing `external` nodes clear of any group box they'd otherwise
+land inside (`pushExternalNodesClearOfGroups` in `bm-flow-layout/layout.js`). If you add a new
+hint combination and see one box swallow another that clearly isn't a member, this is the class
+of bug to suspect first.
 
 ### 4.6 Verify with the JS unit tests, not just the browser
 
@@ -3768,10 +4399,10 @@ per-run-type via the topology hint file (the hint always wins when it sets a val
   bm-flow-layout, animation, charts) and how to test each one, if you're changing rendering
   behavior rather than just configuring it via hints.
 FILE docs/14_Client_Side_Architecture.md
-LENGTH 27874
+LENGTH 27867
 # 14 — Client-Side Architecture: JS Modules and How to Test Them
 
-BatchMonitor is a Blazor **Server** app — components run on the server, and the DOM the user
+NxtUI is a Blazor **Server** app — components run on the server, and the DOM the user
 sees is a live SignalR-synced rendering of server state. Most UI is plain Blazor/MudBlazor and
 never touches JavaScript at all. But several features are either too visually specialized (the
 D3-based flow graph and timeline), too performance-sensitive to round-trip through the SignalR
@@ -4150,6 +4781,517 @@ its exact `?deps=` pinning pattern rather than adding a bare import.
   `d3-timeline.js`).
 - [08_FilterSyntax.md](08_FilterSyntax.md) — the filter syntax `filter.js` (§5) and its C#
   mirror both implement.
+FILE docs/15_Backend_Services.md
+LENGTH 17130
+# 15 — Backend Services Reference
+
+Reference doc for `src/NxtUI.Web/Services/` singletons/hosted services that aren't
+already covered elsewhere. `RunEventBroker`, `RunEventWatcher`,
+`PerformanceEventService`, and `TimelineRun` are covered in
+`02_Models_DataFlow.md`/`05_Timeline.md` — not repeated here.
+
+## DI lifetime summary (`Program.cs`)
+
+| Service | Lifetime |
+|---|---|
+| `HeartbeatMonitor` | Singleton + hosted service (one instance serves both) |
+| `InfraHealthCache` | Singleton + hosted service |
+| `ServiceMetricsMonitor` | Singleton + hosted service |
+| `LogBrowserService` | Singleton |
+| `LogViewerService` | Singleton |
+| `EnvConfigService` | Singleton |
+| `TabService` | Scoped (one per circuit) |
+| `RunActionsService` | Scoped |
+| `FocusGatedPoller` | **Not DI-registered** — constructed directly by pages that need it |
+| `OperationTracker` | Singleton |
+| `ErrorNotificationService` | Scoped |
+| `ErrorNotificationHubFilter` | Scoped, SignalR hub filter, always active |
+| `ThemeService` | Scoped |
+| `DateTimeDisplayService` | Scoped |
+| `BatchCatalogService` | Singleton |
+| `TestLogGenerator` | Hosted service, **only if** `TestLogGenerator:Enabled` config flag is true |
+| `ServerDiagnosticsMonitor` | Hosted service, **only if** `Diagnostics:Enabled` is true |
+| `BlazorCircuitFilter` | Singleton hub filter, **only if** `Diagnostics:Enabled` is true |
+| `WildcardFilter` | Static utility, no DI |
+| `TabLoadingScope` | `readonly struct`, static factory, no DI |
+| `IPushesOwnRunEvents` | Marker interface (see `02_Models_DataFlow.md`) |
+
+---
+
+## Environment / infra health monitoring
+
+### HeartbeatMonitor / IHeartbeatMonitor
+
+Server-side cache in front of `IHeartbeatService`/Mongo. Polls per-subscribed
+environment on an interval, caches the resulting `ServiceStatus` list, and notifies
+subscribers via `OnServicesUpdated(env)` — UI components never hit Mongo directly.
+
+- **Subscriber-counted per env** (`Subscribe(env)` returns an `IDisposable`); polling
+  only runs for environments with ≥1 active subscriber.
+- First poll per env is a full fetch; later polls are **incremental**
+  (`since: LastPollUtc`) — only asks for documents changed since the last successful
+  poll.
+- Liveness (`IsOnline`) is recomputed from wall-clock time on **every** poll for
+  every cached entry, never trusted from fetch time — an incremental fetch only
+  returns *changed* documents, so a service that silently stops heartbeating
+  wouldn't otherwise flip offline.
+- **Idle-release**: after the last subscriber leaves, the env's cache survives
+  `IdleReleaseMinutes` before full eviction — a quick re-subscribe (tab switch back)
+  avoids a cold refetch.
+- Per-env `SemaphoreSlim` gate prevents overlapping polls for the same env (timer
+  tick racing an immediate subscribe-triggered poll).
+
+### InfraHealthCache
+
+Polls Kafka cluster health and Mongo ping health independently (separate
+configurable intervals, `InfraHealthSettings`) and caches results so consumers read
+synchronously (`GetKafka`/`GetMongo`) with zero per-render network calls.
+
+- Two fully independent polling loops — a slow Mongo cadence never blocks Kafka's.
+- **Failure-streak escalation**: one failed poll never immediately reports Down. It
+  takes `ConsecutiveFailuresBeforeDown` consecutive failures to escalate
+  Degraded (steady) → DegradedEscalating (blinking, from the 2nd failure) → Down.
+  Any success resets the streak.
+- Mongo poll deliberately uses `GetClientAsync` (not the sync `GetClient`) — the
+  *first* client build for a given settings fingerprint can itself take seconds
+  (username probing); using the sync path would let that slow-but-working first
+  connection blow past the configured timeout and get misreported as Down.
+- `RequestRefresh(env)` triggers an immediate on-demand poll outside the timer
+  cadence (e.g. on tab switch).
+
+### ServiceMetricsMonitor / IServiceMetricsMonitor
+
+The largest service in this set. Per-environment memory metrics come from two
+merged sources: a live Kafka topic tail (primary) and a one-time disk-log backfill
+(covering the gap between a process's start time and the earliest sample still
+within Kafka's low retention window). If an env's Kafka topic has no data, it falls
+back entirely to continuous file polling for that env.
+
+- Subscriber-counted per env with the same idle-release pattern as
+  `HeartbeatMonitor`; also keeps a `HeartbeatMonitor.Subscribe(env)` alive for the
+  duration since it depends on that service list.
+- `MetricsSettings.Source` can force `FileSystem`-only or `Kafka`-only instead of
+  the default `Both`.
+- File-poll path: cheap `FileInfo.LastWriteTimeUtc` check before ever reading; only
+  reads (via offset-based `IncrementalFileReader`) when mtime changed. Bounded to
+  `MaxParallel = 48` concurrent file reads across all envs via a `SemaphoreSlim`
+  I/O gate.
+- Kafka path: seeks per-service using `OffsetsForTimes` from the oldest known
+  service's `CreatedDateTime` (cheap broker-side resolution, not a scan). Waits up
+  to `HeartbeatWaitTimeout` (10s) for the heartbeat cache to warm before falling
+  back to "seek from latest," to avoid silently missing early messages.
+- **Coalesced-rerun**: if a new trigger arrives while a poll for that env is already
+  in flight, it's not dropped or queued — the in-flight poll notices and reruns
+  once more when done.
+- `UpsertSample` does a **sorted insert**, not a blind append — the same entry can
+  be written by the file-poller, Kafka-live, and disk-backfill paths concurrently,
+  and a blind append could land a sample out of order (showed up as a backward
+  "triangular hole" in the sparkline UI before this fix).
+- Disk backfill for a service runs at most once, covering only
+  `[processStartUtc, kafkaEarliestUtc)` — gated off entirely once Kafka is
+  confirmed live for the env; it is not the ongoing file-tail poller.
+
+---
+
+## Log services
+
+### LogBrowserService (internals — UI-facing behavior in `09_Features.md`)
+
+Folder/file discovery across the log root and streaming content-filtered search
+across multiple servers, using the same line-format grammar as the interactive Log
+Viewer.
+
+- No caching of its own — listings are read live off disk on every call.
+- `SearchAsync` streams results via a **bounded** `Channel<LogFileEntry>` (capacity
+  256, `FullMode = Wait`) — a fast recursive multi-server scan can't outrun a slow
+  UI consumer and buffer unboundedly.
+- Recursive directory walk runs per-server in parallel producers feeding the shared
+  channel; producer exceptions are explicitly observed after the channel drains, not
+  swallowed by `Task.WhenAll` completing before the reader catches up.
+- Content filtering buffers multi-line log entries by detecting a
+  timestamp-prefixed line as the start of a new entry, then evaluates each complete
+  entry against a `FilterNode` via `FilterEvaluator` (the C# filter grammar — see
+  `08_FilterSyntax.md`).
+- `CompileFormat` is `LogBrowserService`'s own from-scratch regex-template compiler
+  for `Logs:Formats` — internal + `[InternalsVisibleTo]` specifically so a
+  format-grammar contract test can validate parity against the JS-side
+  `log-viewer-parser.js` implementation.
+- Falls back to a legacy fixed pipe-delimited 6/7-field format if no `Logs:Formats`
+  config is present.
+
+### LogViewerService / ILogViewerService
+
+Small, focused I/O wrapper for reading log file content in the interactive viewer
+(full read + incremental tail read). No caching, no state.
+
+- Both read methods are explicitly wrapped in `Task.Run` — a `FileStream` without
+  `FileOptions.Asynchronous` silently falls back to synchronous blocking I/O, and
+  these are often slow network-share files, so this must never run on the Blazor
+  circuit's UI thread.
+- `ReadDeltaAsync` delegates to the same offset-based `IncrementalFileReader` used
+  by `ServiceMetricsMonitor`.
+- Opens with `FileShare.ReadWrite | FileShare.Delete` so it never locks a log file
+  being actively written/rotated by the producing service.
+
+---
+
+## Config, tabs, and UI infrastructure
+
+### EnvConfigService / IEnvConfigService
+
+Loads/saves the per-environment config file used by `Pages/ConfigPage.razor` (see
+`09_Features.md`'s Config section).
+
+- `GetSourcePath` resolves against the *first* server for the environment; editing
+  is only enabled when the `EditingEnabled` config flag is true **and** a source
+  path resolves.
+- `SaveAsync`: before overwriting the source file, copies it to a timestamped
+  `.bak` file — save then only proceeds if backup + write to the source of truth
+  both succeed. If the source save fails, mirror saves are **not** attempted at all.
+- `SaveMode.AllServers` mirrors the save to every other server's resolved config
+  path, independently try/caught per target so one failing mirror doesn't affect
+  the others.
+- No in-memory caching — every call touches disk directly.
+
+### TabService
+
+Owns the list of open tabs for a circuit — open/focus/close/reorder/rename — and
+raises `OnChange` on every mutation.
+
+- `OpenOrFocus`: no duplicate tabs by `Id`; if already open and a new navigation
+  hint is supplied, it's propagated onto the existing tab rather than creating a
+  second tab.
+- `Close`: focus moves to the tab immediately left of the closed one, falling back
+  to the first remaining tab, or Home if none remain.
+- `Reorder`: removes then re-inserts at a clamped target index, measured *after*
+  removal.
+- `NotifyChanged()` is a public escape hatch for callers that mutate a `TabModel`'s
+  own fields directly (e.g. `IsLoading`) without going through a `TabService`
+  method — used by `TabLoadingScope`.
+
+### RunActionsService
+
+Single funnel for cancelling a run instead of every page calling
+`IRunService.CancelRunAsync` directly — a documented stand-in for a real external
+orchestrator call.
+
+- POSTs to `api/runs/cancel-simulate` first; only on success does it call through to
+  `IRunService.CancelRunAsync` to update local run state.
+- Returns `(bool Success, string Message)`; never throws — all exceptions are caught
+  and surfaced as a failed result.
+
+### FocusGatedPoller
+
+Extracts the repeated `PeriodicTimer`/`CancellationTokenSource` start-stop
+boilerplate that Home and the Log Browser pages had each hand-rolled — "poll on an
+interval, but only while visible/focused." Deliberately does **not** own the
+definition of "visible"; that stays in the caller's `onTick` callback, this class
+only owns timer lifecycle.
+
+- `Start()`/`Stop()`/`SetActive(bool)` are idempotent.
+- `onTick` exceptions are caught per-tick and routed to an optional `onError`
+  callback rather than killing the loop; `OperationCanceledException` still
+  propagates to end the loop cleanly on `Stop()`/dispose.
+
+### OperationTracker
+
+Lightweight in-flight-operation registry. Any service calls `Track(description)`
+when starting meaningful work; `ServerDiagnosticsMonitor` reports whatever's still
+registered when it detects timer lag, to correlate the stall with what was
+executing.
+
+- `Track` returns an `IDisposable` handle whose `Dispose()` removes the entry —
+  callers wrap operations in a `using`.
+- Used by `InfraHealthCache` (per Kafka/Mongo poll) and `HeartbeatMonitor`
+  (per env poll).
+
+### ErrorNotificationService / ErrorNotificationHubFilter
+
+Single funnel for surfacing server-side errors as toasts + a history list in
+Settings.
+
+- `Report(message, exception, source)`: every call is logged (NLog), appended to a
+  bounded in-memory history (`MaxHistory = 200`, oldest evicted first), and raises
+  `OnError` for reactive toast display.
+- `Report` is frequently called from inside a `catch` block, so each `OnError`
+  subscriber is invoked with exceptions swallowed per-handler — a throwing
+  subscriber must never escape and crash the catch block reporting the original
+  failure.
+- `ErrorNotificationHubFilter` (a SignalR hub filter, always active regardless of
+  `Diagnostics:Enabled`) recovers specifically from unhandled exceptions thrown
+  while dispatching a UI event handler (`DispatchBrowserEvent`), which Blazor
+  Server would otherwise treat as fatal to the whole circuit — reports via
+  `ErrorNotificationService` and swallows it to keep the circuit alive.
+
+### ThemeService
+
+Tracks dark/light/system theme mode; persists via the `bm-theme` cookie; holds the
+shared `MudTheme` palette definitions as a static member.
+
+- Seeds mode from the `bm-theme` cookie; if mode is `System`, also seeds a
+  last-known OS-dark guess from a `bm-theme-system` cookie to minimize
+  flash-of-wrong-theme before JS reports the real OS preference.
+- `SetSystemDark(bool)` is the JS-interop entry point; only fires `OnChange` if the
+  effective displayed theme would actually change.
+
+### DateTimeDisplayService
+
+Tracks the user's UTC-vs-local display preference (`bm-tz` cookie) plus a dev-mode
+flag (`bm-dev` cookie); centralizes UTC→display conversion.
+
+- `ToDisplay(dt)`: if `UseUtc`, forces the DateTimeKind to Utc; otherwise converts
+  to local time only if the input is already tagged `DateTimeKind.Utc` (assumes
+  non-UTC-tagged input is already local).
+- `DevMode`/`UseUtc` setters raise `OnChange` only on actual value change.
+
+### BatchCatalogService (the "Batches" `TabType` — distinct from Run/Pipeline)
+
+Loads a static batch-job catalog from `wwwroot/data/batch-catalog.json` and
+triggers jobs by POSTing a resolved JSON body to each batch's configured HTTP
+endpoint — explicitly a stand-in for a real backend, not part of the mocked
+Run/Pipeline domain (`IRunService`/`MockRunService`).
+
+- Catalog cached in-memory after first load (never invalidated for the process's
+  lifetime), guarded by a double-checked-lock `SemaphoreSlim(1,1)`.
+- `TriggerAsync` merges user-supplied param values with built-in placeholders
+  (`id`, `env`, `today`, `yesterday`, `month`, `year`), substitutes `{key}` tokens
+  into the endpoint URL, and builds a typed JSON body per parameter.
+- On HTTP failure/unreachable endpoint, **catches the exception and simulates a
+  success** with a `[MOCK] Endpoint unreachable — simulated success` message —
+  deliberately, so the demo UI never dead-ends on a real backend that doesn't exist
+  yet.
+
+---
+
+## Dev-only diagnostics (conditionally registered)
+
+### TestLogGenerator
+
+Synthetic data generator for local/demo environments — writes both `Metrics.log`
+files (feeding `ServiceMetricsMonitor`'s file-poll path) and realistic `App.log`
+files (feeding `LogBrowserService`/Log Viewer) under today's date, so the app always
+has something to show without a real backend. Only registered when
+`TestLogGenerator:Enabled` is true.
+
+- Seeding phase runs once at startup on a background thread: for each service from
+  `IHeartbeatService`, backfills a full day of metrics lines and several days of
+  app log lines, with random skips to simulate realistic gaps.
+- After seeding, ticks on `WriteIntervalSeconds` cadence, appending new lines to
+  simulate live/bursty activity — weighted log-level distribution (60% INFO / 20%
+  DEBUG / 12% WARN / 8% ERROR), ERROR lines include a synthetic multi-line stack
+  trace.
+- File writes are best-effort — all exceptions swallowed, a write failure here must
+  never crash the generator loop.
+
+### ServerDiagnosticsMonitor
+
+Debugging aid — periodically samples server health (timer lag, CPU%, working set,
+thread counts, thread-pool saturation) and logs it; on detecting lag, also dumps
+`OperationTracker.ActiveOperations` to correlate the stall with what was executing.
+Only registered when `Diagnostics:Enabled` is true.
+
+- Samples every 10s; "lag" is how much the actual `Task.Delay` overshot the
+  requested interval — a proxy for thread-pool/event-loop pressure.
+- Log level scales with lag severity: Debug (<100ms), Information (100–500ms),
+  Warning (>500ms).
+
+### BlazorCircuitFilter
+
+Wraps every Blazor circuit hub message (render, event dispatch, JS interop) to log
+slow operations and unhandled exceptions — independent of
+`ErrorNotificationHubFilter` (which only targets `DispatchBrowserEvent` and is
+always-on). Only registered when `Diagnostics:Enabled` is true.
+
+- Threshold-based severity: Warning ≥200ms, Error ≥1000ms (logged with a "possible
+  deadlock or thread starvation" hint). Exceptions are always logged as Error
+  regardless of duration, then **rethrown** — unlike `ErrorNotificationHubFilter`,
+  this filter doesn't swallow.
+
+---
+
+## Small utilities
+
+### WildcardFilter
+
+Static one-liner: converts a user-typed filter string into a "contains"-style
+case-insensitive regex, with `*`/`?` as real wildcards
+(`Regex.Escape(pattern).Replace(@"\*", ".*").Replace(@"\?", ".")`). Deliberately
+**not** anchored with `^...$` — plain text behaves as substring search, `*`/`?`
+remain available for callers who want to anchor/constrain further.
+
+### TabLoadingScope
+
+Collapses the `BeginLoading()`/`NotifyChanged()`/try-finally/`EndLoading()`/
+`NotifyChanged()` pattern duplicated across every dashboard page's load method into
+one `using` statement. A `readonly struct` (no heap allocation per use); `_tab` is
+nullable and safe to no-op when there's no tab context (e.g. Home).
+FILE docs/16_Layout_Hints_Reference.md
+LENGTH 11853
+# 16 — Layout Hints Reference
+
+A single reference table for every topology-hint option: what object it lives on,
+what values it accepts, what it actually does, and the gotchas that have come up in
+practice. For the worked walkthrough (how to write a hint file from scratch) see
+`13_Setting_Up_Nested_Runs_And_Topology.md`; for the layout *engine's* internals see
+`12_Custom_Layout_And_Nested_Runs.md`. This doc is the "what does field X do and
+where do I put it" lookup — it doesn't re-explain the algorithm.
+
+All hints live in `config/topology/{runType}.json`, deserialized by
+`src/NxtUI.Core/Models/TopologyHint.cs`. Every field below is optional; an unset
+field means "no opinion, let the layout do its default thing."
+
+---
+
+## 1. Where each hint object sits
+
+```
+TopologyHintFile
+├── RunType: string
+├── Variants: [ TopologyVariant, ... ]   — tried in order, first VariantMatch wins
+└── Default: TopologyVariant             — fallback when nothing matches
+
+TopologyVariant
+├── Match: VariantMatch?                 — discriminator (null on Default)
+├── Layout: LayoutHint?                  — GRAPH-level preferences
+├── Services: [ ServiceHint, ... ]       — one entry per declared/decorated service
+├── Edges: [ EdgeHint, ... ]             — explicit service→service edges
+├── Groups: [ GroupHint, ... ]           — per-group colour upgrade
+├── ExpandChildrenByDefault: bool?       — nested-run behavior override
+└── ChildRunBoxColor: string?            — nested-run box color override
+```
+
+- `TopologyVariant.Match` (`VariantMatch.AnyService`, a glob) picks which variant
+  applies once a service matching it has been seen in the run. Multiple run
+  "shapes" under one `runType` are handled by declaring several `Variants` and
+  letting the first match lock it in; `Default` is the fallback.
+- Everything below `Layout`/`Services[]`/`Edges[]`/`Groups[]` belongs to whichever
+  variant matched (or `Default`).
+
+---
+
+## 2. Graph-level: `LayoutHint`
+
+| Field | Values | Effect | Status |
+|---|---|---|---|
+| `direction` | `"horizontal"` \| `"vertical"` | Overall flow direction for this run's graph. Unset falls back to `RunsSettings:GraphDirection` (`"Horizontal"`/`"Vertical"`/`"Auto"` — Auto picks by the graph panel's own aspect ratio). | Live |
+| `shape` | `"layered"` \| `"tree"` | Was ELK's `layered`/`mrtree` algorithm choice. | **Dead** — ELK removed; `bm-flow-layout` only ever does one layered algorithm. Schema-declared, not consumed. |
+| `density` | `"compact"` \| `"normal"` \| `"airy"` | Scales node/edge spacing (×0.65 / ×1 / ×1.6). | **Dead** — was ELK-only, removed along with it. Schema-declared, not consumed by `bm-flow-layout`. |
+| `straightenEdges` | `bool` | Was ELK's `NETWORK_SIMPLEX` vs `BRANDES_KOEPF` node-placement toggle. | **Dead** — same as above. |
+
+Only `direction` is live. `shape`/`density`/`straightenEdges` remain in the schema
+(no breaking JSON change) but do nothing on the current engine — see
+`12_Custom_Layout_And_Nested_Runs.md` §9 for the ELK-removal history.
+
+---
+
+## 3. Per-service: `ServiceHint`
+
+Applies to one entry in `Services[]`. `Name` may be a literal (pre-renders a
+greyed skeleton node from t=0) or a glob (`*`/`?`, only decorates a matching
+runtime node — no pre-render, since there's no concrete identity to draw yet).
+
+| Field | Values | Applies to | Effect |
+|---|---|---|---|
+| `role` | `"source"` \| `"sink"` \| `"middle"` | any node | Hard-pins the node to the first/last layer. `middle` (or unset) has no pin — normal layer assignment by longest-path from sources. |
+| `group` | string (cluster label) | any node | Nodes sharing a `group` value are kept **contiguous** — same run of layers *and* cross-axis order — with a bounding band drawn behind them (see §4). Any shared tag gets a cosmetic band automatically; no separate `Groups[]` entry needed unless you want a real coloured/bordered box (§4). |
+| `color` | hex string | any node | Header accent override. The node's *state* colour (green/blue/red/grey) still shows via the border/glow — `color` only changes the flat accent bar, it doesn't hide status. |
+| `order` | int (lower first) | any node, typically ones sharing a `group` or converging on the same target | Tie-break for ordering within a layer, after every hard/soft constraint has already settled everything else. |
+| `pin` | bool | any node | *Reserved* — no effect in the current engine (proper pinning would need persisted positions across relayouts, not built yet). |
+| `direction` | `"left"` \| `"right"` \| `"above"` \| `"below"` | any node | Soft placement preference for **this node's successor(s)** — "whatever comes after me, put it below/above/etc. me." A successor's own `placement` (below) always wins if both are set ("child overrides parent"). Only `above`/`below` are meaningful in a horizontal flow, only `left`/`right` in a vertical one. |
+| `placement` | `"left"` \| `"right"` \| `"above"` \| `"below"` | any node | This node's OWN placement preference relative to whichever predecessor points at it — the mirror image of `direction`. Wins over a predecessor's `direction` hint for the same edge. If multiple predecessors offer conflicting `direction` hints and this node has no `placement` of its own, the engine picks one and logs a warning rather than guessing silently. |
+| `orientation` | `"horizontal"` \| `"vertical"` | any node, meant for a genuine side-branch's *first* node | When different from the graph's own flow direction, this node becomes the root of a recursive sub-flow: itself + its exclusive downstream closure (forward-reachable nodes that never rejoin the main graph) are laid out internally in the new direction and packed as one rigid box. See `13` §4.5b for a worked example (`AuditProcessor`/`AuditLog`). Equal to the graph's own direction, or unset, is a no-op. |
+| `external` | bool | a node that's one of several peers converging on the same downstream target | Pulls the node to the extreme edge of its own layer's cross-axis ordering instead of letting it interleave with its siblings by the normal median heuristic. Meaningless without `arriveFrom` also set (dropped with a warning). |
+| `arriveFrom` | `"left"` \| `"right"` \| `"above"` \| `"below"` | only meaningful with `external: true` | Which extreme of the layer to pin the `external` node to. **Common misconception**: this does *not* change which side of the node's own card the incoming edge visually connects to — edges always enter/exit at the flow-direction sides (west/east in a horizontal flow). It only affects the node's own position; the edge's *path* sweeps toward that side as it approaches (since the node sits there), but the connection point itself stays on the flow-axis side. Only `above`/`below` valid in horizontal, only `left`/`right` in vertical (invalid side dropped with a warning). |
+| `collapsed` | bool | any node | *Reserved* — no effect currently. |
+| `publishes` / `subscribes` | `string[]` (topic/target names) | any node | Used to *derive* edges: two services sharing a publish/subscribe target get an implied edge between them, an alternative to declaring `Edges[]` explicitly. |
+
+### Can `arriveFrom` be used on more than one node, or on a "normal" mainline node?
+
+Yes, nothing in the schema restricts it — but it's designed for a node that's
+genuinely one of several peers converging on the same target and needs visual
+separation from that cluster (the `Sidecar` case: it and `Checker` both feed off
+`Intake`, and `Sidecar` needs to read as "the side one"). Setting it on a node
+that has no such cluster to separate from (e.g. a single straight-through
+mainline node like `Checker`, which just flows onward to `Splitter`/
+`AuditProcessor`) is harmless but won't visibly do anything meaningful — there's
+nothing for it to pull away *from*.
+
+---
+
+## 4. Group colouring: `GroupHint`
+
+| Field | Values | Effect |
+|---|---|---|
+| `name` | string, matches a `ServiceHint.group` value | Which group this colour applies to. |
+| `color` | hex string | Upgrades that group from the default cosmetic band (soft, theme-coloured, drawn for *any* shared `group` tag with no declaration needed) to a real bordered box in this colour — border is a more saturated/opaque shade of the same colour used for the translucent fill. There's no separate on/off flag: declaring a colour here *is* what turns the box on. |
+
+A group not listed in `Groups[]` still renders — just as the plain cosmetic band,
+not a coloured box.
+
+**Group boxes and neighbors — two things to know if you're debugging an
+overlap:**
+1. A group's box is a simple bounding rectangle over its members' final laid-out
+   positions. Nothing about the box shape is aware of non-member nodes or edges
+   that might geometrically fall inside it purely by coincidence (adjacent-layer
+   centering, a long edge routed through that layer, etc.).
+2. Two defensive passes exist specifically for this: `pushExternalNodesClearOfGroups`
+   (an `external` node landing inside an unrelated group's box gets pushed clear)
+   and `pushChainPointsClearOfGroups` (an edge's routed segments — including bend
+   points synthesized during orthogonalization, not just raw waypoints — get
+   pushed clear the same way, keeping every segment axis-aligned). Both use an
+   8px clearance margin (`GROUP_CLEAR_GAP` in `bm-flow-layout/layout.js`) past the
+   group's own 14px render padding. If you see a *node* or *edge* still touching
+   a group box that it's not a member of, that's a real bug in one of these two
+   passes (or a case neither currently covers) — not expected behavior.
+
+---
+
+## 5. Explicit edges: `EdgeHint`
+
+| Field | Values | Effect |
+|---|---|---|
+| `from` | service name (literal or glob) | Edge source. |
+| `to` | service name (literal or glob) | Edge target. |
+
+An alternative to `publishes`/`subscribes`-derived edges, for when two services
+are related but don't actually share a topic/target name in a way the derivation
+can pick up (or when you want an edge to exist even before either service has
+published/subscribed anything observable).
+
+---
+
+## 6. Per-pipeline edge ports (no dedicated JSON field yet)
+
+Multiple real edges between the same two services (different `sourcePipeline`/
+`targetPipeline` pairs) automatically render as separate ports on each node's
+card rather than all converging on the node's centre — this is inferred from
+the observed/declared pipeline rows themselves, not a hint you set. A per-edge
+`snapToPipeline` override (forcing a specific edge to connect to a specific row
+regardless of inference) is designed but **not implemented** — see `12` §6's
+"port hints" gap.
+
+---
+
+## 7. Nested-run overrides (not layout, but same file)
+
+| Field | Values | Effect |
+|---|---|---|
+| `expandChildrenByDefault` | bool? | Per-run-type override of `RunsSettings:ExpandChildRunsByDefault`. Null inherits the app-wide setting. |
+| `childRunBoxColor` | CSS color string? | Per-run-type override of `RunsSettings:ChildRunBoxColor` for this run type's own child-run boxes/cards. Null inherits the app-wide setting. |
+
+See `12_Custom_Layout_And_Nested_Runs.md` §7.4.
+
+---
+
+## 8. Removed / never-implemented fields (don't use these)
+
+| Field | Object | Status |
+|---|---|---|
+| `pinX` / `pinY` | `ServiceHint` | **Removed.** Was an ELK-only explicit-position hint; `bm-flow-layout` never consumed it, and it's gone from the schema entirely along with ELK. |
+| `shape`, `density`, `straightenEdges` | `LayoutHint` | Schema-declared, **inert** — see §2. |
+| `pin` | `ServiceHint` | Schema-declared, **inert** — no persisted-position mechanism exists yet. |
+| `collapsed` | `ServiceHint` | Schema-declared, **inert**. |
+| `snapToPipeline` (per-edge port override) | — | Designed, **not implemented**. See §6 above. |
 FILE docs/old/01_Shell_Theme_Tabs.md
 LENGTH 6829
 # Batch Monitor — Shell, Theme, and Tab System

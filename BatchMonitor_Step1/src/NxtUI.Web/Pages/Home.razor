@@ -160,6 +160,10 @@
                 <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" Class="bm-section-refresh-btn"
                                Disabled="@(!_mapReady)" OnClick="RefreshServicesAsync" />
             </MudTooltip>
+            @* <MudTooltip Text="Refresh services">
+                <MudButton StartIcon="@Icons.Material.Outlined.Refresh" Size="Size.Small" Class="bm-section-title"
+                           Disabled="@(!_mapReady)" OnClick="RefreshServicesAsync">Refresh</MudButton>
+            </MudTooltip> *@
         </div>
         <HomeMemoryTreemap @ref="_treemapRef" Env="@EnvService.SelectedId" Visible="@IsVisible"
                             OnFirstPaint="OnMapDataLoaded" OnPidClicked="OnTreemapPidClicked" />
