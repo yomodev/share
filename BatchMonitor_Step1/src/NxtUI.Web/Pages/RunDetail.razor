@@ -16,6 +16,7 @@
 @inject TopologyHintLoader HintLoader
 @inject ILogger<PerformanceEventService> EventServiceLogger
 @inject ISnackbar Snackbar
+@inject ErrorNotificationService Notifications
 @implements IAsyncDisposable
 
 @code {
@@ -30,6 +31,16 @@
     // ── Data ─────────────────────────────────────────────────────────────
     private RunDetails? _details;
     private bool _loading = true;
+
+    // Set first thing in DisposeAsync — checked after every await in an async load/loop
+    // method before touching `this`'s state or calling StateHasChanged(). Closing a tab
+    // disposes this component immediately (MainLayout's @foreach over TabService.Tabs drops
+    // it from the tree), but an in-flight await (e.g. GetRunDetailsAsync still fetching)
+    // resumes anyway — without this guard, the resumed continuation calls StateHasChanged()
+    // on an already-disposed component, which Blazor rejects with an
+    // ObjectDisposedException/InvalidOperationException surfaced to the user as an unhandled
+    // error. This was reported live: closing a run/tab before its initial load finished.
+    private bool _disposed;
 
     private PerformanceEventService? _eventService;
     private TopologyComputationService? _topologyService;
@@ -220,7 +231,10 @@
         StateHasChanged();
         try
         {
-            _details = await RunService.GetRunDetailsAsync(Environment, RunId ?? string.Empty);
+            var details = await RunService.GetRunDetailsAsync(Environment, RunId ?? string.Empty);
+            if (_disposed) return; // tab closed while the fetch was in flight — nothing left to update
+
+            _details = details;
             if (_details is not null && RunId is not null)
             {
                 // Tab label is "{Type} {RunId}" — Type is only known now that details
@@ -232,6 +246,7 @@
                 _hintFile = HintLoader.Get(_details.Type);
 
                 await StartEventServiceAsync();
+                if (_disposed) return;
 
                 if (_details.Status == RunStatus.Running)
                 {
@@ -242,13 +257,20 @@
                 }
             }
         }
-        catch { _details = null; }
+        catch (Exception ex) when (!_disposed)
+        {
+            _details = null;
+            Notifications.Report($"Failed to load run {RunId}: {ex.Message}", ex, "RunDetail");
+        }
         finally
         {
-            _loading = false;
-            Tab?.EndLoading();
-            TabService.NotifyChanged();
-            StateHasChanged();
+            if (!_disposed)
+            {
+                _loading = false;
+                Tab?.EndLoading();
+                TabService.NotifyChanged();
+                StateHasChanged();
+            }
         }
     }
 
@@ -807,6 +829,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _eventService?.Dispose();
         _topologyTimer?.Dispose();
         _playbackCts?.Cancel();

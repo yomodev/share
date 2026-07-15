@@ -516,7 +516,7 @@
             finally
             {
                 _copyingFor.Remove(key);
-                StateHasChanged();
+                if (!_disposed) StateHasChanged();
             }
         }
 
@@ -544,7 +544,7 @@
             finally
             {
                 _openingLogFor.Remove(key);
-                StateHasChanged();
+                if (!_disposed) StateHasChanged();
             }
         }
 

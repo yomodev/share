@@ -231,7 +231,10 @@
         {
             _loading = false;
         }
-        StateHasChanged();
+        // ct might not have been observed by MongoSvc's own await promptly enough for the
+        // catch above to fire (e.g. it resolved normally right as the tab was closed) — this
+        // is the actual disposal guard for that race, not just a redundant check.
+        if (!ct.IsCancellationRequested) StateHasChanged();
     }
 
     private void OnFilterChanged(string text)
