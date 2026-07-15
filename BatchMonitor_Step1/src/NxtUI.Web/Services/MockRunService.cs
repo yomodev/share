@@ -233,7 +233,7 @@ public class MockRunService : IRunService, IPushesOwnRunEvents
                 ["PipelineVersion"] = "v1.2.3",
                 ["ErrorDetails"] = summary?.Status == RunStatus.Failed ? "Simulated failure for testing." : string.Empty,
             },
-            Children = childDepth >= 1 ? BuildMockChildren(runId) : new List<RunNode>(),
+            Children = childDepth >= 1 ? BuildMockChildren(runId ?? string.Empty) : new List<RunNode>(),
         };
         return Task.FromResult(details);
     }

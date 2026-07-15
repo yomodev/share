@@ -17,8 +17,8 @@ public class MockRunServiceNestedRunsTests
         var svc = new MockRunService();
         var runId = FindRunIdWithChildren(svc);
 
-        var first = await svc.GetRunDetailsAsync("dev1", runId);
-        var second = await svc.GetRunDetailsAsync("dev1", runId);
+        var first = await svc.GetRunDetailsAsync("dev1", runId, ct: TestContext.Current.CancellationToken);
+        var second = await svc.GetRunDetailsAsync("dev1", runId, ct: TestContext.Current.CancellationToken);
 
         first.Children.Select(c => c.RunId).Should().Equal(second.Children.Select(c => c.RunId));
     }
@@ -29,7 +29,7 @@ public class MockRunServiceNestedRunsTests
         var svc = new MockRunService();
         var runId = FindRunIdWithChildren(svc);
 
-        var details = await svc.GetRunDetailsAsync("dev1", runId);
+        var details = await svc.GetRunDetailsAsync("dev1", runId, ct: TestContext.Current.CancellationToken);
 
         details.Children.Should().NotContain(c => c.RunId == runId);
     }
@@ -40,7 +40,7 @@ public class MockRunServiceNestedRunsTests
         var svc = new MockRunService();
         var runId = FindRunIdWithChildren(svc);
 
-        var details = await svc.GetRunDetailsAsync("dev1", runId, childDepth: 0);
+        var details = await svc.GetRunDetailsAsync("dev1", runId, childDepth: 0, ct: TestContext.Current.CancellationToken);
 
         details.Children.Should().BeEmpty();
     }
@@ -51,7 +51,7 @@ public class MockRunServiceNestedRunsTests
         var svc = new MockRunService();
         var runId = FindRunIdWithChildren(svc);
 
-        var details = await svc.GetRunDetailsAsync("dev1", runId);
+        var details = await svc.GetRunDetailsAsync("dev1", runId, ct: TestContext.Current.CancellationToken);
 
         details.Children.Should().NotBeEmpty();
         details.Children.Should().OnlyContain(c => c.DoneCount == null && c.TotalCount == null);
@@ -63,7 +63,7 @@ public class MockRunServiceNestedRunsTests
         var svc = new MockRunService();
         var runId = FindRunIdWithoutChildren(svc);
 
-        var details = await svc.GetRunDetailsAsync("dev1", runId);
+        var details = await svc.GetRunDetailsAsync("dev1", runId, ct: TestContext.Current.CancellationToken);
 
         details.Children.Should().NotBeNull();
         details.Children.Should().BeEmpty();
@@ -75,7 +75,7 @@ public class MockRunServiceNestedRunsTests
     public async Task Demo_root_has_exactly_its_two_named_children()
     {
         var svc = new MockRunService();
-        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT");
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT", ct: TestContext.Current.CancellationToken);
 
         details.Children.Select(c => c.RunId).Should()
             .BeEquivalentTo(["RUN-DEMO-CHILD-A", "RUN-DEMO-CHILD-B"]);
@@ -85,7 +85,7 @@ public class MockRunServiceNestedRunsTests
     public async Task Demo_child_a_has_exactly_one_grandchild_completing_the_3rd_level()
     {
         var svc = new MockRunService();
-        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-A");
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-A", ct: TestContext.Current.CancellationToken);
 
         details.Children.Select(c => c.RunId).Should().BeEquivalentTo(["RUN-DEMO-GRANDCHILD-A1"]);
     }
@@ -95,8 +95,8 @@ public class MockRunServiceNestedRunsTests
     {
         var svc = new MockRunService();
 
-        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-B")).Children.Should().BeEmpty();
-        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-GRANDCHILD-A1")).Children.Should().BeEmpty();
+        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-CHILD-B", ct: TestContext.Current.CancellationToken)).Children.Should().BeEmpty();
+        (await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-GRANDCHILD-A1", ct: TestContext.Current.CancellationToken)).Children.Should().BeEmpty();
     }
 
     [Theory]
@@ -107,7 +107,7 @@ public class MockRunServiceNestedRunsTests
     public async Task Every_demo_run_has_well_under_1000_events(string runId)
     {
         var svc = new MockRunService();
-        var events = await svc.GetRunEventsAsync("dev1", runId, DateTime.MinValue);
+        var events = await svc.GetRunEventsAsync("dev1", runId, DateTime.MinValue, TestContext.Current.CancellationToken);
 
         events.Should().NotBeEmpty();
         events.Count.Should().BeLessThan(1000);
@@ -117,7 +117,7 @@ public class MockRunServiceNestedRunsTests
     public async Task Demo_root_type_is_NestedDemo_so_nesteddemo_json_actually_applies()
     {
         var svc = new MockRunService();
-        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT");
+        var details = await svc.GetRunDetailsAsync("dev1", "RUN-DEMO-ROOT", ct: TestContext.Current.CancellationToken);
 
         details.Type.Should().Be("NestedDemo");
     }
