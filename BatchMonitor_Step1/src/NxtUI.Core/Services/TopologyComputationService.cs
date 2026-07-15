@@ -277,6 +277,7 @@ public class TopologyComputationService(TimeSpan? recentActivityWindow = null)
         node.Order = hint.Order;
         node.Pin = hint.Pin;
         node.Direction = hint.Direction;
+        node.Placement = hint.Placement;
         node.External = hint.External;
         node.ArriveFrom = hint.ArriveFrom;
         node.Orientation = hint.Orientation;

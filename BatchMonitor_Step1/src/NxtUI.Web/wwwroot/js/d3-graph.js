@@ -244,6 +244,7 @@ const D3Graph = (() => {
                 id: n.id, width: n._layoutWidth, height: nh(n),
                 role: normalizeRole(n.role), group: n.group || undefined, order: n.order,
                 placeSuccessor: n.direction ? { side: n.direction } : undefined,
+                placement: n.placement ? { side: n.placement } : undefined,
                 external: n.external || undefined,
                 arriveFrom: n.arriveFrom || undefined,
                 // A member's OWN orientation (a nested turn within this sub-flow) is
@@ -377,6 +378,7 @@ const D3Graph = (() => {
                 // placement (that's the successor's own `placement`, which always wins over
                 // this if both are set — see bm-flow-layout/layout.js's own docs).
                 placeSuccessor: n.direction ? { side: n.direction } : undefined,
+                placement: n.placement ? { side: n.placement } : undefined,
                 // docs/12 §6 "external"/"arriveFrom" — place this node outside its peer
                 // cluster on the named layer edge, pinned regardless of predecessor distance
                 // (see collectExternalSides in bm-flow-layout/layout.js).
@@ -696,11 +698,9 @@ const D3Graph = (() => {
 
     // Adapts bm-flow-layout's pure-geometry output into the render contract this module
     // expects (nodes: Map<id,{x,y,width,height,data}>, edges: [{id,pts,data}]).
-    // Blueprint hints (role/group/order, decorated onto topo nodes by
-    // TopologyComputationService.Decorate) are passed through to the engine's Stage 2
-    // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
-    // (docs/12 §6, not yet implemented) so they're always undefined for now — the engine
-    // already supports them, they're just unreachable from the app until that lands.
+    // Blueprint hints (role/group/order/placement/placeSuccessor, decorated onto topo nodes
+    // by TopologyComputationService.Decorate) are passed through to the engine's Stage 2
+    // hard/soft constraints.
     function runLayoutCustom(handle, topo, seedOrder) {
         const layout = topo.layout || null;
         const dir = chooseDir(handle, layout);

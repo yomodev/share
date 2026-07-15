@@ -167,6 +167,12 @@ all optional:
 - **direction** (per node, relative to the *current* service, in flow terms):
   `left` | `right` | `above` | `below` — a soft placement preference for the node's successor.
   **Implemented.**
+- **placement** (per node): `left` | `right` | `above` | `below` — the mirror image of
+  `direction`: this node's own preference relative to whichever predecessor points at it.
+  Wins over a predecessor's `direction` for the same edge. **Implemented** (`ServiceHint.
+  Placement`/`TopologyNode.Placement`, wired through `TopologyComputationService.Decorate`
+  and threaded into `bm-flow-layout`'s existing `placement` field — the engine already
+  supported this hint, it just had no C# schema field to reach it until now).
 - **external** (per node, boolean) + **arriveFrom** (`left`|`right`|`above`|`below`): "place me
   outside the cluster of peers on the same target; my incoming arrow should come from this
   side," which the engine uses to pick which side of the shared target to place the node.

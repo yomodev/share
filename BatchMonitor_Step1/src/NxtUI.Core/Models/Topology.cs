@@ -123,9 +123,16 @@ public class TopologyNode
 
     /// <summary>
     /// "left" | "right" | "above" | "below" — soft placement preference for this node's
-    /// successor(s) (Custom layout engine only). See <see cref="ServiceHint.Direction"/>.
+    /// successor(s). See <see cref="ServiceHint.Direction"/>.
     /// </summary>
     public string? Direction { get; set; }
+
+    /// <summary>
+    /// "left" | "right" | "above" | "below" — this node's own soft placement preference
+    /// relative to its predecessor; wins over the predecessor's <see cref="Direction"/> hint
+    /// when both are set. See <see cref="ServiceHint.Placement"/>.
+    /// </summary>
+    public string? Placement { get; set; }
 
     /// <summary>See <see cref="ServiceHint.External"/> (Custom layout engine only).</summary>
     public bool External { get; set; }

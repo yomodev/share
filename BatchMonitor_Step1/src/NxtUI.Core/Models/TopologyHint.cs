@@ -123,12 +123,25 @@ public sealed class ServiceHint
 
     /// <summary>
     /// "left" | "right" | "above" | "below" — soft placement preference for THIS node's
-    /// successor(s) in the flow (Custom layout engine only — bm-flow-layout's own
-    /// <c>placeSuccessor</c> hint). A successor node's own <see cref="Direction"/> (its
-    /// self-declared <c>placement</c>) always wins over this if both are set. Ignored by the
-    /// Elk engine. See docs/12_Custom_Layout_And_Nested_Runs.md §6 "direction".
+    /// successor(s) in the flow (bm-flow-layout's own <c>placeSuccessor</c> hint). A
+    /// successor's own <see cref="Placement"/> (its self-declared preference) always wins
+    /// over this if both are set — "child overrides parent," docs/12 §3. See
+    /// docs/12_Custom_Layout_And_Nested_Runs.md §6 "direction".
     /// </summary>
     public string? Direction { get; set; }
+
+    /// <summary>
+    /// "left" | "right" | "above" | "below" — soft placement preference for THIS node's
+    /// OWN position relative to whichever predecessor points at it (bm-flow-layout's own
+    /// <c>placement</c> hint — the mirror image of <see cref="Direction"/>, which is a
+    /// predecessor's opinion about its successor instead). Always wins over a predecessor's
+    /// <see cref="Direction"/> hint when both are set for the same edge. If multiple
+    /// predecessors offer conflicting <see cref="Direction"/> hints and this node has no
+    /// <see cref="Placement"/> of its own, the engine logs a warning and picks one
+    /// arbitrarily rather than silently guessing. See docs/12_Custom_Layout_And_Nested_Runs.md
+    /// §6 "direction"/"placement".
+    /// </summary>
+    public string? Placement { get; set; }
 
     /// <summary>
     /// "horizontal" | "vertical" — Custom layout engine only. When set to a value DIFFERENT

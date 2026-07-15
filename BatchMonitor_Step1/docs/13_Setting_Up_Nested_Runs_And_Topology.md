@@ -193,11 +193,18 @@ If the default layered ordering doesn't put a node where you want it relative to
 This is a *soft* hint: `Auditor` is saying "whatever comes after me, put it below me" (in a
 horizontal flow; `above`/`below` only make sense for a horizontal flow's cross axis — see doc
 11's table and doc 12 §6). If a node instead wants to say something about *its own* placement
-relative to whoever points at it, that's the (currently JS-engine-only, not yet in the C#
-schema — see doc 12's "port hints" gap) `placement` field, distinct from `direction` — read doc
-12 §6 carefully, the two are easy to conflate since they're mirror images of the same
-relationship (predecessor's `direction` about its successor vs. a node's own `placement` about
-itself, with the node's own hint always winning — "child overrides parent," doc 12 §3).
+relative to whoever points at it, use `placement` instead — distinct from `direction`, and easy
+to conflate since they're mirror images of the same relationship (predecessor's `direction`
+about its successor vs. a node's own `placement` about itself, with the node's own hint always
+winning — "child overrides parent," doc 12 §3):
+
+```json
+{ "name": "Auditor", "role": "middle", "placement": "above" }
+```
+
+Here `Auditor` is saying "wherever my predecessor wants to put me, I want to be above it
+instead" — this wins even if the predecessor also declared a `direction` hint pointing
+elsewhere.
 
 `external`/`arriveFrom` solves a different problem: several services all point at the same
 downstream target, and you want one of them visually separated from the rest — "outside the
