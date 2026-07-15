@@ -154,7 +154,8 @@ export function layout(input, opts = {}) {
 
     const positioned = assignCoordinates(
         layers, nodesById, dummies, layerOf, direction, layerSpacing, nodeSpacing);
-    pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings);
+    const groupBoxes = computeGroupBoxes(positioned, nodesById);
+    pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direction, warnings);
 
     const edgesOut = [];
     for (const e of structuralEdges) {
@@ -165,7 +166,9 @@ export function layout(input, opts = {}) {
                     id: v.id,
                     source: e.source,
                     target: e.target,
-                    points: chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
+                    points: pushChainPointsClearOfGroups(
+                        chainToPoints(chain, positioned, direction, v.sourceOffset, v.targetOffset),
+                        groupBoxes),
                     isBackEdge: false,
                 });
             }
@@ -174,7 +177,8 @@ export function layout(input, opts = {}) {
                 id: e.id ?? edgeKey(e),
                 source: e.source,
                 target: e.target,
-                points: chainToPoints(chain, positioned, direction),
+                points: pushChainPointsClearOfGroups(
+                    chainToPoints(chain, positioned, direction), groupBoxes),
                 isBackEdge: false,
             });
         }
@@ -184,7 +188,8 @@ export function layout(input, opts = {}) {
             id: e.id ?? edgeKey(e),
             source: e.source,
             target: e.target,
-            points: routeBackEdge(e, positioned, direction),
+            points: pushChainPointsClearOfGroups(
+                routeBackEdge(e, positioned, direction), groupBoxes),
             isBackEdge: true,
         });
     }
@@ -563,22 +568,29 @@ function normalizeSide(side, direction, warnings, nodeId) {
 // external sibling in the same layer if only one of them needed the push — acceptable for
 // the common case (usually at most one external node needs clearing per side) rather than
 // solving general N-body compaction here.
-function pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnings) {
-    const RENDER_PAD = 14; // must match renderGroups()'s PAD in d3-graph.js
-    const CLEAR_GAP = 8;   // extra breathing room past the padded group border
+// Shared by pushExternalNodesClearOfGroups and pushEdgeWaypointsClearOfGroups — RENDER_PAD
+// must match renderGroups()'s own PAD in d3-graph.js, so a node/waypoint that just clears
+// the raw member bbox doesn't still get swallowed by the padded rectangle actually drawn.
+const GROUP_RENDER_PAD = 14;
+const GROUP_CLEAR_GAP = 8; // extra breathing room past the padded group border
 
+function computeGroupBoxes(positioned, nodesById) {
     const groupBoxes = new Map();
     for (const [id, p] of positioned) {
         const node = nodesById.get(id);
         if (!node?.group) continue;
         const hw = p.width / 2, hh = p.height / 2;
         const b = groupBoxes.get(node.group) || { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-        b.x0 = Math.min(b.x0, p.x - hw - RENDER_PAD);
-        b.y0 = Math.min(b.y0, p.y - hh - RENDER_PAD);
-        b.x1 = Math.max(b.x1, p.x + hw + RENDER_PAD);
-        b.y1 = Math.max(b.y1, p.y + hh + RENDER_PAD);
+        b.x0 = Math.min(b.x0, p.x - hw - GROUP_RENDER_PAD);
+        b.y0 = Math.min(b.y0, p.y - hh - GROUP_RENDER_PAD);
+        b.x1 = Math.max(b.x1, p.x + hw + GROUP_RENDER_PAD);
+        b.y1 = Math.max(b.y1, p.y + hh + GROUP_RENDER_PAD);
         groupBoxes.set(node.group, b);
     }
+    return groupBoxes;
+}
+
+function pushExternalNodesClearOfGroups(groupBoxes, positioned, nodesById, direction, warnings) {
     if (groupBoxes.size === 0) return;
 
     for (const [id, node] of nodesById) {
@@ -595,14 +607,64 @@ function pushExternalNodesClearOfGroups(positioned, nodesById, direction, warnin
             if (!overlapsX || !overlapsY) continue;
 
             if (direction === 'horizontal') {
-                if (side === 'below') p.y = Math.max(p.y, b.y1 + hh + CLEAR_GAP);
-                else                  p.y = Math.min(p.y, b.y0 - hh - CLEAR_GAP);
+                if (side === 'below') p.y = Math.max(p.y, b.y1 + hh + GROUP_CLEAR_GAP);
+                else                  p.y = Math.min(p.y, b.y0 - hh - GROUP_CLEAR_GAP);
             } else {
-                if (side === 'right') p.x = Math.max(p.x, b.x1 + hw + CLEAR_GAP);
-                else                  p.x = Math.min(p.x, b.x0 - hw - CLEAR_GAP);
+                if (side === 'right') p.x = Math.max(p.x, b.x1 + hw + GROUP_CLEAR_GAP);
+                else                  p.x = Math.min(p.x, b.x0 - hw - GROUP_CLEAR_GAP);
             }
         }
     }
+}
+
+// A long edge (spanning more than one layer) routes through dummy waypoints in the
+// intermediate layers (buildDummyChains) — those get positioned by the same per-layer
+// cross-axis centering as real nodes, with no awareness of a group box that happens to
+// occupy that same layer. Unlike an external node (which has a declared side to pin
+// toward), a mid-graph waypoint has no such preference, so it's pushed to whichever edge
+// of the offending group box is CLOSER, minimizing the visual detour around it. Every
+// dummy id is checked independently (not per-chain), so a chain with multiple waypoints
+// inside the same or different group boxes gets each one pushed clear on its own — the
+// resulting polyline routes around the box rather than through it.
+// Operates on a FINISHED, already-orthogonalized points array (post chainToPoints/
+// routeBackEdge/orthogonalizeChain) rather than raw dummy positions — a dummy's own
+// resolved position can be perfectly clear of every group box, while the *elbow bend*
+// orthogonalizeChain later synthesizes between two dummy points (at "the horizontal/
+// vertical midpoint of that hop") still lands inside one. Checking the final polyline is
+// the only way to catch that.
+//
+// Segment-aware, not point-aware: an orthogonal polyline alternates horizontal runs
+// (shared y) and vertical runs (shared x). Nudging a single point's cross-axis coordinate
+// without its run-mate would turn a clean 90° elbow into a diagonal, so both endpoints of
+// an offending run are pushed together, keeping every segment perfectly axis-aligned.
+function pushChainPointsClearOfGroups(points, groupBoxes) {
+    if (groupBoxes.size === 0 || !points || points.length < 2) return points;
+
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i], p2 = points[i + 1];
+        for (const b of groupBoxes.values()) {
+            if (Math.abs(p1.y - p2.y) < 0.01) {
+                // Horizontal run at a shared y ("lane") — push the whole lane in y.
+                const y = p1.y;
+                const insideY = y > b.y0 - GROUP_CLEAR_GAP && y < b.y1 + GROUP_CLEAR_GAP;
+                const overlapsX = Math.min(p1.x, p2.x) < b.x1 && Math.max(p1.x, p2.x) > b.x0;
+                if (!insideY || !overlapsX) continue;
+                const distTop = y - b.y0, distBottom = b.y1 - y;
+                const newY = distTop < distBottom ? (b.y0 - GROUP_CLEAR_GAP) : (b.y1 + GROUP_CLEAR_GAP);
+                p1.y = newY; p2.y = newY;
+            } else if (Math.abs(p1.x - p2.x) < 0.01) {
+                // Vertical run (an elbow transition) at a shared x — push it in x.
+                const x = p1.x;
+                const insideX = x > b.x0 - GROUP_CLEAR_GAP && x < b.x1 + GROUP_CLEAR_GAP;
+                const overlapsY = Math.min(p1.y, p2.y) < b.y1 && Math.max(p1.y, p2.y) > b.y0;
+                if (!insideX || !overlapsY) continue;
+                const distLeft = x - b.x0, distRight = b.x1 - x;
+                const newX = distLeft < distRight ? (b.x0 - GROUP_CLEAR_GAP) : (b.x1 + GROUP_CLEAR_GAP);
+                p1.x = newX; p2.x = newX;
+            }
+        }
+    }
+    return points;
 }
 
 function buildNeighborIndex(edgeChains) {

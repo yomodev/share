@@ -377,6 +377,50 @@ describe('external/arriveFrom (docs/12 §6)', () => {
         const overlapsY = sidecar.y0 < groupBox.y1 && sidecar.y1 > groupBox.y0;
         expect(overlapsX && overlapsY).toBe(false);
     });
+
+    it('routes a long edge\'s orthogonal segments clear of an unrelated group box, not just its dummy waypoints', () => {
+        // Reported live: in the LayoutHintsDemo, Sidecar->Merger (a long edge spanning
+        // several layers) visibly clipped through the "Branches" group box. Root cause:
+        // the box-avoidance check ran on each dummy node's own resolved position, but the
+        // actual rendered polyline gets an extra ELBOW BEND synthesized *after* that check
+        // (orthogonalizeChain, at "the midpoint of that hop") — a dummy could be perfectly
+        // clear while the bend between it and its neighbor still clipped the box. This
+        // mirrors that exact topology (Ingest group, external Sidecar, a Branches group
+        // downstream, Sidecar's edge passing through the Branches layer en route to Merger).
+        const nodes = [
+            { id: 'Intake', width: 160, height: 76, group: 'Ingest' },
+            { id: 'Checker', width: 160, height: 76, group: 'Ingest' },
+            { id: 'Sidecar', width: 160, height: 76, external: true, arriveFrom: 'below' },
+            { id: 'Splitter', width: 160, height: 76 },
+            { id: 'BranchA', width: 160, height: 76, group: 'Branches', order: 1 },
+            { id: 'BranchB', width: 160, height: 76, group: 'Branches', order: 2 },
+            { id: 'Merger', width: 160, height: 76 },
+        ];
+        const edges = [
+            edge('Intake', 'Checker'), edge('Intake', 'Sidecar'),
+            edge('Checker', 'Splitter'), edge('Sidecar', 'Merger'),
+            edge('Splitter', 'BranchA'), edge('Splitter', 'BranchB'),
+            edge('BranchA', 'Merger'), edge('BranchB', 'Merger'),
+        ];
+        const result = layout({ nodes, edges, direction: 'horizontal' });
+
+        const PAD = 14;
+        const rectOf = id => {
+            const p = result.nodes.get(id);
+            return { x0: p.x - p.width / 2, y0: p.y - p.height / 2, x1: p.x + p.width / 2, y1: p.y + p.height / 2 };
+        };
+        const a = rectOf('BranchA'), b = rectOf('BranchB');
+        const branchesBox = {
+            x0: Math.min(a.x0, b.x0) - PAD, y0: Math.min(a.y0, b.y0) - PAD,
+            x1: Math.max(a.x1, b.x1) + PAD, y1: Math.max(a.y1, b.y1) + PAD,
+        };
+
+        const sidecarToMerger = result.edges.find(e => e.source === 'Sidecar' && e.target === 'Merger');
+        expect(sidecarToMerger).toBeTruthy();
+        const anyPointInside = sidecarToMerger.points.some(p =>
+            p.x > branchesBox.x0 && p.x < branchesBox.x1 && p.y > branchesBox.y0 && p.y < branchesBox.y1);
+        expect(anyPointInside).toBe(false);
+    });
 });
 
 describe('recursive boxes (subGraph)', () => {

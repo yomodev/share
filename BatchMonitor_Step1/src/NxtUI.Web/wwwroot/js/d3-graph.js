@@ -11,7 +11,7 @@
 //  - Edges: paint-order ensures labels are readable on both themes.
 
 import { createState, sampleEdge, tick } from './d3-animation.js';
-import { layout as flowLayout } from './bm-flow-layout/layout.js?v=1';
+import { layout as flowLayout } from './bm-flow-layout/layout.js?v=2';
 
 const D3Graph = (() => {
 

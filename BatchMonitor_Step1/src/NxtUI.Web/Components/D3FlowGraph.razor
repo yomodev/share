@@ -69,7 +69,7 @@
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=60");
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/d3-graph.js?v=61");
                 var edgeStyle = string.Equals(RunsOptions.Value.GraphEdgeStyle, "Curved", StringComparison.OrdinalIgnoreCase)
                     ? "CURVED" : "ORTHOGONAL";
                 var defaultDirection = string.Equals(RunsOptions.Value.GraphDirection, "Vertical", StringComparison.OrdinalIgnoreCase) ? "DOWN"
