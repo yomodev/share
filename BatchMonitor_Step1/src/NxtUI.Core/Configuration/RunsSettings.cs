@@ -30,24 +30,12 @@ public class RunsSettings
     public string RunStatsDefaultFilterText { get; set; } = "start:>=-24h";
 
     /// <summary>
-    /// How the run-detail flow graph pins pipeline-row ports for ELK's edge routing.
-    /// <c>FixedSide</c> (default): ports are pinned to a side (e.g. EAST) only — ELK can
-    /// reorder them within that side to minimise edge crossings/overlaps, but an arrow
-    /// no longer lands on the exact pixel row it represents. <c>FixedPos</c>: ports are
-    /// pinned to the exact row they represent — arrows always connect to the right row,
-    /// but ELK can't reorder them, so dense diagrams can show more overlapping edges.
-    /// Any other value falls back to FixedSide.
-    /// </summary>
-    public string GraphPortConstraints { get; set; } = "FixedSide";
-
-    /// <summary>
-    /// How the run-detail flow graph draws edges through ELK's computed waypoints.
-    /// <c>Orthogonal</c> (default): horizontal/vertical segments with softly rounded
-    /// corners, matching the routing ELK actually computed (never passes through a
-    /// node interior). <c>Curved</c>: a smooth spline through the same waypoints —
-    /// looser/organic look, but can visually cut closer to node edges between bends.
-    /// Applies regardless of <see cref="GraphPortConstraints"/>. Any other value
-    /// falls back to Orthogonal.
+    /// How the run-detail flow graph draws edges through bm-flow-layout's computed
+    /// waypoints. <c>Orthogonal</c> (default): horizontal/vertical segments with softly
+    /// rounded corners, matching the routing the engine actually computed (never passes
+    /// through a node interior). <c>Curved</c>: a smooth spline through the same
+    /// waypoints — looser/organic look, but can visually cut closer to node edges between
+    /// bends. Any other value falls back to Orthogonal.
     /// </summary>
     public string GraphEdgeStyle { get; set; } = "Orthogonal";
 
@@ -60,18 +48,6 @@ public class RunsSettings
     /// before a fixed default was introduced). Any other value falls back to Horizontal.
     /// </summary>
     public string GraphDirection { get; set; } = "Horizontal";
-
-    /// <summary>
-    /// Which layout engine computes the run-detail flow graph's node positions/edge
-    /// routing. <c>Elk</c> (default): the mature, full-featured ELK.js engine (ports,
-    /// multiple algorithms, battle-tested) — see docs/12_Custom_Layout_And_Nested_Runs.md.
-    /// <c>Custom</c>: the in-house bm-flow-layout engine built alongside it as a Stage 1
-    /// comparison (docs/12 §5) — no per-pipeline ports yet (service-to-service edges only)
-    /// and a narrower feature set, but no external CDN dependency and full control over its
-    /// behavior. Any other value falls back to Elk. Not currently overridable per topology
-    /// hint — this is a whole-app choice, not a per-run-type one.
-    /// </summary>
-    public string GraphLayoutEngine { get; set; } = "Elk";
 
     /// <summary>
     /// How many seconds since a pipeline's last finished chunk it still counts as

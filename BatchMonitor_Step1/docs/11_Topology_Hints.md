@@ -10,7 +10,7 @@ inference).
 
 - **Stable layout from t=0.** Declared services render immediately as greyed `NotStarted`
   nodes; runtime events only flip their state and fill counts — no nodes popping in and
-  forcing an ELK re-layout mid-run.
+  forcing a full re-layout mid-run.
 - **Intended shape is visible even before (or without) data** — including expected edges.
 - **Author-controlled layout** per run type (vertical/tree, source/sink roles, groups).
 
@@ -80,6 +80,12 @@ If a real service matches **two** `services` entries, the **first in declaration
 
 ## Layout vocabulary → ELK
 
+> This section describes the ELK-era vocabulary/mapping. **On this branch ELK has
+> been removed entirely** (docs/12 §9) — `pinX`/`pinY` no longer exist anywhere in
+> the schema, and `density`/`straightenEdges` are schema-declared but not consumed
+> by anything (they were ELK-only). See `12_Custom_Layout_And_Nested_Runs.md` §6
+> for the vocabulary that's actually live now.
+
 Graph-level (`layout`):
 
 | Hint | Values | Effect |
@@ -98,7 +104,7 @@ Per-node (`services[]`):
 | `color` | hex | header accent tint (state still shown via border) |
 | `order` | int (lower first) | in-layer placement bias (ELK priority — approximate) |
 | `pin` | bool | *reserved* in v1 (proper pinning needs persisted positions) |
-| `pinX` / `pinY` | number | explicit position hint (**ELK only** — `RunsSettings.GraphLayoutEngine = "Elk"`, the default). Best-effort: ELK still avoids overlaps and keeps edges sensible, so a pinned node can shift somewhat from the exact value. Set either/both; an unset axis follows ELK's normal automatic layout. Switches the whole graph into ELK's interactive layering/crossing-minimization strategies whenever at least one node sets either — expect to iterate on the value by looking at the rendered result. |
+| ~~`pinX` / `pinY`~~ | number | **removed on this branch** — was an ELK-only explicit position hint; bm-flow-layout never consumed it |
 | `collapsed` | bool | *reserved* in v1 |
 
 ## Reconciliation (runtime vs blueprint)
@@ -119,4 +125,4 @@ Runtime always wins on state/counts; the blueprint only adds structure and styli
 - Variant select + compile: `src/NxtUI.Core/Models/TopologyBlueprint.cs`
 - Merge into the computed graph: `TopologyComputationService.ApplyBlueprint`
 - Selection/locking + wiring: `src/NxtUI.Web/Pages/RunDetail.razor` (`ResolveBlueprint`)
-- Layout/decoration → ELK + rendering: `src/NxtUI.Web/wwwroot/js/d3-graph.js`
+- Layout/decoration + rendering: `src/NxtUI.Web/wwwroot/js/d3-graph.js`

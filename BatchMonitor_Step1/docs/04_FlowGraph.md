@@ -5,10 +5,12 @@
 The flow graph in `RunDetail` shows the service pipeline topology for a run. Nodes
 represent services; edges represent chunk flow between services (and, for nested
 runs, whole child-run boxes — see `12_Custom_Layout_And_Nested_Runs.md`). The graph
-is rendered using D3 v7, with node/edge **positions** computed by a pluggable layout
-engine — the custom `bm-flow-layout` (default) or ELK (`elkjs`, still present as a
-comparison/fallback toggle, `handle.layoutEngine`). **Dagre is gone entirely** — this
-doc previously described a dagre-based layout that no longer exists.
+is rendered using D3 v7, with node/edge **positions** computed entirely by the
+custom `bm-flow-layout` engine. **On this branch, ELK.js has been removed
+entirely** (docs/12 §9 "Retire ELK") — no CDN script, no `handle.elk`/
+`handle.layoutEngine`/`RunsSettings.GraphLayoutEngine`, no `GraphPortConstraints`.
+**Dagre is also gone** — this doc previously described a dagre-based layout that no
+longer exists.
 
 This doc covers the D3/SVG **rendering** layer (what happens once node/edge
 positions are known) — for how those positions are actually computed (role pins,
@@ -23,7 +25,7 @@ much more detailed doc for the layout engine itself.
 | File | Purpose |
 |------|---------|
 | `Components/D3FlowGraph.razor` | Blazor wrapper; passes `Topology` and visibility to JS |
-| `wwwroot/js/d3-graph.js` | All D3 rendering logic, drives `bm-flow-layout`/ELK for positions |
+| `wwwroot/js/d3-graph.js` | All D3 rendering logic, drives `bm-flow-layout` for positions |
 | `wwwroot/js/bm-flow-layout/` | The custom layout engine itself (own package, own tests) |
 | `wwwroot/js/d3-animation.js` | Edge dash-flow animation state machine |
 | `wwwroot/css/d3-graph.css` | Graph styles |
@@ -89,7 +91,7 @@ Same mapping as `PipelineState`'s colours (`02_Models_DataFlow.md`):
 ## Edge Rendering
 
 Edges are no longer simple S-curve beziers between two node centres — the layout
-engine (bm-flow-layout or ELK) returns a full **waypoint polyline** per edge
+engine (bm-flow-layout) returns a full **waypoint polyline** per edge
 (start point, zero or more bend points for orthogonal routing around other nodes,
 end point), and `d3-graph.js` draws through those waypoints one of two ways
 (`RunsSettings:GraphEdgeStyle`, `handle.edgeStyle`):
@@ -140,19 +142,17 @@ function chooseDir(handle, layout) {
 }
 ```
 
-**Density:** a `layout.density` hint (`"compact"`/`"airy"`) scales node/edge
-spacing via a multiplier (`densityScale()`) — schema-declared and read by the JS,
-but currently only meaningfully wired for the ELK comparison path; see the
-"snapToPipeline/density/straightenEdges" note in this repo's session history if
-you're extending it for the custom engine (as of this writing these are inert on the
-`bm-flow-layout` path).
+**Density:** a `layout.density` hint (`"compact"`/`"airy"`) is schema-declared but
+not currently consumed anywhere — `densityScale()` was ELK-only and was removed
+along with ELK on this branch; see the "snapToPipeline/density/straightenEdges"
+note in this repo's session history if you're wiring this up for `bm-flow-layout`.
 
-**Engine choice:** `handle.layoutEngine` (`'custom'` default, `'elk'` alternative)
-picks between `runLayoutElk(handle, topo)` and the custom engine
-(`bm-flow-layout/layout.js`) — a comparison-only toggle; the custom engine is what
-supports role pins, groups, direction/orientation hints, external/arriveFrom
-placement, nested-run recursive boxes, and per-pipeline ports (`12_Custom_...md`).
-ELK doesn't support all of those.
+**Engine:** `bm-flow-layout/layout.js` is the only layout engine on this branch —
+`handle.layoutEngine`/`RunsSettings.GraphLayoutEngine` and the ELK code path
+(`runLayoutElk`) have been removed entirely (docs/12 §9). It supports role pins,
+groups, direction/orientation hints, external/arriveFrom placement, nested-run
+recursive boxes, and per-pipeline ports (`12_Custom_...md`) — everything ELK's
+comparison run never fully matched.
 
 **Debounced layout:** `update()` sets a pending topology and debounces the actual
 layout recompute; the first update bypasses the debounce so the initial render isn't

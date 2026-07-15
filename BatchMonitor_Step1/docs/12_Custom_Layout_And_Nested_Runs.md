@@ -1,6 +1,9 @@
 # 12 — Custom Layout Engine & Nested Runs (design)
 
-**Status:** design / experiment — branch `feature/custom-layout`. No implementation yet.
+**Status:** implemented and in production use — `bm-flow-layout` is the run-detail flow
+graph's layout engine. On the `remove-elk-layout-engine` branch, ELK.js has additionally
+been removed entirely (§9's "Retire ELK" step); on `main` it may still be present as a
+dormant, unused dependency depending on when this doc is read relative to that merge.
 **Supersedes for the flow graph:** the ELK (elkjs) usage described in [04_FlowGraph.md](04_FlowGraph.md).
 **Builds on:** [11_Topology_Hints.md](11_Topology_Hints.md) (the hint schema is *augmented*, not replaced),
 and the generalized event model in `NxtUI.Core/Events/` ([02_Models_DataFlow.md](02_Models_DataFlow.md)).
@@ -298,7 +301,12 @@ there on real runs, we stop having spent ~2 days, not a rewrite.
 - **Independent — zoom-on-hover.** Anytime.
 
 Retire ELK (remove elkjs, delete the ELK branch of the seam) only after Stages 1–3 are trusted
-on real data.
+on real data. **Done** on the `remove-elk-layout-engine` branch: the elkjs CDN `<script>` tag,
+`runLayoutElk` and its ELK-only helpers (`portId`, `layerConstraint`, `densityScale`,
+`portYFromTop`), `handle.elk`/`handle.layoutEngine`, `RunsSettings.GraphLayoutEngine`/
+`GraphPortConstraints`, and `ServiceHint`/`TopologyNode.PinX`/`PinY` are all removed.
+`portXEvenSpread` was kept — despite being written for the ELK path originally, the
+custom engine's own per-pipeline ports (`portOffset`, §6 "port hints") now reuse it too.
 
 ---
 

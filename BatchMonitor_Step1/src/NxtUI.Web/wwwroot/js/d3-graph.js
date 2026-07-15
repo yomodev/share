@@ -133,25 +133,13 @@ const D3Graph = (() => {
         return Math.max(CHILD_RUN_MIN_WIDTH, Math.min(MAX_NODE_WIDTH, Math.ceil(needed)));
     }
 
-    // ── Layout (ELK: layered + orthogonal routing) ─────────────────────────────
+    // ── Layout (bm-flow-layout: layered + orthogonal routing) ──────────────────
     //
-    // Direction adapts to the container's aspect ratio (wide container → flow left-
-    // to-right/EAST-WEST ports; tall/narrow container → flow top-to-bottom/SOUTH-
-    // NORTH ports) — same idea as the old dagre-based chooseDir(), which this ELK
-    // port carried forward but had temporarily hardcoded to 'RIGHT' only. ELK routes
-    // edges orthogonally in the channels *between* blocks — they never cross a node
-    // interior.
-    //
-    // Port constraint mode is configurable (RunsSettings.GraphPortConstraints, passed
-    // in via init()'s portConstraints arg — see handle.portConstraints):
-    //   FIXED_SIDE (default): ports are pinned to a side only — ELK can reorder them
-    //     within that side to minimise crossings, but an arrow no longer lands on the
-    //     exact pixel row it represents; see edgeTooltip/edgeLabel to tell them apart.
-    //   FIXED_POS: ports are pinned to the exact row they represent — arrows always
-    //     connect to the right row, but ELK can't reorder them, so dense diagrams can
-    //     show more overlapping edges.
-
-    function portId(nodeId, dir, pipeline) { return `${nodeId}::${dir}::${pipeline}`; }
+    // Direction adapts to the container's aspect ratio when RunsSettings.GraphDirection
+    // is "Auto" (wide container → flow left-to-right; tall/narrow → top-to-bottom) — see
+    // chooseDir. Edges are routed orthogonally by bm-flow-layout itself (real H/V segments
+    // with rounded corners, no per-pipeline ports yet — service-to-service edges only, see
+    // docs/12_Custom_Layout_And_Nested_Runs.md §6's "port hints" gap).
 
     // Flow direction: an explicit topology-hint layout always wins; otherwise falls back to
     // handle.defaultDirection (RunsSettings.GraphDirection — 'RIGHT'/'DOWN' fixed, or 'AUTO'
@@ -165,18 +153,6 @@ const D3Graph = (() => {
             return r.width >= r.height ? 'RIGHT' : 'DOWN';
         }
         return handle.defaultDirection;
-    }
-
-    // Node/edge spacing multiplier from the hint's density.
-    function densityScale(layout) {
-        const d = layout && layout.density ? String(layout.density).toLowerCase() : '';
-        return d === 'compact' ? 0.65 : d === 'airy' ? 1.6 : 1;
-    }
-
-    // "source"/"sink" role → ELK layer constraint (layered layout only).
-    function layerConstraint(role) {
-        const r = role ? String(role).toLowerCase() : '';
-        return r === 'source' ? 'FIRST' : r === 'sink' ? 'LAST' : 'NONE';
     }
 
     // Same "source"/"sink" role convention, normalised for bm-flow-layout's role hard-pin
@@ -288,19 +264,9 @@ const D3Graph = (() => {
         return { nodes: subFlowNodes, edges: subFlowEdges, direction: subDirection };
     }
 
-    // Port position along the node's EAST/WEST edge, aligned to the centre of the
-    // owning pipeline row (used when flow direction is RIGHT, FIXED_POS only).
-    function portYFromTop(node, pipeline) {
-        const i = pipelineIdx(node, pipeline);
-        return i >= 0
-            ? HEADER_HEIGHT + i * ROW_HEIGHT + ROW_HEIGHT / 2
-            : nh(node) / 2;
-    }
-
-    // Port position along the node's SOUTH/NORTH edge (used when flow direction is
-    // DOWN, FIXED_POS only) — rows stack vertically inside the node regardless of
-    // graph direction, so there's no natural per-row position on a horizontal edge;
-    // spread evenly instead.
+    // Port position along the node's SOUTH/NORTH edge (used by portOffset for a vertical
+    // flow) — rows stack vertically inside the node regardless of graph direction, so
+    // there's no natural per-row position on a horizontal edge; spread evenly instead.
     function portXEvenSpread(node, pipeline, width) {
         const rows = node.pipelines || [];
         const i = pipelineIdx(node, pipeline);
@@ -308,18 +274,12 @@ const D3Graph = (() => {
         return i >= 0 ? (i + 1) * width / (n + 1) : width / 2;
     }
 
-    // Stage 0 seam (docs/12_Custom_Layout_And_Nested_Runs.md): both engines are called with
-    // the same (handle, topo) input and must return the same { nodes, edges, width, height }
-    // shape (nodes: Map<id, {x,y,width,height,data}>, edges: [{id, pts, data}]). Selecting
-    // handle.layoutEngine = 'custom' (default 'elk') is a comparison-only toggle for the
-    // Stage 1 go/no-go evaluation — not exposed in any UI yet, and the custom path is Stage 1
-    // scope only (no ports/pipeline-level edges, no groups, no hints beyond role/order).
-    // `seedOrder` (Stage 3 stability) is only meaningful to the custom engine — ELK has no
-    // such hook and re-solves from scratch regardless.
+    // bm-flow-layout is the only layout engine (ELK.js was removed — see docs/12
+    // §9/"Retire ELK"). runLayout is now a thin async wrapper around the synchronous
+    // runLayoutCustom purely so every caller (which awaits it, from the ELK.js-worker-based
+    // era) doesn't need touching.
     async function runLayout(handle, topo, seedOrder) {
-        return handle.layoutEngine === 'custom'
-            ? runLayoutCustom(handle, topo, seedOrder)
-            : runLayoutElk(handle, topo);
+        return runLayoutCustom(handle, topo, seedOrder);
     }
 
     // Derives a Stage 3 seedOrder (docs/12 §5) from the PREVIOUS layout's own cross-axis
@@ -364,11 +324,11 @@ const D3Graph = (() => {
     //
     // The one thing that's genuinely different is WHERE that content sits: it's boxed inside
     // a background rect (renderChildRunBoxes) representing "these nodes belong to run X."
-    // Sizing that box requires knowing its contents' laid-out size BEFORE the outer engine
-    // (ELK or custom) places it — so each expanded child's own sub-layout is always computed
-    // with bm-flow-layout (buildChildRunBoxSpecs), independent of which engine draws the
-    // OUTER graph, then handed to that outer engine as one opaque, pre-sized leaf. After the
-    // outer engine resolves that leaf's position, flattenChildRunBoxes walks back into the
+    // Sizing that box requires knowing its contents' laid-out size BEFORE the outer layout
+    // places it — so each expanded child's own sub-layout is always computed with
+    // bm-flow-layout (buildChildRunBoxSpecs) first, then handed to the outer level's own
+    // bm-flow-layout pass as one opaque, pre-sized leaf. After the outer pass resolves that
+    // leaf's position, flattenChildRunBoxes walks back into the
     // pre-computed sub-layout and merges its real nodes/edges into the final result,
     // translated into place — recursively, so a grandchild expanded inside an expanded
     // child works the same way one level deeper.
@@ -515,8 +475,7 @@ const D3Graph = (() => {
     // Cross-axis offset (pixels from the node's own center) for a specific pipeline row —
     // undefined/not-found pipeline (declared-but-not-yet-observed blueprint edges connect
     // two SERVICES, not two specific rows) falls back to 0 (plain center), same as before
-    // per-pipeline ports existed. Reuses the exact same row-position math the ELK path's
-    // portYFromTop/portXEvenSpread already established (see those functions' own docs) —
+    // per-pipeline ports existed. Reuses rowCY/portXEvenSpread's own row-position math —
     // just expressed relative to center instead of relative to the node's top/left edge,
     // which is what bm-flow-layout's chainToPoints wants.
     function portOffset(node, pipelineName, direction) {
@@ -657,7 +616,7 @@ const D3Graph = (() => {
         };
     }
 
-    // After the outer engine (ELK or custom) has resolved a position for every node
+    // After the outer bm-flow-layout pass has resolved a position for every node
     // including the synthetic `__box_<runId>` leaves, walks the tree merging each box's
     // pre-computed sub-layout into the final nodes/edges/boxes output, recursively.
     function flattenChildRunBoxes(rawPositions, metaById, edgeDataByKey, direction, offX, offY, runIdPrefix, outNodes, outEdges, outBoxes, outGroupColors) {
@@ -735,8 +694,8 @@ const D3Graph = (() => {
         }
     }
 
-    // Adapts bm-flow-layout's pure-geometry output into the same render contract as ELK.
-    // Edges are service-to-service only here (no per-pipeline ports) — see docs/12 Stage 1.
+    // Adapts bm-flow-layout's pure-geometry output into the render contract this module
+    // expects (nodes: Map<id,{x,y,width,height,data}>, edges: [{id,pts,data}]).
     // Blueprint hints (role/group/order, decorated onto topo nodes by
     // TopologyComputationService.Decorate) are passed through to the engine's Stage 2
     // hard/soft constraints. `placement`/`placeSuccessor` are not yet in the C# hint schema
@@ -770,201 +729,9 @@ const D3Graph = (() => {
         return { nodes, edges: outEdges, width: result.width, height: result.height, childRunBoxes: boxes, groupColorsByRun };
     }
 
-    async function runLayoutElk(handle, topo) {
-        // See runLayoutCustom's own copy of this comment — same childSpecCache pruning need.
-        handle._touchedChildRunIds = new Set();
-
-        const ids  = new Set(topo.nodes.map(n => n.id));
-        const edges = topo.edges.filter(e => ids.has(e.source) && ids.has(e.target));
-
-        const layout    = topo.layout || null;
-        const dir       = chooseDir(handle, layout);
-        const outSide   = dir === 'RIGHT' ? 'EAST'  : 'SOUTH';
-        const inSide    = dir === 'RIGHT' ? 'WEST'  : 'NORTH';
-        const fixedPos  = handle.portConstraints === 'FIXED_POS';
-        const tree      = layout && String(layout.shape || '').toLowerCase() === 'tree';
-        const dens      = densityScale(layout);
-
-        // Which pipeline rows need an output/input port. Edges with NO pipeline (declared-
-        // but-not-yet-observed blueprint edges, which connect two SERVICES rather than two
-        // specific pipeline rows) deliberately get no port here — see elkEdges below, where
-        // they attach straight to the node instead. Giving them a port keyed by "" would
-        // create a phantom connection point distinct from every real pipeline row, which is
-        // exactly what made a declared edge look like a stray duplicate arrow alongside the
-        // real per-pipeline one between the same two services.
-        const outPorts = new Map(); // nodeId -> Set(pipeline)
-        const inPorts  = new Map();
-        const addPort = (map, id, pipe) => (map.get(id) ?? map.set(id, new Set()).get(id)).add(pipe);
-        for (const e of edges) {
-            if (e.sourcePipeline) addPort(outPorts, e.source, e.sourcePipeline);
-            if (e.targetPipeline) addPort(inPorts,  e.target, e.targetPipeline);
-        }
-
-        const nodeById = new Map(topo.nodes.map(n => [n.id, n]));
-        const direction = dir === 'RIGHT' ? 'horizontal' : 'vertical';
-
-        // Expanded child-run boxes (docs/12 §7.4): each one's own sub-layout is always
-        // computed with bm-flow-layout regardless of ELK being the outer engine here — ELK
-        // only needs to know its opaque size (a plain leaf, no ports: a child-run box has no
-        // structural edges to anything). See buildChildRunBoxSpec/flattenChildRunBoxes above.
-        const boxMetaById = new Map();
-        const boxChildren = [];
-        for (const entry of (topo.childRuns || [])) {
-            const childTopo = topo.expandedChildren ? topo.expandedChildren[entry.runId] : null;
-            if (!childTopo) continue;
-            const spec = buildChildRunBoxSpec(handle, childTopo, entry, direction, topo.childRunBoxColor);
-            const boxId = `__box_${entry.runId}`;
-            boxChildren.push({ id: boxId, width: spec.width, height: spec.height, ports: [], layoutOptions: {} });
-            boxMetaById.set(boxId, { kind: 'box', spec });
-        }
-        pruneChildSpecCache(handle);
-
-        const anyPinned = topo.nodes.some(n => typeof n.pinX === 'number' || typeof n.pinY === 'number');
-
-        const children = topo.nodes.map(n => {
-            // Cached on the node so updateClipPaths reuses the width without re-measuring.
-            n._layoutWidth = computeNodeWidth(handle, n);
-            const w = n._layoutWidth, h = nh(n);
-
-            const ports = [];
-            for (const pipe of (outPorts.get(n.id) || [])) {
-                const pos = fixedPos
-                    ? (dir === 'RIGHT' ? { x: w, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: h })
-                    : {};
-                ports.push({ id: portId(n.id, 'out', pipe), ...pos, layoutOptions: { 'elk.port.side': outSide } });
-            }
-            for (const pipe of (inPorts.get(n.id) || [])) {
-                const pos = fixedPos
-                    ? (dir === 'RIGHT' ? { x: 0, y: portYFromTop(n, pipe) } : { x: portXEvenSpread(n, pipe, w), y: 0 })
-                    : {};
-                ports.push({ id: portId(n.id, 'in', pipe), ...pos, layoutOptions: { 'elk.port.side': inSide } });
-            }
-
-            const nodeOpts = { 'elk.portConstraints': fixedPos ? 'FIXED_POS' : 'FIXED_SIDE' };
-            // Per-node hints from the run-type blueprint (layered layout only). role pins the
-            // node to the first/last layer; order biases in-layer placement (lower = earlier).
-            if (!tree) {
-                let lc = layerConstraint(n.role);
-                // Live-tested: ELK's INTERACTIVE crossing-minimization/node-placement
-                // strategies (switched on below whenever any node is pinned) throw
-                // "UnsupportedConfigurationException ... layer constraint set to
-                // FIRST/LAST, but has an edge that does not come from/go to a
-                // FIRST_SEPARATE/LAST_SEPARATE node" against a plain FIRST/LAST
-                // constraint — those two only coexist with FIRST_SEPARATE/LAST_SEPARATE,
-                // which reserves source/sink their own dedicated layer instead of merely
-                // preferring one. Upgrading to the _SEPARATE variant whenever the graph
-                // has any pin keeps role-based source/sink pinning working instead of the
-                // whole layout throwing.
-                if (anyPinned && (lc === 'FIRST' || lc === 'LAST')) lc += '_SEPARATE';
-                if (lc !== 'NONE') nodeOpts['elk.layered.layering.layerConstraint'] = lc;
-                if (typeof n.order === 'number') nodeOpts['elk.priority'] = String(-n.order);
-            }
-            // PinX/PinY (ServiceHint.PinX/PinY) — a best-effort explicit-position hint, only
-            // meaningful when the graph as a whole switches into ELK's interactive strategies
-            // (see anyPinned below); an x/y here with no such switch is simply ignored by ELK.
-            const pos = {};
-            if (typeof n.pinX === 'number') pos.x = n.pinX;
-            if (typeof n.pinY === 'number') pos.y = n.pinY;
-            return { id: n.id, width: w, height: h, ports, layoutOptions: nodeOpts, ...pos };
-        });
-
-        // Content-based id (source/target service+pipeline), NOT an array index — the
-        // `edges` array's order can shift between successive topology recomputes (a new
-        // pipeline appearing shifts everything after it), and renderEdges' D3 join keys on
-        // this id (`.data(data, d => d.id)`) to track element identity across updates. An
-        // index-based id would silently rebind "e5"'s DOM element (with its stale computed
-        // path/colour) onto a completely different logical edge whenever the order shifted,
-        // which read as edges briefly showing the wrong colour or appearing to vanish/jump.
-        const edgeId = e => `${e.source}::${e.sourcePipeline || ''}->${e.target}::${e.targetPipeline || ''}`;
-        const elkEdges = edges.map(e => ({
-            id: edgeId(e),
-            // No pipeline → attach to the node itself (ELK routes it to a sensible point on
-            // the node's boundary automatically), not a per-pipeline port. See the port-
-            // building comment above for why.
-            sources: [e.sourcePipeline ? portId(e.source, 'out', e.sourcePipeline) : e.source],
-            targets: [e.targetPipeline ? portId(e.target, 'in',  e.targetPipeline) : e.target],
-        }));
-        const edgeDataById = new Map(edges.map(e => [edgeId(e), e]));
-
-        // Nudges ELK's own compaction toward filling the container's actual shape
-        // instead of defaulting to a fixed internal ratio — helps address layouts
-        // that were sprawling wide/short regardless of the panel's real proportions.
-        const cw = handle.containerEl.clientWidth  || 1;
-        const ch = handle.containerEl.clientHeight || 1;
-
-        // Blueprint layout hints: "tree" shape → ELK mrtree; density scales spacing;
-        // straightenEdges → NETWORK_SIMPLEX node placement (straighter, less tidy packing).
-        const px = (base) => String(Math.round(base * dens));
-        const graph = {
-            id: 'root',
-            layoutOptions: {
-                'elk.algorithm': tree ? 'mrtree' : 'layered',
-                'elk.direction': dir,
-                'elk.edgeRouting': 'ORTHOGONAL',
-                'elk.aspectRatio': String(cw / ch),
-                'elk.layered.spacing.nodeNodeBetweenLayers': px(110),
-                'elk.spacing.nodeNode': px(56),
-                // These two were the tightest settings relative to how many parallel
-                // edges can share a channel between two fixed-position ports — bumped
-                // up first (least invasive: doesn't change where any arrow connects)
-                // before trading away exact per-row port alignment for FIXED_SIDE.
-                'elk.spacing.edgeNode': px(34),
-                'elk.spacing.edgeEdge': px(28),
-                'elk.layered.spacing.edgeNodeBetweenLayers': px(34),
-                // Live-tested against a hint file using role (source/sink — FIRST/LAST layer
-                // constraints): switching elk.layered.layering.strategy to INTERACTIVE throws
-                // "UnsupportedConfigurationException ... layer constraint set to LAST/FIRST,
-                // but has an edge that does not go to/come from a LAST_SEPARATE/FIRST_SEPARATE
-                // node" — ELK's interactive LAYERING is fundamentally incompatible with the
-                // FIRST/LAST hard pins role already relies on, and role is used by nearly every
-                // real hint file. So PinX only ever influences which position WITHIN whatever
-                // layer the normal automatic/role-constrained assignment already gave the node
-                // (via crossingMinimization+nodePlacement INTERACTIVE, which ARE compatible with
-                // FIRST/LAST) — it does not (and, short of dropping role support, safely cannot)
-                // move a node to a different layer/column. PinY has full effect within a layer.
-                'elk.layered.crossingMinimization.strategy': anyPinned ? 'INTERACTIVE' : 'LAYER_SWEEP',
-                'elk.layered.nodePlacement.strategy': anyPinned ? 'INTERACTIVE'
-                    : (layout && layout.straightenEdges) ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF',
-                'elk.padding': '[top=48,left=48,bottom=48,right=48]',
-            },
-            children: [...children, ...boxChildren],
-            edges: elkEdges,
-        };
-
-        const res = await handle.elk.layout(graph);
-
-        // Normalise into our render structure. ELK coords have a top-left origin;
-        // we store node CENTRE (renderNodes translates to centre, draws from -w/2)
-        // and keep edge points in ELK-absolute space (which equals our render space).
-        // res.children includes both real nodes and the synthetic __box_<runId> leaves —
-        // flattenChildRunBoxes tells them apart via metaById and merges each box's own
-        // pre-computed sub-layout in, recursively.
-        const rawPositions = new Map();
-        for (const c of (res.children || [])) {
-            rawPositions.set(c.id, { x: c.x + c.width / 2, y: c.y + c.height / 2, width: c.width, height: c.height });
-        }
-        const metaById = new Map();
-        for (const n of topo.nodes) metaById.set(n.id, { kind: 'node', data: n });
-        for (const [id, meta] of boxMetaById) metaById.set(id, meta);
-
-        const nodes = new Map();
-        const outEdges = [];
-        const boxes = [];
-        const groupColorsByRun = new Map([['', topo.groupColors || {}]]);
-        flattenChildRunBoxes(rawPositions, metaById, edgeDataById, direction, 0, 0, null, nodes, outEdges, boxes, groupColorsByRun);
-
-        for (const re of (res.edges || [])) {
-            const s = re.sections?.[0];
-            const pts = s ? [s.startPoint, ...(s.bendPoints || []), s.endPoint] : [];
-            outEdges.push({ id: re.id, pts, data: edgeDataById.get(re.id) });
-        }
-
-        return { nodes, edges: outEdges, width: res.width || 0, height: res.height || 0, childRunBoxes: boxes, groupColorsByRun };
-    }
-
     // Orthogonal polyline with rounded corners: line to a point `r` before each
     // bend, then a quadratic through the bend to `r` after it. Works for the axis-
-    // aligned segments ELK emits (and degrades gracefully for any diagonal).
+    // aligned segments bm-flow-layout emits (and degrades gracefully for any diagonal).
     function roundedOrthPath(pts, r = 9) {
         if (!pts || pts.length < 2) return '';
         if (pts.length === 2)
@@ -984,12 +751,11 @@ const D3Graph = (() => {
         return d + ` L ${last.x} ${last.y}`;
     }
 
-    // Smooth spline through the same ELK waypoints (start/bends/end) instead of
+    // Smooth spline through the same bm-flow-layout waypoints (start/bends/end) instead of
     // straight orthogonal segments — looser, organic look; the alternative to
-    // roundedOrthPath, picked by RunsSettings.GraphEdgeStyle via handle.edgeStyle.
-    // Applies regardless of port-constraint mode (FIXED_SIDE or FIXED_POS) — this is
-    // purely how the path between ELK's computed points is drawn, not how those
-    // points/ports were chosen.
+    // roundedOrthPath, picked by RunsSettings.GraphEdgeStyle via handle.edgeStyle. This is
+    // purely how the path between those computed points is drawn, not how the points/ports
+    // themselves were chosen.
     const curveLine = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveCatmullRom.alpha(0.5));
 
     function curvedPath(pts) {
@@ -1074,7 +840,7 @@ const D3Graph = (() => {
 
     // ── init ─────────────────────────────────────────────────────────────
 
-    function init(containerEl, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine) {
+    function init(containerEl, dotNetRef, edgeStyle, defaultDirection) {
         if (!containerEl) return null;
 
         const svg = d3.select(containerEl).append('svg')
@@ -1137,23 +903,17 @@ const D3Graph = (() => {
 
         const handle = {
             containerEl, svg, root, gLayer, cbLayer, eLayer, nLayer, zoom, popover, defs, dotNetRef,
-            portConstraints: portConstraints === 'FIXED_POS' ? 'FIXED_POS' : 'FIXED_SIDE',
             edgeStyle: edgeStyle === 'CURVED' ? 'CURVED' : 'ORTHOGONAL',
             // RunsSettings.GraphDirection (Program.cs / D3FlowGraph.razor) — 'RIGHT'/'DOWN'
             // fixes the default; 'AUTO' keeps the old aspect-ratio auto-pick. A run-type
             // hint's own layout.direction (see chooseDir) always wins over this either way.
             defaultDirection: (defaultDirection === 'DOWN' || defaultDirection === 'AUTO') ? defaultDirection : 'RIGHT',
-            // RunsSettings.GraphLayoutEngine — 'elk' (default) or 'custom' (bm-flow-layout).
-            // See runLayout()'s own comment for what each engine actually supports.
-            layoutEngine: layoutEngine === 'custom' ? 'custom' : 'elk',
             animState: createState(),
-            elk: (typeof ELK !== 'undefined') ? new ELK() : null,
             currentGraph: null, pendingTopology: null,
             layoutTimer: null, layoutSeq: 0, rafId: null, lastFrameTime: null, lastCommitTime: 0,
             userZoomed: false, isVisible: true, disposed: false,
             popoverNodeId: null, popoverPipeline: null, popoverHideTimer: null,
         };
-        if (!handle.elk && handle.layoutEngine !== 'custom') console.error('[D3Graph] ELK not loaded — flow graph cannot lay out.');
 
         const frame = now => {
             if (handle.disposed) return;
@@ -1194,11 +954,11 @@ const D3Graph = (() => {
     }
 
     // Stage 3 stability (docs/12 §5): a pure data update (counts/state/colour changed, but
-    // no node/edge/group actually added or removed) should never reshuffle positions — ELK
-    // re-solves from scratch every commit and WILL reshuffle even then, which is exactly the
-    // instability the custom engine exists to fix. Comparing a cheap structural signature
-    // lets us skip the whole relayout (and the ELK worker round-trip) on the common case of
-    // "same graph shape, new numbers," refreshing only each node/edge's `data` reference.
+    // no node/edge/group actually added or removed) should never reshuffle positions —
+    // re-solving from scratch on every commit would reshuffle even then, which is exactly
+    // the instability this comparison exists to avoid. A cheap structural signature lets us
+    // skip the whole relayout on the common case of "same graph shape, new numbers,"
+    // refreshing only each node/edge's `data` reference.
     // Recursive: an expanded child's real nodes/edges are merged into the main layout (see
     // buildLevelForLayout/flattenChildRunBoxes), so toggling expand/collapse — or a
     // structural change inside an already-expanded child — MUST force a full relayout, not
@@ -1216,10 +976,7 @@ const D3Graph = (() => {
     }
 
     async function commitLayout(handle) {
-        // The custom engine (RunsSettings.GraphLayoutEngine = "Custom") doesn't touch ELK at
-        // all, so it shouldn't be blocked by ELK failing to load (e.g. the CDN script being
-        // unreachable) — only the default 'elk' engine actually needs handle.elk.
-        if (handle.disposed || (handle.layoutEngine !== 'custom' && !handle.elk)) return;
+        if (handle.disposed) return;
         const topo = handle.pendingTopology;
         if (!topo) return;
         handle.lastCommitTime = performance.now();
@@ -1250,8 +1007,9 @@ const D3Graph = (() => {
             return;
         }
 
-        // ELK layout is async (runs in a worker). Guard against an older layout
-        // resolving after a newer one — only the latest sequence wins.
+        // runLayout is still awaited (kept async from the ELK.js-worker era, see its own
+        // comment) — guard against an older layout resolving after a newer one regardless;
+        // only the latest sequence wins.
         const seq = ++handle.layoutSeq;
         let g;
         try {
@@ -1259,7 +1017,7 @@ const D3Graph = (() => {
             // paths reuse that below without re-measuring text a second time.
             g = await runLayout(handle, topo, buildSeedOrder(handle));
         } catch (err) {
-            console.error('[D3Graph] ELK layout failed', err);
+            console.error('[D3Graph] layout failed', err);
             return;
         }
         if (handle.disposed || seq !== handle.layoutSeq) return;
@@ -1501,8 +1259,12 @@ const D3Graph = (() => {
     }
 
     // ── Group bands — a subtle labelled backdrop behind same-`group` nodes ────
-    // v1: a bounding box around the laid-out members (ELK isn't asked to cluster them, so
-    // members can be non-adjacent; the band still communicates the grouping visually).
+    // v1: a bounding box around the laid-out members. bm-flow-layout's own hard-group
+    // constraint (clusterByGroup in bm-flow-layout/layout.js) keeps members contiguous
+    // within their own layer, but a member's OWN layer can still be positioned adjacent to
+    // (and geometrically overlap, on the cross axis) an unrelated node in a neighboring
+    // layer — see pushExternalNodesClearOfGroups for the one case that's specifically
+    // guarded against (an `external` node landing inside a group's box).
     // Groups: ANY shared `group` tag always gets the default cosmetic band (soft, theme-
     // coloured, no configuration needed — unchanged from before). A group also listed in
     // the run-type hint's `groups` block (topo.groupColors, keyed by name) is upgraded to a
@@ -1602,11 +1364,13 @@ const D3Graph = (() => {
 
     // ── Nodes ─────────────────────────────────────────────────────────────
 
-    // ELK occasionally returns a child with no (or non-finite) x/y — seen for isolated
-    // nodes (no edges, e.g. a declared-but-never-observed skeleton service) under some
-    // layout/algorithm combinations. translate(NaN, NaN) breaks the whole <g>'s rendering
-    // and spams the console; fall back to the graph origin and warn once per node/render
-    // so a real occurrence is traceable instead of silently corrupting the layout.
+    // Defensive fallback for a node with no (or non-finite) x/y — a holdover guard from
+    // the ELK.js era, where an isolated node (no edges, e.g. a declared-but-never-observed
+    // skeleton service) could come back without a resolved position under some layout/
+    // algorithm combinations. bm-flow-layout always resolves every node's position, but
+    // translate(NaN, NaN) would break the whole <g>'s rendering and spam the console if
+    // this ever did happen, so the fallback stays cheap insurance: fall back to the graph
+    // origin and warn once per node/render so a real occurrence is traceable.
     function safeCoord(d) {
         if (Number.isFinite(d.x) && Number.isFinite(d.y)) return d;
         console.warn(`d3-graph: node "${d.id}" has non-finite position (x=${d.x}, y=${d.y}) — falling back to (0,0)`);
@@ -2222,7 +1986,7 @@ const D3Graph = (() => {
         const ch0 = handle.containerEl.clientHeight;
 
         // The container can still be mid-layout (e.g. tab/flex sizing not settled yet)
-        // the moment ELK's async layout resolves, especially on first load — measuring
+        // the moment the graph's own layout resolves, especially on first load — measuring
         // it then produces a bogus (often tiny) transform that's never corrected
         // afterward, which reads as "the graph opens zoomed into a small corner of
         // itself". Retry a few frames instead of committing to a size that isn't real.
@@ -2297,8 +2061,8 @@ const D3Graph = (() => {
 
 const _handles = new Map();
 
-/** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [portConstraints] "FIXED_SIDE" (default) or "FIXED_POS" @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
-export function init(el, key, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, portConstraints, edgeStyle, defaultDirection, layoutEngine)); }
+/** @param {Element} el @param {string} key @param {object} dotNetRef @param {string} [edgeStyle] "ORTHOGONAL" (default) or "CURVED" */
+export function init(el, key, dotNetRef, edgeStyle, defaultDirection) { if (_handles.has(key)) D3Graph.dispose(_handles.get(key)); _handles.set(key, D3Graph.init(el, dotNetRef, edgeStyle, defaultDirection)); }
 /** @param {string} key @param {object} topo */
 export function update(key, topo)        { const h = _handles.get(key); if (h) D3Graph.update(h, topo); }
 /** @param {string} key */

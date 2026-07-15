@@ -122,20 +122,6 @@ public sealed class ServiceHint
     public bool Pin { get; set; }
 
     /// <summary>
-    /// Explicit position hint, ELK layout only (RunsSettings.GraphLayoutEngine = "Elk", the
-    /// default) — same coordinate space ELK lays the whole graph out in, so getting exact
-    /// values usually means iterating: set a rough guess, look at the result, adjust. Passed
-    /// to ELK as a strong bias via its interactive layering/crossing-minimization strategies,
-    /// not a hard pixel guarantee — ELK still avoids overlapping nodes and keeps edges
-    /// sensible, so a pinned node can still shift somewhat from the exact requested spot.
-    /// Set either or both; an unset axis is left to ELK's normal automatic layout.
-    /// </summary>
-    public double? PinX { get; set; }
-
-    /// <summary>See <see cref="PinX"/>.</summary>
-    public double? PinY { get; set; }
-
-    /// <summary>
     /// "left" | "right" | "above" | "below" — soft placement preference for THIS node's
     /// successor(s) in the flow (Custom layout engine only — bm-flow-layout's own
     /// <c>placeSuccessor</c> hint). A successor node's own <see cref="Direction"/> (its
