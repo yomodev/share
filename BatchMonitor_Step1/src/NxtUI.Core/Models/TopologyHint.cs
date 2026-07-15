@@ -155,11 +155,15 @@ public sealed class ServiceHint
 
     /// <summary>
     /// "left" | "right" | "above" | "below" — which side of the layer an
-    /// <see cref="External"/> node is pinned to; its incoming edge visually approaches from
-    /// that side as a side effect of the engine's own orthogonal routing, not a separate
-    /// rule. Only "above"/"below" are valid in a horizontal flow, only "left"/"right" in a
-    /// vertical one (the flow axis itself is already fixed by layer) — an invalid side is
-    /// dropped with a warning. See <see cref="External"/>.
+    /// <see cref="External"/> node is pinned to. This only controls the node's POSITION
+    /// within its layer — it does not change which side of the node's own card an edge
+    /// connects to (edges always enter/exit at the flow-direction sides: west/east in a
+    /// horizontal flow, north/south in a vertical one). The routed edge's path does sweep
+    /// toward that side as it approaches (since the node itself sits there), but the actual
+    /// connection point stays on the flow-axis side either way. Only "above"/"below" are
+    /// valid in a horizontal flow, only "left"/"right" in a vertical one (the flow axis
+    /// itself is already fixed by layer) — an invalid side is dropped with a warning. See
+    /// <see cref="External"/>.
     /// </summary>
     public string? ArriveFrom { get; set; }
 
