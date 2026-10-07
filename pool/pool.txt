@@ -1,0 +1,1296 @@
+TEXTTAR 1.0
+FILE .gitignore
+LENGTH 42
+bin/
+obj/
+BenchmarkDotNet.Artifacts/
+.vs/
+FILE Directory.Build.props
+LENGTH 254
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>
+FILE README.md
+LENGTH 2687
+# StringPoolLab
+
+A UTF-8 string pool for huge CSV files (.NET 8), with a pluggable hash function,
+tests, and benchmarks comparing several implementations.
+
+## Layout
+
+```
+src/StringPooling/          library
+  ShardedStringPool<THasher>   the main implementation (lock-free hits, sharded locked inserts)
+  Hashers.cs                   CustomHasher, XxHash3Hasher, XxHash64Hasher, Fnv1aHasher (baseline)
+  Baselines.cs                 NoPool, InternPool, DictionaryPool, ConcurrentDictionaryPool,
+                               HashKeyedDictionaryPool, LockedPool
+  PoolCatalog.cs               PoolKind enum + factory used by tests and benchmarks
+  Analysis/                    hash-quality checks (collisions, chi-square, avalanche)
+tests/StringPooling.Tests/  xunit
+benchmarks/StringPooling.Benchmarks/  BenchmarkDotNet + quality report
+```
+
+## Run
+
+```
+dotnet test -c Release
+
+# hash quality numbers for all hashers (incl. weak FNV-1a)
+dotnet run -c Release --project benchmarks/StringPooling.Benchmarks -- quality
+
+# benchmarks (full run is long; add --job short for a quicker pass)
+dotnet run -c Release --project benchmarks/StringPooling.Benchmarks -- --filter "*HashBenchmarks*"
+dotnet run -c Release --project benchmarks/StringPooling.Benchmarks -- --filter "*SingleThreadBenchmarks*" --job short
+dotnet run -c Release --project benchmarks/StringPooling.Benchmarks -- --filter "*ParallelBenchmarks*" --job short
+```
+
+## Reading the benchmarks
+
+* `SingleThreadBenchmarks`: a fresh pre-sized pool per run, 4M fields, skewed value distribution,
+  `Distinct` = 1k (very repetitive) or 1M (long tail), ASCII or mixed non-ASCII.
+  Look at Mean and Allocated. `NoPool` is the floor for allocations, `Sharded1_*` vs `Sharded_*`
+  shows the cost of sharding itself.
+* `ParallelBenchmarks`: same idea with 1/2/4/8 threads sharing one pool, thread-safe pools only.
+* `HashBenchmarks`: raw hash throughput per key length.
+* All pools are called through `IStringPool`, so interface dispatch is a constant added to every row.
+* Synthetic data is only a proxy. Replace `FieldData.Generate` with slices of your real file before deciding.
+* The GC runs in the default (workstation, concurrent) mode on purpose, since you can't switch to server GC.
+
+## Notes
+
+* Equality on a hit compares UTF-8 bytes against the stored string without allocating
+  (`Utf8Compare.Equal`). Equal lengths do not imply ASCII: an invalid byte such as 0xFF decodes
+  to one U+FFFD char, so the slow path decodes before declaring a mismatch.
+* Entries are never removed. That is what makes the lock-free read path safe.
+* On .NET 9+ you could also use `Dictionary<string,string>.GetAlternateLookup<ReadOnlySpan<char>>()`.
+FILE StringPoolLab.sln
+LENGTH 2037
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StringPooling", "src\StringPooling\StringPooling.csproj", "{A1B2C3D4-0001-4000-8000-000000000001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StringPooling.Tests", "tests\StringPooling.Tests\StringPooling.Tests.csproj", "{A1B2C3D4-0002-4000-8000-000000000002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StringPooling.Benchmarks", "benchmarks\StringPooling.Benchmarks\StringPooling.Benchmarks.csproj", "{A1B2C3D4-0003-4000-8000-000000000003}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|Any CPU = Debug|Any CPU
+        Release|Any CPU = Release|Any CPU
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {A1B2C3D4-0001-4000-8000-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A1B2C3D4-0001-4000-8000-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A1B2C3D4-0001-4000-8000-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {A1B2C3D4-0001-4000-8000-000000000001}.Release|Any CPU.Build.0 = Release|Any CPU
+        {A1B2C3D4-0002-4000-8000-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A1B2C3D4-0002-4000-8000-000000000002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A1B2C3D4-0002-4000-8000-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {A1B2C3D4-0002-4000-8000-000000000002}.Release|Any CPU.Build.0 = Release|Any CPU
+        {A1B2C3D4-0003-4000-8000-000000000003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A1B2C3D4-0003-4000-8000-000000000003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A1B2C3D4-0003-4000-8000-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {A1B2C3D4-0003-4000-8000-000000000003}.Release|Any CPU.Build.0 = Release|Any CPU
+    EndGlobalSection
+EndGlobal
+FILE benchmarks/StringPooling.Benchmarks/FieldData.cs
+LENGTH 2121
+using System.Text;
+
+namespace StringPooling.Benchmarks;
+
+/// <summary>
+/// Synthetic "parsed CSV" input: one big UTF-8 buffer plus (offset, length) per field,
+/// which is exactly what a span-based CSV parser hands to the pool.
+/// Values are drawn from a skewed distribution (few very common values, a long tail).
+/// </summary>
+public sealed class FieldData
+{
+    public byte[] Buffer = Array.Empty<byte>();
+    public int[] Offsets = Array.Empty<int>();
+    public int[] Lengths = Array.Empty<int>();
+
+    public static FieldData Generate(int fieldCount, int distinct, bool nonAscii, int seed)
+    {
+        var rng = new Random(seed);
+        string[] prefixes = { "ACTIVE", "pending", "CZ", "Praha", "order", "customer", "SKU", "north", "item", "region" };
+
+        var words = new byte[distinct][];
+        var sb = new StringBuilder();
+        for (int i = 0; i < distinct; i++)
+        {
+            sb.Clear();
+            sb.Append(prefixes[i % prefixes.Length]).Append('-').Append(i.ToString("x"));   // guarantees uniqueness
+            int pad = rng.Next(0, 24);
+            for (int k = 0; k < pad; k++) sb.Append((char)('a' + rng.Next(26)));
+            if (nonAscii && i % 5 == 0) sb.Append("é日本");
+            words[i] = Encoding.UTF8.GetBytes(sb.ToString());
+        }
+
+        var picks = new int[fieldCount];
+        long total = 0;
+        for (int f = 0; f < fieldCount; f++)
+        {
+            int idx = (int)(distinct * Math.Pow(rng.NextDouble(), 3.0));   // skew toward low indices
+            if (idx >= distinct) idx = distinct - 1;
+            picks[f] = idx;
+            total += words[idx].Length;
+        }
+
+        var data = new FieldData
+        {
+            Buffer = new byte[total],
+            Offsets = new int[fieldCount],
+            Lengths = new int[fieldCount],
+        };
+        int pos = 0;
+        for (int f = 0; f < fieldCount; f++)
+        {
+            var w = words[picks[f]];
+            w.CopyTo(data.Buffer, pos);
+            data.Offsets[f] = pos;
+            data.Lengths[f] = w.Length;
+            pos += w.Length;
+        }
+        return data;
+    }
+}
+FILE benchmarks/StringPooling.Benchmarks/HashBenchmarks.cs
+LENGTH 1394
+using BenchmarkDotNet.Attributes;
+
+namespace StringPooling.Benchmarks;
+
+/// <summary>Raw hash speed per key length (direct static calls, no delegates).</summary>
+public class HashBenchmarks
+{
+    private const int KeyCount = 1024;
+    private byte[][] _keys = null!;
+
+    [Params(4, 8, 16, 32, 64, 256)]
+    public int Length { get; set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var rng = new Random(7);
+        _keys = new byte[KeyCount][];
+        for (int i = 0; i < KeyCount; i++)
+        {
+            _keys[i] = new byte[Length];
+            rng.NextBytes(_keys[i]);
+        }
+    }
+
+    [Benchmark(OperationsPerInvoke = KeyCount, Baseline = true)]
+    public ulong Hash_XxHash3()
+    {
+        ulong x = 0;
+        foreach (var k in _keys) x ^= XxHash3Hasher.Hash(k);
+        return x;
+    }
+
+    [Benchmark(OperationsPerInvoke = KeyCount)]
+    public ulong Hash_Custom()
+    {
+        ulong x = 0;
+        foreach (var k in _keys) x ^= CustomHasher.Hash(k);
+        return x;
+    }
+
+    [Benchmark(OperationsPerInvoke = KeyCount)]
+    public ulong Hash_XxHash64()
+    {
+        ulong x = 0;
+        foreach (var k in _keys) x ^= XxHash64Hasher.Hash(k);
+        return x;
+    }
+
+    [Benchmark(OperationsPerInvoke = KeyCount)]
+    public ulong Hash_Fnv1a()
+    {
+        ulong x = 0;
+        foreach (var k in _keys) x ^= Fnv1aHasher.Hash(k);
+        return x;
+    }
+}
+FILE benchmarks/StringPooling.Benchmarks/PoolBenchmarks.cs
+LENGTH 2520
+using BenchmarkDotNet.Attributes;
+
+namespace StringPooling.Benchmarks;
+
+/// <summary>
+/// One thread, fresh (pre-sized) pool per invocation, so misses (insertions) and hits are both measured,
+/// like processing a file once. Compare Mean and Allocated across PoolKind.
+/// </summary>
+[MemoryDiagnoser]
+public class SingleThreadBenchmarks
+{
+    private const int FieldCount = 4_000_000;
+    private FieldData _data = null!;
+
+    [Params(1_000, 1_000_000)]
+    public int Distinct { get; set; }
+
+    [ParamsAllValues]
+    public bool NonAscii { get; set; }
+
+    [ParamsAllValues]
+    public PoolKind Kind { get; set; }
+
+    [GlobalSetup]
+    public void Setup() => _data = FieldData.Generate(FieldCount, Distinct, NonAscii, seed: 42);
+
+    [Benchmark]
+    public long Run()
+    {
+        var pool = PoolCatalog.Create(Kind, Distinct);
+        var buf = _data.Buffer;
+        var off = _data.Offsets;
+        var len = _data.Lengths;
+
+        long total = 0;
+        for (int i = 0; i < off.Length; i++)
+            total += pool.Get(buf.AsSpan(off[i], len[i])).Length;
+        return total;
+    }
+}
+
+/// <summary>Several threads share one pool; only thread-safe implementations take part.</summary>
+[MemoryDiagnoser]
+public class ParallelBenchmarks
+{
+    private const int FieldCount = 8_000_000;
+    private FieldData _data = null!;
+
+    [Params(1_000, 1_000_000)]
+    public int Distinct { get; set; }
+
+    [Params(1, 2, 4, 8)]
+    public int Threads { get; set; }
+
+    [ParamsSource(nameof(ThreadSafeKinds))]
+    public PoolKind Kind { get; set; }
+
+    public IEnumerable<PoolKind> ThreadSafeKinds => PoolCatalog.ThreadSafeKinds.Where(k => k != PoolKind.NoPool);
+
+    [GlobalSetup]
+    public void Setup() => _data = FieldData.Generate(FieldCount, Distinct, nonAscii: false, seed: 42);
+
+    [Benchmark]
+    public long Run()
+    {
+        var pool = PoolCatalog.Create(Kind, Distinct);
+        var buf = _data.Buffer;
+        var off = _data.Offsets;
+        var len = _data.Lengths;
+        int n = off.Length;
+        int threads = Threads;
+        long total = 0;
+
+        Parallel.For(0, threads, new ParallelOptions { MaxDegreeOfParallelism = threads }, t =>
+        {
+            int start = (int)((long)n * t / threads);
+            int end = (int)((long)n * (t + 1) / threads);
+            long local = 0;
+            for (int i = start; i < end; i++)
+                local += pool.Get(buf.AsSpan(off[i], len[i])).Length;
+            Interlocked.Add(ref total, local);
+        });
+        return total;
+    }
+}
+FILE benchmarks/StringPooling.Benchmarks/Program.cs
+LENGTH 234
+using BenchmarkDotNet.Running;
+using StringPooling.Benchmarks;
+
+if (args.Length > 0 && args[0] == "quality")
+{
+    QualityReport.Run();
+    return;
+}
+
+BenchmarkSwitcher.FromAssembly(typeof(SingleThreadBenchmarks).Assembly).Run(args);
+FILE benchmarks/StringPooling.Benchmarks/QualityReport.cs
+LENGTH 2081
+using StringPooling.Analysis;
+
+namespace StringPooling.Benchmarks;
+
+/// <summary>Prints hash-quality numbers for every hasher (including the weak FNV-1a baseline).</summary>
+public static class QualityReport
+{
+    public static void Run()
+    {
+        const int n = 1 << 20;
+
+        Console.WriteLine($"== Collisions of full 64-bit hash (want 0) and chi-square z-scores (want |z| < ~4), {n:N0} keys per family ==");
+        foreach (var h in HasherCatalog.All)
+        {
+            Console.WriteLine();
+            Console.WriteLine(h.Name);
+            Console.WriteLine("  " + "family".PadRight(16) + "collisions".PadLeft(12) + "z(slot16)".PadLeft(12) + "z(shard6)".PadLeft(12));
+            foreach (var f in HashQuality.KeyFamilies)
+            {
+                int c = HashQuality.CountCollisions(h.Fn, f.Make, n);
+                double zs = HashQuality.ChiSquareZ(h.Fn, f.Make, n, shift: 0, bits: 16);
+                double zh = HashQuality.ChiSquareZ(h.Fn, f.Make, n, shift: 32, bits: 6);
+                Console.WriteLine("  " + f.Name.PadRight(16) + c.ToString().PadLeft(12) + zs.ToString("F2").PadLeft(12) + zh.ToString("F2").PadLeft(12));
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("== Avalanche (ideal: mean 0.5000, worst cell bias near 0; 3000 samples/length) ==");
+        foreach (var h in HasherCatalog.All)
+        {
+            Console.WriteLine();
+            Console.WriteLine(h.Name);
+            Console.WriteLine("  " + "length".PadRight(8) + "mean".PadLeft(10) + "worstBias".PadLeft(12));
+            foreach (int len in new[] { 1, 2, 3, 4, 7, 8, 9, 16, 31, 33, 64, 100 })
+            {
+                var r = HashQuality.Avalanche(h.Fn, len, 3000, 1234 + len);
+                Console.WriteLine("  " + len.ToString().PadRight(8) + r.MeanFlipProbability.ToString("F4").PadLeft(10) + r.WorstCellBias.ToString("F4").PadLeft(12));
+            }
+        }
+        Console.WriteLine();
+        Console.WriteLine("Note: for length 1-2 there are only 256 / 65536 distinct inputs, so worstBias is noisy there.");
+    }
+}
+FILE benchmarks/StringPooling.Benchmarks/StringPooling.Benchmarks.csproj
+LENGTH 321
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StringPooling\StringPooling.csproj" />
+  </ItemGroup>
+</Project>
+FILE src/StringPooling/Baselines.cs
+LENGTH 3663
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace StringPooling;
+
+/// <summary>No pooling at all: one new string per field. The "do nothing" baseline.</summary>
+public sealed class NoPool : IStringPool
+{
+    public bool IsThreadSafe => true;
+    public string Get(ReadOnlySpan<byte> utf8) => Encoding.UTF8.GetString(utf8);
+}
+
+/// <summary>string.Intern on a freshly decoded string. Never frees, global lock-ish table.</summary>
+public sealed class InternPool : IStringPool
+{
+    public bool IsThreadSafe => true;
+    public string Get(ReadOnlySpan<byte> utf8) =>
+        utf8.IsEmpty ? string.Empty : string.Intern(Encoding.UTF8.GetString(utf8));
+}
+
+/// <summary>Decode first, then Dictionary&lt;string,string&gt; lookup. Allocates a string per field.</summary>
+public sealed class DictionaryPool : IStringPool
+{
+    private readonly Dictionary<string, string> _map;
+    public DictionaryPool(int capacity = 0) => _map = new(capacity);
+    public bool IsThreadSafe => false;
+
+    public string Get(ReadOnlySpan<byte> utf8)
+    {
+        string s = Encoding.UTF8.GetString(utf8);
+        if (_map.TryGetValue(s, out var existing)) return existing;
+        _map.Add(s, s);
+        return s;
+    }
+}
+
+/// <summary>Decode first, then ConcurrentDictionary.GetOrAdd. Allocates a string per field.</summary>
+public sealed class ConcurrentDictionaryPool : IStringPool
+{
+    private readonly ConcurrentDictionary<string, string> _map;
+
+    public ConcurrentDictionaryPool(int capacity = 31) =>
+        _map = new(Environment.ProcessorCount, Math.Max(capacity, 31));
+
+    public bool IsThreadSafe => true;
+
+    public string Get(ReadOnlySpan<byte> utf8)
+    {
+        string s = Encoding.UTF8.GetString(utf8);
+        return _map.GetOrAdd(s, s);
+    }
+}
+
+/// <summary>
+/// Dictionary keyed by the 64-bit hash (no string allocation on hit), with verification and
+/// a side table for real collisions. Single-threaded.
+/// </summary>
+public sealed class HashKeyedDictionaryPool<THasher> : IStringPool where THasher : IUtf8Hasher
+{
+    private readonly Dictionary<ulong, string> _map;
+    private Dictionary<ulong, List<string>>? _collisions;
+
+    public HashKeyedDictionaryPool(int capacity = 0) => _map = new(capacity);
+    public bool IsThreadSafe => false;
+
+    public string Get(ReadOnlySpan<byte> utf8)
+    {
+        if (utf8.IsEmpty) return string.Empty;
+
+        ulong h = THasher.Hash(utf8);
+        ref string? slot = ref CollectionsMarshal.GetValueRefOrAddDefault(_map, h, out bool exists);
+        if (!exists)
+        {
+            string s = Encoding.UTF8.GetString(utf8);
+            slot = s;
+            return s;
+        }
+        if (Utf8Compare.Equal(utf8, slot!)) return slot!;
+        return GetFromCollisions(h, utf8);
+    }
+
+    private string GetFromCollisions(ulong h, ReadOnlySpan<byte> utf8)
+    {
+        _collisions ??= new();
+        if (!_collisions.TryGetValue(h, out var list))
+            _collisions[h] = list = new List<string>(2);
+
+        foreach (var item in list)
+            if (Utf8Compare.Equal(utf8, item)) return item;
+
+        string created = Encoding.UTF8.GetString(utf8);
+        list.Add(created);
+        return created;
+    }
+}
+
+/// <summary>Coarse single lock around any pool: the naive way to make a pool thread-safe.</summary>
+public sealed class LockedPool : IStringPool
+{
+    private readonly IStringPool _inner;
+    private readonly object _lock = new();
+
+    public LockedPool(IStringPool inner) => _inner = inner;
+    public bool IsThreadSafe => true;
+
+    public string Get(ReadOnlySpan<byte> utf8)
+    {
+        lock (_lock) return _inner.Get(utf8);
+    }
+}
+FILE src/StringPooling/Hashers.cs
+LENGTH 2417
+using System.IO.Hashing;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace StringPooling;
+
+/// <summary>The hand-written hash from the conversation: 8 bytes/step multiply-rotate + murmur3 fmix64.</summary>
+public readonly struct CustomHasher : IUtf8Hasher
+{
+    private const ulong K1 = 0x9E3779B185EBCA87UL;
+    private const ulong K2 = 0xC2B2AE3D27D4EB4FUL;
+
+    public static ulong Hash(ReadOnlySpan<byte> d)
+    {
+        int len = d.Length;
+        if (len == 0) return 0x2545F4914F6CDD1DUL;
+
+        ref byte r = ref MemoryMarshal.GetReference(d);
+        ulong h = (ulong)len * K1;
+
+        int i = 0;
+        for (; i + 8 <= len; i += 8)
+            h = BitOperations.RotateLeft(
+                    h ^ (Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i)) * K2), 29) * K1;
+
+        ulong tail;
+        if (len >= 8)
+            tail = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, len - 8));
+        else if (len >= 4)
+            tail = ((ulong)Unsafe.ReadUnaligned<uint>(ref r) << 32)
+                 | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref r, len - 4));
+        else
+            tail = ((ulong)r << 16)
+                 | ((ulong)Unsafe.Add(ref r, len >> 1) << 8)
+                 | Unsafe.Add(ref r, len - 1);
+
+        h ^= tail * K2;
+        return FMix64(h);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong FMix64(ulong h)
+    {
+        h ^= h >> 33; h *= 0xFF51AFD7ED558CCDUL;
+        h ^= h >> 33; h *= 0xC4CEB9FE1A85EC53UL;
+        h ^= h >> 33;
+        return h;
+    }
+}
+
+/// <summary>XXH3 64-bit from System.IO.Hashing (vectorized, well-vetted).</summary>
+public readonly struct XxHash3Hasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data) => XxHash3.HashToUInt64(data);
+}
+
+/// <summary>XXH64 from System.IO.Hashing.</summary>
+public readonly struct XxHash64Hasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data) => XxHash64.HashToUInt64(data);
+}
+
+/// <summary>FNV-1a 64-bit, byte at a time. Included as a deliberately simple/weak baseline.</summary>
+public readonly struct Fnv1aHasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data)
+    {
+        ulong h = 14695981039346656037UL;
+        foreach (byte b in data)
+        {
+            h ^= b;
+            h *= 1099511628211UL;
+        }
+        return h;
+    }
+}
+FILE src/StringPooling/IStringPool.cs
+LENGTH 523
+namespace StringPooling;
+
+/// <summary>A pool that turns UTF-8 field bytes into (shared) string instances.</summary>
+public interface IStringPool
+{
+    string Get(ReadOnlySpan<byte> utf8);
+    bool IsThreadSafe { get; }
+}
+
+/// <summary>
+/// Hash strategy over UTF-8 bytes. Implemented as a struct so the pool's generic code is
+/// specialized per hasher and the call can be inlined (no delegate / interface dispatch).
+/// </summary>
+public interface IUtf8Hasher
+{
+    static abstract ulong Hash(ReadOnlySpan<byte> data);
+}
+FILE src/StringPooling/PoolCatalog.cs
+LENGTH 1847
+namespace StringPooling;
+
+public enum PoolKind
+{
+    NoPool,
+    Intern,
+    Dictionary,
+    ConcurrentDictionary,
+    HashKeyed_XxHash3,
+    Locked_HashKeyed_XxHash3,
+    Sharded1_XxHash3,       // one shard: shows the cost/benefit of sharding itself
+    Sharded_Custom,
+    Sharded_XxHash3,
+    Sharded_XxHash64,
+    Sharded_Fnv1a,
+}
+
+public static class PoolCatalog
+{
+    public static IEnumerable<PoolKind> AllKinds => Enum.GetValues<PoolKind>();
+
+    /// <summary>Everything that actually shares string instances (i.e. all but NoPool).</summary>
+    public static IEnumerable<PoolKind> PoolingKinds => AllKinds.Where(k => k != PoolKind.NoPool);
+
+    public static IEnumerable<PoolKind> ThreadSafeKinds =>
+        AllKinds.Where(k => Create(k, 16).IsThreadSafe);
+
+    public static IStringPool Create(PoolKind kind, int expectedCount) => kind switch
+    {
+        PoolKind.NoPool => new NoPool(),
+        PoolKind.Intern => new InternPool(),
+        PoolKind.Dictionary => new DictionaryPool(expectedCount),
+        PoolKind.ConcurrentDictionary => new ConcurrentDictionaryPool(expectedCount),
+        PoolKind.HashKeyed_XxHash3 => new HashKeyedDictionaryPool<XxHash3Hasher>(expectedCount),
+        PoolKind.Locked_HashKeyed_XxHash3 => new LockedPool(new HashKeyedDictionaryPool<XxHash3Hasher>(expectedCount)),
+        PoolKind.Sharded1_XxHash3 => new ShardedStringPool<XxHash3Hasher>(expectedCount, shardCount: 1),
+        PoolKind.Sharded_Custom => new ShardedStringPool<CustomHasher>(expectedCount),
+        PoolKind.Sharded_XxHash3 => new ShardedStringPool<XxHash3Hasher>(expectedCount),
+        PoolKind.Sharded_XxHash64 => new ShardedStringPool<XxHash64Hasher>(expectedCount),
+        PoolKind.Sharded_Fnv1a => new ShardedStringPool<Fnv1aHasher>(expectedCount),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+}
+FILE src/StringPooling/ShardedStringPool.cs
+LENGTH 5402
+using System.Buffers;
+using System.Numerics;
+using System.Text;
+
+namespace StringPooling;
+
+/// <summary>
+/// One logical pool made of independent shards. Each shard is an open-addressing table
+/// (parallel int[] hashes / string[] values). Hits are lock-free, misses take the shard lock.
+/// Entries are never removed, which is what makes the lock-free read path safe.
+/// </summary>
+public sealed class ShardedStringPool<THasher> : IStringPool where THasher : IUtf8Hasher
+{
+    private const int MaxSlotsPerShard = 1 << 30;
+
+    private sealed class Table
+    {
+        public readonly int[] Hashes;      // 0 = empty slot
+        public readonly string?[] Values;
+        public readonly int Mask;
+        public readonly int GrowAt;
+
+        public Table(int slots)
+        {
+            Hashes = new int[slots];
+            Values = new string?[slots];
+            Mask = slots - 1;
+            GrowAt = (int)((long)slots * 6 / 10);
+        }
+    }
+
+    private sealed class Shard
+    {
+        public readonly object Lock = new();
+        public Table Current;
+        public int Count;
+        public Shard(int slots) => Current = new Table(slots);
+    }
+
+    private readonly Shard[] _shards;
+    private readonly int _shardMask;
+
+    public ShardedStringPool(int expectedCount = 1 << 22, int shardCount = 64)
+    {
+        int shards = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(1, shardCount));
+        _shardMask = shards - 1;
+        long perShard = Math.Max(16, (long)(expectedCount / (double)shards / 0.6) + 1);
+        int slots = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Min(perShard, MaxSlotsPerShard));
+        _shards = new Shard[shards];
+        for (int i = 0; i < shards; i++) _shards[i] = new Shard(slots);
+    }
+
+    public bool IsThreadSafe => true;
+
+    public int Count
+    {
+        get
+        {
+            long n = 0;
+            foreach (var s in _shards) n += Volatile.Read(ref s.Count);
+            return (int)Math.Min(n, int.MaxValue);
+        }
+    }
+
+    /// <summary>Primary path: UTF-8 bytes straight from the parser.</summary>
+    public string Get(ReadOnlySpan<byte> utf8)
+    {
+        if (utf8.IsEmpty) return string.Empty;
+
+        ulong h64 = THasher.Hash(utf8);
+        int h = (int)h64;                          // slot index source: low 32 bits
+        if (h == 0) h = 1;                         // 0 is reserved for "empty"
+        var shard = _shards[(int)(h64 >> 32) & _shardMask];   // shard source: high bits
+
+        // Lock-free probe.
+        var found = Find(Volatile.Read(ref shard.Current), h, utf8);
+        if (found is not null) return found;
+
+        lock (shard.Lock)
+        {
+            var t = shard.Current;
+            found = Find(t, h, utf8);              // someone may have inserted it meanwhile
+            if (found is not null) return found;
+
+            string s = Encoding.UTF8.GetString(utf8);
+            Insert(t, h, s);
+            if (++shard.Count > t.GrowAt) Grow(shard);
+            return s;
+        }
+    }
+
+    /// <summary>Convenience path: transcodes to UTF-8 so the hash matches the byte path. Keep off hot paths.</summary>
+    public string Get(ReadOnlySpan<char> chars)
+    {
+        if (chars.IsEmpty) return string.Empty;
+
+        int max = Encoding.UTF8.GetMaxByteCount(chars.Length);
+        byte[]? rented = null;
+        Span<byte> buf = stackalloc byte[512];
+        if (max > buf.Length)
+        {
+            rented = ArrayPool<byte>.Shared.Rent(max);
+            buf = rented;
+        }
+        try
+        {
+            int n = Encoding.UTF8.GetBytes(chars, buf);
+            return Get((ReadOnlySpan<byte>)buf[..n]);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static string? Find(Table t, int h, ReadOnlySpan<byte> utf8)
+    {
+        var hashes = t.Hashes;
+        var values = t.Values;
+        int mask = t.Mask;
+        int i = h & mask;
+        while (true)
+        {
+            int hv = Volatile.Read(ref hashes[i]);   // acquire
+            if (hv == 0) return null;
+            if (hv == h)
+            {
+                var v = values[i]!;                  // written before the hash was published
+                if (Utf8Compare.Equal(utf8, v)) return v;
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    private static void Insert(Table t, int h, string s)
+    {
+        var hashes = t.Hashes;
+        int mask = t.Mask;
+        int i = h & mask;
+        while (hashes[i] != 0) i = (i + 1) & mask;
+        t.Values[i] = s;
+        Volatile.Write(ref hashes[i], h);            // release: publish after the value
+    }
+
+    private static void Grow(Shard shard)
+    {
+        var old = shard.Current;
+        if (old.Hashes.Length >= MaxSlotsPerShard)
+            throw new InvalidOperationException("StringPool shard is full.");
+
+        var next = new Table(old.Hashes.Length * 2);
+        for (int j = 0; j < old.Hashes.Length; j++)
+        {
+            int h = old.Hashes[j];
+            if (h == 0) continue;
+            int i = h & next.Mask;
+            while (next.Hashes[i] != 0) i = (i + 1) & next.Mask;
+            next.Values[i] = old.Values[j];
+            next.Hashes[i] = h;                      // table not visible to readers yet
+        }
+        Volatile.Write(ref shard.Current, next);     // publish the whole table at once
+    }
+}
+FILE src/StringPooling/StringPooling.csproj
+LENGTH 143
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+  </ItemGroup>
+</Project>
+FILE src/StringPooling/Utf8Compare.cs
+LENGTH 1389
+using System.Buffers;
+using System.Text;
+
+namespace StringPooling;
+
+public static class Utf8Compare
+{
+    /// <summary>
+    /// True if decoding <paramref name="utf8"/> with Encoding.UTF8 (replacement semantics) yields exactly <paramref name="s"/>.
+    /// </summary>
+    public static bool Equal(ReadOnlySpan<byte> utf8, string s)
+    {
+        // Decoding never produces more chars than input bytes.
+        if (s.Length > utf8.Length) return false;
+
+        // Fast path: pure ASCII, no transcoding.
+        if (s.Length == utf8.Length && Ascii.Equals(utf8, s)) return true;
+
+        // Slow path: non-ASCII, invalid sequences (e.g. one 0xFF byte becomes one U+FFFD char,
+        // so equal lengths do NOT imply ASCII), or a rare hash collision between ASCII strings.
+        return DecodeEquals(utf8, s);
+    }
+
+    private static bool DecodeEquals(ReadOnlySpan<byte> utf8, string s)
+    {
+        char[]? rented = null;
+        Span<char> buf = stackalloc char[256];
+        if (utf8.Length > buf.Length)
+        {
+            rented = ArrayPool<char>.Shared.Rent(utf8.Length);
+            buf = rented;
+        }
+        try
+        {
+            int n = Encoding.UTF8.GetChars(utf8, buf);
+            return n == s.Length && buf[..n].SequenceEqual(s);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+}
+FILE tests/StringPooling.Tests/HashQualityTests.cs
+LENGTH 2343
+using StringPooling.Analysis;
+
+namespace StringPooling.Tests;
+
+/// <summary>
+/// Statistical sanity checks. They run on the hashers expected to be good (Custom, XxHash3, XxHash64);
+/// run `dotnet run -c Release --project benchmarks/StringPooling.Benchmarks -- quality`
+/// to see the numbers for all hashers, including the weak FNV-1a baseline.
+/// </summary>
+public class HashQualityTests
+{
+    private const int N = 1 << 20;
+
+    public static IEnumerable<object[]> Hashers() => HasherCatalog.Strong.Select(h => new object[] { h.Name });
+
+    [Theory, MemberData(nameof(Hashers))]
+    public void No_full_64bit_collisions_on_structured_keys(string name)
+    {
+        var hash = HasherCatalog.Get(name).Fn;
+        foreach (var family in HashQuality.KeyFamilies)
+        {
+            int collisions = HashQuality.CountCollisions(hash, family.Make, N);
+            Assert.True(collisions == 0, $"{name}/{family.Name}: {collisions} full 64-bit collisions in {N} keys");
+        }
+    }
+
+    [Theory, MemberData(nameof(Hashers))]
+    public void Slot_and_shard_bits_are_uniform(string name)
+    {
+        var hash = HasherCatalog.Get(name).Fn;
+        foreach (var family in HashQuality.KeyFamilies)
+        {
+            double zSlot = HashQuality.ChiSquareZ(hash, family.Make, N, shift: 0, bits: 16);    // low bits -> table slot
+            double zShard = HashQuality.ChiSquareZ(hash, family.Make, N, shift: 32, bits: 6);   // bits 32..37 -> shard
+            Assert.True(Math.Abs(zSlot) < 7, $"{name}/{family.Name}: slot-bit chi-square z = {zSlot:F2}");
+            Assert.True(Math.Abs(zShard) < 7, $"{name}/{family.Name}: shard-bit chi-square z = {zShard:F2}");
+        }
+    }
+
+    [Theory, MemberData(nameof(Hashers))]
+    public void Single_bit_flips_avalanche(string name)
+    {
+        var hash = HasherCatalog.Get(name).Fn;
+        foreach (int length in new[] { 3, 4, 7, 8, 9, 16, 31, 33, 64, 100 })
+        {
+            var r = HashQuality.Avalanche(hash, length, samples: 3000, seed: 1234 + length);
+            Assert.True(Math.Abs(r.MeanFlipProbability - 0.5) < 0.01,
+                $"{name} len {length}: mean flip probability {r.MeanFlipProbability:F4}");
+            Assert.True(r.WorstCellBias < 0.08,
+                $"{name} len {length}: worst (input bit, output bit) bias {r.WorstCellBias:F4}");
+        }
+    }
+}
+FILE tests/StringPooling.Tests/PoolContractTests.cs
+LENGTH 2617
+using System.Text;
+using StringPooling;
+
+namespace StringPooling.Tests;
+
+/// <summary>Behaviour every pooling implementation must share.</summary>
+public class PoolContractTests
+{
+    public static IEnumerable<object[]> Kinds() => PoolCatalog.PoolingKinds.Select(k => new object[] { k });
+
+    private static byte[] B(string s) => Encoding.UTF8.GetBytes(s);
+
+    private static readonly string[] Samples =
+    {
+        "a",
+        "hello",
+        "Praha-Žižkov",
+        "héllo wörld",
+        "日本語",
+        "😀 emoji + 𝄞 surrogates",
+        new string('x', 1000),
+        new string('é', 5000),          // long, non-ASCII: forces the rented-buffer path
+        "mixed " + new string('日', 300),
+    };
+
+    [Theory, MemberData(nameof(Kinds))]
+    public void Empty_input_returns_string_empty(PoolKind kind)
+    {
+        var pool = PoolCatalog.Create(kind, 16);
+        Assert.Same(string.Empty, pool.Get(ReadOnlySpan<byte>.Empty));
+    }
+
+    [Theory, MemberData(nameof(Kinds))]
+    public void Same_content_returns_same_reference(PoolKind kind)
+    {
+        var pool = PoolCatalog.Create(kind, 16);
+        foreach (var s in Samples)
+        {
+            var a = pool.Get(B(s));
+            var b = pool.Get(B(s));
+            Assert.Equal(s, a);
+            Assert.Same(a, b);
+        }
+    }
+
+    [Theory, MemberData(nameof(Kinds))]
+    public void Many_distinct_values_are_all_correct_and_stable(PoolKind kind)
+    {
+        const int n = 50_000;
+        var pool = PoolCatalog.Create(kind, 16);   // small on purpose: forces growth
+
+        var first = new string[n];
+        for (int i = 0; i < n; i++) first[i] = pool.Get(B($"key-{i}-é"));
+
+        for (int i = 0; i < n; i++)
+        {
+            Assert.Equal($"key-{i}-é", first[i]);
+            Assert.Same(first[i], pool.Get(B($"key-{i}-é")));
+        }
+    }
+
+    [Theory, MemberData(nameof(Kinds))]
+    public void Invalid_utf8_is_pooled_like_anything_else(PoolKind kind)
+    {
+        var pool = PoolCatalog.Create(kind, 16);
+        byte[][] inputs =
+        {
+            new byte[] { 0xFF },                     // 1 byte -> 1 char (U+FFFD): equal lengths, not ASCII
+            new byte[] { 0x61, 0xFF, 0x62 },
+            new byte[] { 0xC3 },                     // truncated 2-byte sequence
+            new byte[] { 0xE6, 0x97 },               // truncated 3-byte sequence
+        };
+        foreach (var bytes in inputs)
+        {
+            var a = pool.Get(bytes);
+            var b = pool.Get(bytes);
+            Assert.Equal(Encoding.UTF8.GetString(bytes), a);
+            Assert.Same(a, b);
+        }
+    }
+}
+FILE tests/StringPooling.Tests/ShardedStringPoolTests.cs
+LENGTH 4582
+using System.IO.Hashing;
+using System.Text;
+using StringPooling;
+
+namespace StringPooling.Tests;
+
+// Hashers that are deliberately terrible, to prove the pool stays correct under collisions.
+public readonly struct ZeroHasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data) => 0;                   // also exercises the "0 = empty" remap
+}
+
+public readonly struct ConstantHasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data) => 0x1234_5678_9ABC_DEF0UL;
+}
+
+public readonly struct NarrowHasher : IUtf8Hasher
+{
+    public static ulong Hash(ReadOnlySpan<byte> data) => XxHash3.HashToUInt64(data) & 0xFF;   // only 256 distinct hashes
+}
+
+public class ShardedStringPoolTests
+{
+    private static byte[] B(string s) => Encoding.UTF8.GetBytes(s);
+
+    private static void ExerciseSmallPool<THasher>(int n) where THasher : IUtf8Hasher
+    {
+        var pool = new ShardedStringPool<THasher>(expectedCount: 1, shardCount: 4);
+        var first = new string[n];
+        for (int i = 0; i < n; i++) first[i] = pool.Get(B($"value-{i}"));
+
+        for (int i = 0; i < n; i++)
+        {
+            Assert.Equal($"value-{i}", first[i]);
+            Assert.Same(first[i], pool.Get(B($"value-{i}")));
+        }
+        Assert.Equal(n, pool.Count);
+    }
+
+    [Fact] public void Hash_zero_for_everything() => ExerciseSmallPool<ZeroHasher>(3000);
+    [Fact] public void Constant_hash_for_everything() => ExerciseSmallPool<ConstantHasher>(3000);
+    [Fact] public void Only_256_distinct_hashes() => ExerciseSmallPool<NarrowHasher>(20_000);
+    [Fact] public void Real_hash_with_growth_from_tiny_start() => ExerciseSmallPool<XxHash3Hasher>(200_000);
+
+    [Fact]
+    public void Single_shard_works()
+    {
+        var pool = new ShardedStringPool<XxHash3Hasher>(expectedCount: 1, shardCount: 1);
+        for (int i = 0; i < 50_000; i++)
+            Assert.Same(pool.Get(B($"k{i}")), pool.Get(B($"k{i}")));
+        Assert.Equal(50_000, pool.Count);
+    }
+
+    [Fact]
+    public void Count_counts_distinct_values_only()
+    {
+        var pool = new ShardedStringPool<XxHash3Hasher>(16, 8);
+        for (int rep = 0; rep < 5; rep++)
+            for (int i = 0; i < 1000; i++)
+                pool.Get(B($"v{i}"));
+        Assert.Equal(1000, pool.Count);
+    }
+
+    [Fact]
+    public void Char_overload_shares_instances_with_byte_overload()
+    {
+        var pool = new ShardedStringPool<XxHash3Hasher>(16, 4);
+        foreach (var s in new[] { "plain", "héllo", "日本語", "😀😀", new string('é', 1000) /* >512 bytes */ })
+        {
+            var fromBytes = pool.Get(B(s));
+            var fromChars = pool.Get(s.AsSpan());
+            Assert.Equal(s, fromChars);
+            Assert.Same(fromBytes, fromChars);
+        }
+    }
+
+    [Fact]
+    public void Concurrent_gets_return_exactly_one_reference_per_distinct_value()
+    {
+        const int distinct = 20_000;
+        const int perThread = 200_000;
+        const int threads = 8;
+
+        var words = Enumerable.Range(0, distinct).Select(i => B($"word-{i}-ü")).ToArray();
+        // Tiny initial capacity so tables grow while other threads are reading.
+        var pool = new ShardedStringPool<XxHash3Hasher>(expectedCount: 16, shardCount: 8);
+
+        var results = new string?[threads][];
+        using var gate = new ManualResetEventSlim(false);
+
+        var tasks = Enumerable.Range(0, threads).Select(t => Task.Factory.StartNew(() =>
+        {
+            var local = new string?[distinct];
+            var rng = new Random(t);
+            gate.Wait();
+            for (int k = 0; k < perThread; k++)
+            {
+                int i = rng.Next(distinct);
+                var s = pool.Get(words[i]);
+                if (local[i] is null) local[i] = s;
+                else if (!ReferenceEquals(local[i], s))
+                    throw new Exception($"thread {t} saw two different instances for word {i}");
+            }
+            results[t] = local;
+        }, TaskCreationOptions.LongRunning)).ToArray();
+
+        gate.Set();
+        Task.WaitAll(tasks);
+
+        int requested = 0;
+        for (int i = 0; i < distinct; i++)
+        {
+            string? reference = null;
+            for (int t = 0; t < threads; t++)
+            {
+                var s = results[t]![i];
+                if (s is null) continue;
+                if (reference is null) { reference = s; requested++; }
+                Assert.Same(reference, s);
+            }
+            if (reference is not null) Assert.Equal($"word-{i}-ü", reference);
+        }
+        Assert.Equal(requested, pool.Count);
+    }
+}
+FILE tests/StringPooling.Tests/StringPooling.Tests.csproj
+LENGTH 524
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StringPooling\StringPooling.csproj" />
+  </ItemGroup>
+</Project>
+FILE tests/StringPooling.Tests/Utf8CompareTests.cs
+LENGTH 1281
+using StringPooling;
+
+namespace StringPooling.Tests;
+
+public class Utf8CompareTests
+{
+    [Fact] public void Equal_ascii() => Assert.True(Utf8Compare.Equal("abc"u8, "abc"));
+    [Fact] public void Different_ascii_same_length() => Assert.False(Utf8Compare.Equal("abc"u8, "abd"));
+    [Fact] public void String_longer_than_bytes() => Assert.False(Utf8Compare.Equal("a"u8, "ab"));
+    [Fact] public void Equal_non_ascii() => Assert.True(Utf8Compare.Equal("héllo"u8, "héllo"));
+    [Fact] public void Different_non_ascii() => Assert.False(Utf8Compare.Equal("héllo"u8, "hello"));
+    [Fact] public void Two_byte_char_vs_one_char_string() => Assert.False(Utf8Compare.Equal("é"u8, "e"));
+
+    [Fact]
+    public void Invalid_byte_equals_replacement_char()
+    {
+        // 0xFF decodes to U+FFFD: same length as the input, yet not ASCII.
+        Assert.True(Utf8Compare.Equal(new byte[] { 0xFF }, "\uFFFD"));
+        Assert.False(Utf8Compare.Equal(new byte[] { 0xFF }, "?"));
+    }
+
+    [Fact]
+    public void Long_non_ascii_uses_rented_buffer()
+    {
+        var s = new string('é', 500);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+        Assert.True(Utf8Compare.Equal(bytes, s));
+        Assert.False(Utf8Compare.Equal(bytes, new string('é', 499) + "e"));
+    }
+}
+FILE src/StringPooling/Analysis/HasherCatalog.cs
+LENGTH 765
+namespace StringPooling.Analysis;
+
+public delegate ulong HashFunc(ReadOnlySpan<byte> data);
+
+public sealed record NamedHasher(string Name, HashFunc Fn);
+
+public static class HasherCatalog
+{
+    public static readonly NamedHasher[] All =
+    {
+        new("Custom", new HashFunc(CustomHasher.Hash)),
+        new("XxHash3", new HashFunc(XxHash3Hasher.Hash)),
+        new("XxHash64", new HashFunc(XxHash64Hasher.Hash)),
+        new("Fnv1a", new HashFunc(Fnv1aHasher.Hash)),
+    };
+
+    /// <summary>Hashers expected to pass the statistical tests (FNV-1a is reported but not asserted).</summary>
+    public static IEnumerable<NamedHasher> Strong => All.Where(h => h.Name != "Fnv1a");
+
+    public static NamedHasher Get(string name) => All.First(h => h.Name == name);
+}
+FILE src/StringPooling/Analysis/HashQuality.cs
+LENGTH 3820
+using System.Buffers.Binary;
+using System.Numerics;
+using System.Text;
+
+namespace StringPooling.Analysis;
+
+public sealed record KeyFamily(string Name, Func<int, byte[]> Make);
+
+public readonly record struct AvalancheResult(double MeanFlipProbability, double WorstCellBias);
+
+/// <summary>Statistical checks for a 64-bit hash over byte strings.</summary>
+public static class HashQuality
+{
+    public static readonly KeyFamily[] KeyFamilies =
+    {
+        new("SeqId",         i => Encoding.ASCII.GetBytes($"ID{i:D8}")),
+        new("Decimal",       i => Encoding.ASCII.GetBytes(i.ToString())),
+        new("Email",         i => Encoding.ASCII.GetBytes($"user{i}@example.com")),
+        new("Counter16Head", i => { var b = new byte[16]; BinaryPrimitives.WriteInt32LittleEndian(b, i); return b; }),
+        new("Counter16Tail", i => { var b = new byte[16]; BinaryPrimitives.WriteInt32LittleEndian(b.AsSpan(12), i); return b; }),
+        new("Counter3",      i => new[] { (byte)i, (byte)(i >> 8), (byte)(i >> 16) }),
+    };
+
+    /// <summary>Number of distinct keys (0..n-1) whose full 64-bit hashes collide. Expect 0 for a good hash.</summary>
+    public static int CountCollisions(HashFunc hash, Func<int, byte[]> make, int n)
+    {
+        var hashes = new ulong[n];
+        for (int i = 0; i < n; i++) hashes[i] = hash(make(i));
+        Array.Sort(hashes);
+        int collisions = 0;
+        for (int i = 1; i < n; i++)
+            if (hashes[i] == hashes[i - 1]) collisions++;
+        return collisions;
+    }
+
+    /// <summary>
+    /// Chi-square uniformity of bucket = (hash >> shift) &amp; (2^bits - 1), reported as a z-score
+    /// (chi2 - df) / sqrt(2 df). Around 0 is ideal; |z| above ~5 is suspicious in either direction.
+    /// shift=0 mimics the table slot index; shift=32 mimics the shard index.
+    /// </summary>
+    public static double ChiSquareZ(HashFunc hash, Func<int, byte[]> make, int n, int shift, int bits)
+    {
+        int buckets = 1 << bits;
+        ulong mask = (ulong)buckets - 1;
+        var counts = new int[buckets];
+        for (int i = 0; i < n; i++)
+            counts[(int)((hash(make(i)) >> shift) & mask)]++;
+
+        double expected = (double)n / buckets;
+        double chi = 0;
+        foreach (int c in counts)
+        {
+            double d = c - expected;
+            chi += d * d / expected;
+        }
+        int df = buckets - 1;
+        return (chi - df) / Math.Sqrt(2.0 * df);
+    }
+
+    /// <summary>
+    /// Strict avalanche test: flipping any single input bit should flip each output bit with probability 0.5.
+    /// Returns the mean flip probability and the worst |p - 0.5| over all (input bit, output bit) cells.
+    /// </summary>
+    public static AvalancheResult Avalanche(HashFunc hash, int length, int samples, int seed)
+    {
+        var rng = new Random(seed);
+        int inBits = length * 8;
+        var counts = new int[inBits * 64];
+        var data = new byte[length];
+
+        for (int s = 0; s < samples; s++)
+        {
+            rng.NextBytes(data);
+            ulong h0 = hash(data);
+            for (int b = 0; b < inBits; b++)
+            {
+                data[b >> 3] ^= (byte)(1 << (b & 7));
+                ulong diff = h0 ^ hash(data);
+                data[b >> 3] ^= (byte)(1 << (b & 7));
+
+                int row = b * 64;
+                while (diff != 0)
+                {
+                    counts[row + BitOperations.TrailingZeroCount(diff)]++;
+                    diff &= diff - 1;
+                }
+            }
+        }
+
+        long total = 0;
+        double worst = 0;
+        foreach (int c in counts)
+        {
+            total += c;
+            worst = Math.Max(worst, Math.Abs((double)c / samples - 0.5));
+        }
+        return new AvalancheResult((double)total / ((double)counts.Length * samples), worst);
+    }
+}
+END
